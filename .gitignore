@@ -79,6 +79,9 @@ docs/_archive/
 *.bak
 *.bak2
 *.bak-*
+# 下划线形式（如 gates_manifest.json.bak_20261113）：前面三条都匹配不到，
+# 结果备份文件一直被 git 当新文件（不是被忽略），一提交就进版本库。
+*.bak_*
 *.orig
 *.rej
 tools/legacy/

@@ -131,12 +131,19 @@ def main():
         except Exception:
             bad_scope.append(f"{n}:非法JSON")
             continue
-        if sorted(s.get("docs") or []) != sorted(p_docs):
-            bad_scope.append(f"{n}:docs不等于档案")
+        # ★ 2026-11-14 判据**反转**（拆多套的必然结果）：原来是「Agent docs == 档案 docs」。
+        #   `merge_scope()` 是并集语义 ⇒ Agent 一旦写死 docs，切档案后旧文档仍被检索
+        #   ⇒ 「换标准」变假切换。现在要求 Agent docs **为空**：白名单唯一来源是档案。
+        if (s.get("docs") or []) != []:
+            bad_scope.append(f"{n}:docs应为空实为{len(s.get('docs') or [])}项")
         if d.get("status") != "active":
             bad_scope.append(f"{n}:status={d.get('status')}")
-    check("A", "A10 三个 Agent 的 kb_scope.docs 与档案同源且 active", not bad_scope,
-          f"{bad_scope[:4]}")
+    check("A", "A10 三个 Agent 的 kb_scope.docs 为空（白名单只由档案决定）且 active",
+          not bad_scope, f"{bad_scope[:4]}")
+    # 「同源」的正确取证：合并结果 == 档案 docs（一份配置，多处读同一份）
+    _same = rc.merge_scope({}, profile).get("docs") or []
+    check("A", "A10' 空 scope 合并档案 ⇒ 恰好等于档案 docs（同源、非复制）",
+          sorted(_same) == sorted(p_docs), f"merged={_same[:3]} profile={p_docs[:3]}")
 
     # 三个 Skill 必须存在且正文非空（正文才是规则的真正载体）
     sk_bad = []
@@ -161,11 +168,21 @@ def main():
 
     # ── B. 边界条件不撒谎 ────────────────────────────────────────────────
     print("\n── B. 5 处胶水在边界条件上不撒谎 ──")
-    # ⑤ 硬门槛
-    req_on = rc.must_retrieve(profile, conn)
-    check("B", "B1 档案存在 ⇒ 默认要求先检索", req_on is True, f"must_retrieve={req_on}")
-    check("B", "B2 无档案 ⇒ 不要求（fail-open，不卡普通问答）",
-          rc.must_retrieve({}, conn) is False, "")
+    # ⑤ 硬门槛（D9-A：**无开关**，有档案 + 校验意图 ⇒ 恒生效）
+    # 判据同源技巧：先从 execute.py 里**取出真实表达式**，再用它复算 ——
+    # 而不是在门禁里另写一份布尔（那样源码改了门禁照样绿）。
+    _exec_src = open(os.path.join(_ROOT, "agent", "pipeline_parts", "execute.py"),
+                     encoding="utf-8").read()
+    _gate_expr = "bool(_req_profile) and _rc2.is_check_intent(intent)"
+    check("B", "B0 硬门槛表达式在 execute.py 中真实存在（门禁不另写一份）",
+          _gate_expr in _exec_src, _gate_expr)
+    check("B", "B1 有档案 + 需求校验意图 ⇒ 门槛成立（恒硬门槛，无开关）",
+          bool(profile) and rc.is_check_intent("requirement_rule_check") is True,
+          f"profile={bool(profile)}")
+    check("B", "B2 无档案 ⇒ 门槛不成立（不卡普通问答，fail-open）",
+          not (bool({}) and rc.is_check_intent("requirement_rule_check")), "")
+    check("B", "B2' 非校验意图 ⇒ 门槛不成立（普通建模/问答不受影响）",
+          not (bool(profile) and rc.is_check_intent("modeling")), "modeling")
 
     # ⑤ 检索判定
     # ⚠️ 用**生产真实形态**喂判据，键名逐个来自 `agent/rag.py::retrieve()` 的 return dict：
@@ -181,20 +198,27 @@ def main():
                 "entities": [{"name": "需求", "branch": "release"}], "graph_count": 1}
     REAL_EMPTY = {"source": "none", "chunk_hits": [], "vector_docs": [], "vector_count": 0,
                   "entities": [], "graph_count": 0}
-    v_no = rc.retrieval_verdict(REAL_EMPTY, True)
-    v_yes = rc.retrieval_verdict(REAL_HIT, True)
-    v_vec = rc.retrieval_verdict(REAL_ONLY_VEC, True)
-    v_chunk = rc.retrieval_verdict(REAL_ONLY_CHUNK, True)
-    v_ent = rc.retrieval_verdict(REAL_ENT, True)
-    v_off = rc.retrieval_verdict(REAL_EMPTY, False)
-    check("B", "B3 要求检索但零命中 ⇒ insufficient", v_no == "insufficient", f"={v_no}")
+    # ★ 2026-11-14 D9-A：`retrieval_verdict` 的 `required` 形参已删。
+    #   语义迁移：函数自身**恒保守**（无证据即 insufficient），"要不要判"由调用方门槛决定。
+    v_no = rc.retrieval_verdict(REAL_EMPTY)
+    v_yes = rc.retrieval_verdict(REAL_HIT)
+    v_vec = rc.retrieval_verdict(REAL_ONLY_VEC)
+    v_chunk = rc.retrieval_verdict(REAL_ONLY_CHUNK)
+    v_ent = rc.retrieval_verdict(REAL_ENT)
+    check("B", "B3 零命中 ⇒ insufficient", v_no == "insufficient", f"={v_no}")
     check("B", "B4 真实形态：有分块命中 ⇒ checked", v_yes == "checked", f"={v_yes}")
     check("B", "B5 只透出 chunk_hits ⇒ checked（低置信过滤清空 vector_docs 时有据）",
           v_chunk == "checked", f"={v_chunk}")
     check("B", "B5b 只透出 vector_docs ⇒ checked（工具路径裁剪时有据）",
           v_vec == "checked", f"={v_vec}")
     check("B", "B5c 只有图谱实体（entities）⇒ checked", v_ent == "checked", f"={v_ent}")
-    check("B", "B6 未要求检索 ⇒ checked（不误报）", v_off == "checked", f"={v_off}")
+    # 原 B6「未要求检索 ⇒ checked」在 D9-A 后不存在这个分支了：
+    #   传 None（没检索）也必须判 insufficient —— 证明函数里没有"放松通道"。
+    import inspect as _ins
+    check("B", "B6 retrieval_verdict 只吃 retrieval 一个参数（无 required 放松通道）",
+          len(_ins.signature(rc.retrieval_verdict).parameters) == 1
+          and rc.retrieval_verdict(None) == "insufficient",
+          f"params={list(_ins.signature(rc.retrieval_verdict).parameters)}")
     # 防漂移锁：判据用到的证据键必须**真实存在**于 rag 返回体（读错键=门槛形同虚设）
     _rag_src = open(os.path.join(_ROOT, "agent", "rag.py"), encoding="utf-8").read()
     _keys_ok = all(k in _rag_src for k in (
@@ -210,7 +234,7 @@ def main():
     # ③ anchored=0 不许写"无冲突"  ← 之前读错字段名踩过的坑
     r_zero = rc.assemble_result(
         json.dumps({"checks": [], "completeness": [], "conflicts": []}, ensure_ascii=False),
-        retrieval=REAL_HIT, required=True,
+        retrieval=REAL_HIT,
         deterministic={"conflicts": [], "stats": {"claims_total": 0, "claims_anchored": 0}})
     check("B", "B6d anchored=0 且无冲突 ⇒ verdict=insufficient",
           r_zero["verdict"] == "insufficient", f"verdict={r_zero['verdict']}")
@@ -221,7 +245,7 @@ def main():
     # 反向：anchored>0 ⇒ 必须允许 checked（否则"恒 insufficient"也能过 B6/B7）
     r_ok = rc.assemble_result(
         json.dumps({"checks": [], "completeness": [], "conflicts": []}, ensure_ascii=False),
-        retrieval=REAL_HIT, required=True,
+        retrieval=REAL_HIT,
         deterministic={"conflicts": [], "stats": {"claims_total": 3, "claims_anchored": 3}})
     check("B", "B8 anchored>0 ⇒ deterministic_verdict=checked（反向判据）",
           (r_ok["result"] or {}).get("deterministic_verdict") == "checked",
@@ -231,23 +255,22 @@ def main():
     r_noret = rc.assemble_result(
         json.dumps({"checks": [{"rule_id": "RC-01", "verdict": "pass"}], "verdict": "pass"},
                    ensure_ascii=False),
-        retrieval=REAL_EMPTY, required=True, deterministic=None)
+        retrieval=REAL_EMPTY, deterministic=None)
     check("B", "B9 未检索到条款 ⇒ verdict 被降为 insufficient（不许 pass）",
           r_noret["verdict"] == "insufficient", f"verdict={r_noret['verdict']}")
 
     # 类别未覆盖齐 ⇒ insufficient
     r_miss = rc.assemble_result(
         json.dumps({"checks": [], "covered_categories": ["RC-01"]}, ensure_ascii=False),
-        retrieval=REAL_HIT, required=True,
+        retrieval=REAL_HIT,
         configured=cat_ids[:4])
     miss_reason = " ".join(r_miss["reasons"])
     check("B", "B10 类别未覆盖齐 ⇒ insufficient 且列出缺口",
           r_miss["verdict"] == "insufficient" and "未覆盖齐" in miss_reason,
           f"verdict={r_miss['verdict']} reasons={miss_reason[:80]}")
 
-    # 解析失败不许伪造
-    r_bad = rc.assemble_result("模型没给结构化结果，只说了些废话。", retrieval=REAL_HIT,
-                               required=False)
+    # 解析失败不许伪造（D9-A 后无 required 形参，这里只验解析失败口径）
+    r_bad = rc.assemble_result("模型没给结构化结果，只说了些废话。", retrieval=REAL_HIT)
     check("B", "B11 无结构化 JSON ⇒ ok=False（不伪造结论）",
           r_bad["ok"] is False and r_bad["quality_report"] is None, f"ok={r_bad['ok']}")
 
@@ -261,7 +284,7 @@ def main():
     r_full = rc.assemble_result(
         json.dumps({"checks": fake_checks, "completeness": fake_comp, "conflicts": fake_conf,
                     "covered_categories": cat_ids, "verdict": "fail"}, ensure_ascii=False),
-        retrieval=REAL_HIT, required=True,
+        retrieval=REAL_HIT,
         deterministic={"conflicts": [], "stats": {"claims_total": 5, "claims_anchored": 5}},
         configured=cat_ids)
     issues = (r_full["quality_report"] or {}).get("issues") or []
@@ -276,7 +299,7 @@ def main():
     r_pass = rc.assemble_result(
         json.dumps({"checks": [{"rule_id": "RC-01", "verdict": "pass"}],
                     "covered_categories": cat_ids}, ensure_ascii=False),
-        retrieval=REAL_HIT, required=True,
+        retrieval=REAL_HIT,
         deterministic={"conflicts": [], "stats": {"claims_total": 3, "claims_anchored": 3}},
         configured=cat_ids)
     check("B", "B15 verdict=pass 的规则不进 issues（不虚报问题）",
@@ -289,7 +312,7 @@ def main():
     r_prose = rc.assemble_result(
         json.dumps({"checks": [{"rule_id": "RC-04", "verdict": "fail"}],
                     "verdict": _prose, "covered_categories": cat_ids}, ensure_ascii=False),
-        retrieval=REAL_HIT, required=True,
+        retrieval=REAL_HIT,
         deterministic={"conflicts": [], "stats": {"claims_total": 3, "claims_anchored": 3}},
         configured=cat_ids)
     check("B", "B15b 模型散文 verdict ⇒ 归一为 fail（不是原样透出）",
@@ -300,7 +323,7 @@ def main():
     _enum_ok = all(
         rc.assemble_result(json.dumps({"checks": [{"rule_id": "RC-01", "verdict": v}],
                                        "covered_categories": cat_ids}, ensure_ascii=False),
-                           retrieval=REAL_HIT, required=True,
+                           retrieval=REAL_HIT,
                            deterministic={"conflicts": [], "stats": {"claims_total": 3,
                                                                      "claims_anchored": 3}},
                            configured=cat_ids)["verdict"]
@@ -337,7 +360,7 @@ def main():
     r_two = rc.assemble_result(
         json.dumps({"conflicts": [], "items": _items, "verdict": "无冲突",
                     "covered_categories": cat_ids}, ensure_ascii=False),
-        retrieval=REAL_HIT, required=True)                    # ← 不传 deterministic
+        retrieval=REAL_HIT)                    # ← 不传 deterministic
     check("B", "B20 只给 items（不传 deterministic）⇒ 确定性层自动跑起来",
           (r_two["result"] or {}).get("deterministic_verdict") is not None,
           f"det={(r_two['result'] or {}).get('deterministic_verdict')}")
@@ -351,7 +374,7 @@ def main():
                     "items": [{"req_id": "A", "text": "无锚点条目一"},
                               {"req_id": "B", "text": "无锚点条目二"}],
                     "verdict": "fail"}, ensure_ascii=False),
-        retrieval=REAL_HIT, required=True)
+        retrieval=REAL_HIT)
     check("B", "B22 0 锚点 ⇒ 确定性层 undetermined（不因语义层检出就标 checked）",
           (r_zero2["result"] or {}).get("deterministic_verdict") == "undetermined",
           f"det={(r_zero2['result'] or {}).get('deterministic_verdict')} "
@@ -394,11 +417,11 @@ def main():
     prof_b = {"profile_id": "incose_only_v1", "docs": [p_docs[-1]] if p_docs else []}
     sub_a = sorted(cat_ids)
     sub_b = sorted(cat_ids[:5])          # 只要求前 5 类
-    ra = rc.assemble_result(llm_text, retrieval=REAL_HIT, required=True,
+    ra = rc.assemble_result(llm_text, retrieval=REAL_HIT,
                             deterministic={"conflicts": [], "stats": {"claims_total": 3,
                                                                       "claims_anchored": 3}},
                             configured=sub_a)
-    rb = rc.assemble_result(llm_text, retrieval=REAL_HIT, required=True,
+    rb = rc.assemble_result(llm_text, retrieval=REAL_HIT,
                             deterministic={"conflicts": [], "stats": {"claims_total": 3,
                                                                       "claims_anchored": 3}},
                             configured=sub_b)
@@ -407,7 +430,7 @@ def main():
     # 反面：把覆盖类别砍到只剩 1 类 ⇒ 必须 insufficient（证明 configured 真被消费）
     rc_strict = rc.assemble_result(
         json.dumps({"checks": [], "covered_categories": ["RC-01"]}, ensure_ascii=False),
-        retrieval=REAL_HIT, required=True,
+        retrieval=REAL_HIT,
         deterministic={"conflicts": [], "stats": {"claims_total": 3, "claims_anchored": 3}},
         configured=sub_a)
     check("C", "C2 只覆盖 1/14 类 ⇒ insufficient（configured 真被消费）",
@@ -426,32 +449,39 @@ def main():
           (mU.get("docs") or [""])[0] == "用户自选.pdf" and len(mU.get("docs") or []) == len(p_docs) + 1,
           f"docs={mU.get('docs')}")
 
-    # 关掉硬门槛开关 ⇒ verdict 随之变化（证明配置真的生效，不是摆设）
-    orig = dconn.execute("SELECT rule_value FROM generate_rules WHERE rule_key=?",
-                         ("requirement_must_retrieve",)).fetchone()
-    orig_v = orig[0] if orig else None
-    try:
-        dconn.execute("UPDATE generate_rules SET rule_value=? WHERE rule_key=?",
-                      ("false", "requirement_must_retrieve"))
-        dconn.commit()
-        c2 = _conn()
-        off = rc.must_retrieve(rc.load_profile(c2), c2)
-        r_off = rc.assemble_result(
-            json.dumps({"checks": [], "covered_categories": cat_ids}, ensure_ascii=False),
-            retrieval=REAL_EMPTY, required=off,
-            deterministic={"conflicts": [], "stats": {"claims_total": 3, "claims_anchored": 3}},
-            configured=cat_ids)
-        check("C", "C5 关闭硬门槛 ⇒ must_retrieve=False，零检索也不再判 insufficient",
-              off is False and r_off["verdict"] == "checked",
-              f"must={off} verdict={r_off['verdict']}")
-    finally:
-        dconn.execute("UPDATE generate_rules SET rule_value=? WHERE rule_key=?",
-                      (orig_v, "requirement_must_retrieve"))
-        dconn.commit()
-    # 还原后再确认一次（防止"改坏了没还原"留下长期污染）
-    c3 = _conn()
-    back = rc.must_retrieve(rc.load_profile(c3), c3)
-    check("C", "C6 开关已还原（硬门槛恢复生效）", back is True, f"must_retrieve={back}")
+    # ★ 2026-11-14 D9-A：原 C5/C6 是「把 requirement_must_retrieve 改成 false ⇒
+    #   verdict 随之变化，再还原」。开关删掉后这两条的**语义要迁移**：
+    #   从"证明开关生效"变成"证明开关再也回不来"——即没有任何运行时代码读它。
+    #   直接在真库里插一行 false 再删，风险是中途崩了留下脏键；改用**静态取证**：
+    #   扫运行时代码（services/ agent/ api/），确认两个死键零消费点。
+    _zombie_keys = ("requirement_must_retrieve", "requirement_check_enabled")
+    _runtime_hits = []
+    for _sub in ("services", "agent", "api"):
+        _dir = os.path.join(_ROOT, _sub)
+        for _root, _dirs, _files in os.walk(_dir):
+            for _f in _files:
+                if not _f.endswith(".py"):
+                    continue
+                _p = os.path.join(_root, _f)
+                try:
+                    _lines = open(_p, encoding="utf-8").read().splitlines()
+                except Exception:
+                    continue
+                for _ln, _line in enumerate(_lines, 1):
+                    # ⚠️ 只抓**代码消费**，放过注释：
+                    #   代码里写 `"requirement_must_retrieve"` 才是真的在读它；
+                    #   而注释里写「为什么把它删了」是必须留下的历史，不该被判红
+                    #   （否则谁也不敢解释删除原因，下一个人又会把它加回来）。
+                    _code = _line.split("#", 1)[0]
+                    for _k in _zombie_keys:
+                        if _k in _code:
+                            _runtime_hits.append(
+                                f"{os.path.relpath(_p, _ROOT)}:{_ln}:{_k}")
+    check("C", "C5 D9-A 死键零消费点（运行时代码不再读 must_retrieve/check_enabled）",
+          not _runtime_hits, f"命中={_runtime_hits[:3]}")
+    check("C", "C6 硬门槛不依赖任何 DB 布尔（只依赖 档案存在 + 校验意图）",
+          "is_check_intent" in _exec_src and "_req_hard_gate = bool(_req_profile) and" in _exec_src,
+          None)
 
     dconn.close()
     conn.close()

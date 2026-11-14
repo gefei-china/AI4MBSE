@@ -99,8 +99,14 @@ def main():
                   "clause_ref" in body and ("输出契约" in body or "verdict" in body),
                   body[:80])
             fm = json.loads(r["frontmatter"] or "{}")
-            check("G2 %s 声明 must_retrieve 硬门槛" % name,
-                  fm.get("must_retrieve") is True, fm.get("must_retrieve"))
+            # ★ 2026-11-14 D9-A 判据**反转**：原来要求 frontmatter 声明 `must_retrieve`，
+            #   但全仓没有任何消费点读它（纯尸体配置），而且它在 Skill 层再造了一个
+            #   "要不要检索"的开关 —— 与「有档案 + 校验意图 ⇒ 恒硬门槛」直接矛盾。
+            #   ⇒ 现在要求 frontmatter **不得**出现 must_retrieve / required_docs：
+            #     检索意图只在 `is_check_intent()` 一处判定，文档白名单只在档案一处定义。
+            _zombie = [k for k in ("must_retrieve", "required_docs") if k in fm]
+            check("G2 %s frontmatter 不含死配置（must_retrieve/required_docs）" % name,
+                  _zombie == [], _zombie)
             check("G2 %s allowed_tools 含 graph_retrieve" % name,
                   "graph_retrieve" in json.loads(r["allowed_tools"] or "[]"),
                   r["allowed_tools"])
@@ -117,8 +123,16 @@ def main():
         if r:
             kb = json.loads(r["kb_scope"] or "{}")
             docs = kb.get("docs") or []
-            check("G3 %s 绑定标准文档白名单" % name,
-                  any("29148" in d for d in docs) and any("Guide" in d for d in docs), docs)
+            # ★ 2026-11-14 判据**反转**（拆多套的必然结果）：
+            #   原判据是「Agent 的 kb_scope.docs 含 29148 与 Guide 两篇」。
+            #   但 `merge_scope()` 是**并集**语义 ⇒ Agent 只要写死两篇，
+            #   切到 `incose_only_v1` 仍会检索 29148 ⇒ 「换标准」只是假切换。
+            #   ⇒ 现在要求 Agent 的 docs **必须为空**：文档白名单的唯一来源是
+            #     标准档案 `profiles[*].docs`（见 G13 的多套切换判据）。
+            #   ⚠️ 这是把判据从「存在」改成「不存在」，不是删掉判据
+            #      —— 删掉就等于这个维度不再受保护，下次又会有人把 docs 写回来。
+            check("G3 %s kb_scope.docs 为空（白名单只由档案决定）" % name,
+                  docs == [], docs)
             binds = [tuple(x) for x in con.execute(
                 "SELECT tool_type,tool_name FROM agent_tools WHERE agent_id=?", (r["id"],))]
             check("G3 %s 绑定 Skill + graph_retrieve" % name,
@@ -143,7 +157,20 @@ def main():
     check("G4d 项目绑定标准档案",
           bool(con.execute("SELECT 1 FROM project_methodology WHERE profile_id=?",
                            (prof.get("profile_id"),)).fetchone()), prof.get("profile_id"))
-    check("G4e must_retrieve 开关生效", rc.must_retrieve(prof, con) is True, None)
+    # ★ 2026-11-14 D9-A（米爸拍板）：删掉 `must_retrieve` 开关，改为
+    #   「有档案 + 需求校验意图 ⇒ 恒硬门槛」。这里锁死"开关确实没了"，
+    #   防止有人为了"偶尔放宽"再加回来（那会让整条链能被静默关闭）。
+    check("G4e D9-A 无开关：must_retrieve 函数已删除",
+          not hasattr(rc, "must_retrieve"), dir(rc)[:0])
+    _deadkeys = [k for k in ("requirement_must_retrieve", "requirement_check_enabled")
+                 if con.execute("SELECT 1 FROM generate_rules WHERE rule_key=?", (k,)).fetchone()]
+    check("G4e' D9-A 无开关：两个死配置键不在库中", _deadkeys == [], _deadkeys)
+    import inspect as _inspect
+    _sig_asm = _inspect.signature(rc.assemble_result).parameters
+    _sig_rv = _inspect.signature(rc.retrieval_verdict).parameters
+    check("G4e'' D9-A 无开关：assemble_result / retrieval_verdict 均无 required 形参",
+          "required" not in _sig_asm and "required" not in _sig_rv,
+          (list(_sig_asm), list(_sig_rv)))
     check("G4f 需求意图被识别", all(rc.is_check_intent(n) for n in AGENTS), AGENTS)
 
     # ── G5 接线（静态 + 运行时）──
@@ -158,8 +185,9 @@ def main():
     check("G5c ① 两条路径都挂 _effective_kb_scope",
           exec_src.count("self._effective_kb_scope") >= 2
           and stream_src.count("self._effective_kb_scope") >= 2, None)
-    check("G5d ⑤ execute 硬门槛接入 should_retrieve",
-          "_req_must_retrieve" in exec_src and "or _req_must_retrieve)" in exec_src, None)
+    check("G5d ⑤ execute 硬门槛接线（无开关：有档案 + 校验意图）",
+          "_req_hard_gate" in exec_src and "or _req_hard_gate)" in exec_src
+          and "_req_must_retrieve" not in exec_src, None)
     check("G5e ③ 结果组装 + card_data 回写",
           "assemble_result(" in exec_src and "UPDATE messages SET card_data=?" in exec_src, None)
     check("G5f ③ 返回体带 verdict/reasons",
@@ -202,7 +230,7 @@ def main():
     }
     hit = {"chunk_hits": [{"content": "5.2.5 ..."}], "entities": []}
     a = rc.assemble_result(json.dumps(ok_payload, ensure_ascii=False),
-                           retrieval=hit, required=True, configured=configured)
+                           retrieval=hit, configured=configured)
     check("G7a 正常结果 ok=True / verdict=checked", a["ok"] and a["verdict"] == "checked", a["reasons"])
     check("G7b quality_report.issues[] 符合前端契约",
           bool(a["quality_report"]) and all(
@@ -213,28 +241,37 @@ def main():
 
     b = rc.assemble_result(json.dumps(ok_payload, ensure_ascii=False),
                            retrieval={"chunk_hits": [], "entities": []},
-                           required=True, configured=configured)
+                           configured=configured)
     check("G8a 无检索命中 ⇒ insufficient（硬门槛）",
           b["verdict"] == "insufficient" and b["reasons"], b["reasons"])
     c = rc.assemble_result("模型只给了散文，没有 JSON", retrieval=hit,
-                           required=True, configured=configured)
+                           configured=configured)
     check("G8b 无结构化输出 ⇒ ok=False，不伪造",
           c["ok"] is False and c["quality_report"] is None, c["reasons"])
     d = rc.assemble_result(json.dumps({**ok_payload, "covered_categories": configured[:3]},
                                       ensure_ascii=False),
-                           retrieval=hit, required=True, configured=configured)
+                           retrieval=hit, configured=configured)
     check("G8c 规则类别漏检 ⇒ insufficient",
           d["verdict"] == "insufficient" and any("未覆盖齐" in x for x in d["reasons"]),
           d["reasons"])
     e = rc.assemble_result(json.dumps({"conflicts": []}, ensure_ascii=False),
-                           retrieval=hit, required=True, deterministic={
+                           retrieval=hit, deterministic={
                                "conflicts": [], "stats": {"claims_anchored": 0, "verdict": "no-data"}})
     check("G8d anchored=0 ⇒ 不许写「无冲突」",
           e["result"].get("deterministic_verdict") == "undetermined"
           and e["verdict"] == "insufficient", e["reasons"])
-    check("G8e 关闭 required 时不误伤普通问答",
+    # ★ 2026-11-14 D9-A：原来的 G8e 是「关闭 required 时不误伤普通问答」。
+    #   开关删掉后这条**语义迁移**了：「不误伤普通问答」的保证从"函数形参"搬到
+    #   "调用方门槛"（execute.py 只在 `_req_hard_gate` 成立时才调 assemble_result）。
+    #   于是判据拆成两条：
+    #   ① assemble_result 自身对"没有检索证据"一律保守（不因调用方写法而放松）；
+    #   ② 普通问答根本不会走到这里 —— 由 G5d 的接线判据保证（有档案 + 校验意图才进）。
+    check("G8e 无检索证据 ⇒ 一律 insufficient（assemble 自身不再有放松开关）",
           rc.assemble_result(json.dumps(ok_payload, ensure_ascii=False),
-                             retrieval=None, required=False)["verdict"] == "checked", None)
+                             retrieval=None)["verdict"] == "insufficient", None)
+    check("G8e' 普通问答由调用方门槛隔离（assemble 调用点受 _req_hard_gate 保护）",
+          "if _req_hard_gate:" in exec_src
+          and exec_src.find("if _req_hard_gate:") < exec_src.find("assemble_result("), None)
 
     # ── G9 变异自证 ──
     print("\n=== G9 变异自证（判据非空转）===")
@@ -259,12 +296,12 @@ def main():
     alt = configured[:2]
     f = rc.assemble_result(json.dumps({**ok_payload, "covered_categories": alt,
                                        "configured_categories": alt}, ensure_ascii=False),
-                           retrieval=hit, required=True, configured=alt)
+                           retrieval=hit, configured=alt)
     check("G10a 换成 2 类子集 ⇒ 按新配置判定（不漏检）",
           f["verdict"] == "checked", f["reasons"])
     g = rc.assemble_result(json.dumps({**ok_payload, "covered_categories": alt},
                                       ensure_ascii=False),
-                           retrieval=hit, required=True, configured=configured)
+                           retrieval=hit, configured=configured)
     check("G10b 仍按全量子集 ⇒ 漏检被抓出",
           g["verdict"] == "insufficient", g["reasons"])
 
@@ -397,8 +434,74 @@ def main():
                   ("rule_categories", "completeness_categories", "conflict_types")
                   for it in (_mut2.get(k) or [])), None)
 
+    # ── G13 多套标准档案切换（2026-11-14 米爸「拆多套」）──
+    # 为什么必须在**内存库**里测：切换会改 `active_profile`，在真库上测会把
+    # 生产配置切来切去（跑一次门禁就改一次生产状态）。内存库既验证了切换机制，
+    # 又不碰真库 —— 而真库上的切换效果由 `tools/switch_requirement_profile.py`
+    # 的「写后新连接回读自证」与真机 e2e 负责。
+    print("\n=== G13 多套标准档案切换 ===")
+    import sqlite3 as _sq
+    _mem = _sq.connect(":memory:")
+    _mem.execute("CREATE TABLE generate_rules (rule_key TEXT PRIMARY KEY, rule_value TEXT,"
+                 " description TEXT)")
+    _synth = {
+        "active_profile": "p_full",
+        "catalog_path": "data/requirement_standards/rule_catalog.json",
+        "skills": ["s1"], "agents": ["a1"],
+        "profiles": {
+            "p_full": {"standard_ids": ["S-A", "S-B"], "docs": ["docA.pdf", "docB.pdf"]},
+            "p_a": {"standard_ids": ["S-A"], "docs": ["docA.pdf"]},
+            "p_b": {"standard_ids": ["S-B"], "docs": ["docB.pdf"]},
+        },
+    }
+    _mem.execute("INSERT INTO generate_rules VALUES (?,?,?)",
+                 (rc.PROFILE_KEY, json.dumps(_synth, ensure_ascii=False), "t"))
+    _mem.commit()
+    _p0 = rc.load_profile(_mem)
+    check("G13a 多档案可读，回显 active/候选集",
+          _p0.get("profile_id") == "p_full"
+          and sorted(_p0.get("available_profiles") or []) == ["p_a", "p_b", "p_full"], _p0.get("profile_id"))
+    check("G13b 选中档案的 docs 就是该套的 docs（非并集）",
+          _p0.get("docs") == ["docA.pdf", "docB.pdf"], _p0.get("docs"))
+    check("G13c 公共字段（catalog_path/skills/agents）与档案差异项合并可见",
+          _p0.get("catalog_path", "").endswith("rule_catalog.json")
+          and _p0.get("skills") == ["s1"], (_p0.get("skills"), _p0.get("catalog_path")))
+    _sw = rc.switch_profile(_mem, "p_a")
+    check("G13d 切换成功且返回新生效 docs",
+          _sw.get("ok") and _sw.get("docs") == ["docA.pdf"], _sw)
+    check("G13e 切换后回读为新档案（不是旧快照）",
+          rc.load_profile(_mem).get("profile_id") == "p_a", None)
+    check("G13f 切换只改 active_profile，其余结构原样",
+          len(json.loads(_mem.execute("SELECT rule_value FROM generate_rules WHERE rule_key=?",
+                                      (rc.PROFILE_KEY,)).fetchone()[0])["profiles"]) == 3, None)
+    _bad = rc.switch_profile(_mem, "p_not_exist")
+    check("G13g 切到不存在档案 ⇒ ok=False 且不写库",
+          _bad.get("ok") is False and rc.load_profile(_mem).get("profile_id") == "p_a", _bad.get("error"))
+    _rb = _mem.execute("SELECT rule_value FROM generate_rules WHERE rule_key=?",
+                       (rc.PROFILE_KEY,)).fetchone()[0]
+    _badjson = json.loads(_rb)
+    _badjson["active_profile"] = "p_ghost"
+    _mem.execute("UPDATE generate_rules SET rule_value=? WHERE rule_key=?",
+                 (json.dumps(_badjson, ensure_ascii=False), rc.PROFILE_KEY))
+    _mem.commit()
+    _fb = rc.load_profile(_mem)
+    check("G13h active 指向无效 id ⇒ 回退第一套并置 _active_fallback",
+          _fb.get("_active_fallback") is True and _fb.get("profile_id") in _fb.get("available_profiles"),
+          (_fb.get("profile_id"), _fb.get("_active_fallback")))
+    # 旧单档案结构必须继续可用（向后兼容，不改老数据就不用迁移）
+    _old = dict(_synth)
+    _old.pop("profiles")
+    _old.pop("active_profile")
+    _old["docs"] = ["legacy.pdf"]
+    _mem.execute("UPDATE generate_rules SET rule_value=? WHERE rule_key=?",
+                 (json.dumps(_old, ensure_ascii=False), rc.PROFILE_KEY))
+    _mem.commit()
+    _ol = rc.load_profile(_mem)
+    check("G13i 旧单档案结构原样可读（向后兼容）",
+          _ol.get("docs") == ["legacy.pdf"] and not _ol.get("profiles"), _ol.get("docs"))
+    _mem.close()
+
     con.close()
-    print("\n" + "=" * 76)
     print("PASS %d / FAIL %d" % (PASS, FAIL))
     os.makedirs(os.path.join(ROOT, "outputs"), exist_ok=True)
     with open(os.path.join(ROOT, "outputs", "_verify_requirement_config_chain.json"),

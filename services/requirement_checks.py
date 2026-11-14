@@ -36,9 +36,27 @@ CHECK_INTENTS = frozenset({
 
 # ── ④ 标准档案 ────────────────────────────────────────────────────────────
 def load_profile(conn) -> dict:
-    """从 generate_rules 读取标准档案；读不到返回空 dict（fail-open，不阻断主流程）。
+    """从 generate_rules 读取**当前生效**的标准档案；读不到返回空 dict（fail-open）。
 
-    返回 {"profile_id", "docs", "skills", "agents", "catalog_path", "standard_ids", ...}
+    返回 {"profile_id", "active_profile", "available_profiles",
+          "docs", "skills", "agents", "catalog_path", "standard_ids", ...}
+
+    ── 多档案（2026-11-14，米爸要求「拆多套」）──
+    数据结构（同一行 `requirement_standard_profile`，向后兼容旧单档案）：
+
+        {"active_profile": "iso29148_incose_v1",
+         "profiles": {
+             "iso29148_incose_v1": {"standard_ids": [...], "docs": [...], "skills": [...]},
+             "iso29148_only_v1":   {...},
+             "incose_only_v1":     {...}}}
+
+    · 有 `profiles` ⇒ 取 `active_profile` 指向那套，与顶层公共字段合并（档案可只覆盖差异项）；
+    · 无 `profiles` ⇒ 顶层即单档案（旧数据原样可用，不改它们就永远不用迁移）；
+    · `active_profile` 指向不存在的 id ⇒ **回退第一套**并打 `_active_fallback=True`
+      （宁可退到默认档案继续工作，也不要因为一个手滑的字符串让整条链路 fail-closed）；
+    · 回显 `available_profiles` 供前端/CLI 列出可选项。
+
+    ⚠️ 这里只做"读 + 选"，不写库；切换用 `switch_profile()`（唯一写入点）。
     """
     try:
         row = conn.execute(
@@ -48,9 +66,65 @@ def load_profile(conn) -> dict:
             return {}
         val = row[0]
         d = json.loads(val) if isinstance(val, str) else dict(val)
-        return d if isinstance(d, dict) else {}
+        if not isinstance(d, dict):
+            return {}
     except Exception:
         return {}
+
+    profs = d.get("profiles")
+    if not isinstance(profs, dict) or not profs:
+        return d                     # 旧单档案结构：原样返回
+
+    base = {k: v for k, v in d.items() if k not in ("profiles", "active_profile")}
+    avail = sorted(profs)
+    act = str(d.get("active_profile") or "")
+    fallback = False
+    if act not in profs:
+        act = avail[0]
+        fallback = True
+    sel = dict(base)
+    _one = profs.get(act) or {}
+    if isinstance(_one, dict):
+        sel.update(_one)
+    sel["active_profile"] = act
+    sel["available_profiles"] = avail
+    sel["profile_id"] = act          # 与 active 同源，避免两处口径漂移
+    if fallback:
+        sel["_active_fallback"] = True
+    return sel
+
+
+def switch_profile(conn, profile_id: str) -> dict:
+    """切换生效的标准档案：**只改 `active_profile` 一个字**，其余原样保留。
+
+    返回 {"ok", "active_profile", "available_profiles", "docs", "standard_ids"}
+    失败（档案不存在/结构不对）⇒ ok=False 且**不写库**（绝不落半截状态）。
+    """
+    row = conn.execute("SELECT rule_value FROM generate_rules WHERE rule_key=?",
+                       (PROFILE_KEY,)).fetchone()
+    if not row:
+        return {"ok": False, "error": "缺少 %s 配置" % PROFILE_KEY}
+    try:
+        d = json.loads(row[0]) if isinstance(row[0], str) else dict(row[0])
+    except Exception as e:
+        return {"ok": False, "error": "档案 JSON 非法：%r" % (e,)}
+    profs = d.get("profiles") or {}
+    if not isinstance(profs, dict) or not profs:
+        return {"ok": False, "error": "当前是单档案结构，无 profiles 可切换",
+                "available_profiles": []}
+    pid = str(profile_id or "").strip()
+    if pid not in profs:
+        return {"ok": False, "error": "档案不存在：%s" % pid,
+                "available_profiles": sorted(profs)}
+    d["active_profile"] = pid
+    conn.execute("UPDATE generate_rules SET rule_value=? WHERE rule_key=?",
+                 (json.dumps(d, ensure_ascii=False), PROFILE_KEY))
+    conn.commit()
+    sel = load_profile(conn)
+    return {"ok": True, "active_profile": pid,
+            "available_profiles": sorted(profs),
+            "docs": sel.get("docs") or [],
+            "standard_ids": sel.get("standard_ids") or []}
 
 
 def profile_scope(profile: dict) -> dict:
@@ -145,25 +219,18 @@ def run_deterministic_conflicts(items: list[dict]) -> dict:
     }
 
 
-# ── ⑤ 硬门槛 ──────────────────────────────────────────────────────────────
-def must_retrieve(profile: dict, conn=None) -> bool:
-    """⑤ 本轮是否强制「先检索标准条款」。配置开关 + 档案存在即生效。"""
-    if not profile:
-        return False
-    if conn is not None:
-        try:
-            row = conn.execute(
-                "SELECT rule_value FROM generate_rules WHERE rule_key=?",
-                ("requirement_must_retrieve",)).fetchone()
-            if row and str(row[0]).strip().lower() in ("false", "0", "off", "no"):
-                return False
-        except Exception:
-            pass
-    return True
-
-
-def retrieval_verdict(retrieval: dict | None, required: bool) -> str:
-    """判定检索是否达标：required 且无命中 ⇒ insufficient（不许写成已检查）。
+# ── ⑤ 硬门槛（**无开关**，2026-11-14 米爸拍板 D9-A 删除）─────────────────
+# 设计取舍（为什么删而不是留着）：
+#   ① 原来那个布尔（`requirement_must_retrieve`）名义上管"是否必须检索"，实际同时管着
+#      「要不要检索」「要不要产出结构化结果」「没检索到怎么判」——一个开关三种语义；
+#   ② 它的原始用途（让"没配标准档案的普通问答"不受影响）**已由 `bool(profile)` 覆盖**，
+#      开关纯属第二层冗余；
+#   ③ 真机实测它还根本读不到（`must_retrieve(profile)` 调用未传 conn ⇒ 死配置）；
+#      同族的 `requirement_check_enabled` 更是全仓零消费点。
+#   ⇒ 按"少一个配置项就少一个死配置"的原则直接删除：**有档案 + 需求校验意图 ⇒ 恒硬门槛**。
+#     想放宽判据的正确做法是改档案/类别清单（配置），而不是加一个能让整条链静默关闭的开关。
+def retrieval_verdict(retrieval: dict | None) -> str:
+    """判定检索是否达标：**无命中即 insufficient**（不许写成已检查）。
 
     证据来源（`agent/rag.py::retrieve()` 的真实返回键，均已核实）：
       · `chunk_hits`  分块级命中预览（rag.py:815，**存在**）
@@ -180,8 +247,6 @@ def retrieval_verdict(retrieval: dict | None, required: bool) -> str:
       rag.py 第 814 行就下了结论，实际第 815 行就是 `"chunk_hits": chunk_hits`）。
       错话差点被写死进代码与门禁里，故此处如实记录：**结论要看到定义处再下**。
     """
-    if not required:
-        return "checked"
     if not isinstance(retrieval, dict):
         return "insufficient"
     chunks = retrieval.get("chunk_hits") or retrieval.get("vector_docs") or []
@@ -366,13 +431,13 @@ def to_quality_issues(result: dict) -> list[dict]:
 
 
 def assemble_result(llm_content: str, *, retrieval: dict | None = None,
-                    required: bool = False, deterministic: dict | None = None,
+                    deterministic: dict | None = None,
                     configured: list[str] | None = None) -> dict:
     """③ 组装最终结构化结果（供 quality_report / card_data 复用）。
 
     返回 {"ok", "result", "quality_report", "card_patch", "verdict", "reasons"}
     · 解析失败 ⇒ ok=False，绝不伪造结果；
-    · 强制检索但无命中 ⇒ verdict=insufficient（硬门槛，不许写成已检查）；
+    · 无检索命中 ⇒ verdict=insufficient（硬门槛**恒生效**，无开关，不许写成已检查）；
     · 类别未覆盖齐 ⇒ verdict=insufficient 并列出缺口；
     · 确定性层 anchored==0 ⇒ 不得写「无冲突」。
     """
@@ -385,7 +450,7 @@ def assemble_result(llm_content: str, *, retrieval: dict | None = None,
         out["reasons"].append("LLM 未输出可解析的结构化 JSON")
         return out
 
-    verdict = retrieval_verdict(retrieval, required)
+    verdict = retrieval_verdict(retrieval)
     reasons: list[str] = []
     if verdict == "insufficient":
         reasons.append("标准档案要求先检索条款，但本轮无检索命中（不得声称已按标准校验）")

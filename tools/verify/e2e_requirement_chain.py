@@ -304,8 +304,75 @@ def phase3():
               bool(back) and len(json.loads(back)) == len(full), f"还原条数={len(json.loads(back or '[]'))}")
 
 
+def phase3b():
+    """P3b 换标准档案（拆多套）⇒ 检索白名单真的换了，不是假切换。
+
+    为什么这条必须独立取证：`merge_scope()` 是**并集**语义 ——
+    只要任何一处（Agent kb_scope / Skill frontmatter）还写死两篇文档，
+    切到 `incose_only_v1` 后 29148 仍然会被检索，配置看起来"切了"实际没切。
+    唯一可信证据是**请求返回的 citations 里到底引了哪些文档**。
+    """
+    print("\n── P3b 换标准档案（多套）⇒ 检索范围真变化 ──")
+    sys.path.insert(0, _ROOT)
+    from services import requirement_checks as rc        # noqa: E402
+    c = sqlite3.connect(DB)
+    c.row_factory = sqlite3.Row
+    conv = _new_conv("P3b")
+    if not conv:
+        check("P3b", "创建会话", False, "无 id")
+        c.close()
+        return
+    try:
+        _cur = rc.load_profile(c).get("profile_id")
+        avail = rc.load_profile(c).get("available_profiles") or []
+        check("P3b", "存在多套档案可切", len(avail) >= 2 and "incose_only_v1" in avail, f"{avail}")
+        sw = rc.switch_profile(c, "incose_only_v1")
+        check("P3b", "切换到 incose_only_v1 成功", bool(sw.get("ok")), f"{sw.get('error')}")
+        check("P3b", "切换后档案 docs 只剩 Guide（1 篇）",
+              len(sw.get("docs") or []) == 1 and "Guide" in str(sw.get("docs")),
+              f"{sw.get('docs')}")
+
+        r, dt = _chat(conv, PROMPT_RULE)
+        print(f"     incose_only_v1 耗时 {dt:.0f}s")
+        # ⚠️ citations 在 `retrieval.citations` 下（返回体顶层没有这个键）——
+        #   初版写 `r.get("citations")` 拿到空列表，导致"不含 29148"变成**空过**
+        #   （没有证据当然不含）。这类判据必须先证明"有证据"，再判"证据对不对"。
+        ret = r.get("retrieval") or {}
+        cits = ret.get("citations") or []
+        docs = sorted({str(x.get("source_doc") or "") for x in cits if isinstance(x, dict)} - {""})
+        vc, gc = int(ret.get("vector_count") or 0), int(ret.get("graph_count") or 0)
+        print(f"     retrieval: route={ret.get('route')} vc={vc} gc={gc} "
+              f"citations={len(cits)} docs={docs[:3]}")
+        check("P3b", "切换后检索仍产出证据（不是切换把检索切没了）",
+              bool(r.get("requirement_check_verdict")) and (vc > 0 or gc > 0 or bool(cits)),
+              f"verdict={r.get('requirement_check_verdict')} vc={vc} gc={gc} cits={len(cits)}")
+        # 核心判据的前置条件：必须先真的看到引用文档，否则"不含 29148"是空过
+        check("P3b", "引用了具体文档（无文档 ⇒ 后面的泄漏判据会空过）",
+              bool(docs), f"docs={docs[:3]}")
+        _leak = [d for d in docs if "29148" in d]
+        check("P3b", "incose_only_v1 下引用不含 29148（白名单非并集）",
+              bool(docs) and not _leak, f"docs={docs[:3]} 泄漏={_leak}")
+        _has_guide = [d for d in docs if "Guide" in d]
+        check("P3b", "incose_only_v1 下确实引到 Guide（切换方向正确）",
+              bool(_has_guide), f"docs={docs[:3]}")
+        _lc = rc.load_profile(c)
+        check("P3b", "请求期间档案未被改写（服务端只读配置）",
+              _lc.get("profile_id") == "incose_only_v1", _lc.get("profile_id"))
+    except Exception as e:
+        check("P3b", "incose_only_v1 下请求完成", False, repr(e)[:200])
+    finally:
+        try:
+            back = rc.switch_profile(c, _cur or "iso29148_incose_v1")
+            check("P3b", "档案已还原到原选那套", bool(back.get("ok")), f"{back.get('error')}")
+            _b = rc.load_profile(c)
+            check("P3b", "还原后两篇文档都在（复原证据）",
+                  len(_b.get("docs") or []) == 2, f"{_b.get('docs')}")
+        finally:
+            c.close()
+
+
 def main():
-    want = [a.lower() for a in sys.argv[1:]] or ["p1", "p2", "p3"]
+    want = [a.lower() for a in sys.argv[1:]] or ["p1", "p2", "p3", "p3b"]
     print("=" * 78)
     print("需求分析与冲突检测 · 配置化链路真机 E2E（HTTP 入口 + 落库取证）")
     print("=" * 78)
@@ -323,6 +390,8 @@ def main():
         phase2()
     if "p3" in want:
         phase3()
+    if "p3b" in want:
+        phase3b()
 
     fails = [x for x in RESULTS if not x[2]]
     print("\n" + "=" * 78)

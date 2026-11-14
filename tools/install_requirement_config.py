@@ -44,6 +44,33 @@ def j(x):
     return json.dumps(x, ensure_ascii=False)
 
 
+def _skill_frontmatter(s: dict) -> dict:
+    """Skill frontmatter 的**唯一构造点**（DB 写入与快照导出共用，避免两处漂移）。
+
+    ⚠️ 故意不含 `must_retrieve` / `required_docs`：
+      · 二者全仓零消费点（死配置），留着只会让人以为"这里能控制检索"；
+      · `required_docs` 若写死两篇，会让「拆多套标准档案」变成假切换；
+      · 文档白名单唯一来源 = `requirement_standard_profile.profiles[*].docs`，
+        检索意图判定唯一来源 = `services.requirement_checks.is_check_intent()`（无开关）。
+    """
+    return {"name": s["name"], "description": s["description"],
+            "triggers": s["triggers"], "version": s["version"],
+            "allowed-tools": " ".join(s["allowed_tools"]),
+            "category": "AI建模", "author": "平台内置"}
+
+
+def _agent_kb_scope() -> dict:
+    """Agent kb_scope 的**唯一构造点**（DB 写入与快照导出共用）。
+
+    ⚠️ Agent 级 **不写 doc 白名单** —— 白名单由「标准档案」唯一决定。
+    原因（"拆多套"时暴露）：`merge_scope` 是**并集**语义（用户显式选优先、档案追加），
+    若 Agent 里也写死两篇，切到 `incose_only_v1` 时最终 docs 仍是两篇
+    ⇒ 检索照样命中 29148 ⇒ **换标准是假的**。同一份清单写两处必然漂移。
+    `branches` 仍保留：图谱实体检索按分支口径，与文档白名单是两件事。
+    """
+    return {"branches": ["release"], "docs": []}
+
+
 def qcol(name: str) -> str:
     """列名加双引号：`references` 等 SQLite 保留字不加引号会 syntax error。"""
     return '"%s"' % str(name).replace('"', '""')
@@ -177,7 +204,7 @@ def build_skills(catalog):
 
 
 def build_agents():
-    kb = {"branches": ["release"], "docs": STANDARD_DOCS}
+    kb = _agent_kb_scope()
     common = ("输出必须是结构化 JSON（见 output_schema）。每条结论须带标准条款出处 clause_ref "
               "与需求原文证据 evidence；无出处或依据不足一律标 to_verify，不得写成已确认事实。")
     return [
@@ -312,12 +339,11 @@ def install_db(catalog, dry=False):
         # ── Skills ──
         for s in skills:
             existing = con.execute("SELECT id FROM skills WHERE name=?", (s["name"],)).fetchone()
-            fm = j({"name": s["name"], "description": s["description"],
-                    "triggers": s["triggers"], "version": s["version"],
-                    "allowed-tools": " ".join(s["allowed_tools"]),
-                    "must_retrieve": True,
-                    "required_docs": STANDARD_DOCS,
-                    "category": "AI建模", "author": "平台内置"})
+            # ★ 2026-11-14：frontmatter 里**不写** must_retrieve / required_docs。
+            #   两者全仓零消费点（纯尸体配置），而且都会让「拆多套」变假：
+            #   required_docs 写死两篇 ⇒ 切到 incose_only_v1 仍会带上 29148。
+            #   文档白名单的唯一来源 = 标准档案 profiles[*].docs。
+            fm = j(_skill_frontmatter(s))
             vals = dict(
                 name=s["name"], skill_type=s["skill_type"], description=s["description"],
                 version=s["version"], status=s["status"], frontmatter=fm,
@@ -378,23 +404,66 @@ def install_db(catalog, dry=False):
 
         # ── 标准档案（generate_rules，纯配置）──
         cfg = {
+            # ★ 2026-11-14：**多套标准档案**（米爸要求「拆多套」）。
+            #   结构：顶层放公共字段（catalog_path/skills/agents），`profiles` 放各套差异，
+            #   `active_profile` 指向当前生效那套。切换 = 改这一个字符串（见
+            #   `services.requirement_checks.switch_profile` / `tools/switch_requirement_profile.py`）。
+            #   为什么要多套而不是一个"docs 列表"：不同标准的**判据集**并不相同
+            #   （29148 讲 SRS 特性、INCOSE Guide 讲 R01-R42 写作规则），
+            #   档案必须能同时表达"用哪些文档"和"用哪些 Skill"，否则换标准只换了检索范围、
+            #   判据仍是旧那套 ⇒ 假切换。
             "requirement_standard_profile": j({
-                "profile_id": "iso29148_incose_v1",
-                "standard_ids": ["ISO/IEC/IEEE 29148:2011", "INCOSE Guide v4"],
-                "docs": STANDARD_DOCS,
+                "active_profile": "iso29148_incose_v1",
                 "catalog_path": "data/requirement_standards/rule_catalog.json",
                 "skills": ["requirement_rule_check_guide", "requirement_completeness_guide",
                            "Requirement_Conflict_Analysis"],
                 "agents": [a["name"] for a in agents],
-                "description": "需求分析与冲突检测默认标准档案；换标准只改本行配置"
+                "profiles": {
+                    "iso29148_incose_v1": {
+                        "standard_ids": ["ISO/IEC/IEEE 29148:2011", "INCOSE Guide v4"],
+                        "docs": STANDARD_DOCS,
+                        "description": "默认档案：29148-2011 的 SRS 特性 + INCOSE Guide 的写作规则"
+                                       "（两套互为补充，覆盖面最广）",
+                    },
+                    "iso29148_only_v1": {
+                        "standard_ids": ["ISO/IEC/IEEE 29148:2011"],
+                        "docs": [STANDARD_DOCS[1]],
+                        "description": "仅 ISO 29148-2011：只按 SRS 特性判，不引入 INCOSE 写作规则",
+                    },
+                    "incose_only_v1": {
+                        "standard_ids": ["INCOSE Guide v4"],
+                        "docs": [STANDARD_DOCS[0]],
+                        "description": "仅 INCOSE Guide v4：只按 R01-R42 写作规则判，适合先做文本规范收敛",
+                    },
+                },
+                "description": "多套标准档案；换标准 = 改 active_profile 一个字符串",
             }),
             "requirement_rule_categories": j([c["id"] for c in catalog["rule_categories"]]),
             "requirement_completeness_categories": j(
                 [c["id"] for c in catalog["completeness_categories"]]),
             "requirement_conflict_types": j([c["id"] for c in catalog["conflict_types"]]),
-            "requirement_must_retrieve": "true",
-            "requirement_check_enabled": "true",
-        }
+                                }
+        # ★ 2026-11-14：重装**不得静默重置用户已切换的档案**。
+        #   安装器每次都写整份 JSON；若原样覆盖 `active_profile`，
+        #   客户按需切到 incose_only_v1 之后，谁再跑一次安装器就被打回默认 ——
+        #   而"安装输出看起来完全正常"，没人会想到配置被悄悄重置
+        #   （最隐蔽的那类回归：命令成功、行为变了、无任何痕迹）。
+        #   ⇒ 读旧值：旧 active_profile 若在新 profiles 里仍存在，就沿用它。
+        _old_active = ""
+        try:
+            _row = con.execute("SELECT rule_value FROM generate_rules WHERE rule_key=?",
+                               ("requirement_standard_profile",)).fetchone()
+            if _row and _row[0]:
+                _old = json.loads(_row[0]) if isinstance(_row[0], str) else dict(_row[0])
+                if isinstance(_old, dict):
+                    _old_active = str(_old.get("active_profile") or "")
+        except Exception:
+            _old_active = ""
+        _cfg_obj = json.loads(cfg["requirement_standard_profile"])
+        if _old_active and _old_active in (_cfg_obj.get("profiles") or {}):
+            _cfg_obj["active_profile"] = _old_active
+            cfg["requirement_standard_profile"] = j(_cfg_obj)
+            print("沿用已有生效档案：%s（安装器不重置用户选择）" % _old_active)
         for k, v in cfg.items():
             if con.execute("SELECT 1 FROM generate_rules WHERE rule_key=?", (k,)).fetchone():
                 con.execute("UPDATE generate_rules SET rule_value=? WHERE rule_key=?", (v, k))
@@ -457,11 +526,7 @@ def sync_snapshot(skills, agents, dry=False):
             "name": s["name"], "skill_type": s["skill_type"], "description": s["description"],
             "prompt_id": None, "tool_name": "", "version": s["version"],
             "status": s["status"],
-            "frontmatter": j({"name": s["name"], "description": s["description"],
-                              "triggers": s["triggers"], "version": s["version"],
-                              "allowed-tools": " ".join(s["allowed_tools"]),
-                              "must_retrieve": True, "required_docs": STANDARD_DOCS,
-                              "category": "AI建模", "author": "平台内置"}),
+            "frontmatter": j(_skill_frontmatter(s)),
             "content": s["content"], "triggers": j(s["triggers"]), "category": "AI建模",
             "package_path": "", "source": "manual", "dependencies": "[]",
             "allowed_roles": "[]", "allowed_tools": j(s["allowed_tools"]),
@@ -474,7 +539,7 @@ def sync_snapshot(skills, agents, dry=False):
         d["tables"]["skills"] = [x for x in d["tables"]["skills"] if x.get("name") != s["name"]]
         d["tables"]["skills"].append(snap_skill(s))
 
-    kb = {"branches": ["release"], "docs": STANDARD_DOCS}
+    kb = _agent_kb_scope()
     for a in agents:
         row = {
             "name": a["name"], "display_name": a["display_name"], "description": a["description"],

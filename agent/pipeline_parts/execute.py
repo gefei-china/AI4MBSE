@@ -389,19 +389,24 @@ class ExecuteMixin:
 
         # Step 2: GraphRAG retrieval——按需检索：#标签主动引用 / Agent kb_required 配置 / 类型化报告素材 触发
         # V3：上传附件不再默认触发知识库检索（附件仍作「优先依据」注入 prompt；需查库时加 #知识库 标签）
-        # ★ 2026-11-14（胶水 ⑤ 硬门槛）：声明了 must_retrieve 的需求校验意图
-        #   必须真的检索到标准条款，否则后续 assemble_result 会把 verdict 判 insufficient，
-        #   不许把「没检索」当成「已按标准校验」。这是运行时判定，不依赖模型自觉。
-        _req_must_retrieve = False
+        # ★ 2026-11-14（胶水 ⑤ 硬门槛 · 无开关）：需求校验意图 + 标准档案存在 ⇒ **必须**检索。
+        #   米爸拍板 D9-A：删掉原来的布尔开关。理由（实测）：
+        #     ① 那个开关名义管"是否必须检索"，实际同时管「要不要检索」「要不要产出结构化结果」
+        #        「没检索到怎么判」——一个开关三种语义；
+        #     ② 它的原始用途（不干扰没配档案的普通问答）已由 `_req_profile` 空判覆盖；
+        #     ③ 真机还读不到它（调用未传 conn ⇒ 死配置），同族 `requirement_check_enabled`
+        #        更是全仓零消费点。⇒ 少一个配置项就少一个死配置，直接删。
+        #   想放宽判据的正确做法是改档案/类别清单（配置），而不是加一个能静默关掉整条链的开关。
+        #   ⚠️ 独立导入而**不复用**上面 try 里的 `_rc`：那个导入若失败，这里是 NameError，
+        #      而本处异常会把整轮请求带崩 —— 宁可判据 fail-closed（不硬门槛），也不能炸链路。
         try:
             from services import requirement_checks as _rc2
-            _req_must_retrieve = (_rc2.is_check_intent(intent)
-                                  and _rc2.must_retrieve(_req_profile))
+            _req_hard_gate = bool(_req_profile) and _rc2.is_check_intent(intent)
         except Exception:
-            _req_must_retrieve = False
+            _req_hard_gate = False
         should_retrieve = (bool(req_scope and req_scope.get('ok')) or bool(kb_tags) or bool(agent_def.kb_required)
                            or (intent == "report_generation" and report_type in ("impact", "review"))
-                           or _req_must_retrieve)
+                           or _req_hard_gate)
         if should_retrieve:
             retrieve_query = user_input + kb_hint
             # P1：结构化拆解的实体并入检索词（提升图谱/向量召回）
@@ -1214,7 +1219,8 @@ class ExecuteMixin:
         #   前端 13-reports.js 折叠块与 06-cards.js 冲突卡现成可用，**零前端改动**。
         #   parse 失败 / 未检索 / 类别漏检 / anchored=0 一律判 insufficient，绝不伪造结论。
         _req_assembled = None
-        if _req_profile and _req_must_retrieve:
+        # D9-A：无开关 —— 有档案 + 需求校验意图即产出结构化结果（硬门槛恒生效）
+        if _req_hard_gate:
             try:
                 from services import requirement_checks as _rc3
                 _configured = []
@@ -1223,7 +1229,7 @@ class ExecuteMixin:
                         _cc, "requirement_rule_categories" if intent == "requirement_rule_check"
                         else "requirement_completeness_categories")
                 _req_assembled = _rc3.assemble_result(
-                    llm_content, retrieval=retrieval, required=True,
+                    llm_content, retrieval=retrieval,
                     configured=_configured if intent in
                     ("requirement_rule_check", "requirement_completeness_check") else None)
                 if _req_assembled.get("quality_report"):
