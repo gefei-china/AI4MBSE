@@ -38,6 +38,15 @@ data/bootstrap/*
 #    FileNotFoundError: .../data/modeling_nodes.json ⇒ 恒红，而本机永远绿。
 #    入参已脱敏（原文件含 `C:/Users/<user>/Downloads/...` 溯源路径）。
 !data/modeling_nodes.json
+# 2026-11-14：`data/requirement_standards/` 同样是**代码级配置**，不是运行数据——
+#    规则清单是需求校验判据的**单一真源**：`tools/install_requirement_config.py` 读它
+#    生成 3 个 Skill 正文 + 6 条 generate_rules，门禁 G12 也要对着它校验条款出处。
+#    被 `data/*` 忽略时，干净克隆根本没有 rule_catalog.json ⇒ 安装器/门禁全部
+#    FileNotFoundError，而本机永远绿（与 modeling_nodes.json 同一类坑）。
+#    同样三段式（父目录先解封）。
+!data/requirement_standards/
+data/requirement_standards/*
+!data/requirement_standards/rule_catalog.json
 mbse.db
 mbse.db-shm
 mbse.db-wal

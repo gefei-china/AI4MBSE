@@ -1848,7 +1848,7 @@
    "script": "verify_requirement_config_chain.py",
    "tier": "local",
    "timeout": 240,
-   "reason": "配置化需求分析与冲突检测链路（75 断言）：规则清单为数据资产、Skill/Agent/档案/HIL 全配置、5 处通用胶水接线、确定性冲突复用 detect_conflicts、insufficient 四类判据、配置即行为，G11a-h 输出契约注入闭环（agents.output_schema → 提示词，含两条变异自证）。需真库配置资产 ⇒ local。2026-11-14"
+   "reason": "配置化需求分析与冲突检测链路（80 断言）：规则清单为数据资产、Skill/Agent/档案/HIL 全配置、5 处通用胶水接线、确定性冲突复用 detect_conflicts、insufficient 四类判据、配置即行为，G11a-h 输出契约注入闭环（agents.output_schema → 提示词，两条变异），G12a-e 条款出处真实性（锚点必须真实存在于已入库标准，防编造条款，含两条变异）。需真库 ⇒ local。2026-11-14"
   },
   {
    "script": "verify_requirement_optimization.py",

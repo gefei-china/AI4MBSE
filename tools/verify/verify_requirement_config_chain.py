@@ -326,6 +326,77 @@ def main():
     else:
         check("G11 AgentDefinition 导入失败（判据无法执行）", False, None)
 
+    # ── G12 条款出处真实性（防「编造标准条款」）──
+    # 为什么必须有：2026-11-14 核对发现初版 catalog **自己编了 6 处 §5.2.8.1**
+    #   （29148-2011 全文实有 5.2.1/5.2.3/5.2.4/5.2.5/5.2.6/5.2.7/5.2.8/5.2.8.6，
+    #    **没有 5.2.8.1**），且 5 类冲突**一条依据都没写**。
+    #   "所有结论须有明确来源、严禁编造"是硬约束 ⇒ 出处必须**对着已入库文档验存在性**，
+    #   而不是看起来像那么回事就算。
+    print("\n=== G12 条款出处真实性（锚点必须真实存在于已入库标准）===")
+
+    def _doc_text(con, did):
+        try:
+            rows = con.execute("SELECT content FROM document_chunks WHERE document_id=?",
+                               (did,)).fetchall()
+            return " ".join((r[0] or "") for r in rows)
+        except Exception:
+            return ""
+
+    def _audit_refs(cat, t29148, tguide):
+        """返回问题列表；空 = 全部锚点真实存在。"""
+        import re as _re
+        sec29148 = set(_re.findall(r"5\.2\.\d(?:\.\d)?", t29148))
+        secguide = set(_re.findall(r"5\.2\.\d(?:\.\d)?", tguide))
+        out = []
+        for key in ("rule_categories", "completeness_categories", "conflict_types"):
+            for it in cat.get(key) or []:
+                refs = it.get("clause_ref") or []
+                if isinstance(refs, str):
+                    refs = [refs]
+                if not refs:
+                    out.append("%s 无 clause_ref" % it.get("id"))
+                    continue
+                for r in refs:
+                    r = str(r)
+                    for m in _re.findall(r"§\s*(\d+(?:\.\d+)+)", r):
+                        have = sec29148 if "29148" in r else secguide
+                        if m not in have:
+                            out.append("%s: §%s 在该文档中不存在" % (it.get("id"), m))
+                    for m in _re.findall(r"\bR(\d{1,2})\b", r):
+                        if int(m) > 42 or ("R%s" % m) not in tguide:
+                            out.append("%s: R%s 未在 Guide 定位" % (it.get("id"), m))
+                    for m in _re.findall(r"\bC(\d{1,2})\b", r):
+                        if int(m) > 15 or ("C%s" % m) not in tguide:
+                            out.append("%s: C%s 未在 Guide 定位" % (it.get("id"), m))
+        return out
+
+    _t29148 = _doc_text(con, 846)
+    _tguide = _doc_text(con, 793)
+    _cat = json.load(open(os.path.join(ROOT, rc.CATALOG_REL), encoding="utf-8"))
+    check("G12a 两份标准正文可读（29148 / Guide）",
+          len(_t29148) > 10000 and len(_tguide) > 10000,
+          f"29148={len(_t29148)} Guide={len(_tguide)}")
+    _probs = _audit_refs(_cat, _t29148, _tguide)
+    check("G12b 全部 clause_ref 锚点真实存在（无编造条款）", not _probs,
+          f"问题 {len(_probs)} 条：{_probs[:4]}")
+    _allrefs = [it for k in ("rule_categories", "completeness_categories", "conflict_types")
+                for it in (_cat.get(k) or [])]
+    check("G12c 每条规则/完整性/冲突都写了依据（无空依据条目）",
+          all(it.get("clause_ref") for it in _allrefs),
+          f"缺依据：{[it.get('id') for it in _allrefs if not it.get('clause_ref')][:5]}")
+    # 变异自证：注入一个不存在的锚点 ⇒ 判据必须报出来（否则"不校验也绿"）
+    _mut = json.loads(json.dumps(_cat))
+    _mut["rule_categories"][0]["clause_ref"] = ["29148:2011 §9.9.9 编造条款"]
+    _mp = _audit_refs(_mut, _t29148, _tguide)
+    check("G12d 变异：注入 §9.9.9 编造锚点 ⇒ 判据报错（自证非恒真）", bool(_mp), f"{_mp[:2]}")
+    # 变异自证 2：删掉某条依据 ⇒ G12c 必须红
+    _mut2 = json.loads(json.dumps(_cat))
+    _mut2["conflict_types"][0]["clause_ref"] = []
+    check("G12e 变异：清空一条依据 ⇒ G12c 判红（空依据抓得住）",
+          not all(it.get("clause_ref") for k in
+                  ("rule_categories", "completeness_categories", "conflict_types")
+                  for it in (_mut2.get(k) or [])), None)
+
     con.close()
     print("\n" + "=" * 76)
     print("PASS %d / FAIL %d" % (PASS, FAIL))
