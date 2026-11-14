@@ -364,6 +364,66 @@ def group_e():
     check("E6", "告知类文本仍是追加语义（待续清单不会被去重吞掉）",
           "_full_content + _nt" in s, "")
 
+    # ── E7~E11：判据④「md5 相同」抓不到的形态（2026-11-14 真机 msg 6585）──
+    #   为什么必须新增：那次续跑 3 轮生成的三份正文**措辞不逐字相同**
+    #   （"负载/工况" vs "负载与工况"），三个 ```json 块 md5 全不同
+    #   ⇒ 判据④ 不命中 ⇒ 走 ⑤ 追加 ⇒ 用户仍看到 3 份（29,774 字符讲三遍同一件事）。
+    #   ⚠️ 样本取自真库，不造样本（本门禁的既有纪律）。
+    from agent.auto_continue import _ngram_sim, _RESTATE_SIM
+    t6585 = _row("select content from messages where id=6585")
+    check("E7", "真机样本存在（message 6585，续跑 3 份那种形态）", bool(t6585), "")
+    if t6585:
+        _parts = t6585[0].split("`" * 3)
+        _rnds = [_parts[i].strip() + ("\n" + "`" * 3 + _parts[i + 1] + "`" * 3
+                                      if i + 1 < len(_parts) else "")
+                 for i in range(0, len(_parts), 2) if _parts[i].strip()]
+        _bl = [_code_blocks(r) for r in _rnds]
+        _md5 = [{hashlib.md5(b.strip().encode()).hexdigest() for b in bs} for bs in _bl]
+        check("E8", "真机症状确认：6585 的 3 份正文块数相同、但 md5 **全不同**（=④ 抓不到）",
+              len(_rnds) == 3 and [len(b) for b in _bl] == [1, 1, 1]
+              and all(len(m) == 1 for m in _md5)
+              and len(set().union(*_md5)) == 3,
+              f"rounds={len(_rnds)} blocks={[len(b) for b in _bl]} "
+              f"uniq_md5={len(set().union(*_md5)) if _md5 else 0}")
+        # 阈值标定必须落在两群之间（这是"调参前先量分布"的硬要求，不是装饰）
+        _s12 = _ngram_sim(_rnds[0], _rnds[1]) if len(_rnds) > 1 else 0
+        _s13 = _ngram_sim(_rnds[0], _rnds[2]) if len(_rnds) > 2 else 0
+        _s23 = _ngram_sim(_rnds[1], _rnds[2]) if len(_rnds) > 2 else 0
+        _other = _row("select content from messages where role='assistant' "
+                      "and id<>6585 and length(content)>3000 order by id desc limit 1")
+        _s_far = _ngram_sim(_rnds[0], _other[0]) if _other else 0
+        check("E9", "阈值标定：同任务重述(%.3f/%.3f/%.3f) ≥ 阈值 ≥ 无关正文(%.3f)"
+              % (_s12, _s13, _s23, _s_far),
+              min(_s12, _s13, _s23) >= _RESTATE_SIM and _s_far < _RESTATE_SIM - 0.2,
+              f"阈值={_RESTATE_SIM}")
+        # 关键判据：3 份顺序喂进 merge ⇒ 只剩 1 份（不是 ≤2，是必须 1）
+        _m = ""
+        for _r in _rnds:
+            _m = merge_round_content(_m, _r)
+        _mb = _code_blocks(_m)
+        check("E10", "真机 3 份顺序合并后：只剩 1 个代码块（用户只该看到一版）",
+              len(_mb) == 1 and len(_m) < len(t6585[0]) * 0.5,
+              f"blocks={len(_mb)} len={len(_m)} vs 原文 {len(t6585[0])}")
+        # 变异自证：关掉新判据（阈值抬到 >1）⇒ E10 必须翻红，否则新判据没生效
+        _bak = globals().get("_RESTATE_SIM_ORIG")
+        import agent.auto_continue as _acm
+        _orig_thr = _acm._RESTATE_SIM
+        try:
+            _acm._RESTATE_SIM = 1.01
+            _m2 = ""
+            for _r in _rnds:
+                _m2 = _acm.merge_round_content(_m2, _r)
+            check("E11", "变异自证：阈值抬到 1.01（新判据失效）⇒ 代码块重新堆到 3 个",
+                  len(_code_blocks(_m2)) == 3, f"blocks={len(_code_blocks(_m2))}")
+        finally:
+            _acm._RESTATE_SIM = _orig_thr
+        # 信息保全：不同主题两段不得被相似度判据吞掉
+        check("E12", "不同主题两段（真机无关正文）仍追加，不被相似度判据吞掉",
+              merge_round_content(_rnds[0], _other[0] if _other else "别的内容 B"
+                                  ) .startswith(_rnds[0][:60])
+              and len(merge_round_content(_rnds[0], _other[0] if _other else "")
+                      ) > len(_rnds[0]), "")
+
 
 def main():
     print("=" * 78)

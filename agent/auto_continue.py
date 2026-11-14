@@ -34,7 +34,8 @@ __all__ = ["EVAL_SYS", "AUTO_CONTINUE_STAGE", "AUTO_EVAL_STAGE",
            "build_eval_messages", "parse_verdict", "normalize_step",
            "is_spinning", "decide", "continuation_prompt", "tools_brief",
            "looks_awaiting_permission", "has_continue_cue", "clarify_from_verdict",
-           "default_progress_verdict", "build_degrade_notice"]
+           "default_progress_verdict", "build_degrade_notice",
+           "merge_round_content", "_code_blocks", "_ngram_sim"]
 
 #: 前端 proc 时间线环节名（11-pipeline.js onStageEvent 按此渲染 🔄 块）
 AUTO_CONTINUE_STAGE = "自主续跑"
@@ -290,6 +291,31 @@ def _code_blocks(text: str) -> list:
     return out
 
 
+def _ngram_sim(a: str, b: str, n: int = 3) -> float:
+    """两段正文的字符 3-gram Jaccard 相似度（去空白后），范围 0~1。
+
+    为什么用字符 n-gram 而不是分词/编辑距离：
+      · 中文没有分词边界，字符 n-gram 才稳，且**零依赖**（本模块是纯函数模块，不引库）；
+      · 编辑距离对 1 万字符是 O(n²)，续跑轮每轮都要判一次，成本不可接受；
+      · 实测分离度足够（见 `merge_round_content` 的标定数据）：同一任务的两次重述
+        落在 0.85~0.95，而**不同主题**的两段正文只有 0.30 ⇒ 判据有很大的中间地带。
+    """
+    x, y = " ".join(str(a or "").split()), " ".join(str(b or "").split())
+    if len(x) < n or len(y) < n:
+        return 1.0 if x == y else 0.0
+    ga = {x[i:i + n] for i in range(len(x) - n + 1)}
+    gb = {y[i:i + n] for i in range(len(y) - n + 1)}
+    return len(ga & gb) / float(len(ga | gb) or 1)
+
+
+#: 判「同一份产物的又一次重述」的相似度阈值。
+#: 标定（真库 msg 6585，2026-11-14）：同一轮任务被续跑 3 次生成的 3 份正文
+#:   J(1,2)=0.8768 / J(1,3)=0.8483 / J(2,3)=0.9540；而与该会话无关的另一条长答复只有 0.3034。
+#: 取 0.70 —— 命中区间最低值之上还留 0.15 余量，非同类文本（0.30）离得很远。
+#: ⚠️ 调这个数之前先跑 `tools/verify/verify_conv9736_write.py` 的 E7~E11（真机样本标定）。
+_RESTATE_SIM = 0.70
+
+
 def merge_round_content(prev: str, cur: str) -> str:
     """把**同一任务的续跑轮正文**并进已有正文，但**不许堆出多份相同内容**。
 
@@ -299,11 +325,21 @@ def merge_round_content(prev: str, cur: str) -> str:
       拼接策略的错在于：**续跑轮的正文本意是"接着做"**，而模型每轮都会重写一份
       完整报告；把每轮都追加 ⇒ 用户看到 7 份重复，重点被稀释。
 
+    ★ 2026-11-14（conv 999999024 / msg 6585 实证）：**判据④"md5 相同"抓不到真机形态**。
+      那次续跑生成的三份正文措辞并不逐字相同（"负载/工况" vs "负载与工况"），
+      三个 ```json 块 md5 全不同 ⇒ ④ 不命中 ⇒ 走 ⑤ 追加 ⇒ 用户仍看到 **3 份**
+      （29,774 字符，同一份"结论摘要 + 结构化结果"讲了三遍）。
+      ⇒ 补判据④b/④c：**同一份产物的重述不一定逐字相同**，用 3-gram 相似度判。
+      ⚠️ 为什么不干脆去掉 ④ 只留相似度：md5 相同是**充分**证据（相似度必为 1），
+        保留它可让"逐字重复"这条最确定的路零成本先短路。
+
     判据（纯函数，可单测）：
       ① `cur` 空 ⇒ 保留 `prev`；
       ② `cur` 包含 `prev`（cur 是更完整版）⇒ **取 cur**；
       ③ `prev` 包含 `cur`（cur 只是片段）⇒ **保留 prev**；
       ④ 两边的代码块集合相同（同一份产物重述）⇒ **取 cur**（最新措辞/结论）；
+      ④b 代码块**数量相同**且都 ≥1、整体相似度 ≥ `_RESTATE_SIM` ⇒ 取 cur；
+      ④c 两边都无代码块、整体相似度 ≥ 0.85 ⇒ 取 cur（纯散文重述，判据更严）；
       ⑤ 其余（确实是新增的不同内容）⇒ 追加，保信息。
     """
     p, c = str(prev or "").strip(), str(cur or "").strip()
@@ -321,16 +357,29 @@ def merge_round_content(prev: str, cur: str) -> str:
     if _np in _nc:
         return c
     # ④ 代码块集合相同 ⇒ 同一产物的又一次重述
+    _bp, _bc = [], []
     try:
-        bp, bc = _code_blocks(p), _code_blocks(c)
-        if bp and bc:
-            sp = {b for b in bp if b}
-            sc = {b for b in bc if b}
+        _bp, _bc = _code_blocks(p), _code_blocks(c)
+        if _bp and _bc:
+            sp = {b for b in _bp if b}
+            sc = {b for b in _bc if b}
             if sp and sc and sp == sc:
                 return c
             # 新内容是旧内容的超集（多了代码块）⇒ 取新
             if sc and sc > sp:
                 return c
+    except Exception:
+        pass
+    # ④b / ④c 逐字不同但语义同一份（措辞微调）—— 见函数头 2026-11-14 那段标定
+    try:
+        _sim = _ngram_sim(p, c)
+        if _bp and _bc:
+            # 有产物：块数相同 = 同一份产物的重述（多一块/少一块都算真有新增，不吞）
+            if len(_bp) == len(_bc) and _sim >= _RESTATE_SIM:
+                return c
+        elif not _bp and not _bc and _sim >= 0.85:
+            # 纯散文：没有代码块可对齐，只认"几乎逐句改写"这一种，判据刻意更严
+            return c
     except Exception:
         pass
     return p + "\n\n" + c
