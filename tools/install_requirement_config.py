@@ -94,7 +94,18 @@ def build_skills(catalog):
 
     contract = (
         "\n## 输出契约（必须严格遵守，否则结果判为未判定）\n"
-        "只输出一个 JSON 对象，不要包裹 markdown 代码块：\n"
+        # ★ 2026-11-15（米爸拍板 A）：从「只输出一个 JSON 对象」改为
+        #   「先 ≤6 行结论摘要（带 [n]）→ 再一个 ```json 结构化块」。
+        #   为什么改：只输出 JSON ⇒ 聊天里看到的是一坨 2 万+ 字符的代码块，
+        #   用户既读不到结论，也**没有论述可以挂引用标识**（实测该场景正文 [n]=0，
+        #   而普通问答同一套机制是 7 个）。结构化结果仍然保留，只是不再霸占正文。
+        "\n### 第一部分：结论摘要（≤6 行，给用户看）\n"
+        "- 每行一个要点：哪条需求/哪个对象 + 什么问题 + 依据是什么；\n"
+        "- 引用标准条款时必须**紧跟来源序号**，写成 `§5.2.7 [2]` 这种样式"
+        "（序号见检索块里的「可引用编号对照」）；\n"
+        "- 这部分**不要写 JSON、不要出现字段名**。\n"
+        "\n### 第二部分：结构化结果（给系统解析）\n"
+        "紧接着输出**一个** ```json 代码块，内含**唯一一个** JSON 对象：\n"
         '{"checks":[{"req_id","rule_id","category","verdict","severity",'
         '"evidence","clause_ref","suggestion"}],'
         '"covered_categories":[...],"configured_categories":[...],'
@@ -103,7 +114,9 @@ def build_skills(catalog):
         "不得写成已确认事实。\n"
         "- 必须逐类过一遍规则清单，covered_categories 与 configured_categories 需可逐项核对；"
         "漏类或缺字段时把 verdict 写 insufficient，不许声称已检查。\n"
-        "- 每条结论的 clause_ref 必须来自上方清单，不要编造条款号。\n")
+        "- 每条结论的 clause_ref 必须来自上方清单，不要编造条款号。\n"
+        "- 格式细则以系统提示中的「输出契约（OUTPUT CONTRACT）」块为准（**单一真源**），"
+        "本段只给字段轮廓。\n")
 
     s1 = {
         "name": "requirement_rule_check_guide",
@@ -156,11 +169,15 @@ def build_skills(catalog):
             "2. missing 必须引用具体需求编号或说明缺哪一类内容，不许写笼统的「信息不足」。\n"
             "3. 未覆盖的类别不得算作通过；类别未全部检查时 verdict 写 insufficient。\n\n"
             "## 输出契约\n"
-            "只输出一个 JSON 对象：\n"
+            # ★ 2026-11-15 A：先 ≤6 行结论（带 [n]）→ 再一个 ```json 块（同 rule_check）
+            "第一部分：≤6 行结论摘要，直接说哪些类别未覆盖、缺什么、依据哪条；"
+            "引用条款须写成 `§5.2.6 [1]` 这种样式（序号见检索块「可引用编号对照」）。\n"
+            "第二部分：紧跟**一个** ```json 代码块，内含**唯一一个** JSON 对象：\n"
             '{"completeness":[{"category","covered","missing":[],"evidence","clause_ref"}],'
             '"covered_categories":[...],"configured_categories":[...],'
             '"standard_id":"...","verdict":"checked|insufficient"}\n'
             "- clause_ref 必须取自上方清单，不得编造条款号。\n"
+            "- 格式细则以系统提示「输出契约（OUTPUT CONTRACT）」块为准（单一真源）。\n"
         ) % (len(comps), comp_lines),
     }
 
@@ -191,13 +208,17 @@ def build_skills(catalog):
             "2. 每条冲突必须给出双方需求编号、原文证据、冲突描述与修改建议。\n"
             "3. 按严重度降序输出，并复核可追溯性。\n\n"
             "## 输出契约\n"
-            "只输出一个 JSON 对象：\n"
+            # ★ 2026-11-15 A：先 ≤6 行结论（带 [n]）→ 再一个 ```json 块（同 rule_check）
+            "第一部分：≤6 行结论摘要，直接说检出几处冲突、最严重的是哪几对、依据哪条；"
+            "引用条款须写成 `§5.2.5 [3]` 这种样式（序号见检索块「可引用编号对照」）。\n"
+            "第二部分：紧跟**一个** ```json 代码块，内含**唯一一个** JSON 对象：\n"
             '{"conflicts":[{"conflict_id","type","req_ids":[],"severity",'
             '"description","evidence","clause_ref","suggestion"}],'
             '"layer":"semantic","anchored":<int>,"verdict":"checked|insufficient"}\n'
             "- 每条冲突须带 clause_ref（标准条款出处，取自规则清单）与 evidence（双方需求原文），"
             "无出处一律标 to_verify；不得编造条款号。\n"
             "- 没有证据不得写 conflicts 条目；anchored 为 0 时 verdict 必须是 insufficient。\n"
+            "- 格式细则以系统提示「输出契约（OUTPUT CONTRACT）」块为准（单一真源）。\n"
         ) % (len(conflicts), conflict_lines),
     }
     return [s1, s2, s3]
@@ -328,7 +349,15 @@ def build_agents():
 def install_db(catalog, dry=False):
     skills = build_skills(catalog)
     agents = build_agents()
-    con = sqlite3.connect(DB)
+    # ⚠️ 2026-11-15：**服务在跑时安装器会撞写锁**（库是 WAL，服务随时可能写一行）。
+    #   实测 `sqlite3.OperationalError: database is locked` —— 默认 timeout=5s 不够，
+    #   而写本身只要 0.0s（纯粹是没等到锁）。给足 15s 并显式设 busy_timeout。
+    #   为什么不在失败时让人"先停服"：安装器是**配置动作**，不该要求停业务。
+    con = sqlite3.connect(DB, timeout=15)
+    try:
+        con.execute("PRAGMA busy_timeout=15000")
+    except Exception:
+        pass
     con.row_factory = sqlite3.Row
     stats = {"skills": 0, "agents": 0, "bindings": 0, "rules": 0,
              "intents": 0, "hil": 0, "profile": 0}

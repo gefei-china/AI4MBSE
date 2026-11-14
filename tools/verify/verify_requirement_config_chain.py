@@ -360,6 +360,45 @@ def main():
         _src = _insp.getsource(__import__("agent.registry", fromlist=["x"]))
         check("G11h registry 把 output_schema 传进 AgentDefinition",
               "output_schema=_parse_json_obj" in _src, None)
+
+        # ★ 2026-11-15（米爸拍板 A）：契约从「只输出一个 JSON」改成两段式。
+        #   为什么这条必须有判据：这是**用户可见**的形态变更（正文从"一坨 JSON"
+        #   变成"结论摘要 + JSON 块"），改回去只需要删一句话 —— 没有判据就会
+        #   悄无声息地回退（本轮用户报的"正文没有引用标识"正是它引起的）。
+        if _has_fn:
+            _inst2 = _cls.__new__(_cls)
+            _with2 = _AD(name="t3", description="d", output_schema={
+                "type": "object", "required": ["checks"], "properties": {
+                    "checks": {"type": "array"}, "verdict": {"type": "string"}}})
+            _ct = _cls._build_output_contract(_inst2, _with2)
+            check("G11i 契约要求**两部分**（结论摘要 + 结构化块），不再只输出 JSON",
+                  "第一部分" in _ct and "第二部分" in _ct and "结论摘要" in _ct, _ct[:120])
+            check("G11j 契约要求结论里条款号紧跟来源序号（如 §5.2.7 [2]）",
+                  "§5.2.7 [2]" in _ct and "来源序号" in _ct, None)
+            check("G11k 旧约束「JSON 之外不要写解释性散文」必须已删除（否则又回到只给 JSON）",
+                  "JSON 之外不要写解释性散文" not in _ct
+                  and "只输出**一个 JSON 对象**" not in _ct, None)
+            check("G11l 契约仍限「只允许一个 json 代码块」（解析需要唯一对象）",
+                  "只允许这一个代码块" in _ct and "唯一一个" in _ct, None)
+            # 变异自证：把契约退回旧文案 ⇒ G11i/G11k 必须红
+            _ct_old = ("## 输出契约（OUTPUT CONTRACT · 必须遵守）\n"
+                       "最终答复只输出**一个 JSON 对象**；JSON 之外不要写解释性散文。\n")
+            check("M-G11 变异（契约退回只输出 JSON）被 G11i/G11k 抓住",
+                  ("第一部分" in _ct) != ("第一部分" in _ct_old)
+                  and ("JSON 之外不要写解释性散文" in _ct_old))
+            # Skill 正文侧**不得**再写"只输出一个 JSON 对象"（否则两条指令冲突，
+            # 模型会听更严格的那条 ⇒ 契约白改）。这是"同一语义写两处必然漂移"的实例。
+            _bad_sk = []
+            for _n in ("requirement_rule_check_guide", "requirement_completeness_guide",
+                       "Requirement_Conflict_Analysis"):
+                _r = con.execute("SELECT content FROM skills WHERE name=?", (_n,)).fetchone()
+                _c = (_r[0] if _r else "") or ""
+                if "只输出一个 JSON 对象" in _c or "只输出一个 JSON" in _c:
+                    _bad_sk.append(_n + ":仍写只输出JSON")
+                if "结论摘要" not in _c:
+                    _bad_sk.append(_n + ":缺两段式说明")
+            check("G11m 三个 Skill 正文与契约同口径（两段式，无冲突指令）",
+                  not _bad_sk, _bad_sk[:3])
     else:
         check("G11 AgentDefinition 导入失败（判据无法执行）", False, None)
 

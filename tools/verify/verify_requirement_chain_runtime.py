@@ -408,6 +408,32 @@ def main():
     check("B", "B28 真机单段 JSON 原样可解（结构未被过度容错改坏）",
           (rc.parse_result_json(_real) or {}).get("anchored") == 3, "")
 
+    # ★ 2026-11-15（米爸拍板 A）：输出契约改成「≤6 行结论摘要 + 一个 ```json 块」。
+    #   这会**改变模型的产出形态**，所以解析侧必须逐形态验证 —— 否则契约改了、
+    #   解析失败、结构化结果静默丢失（表现为"卡片空了但没报错"）。
+    #   B29 是新形态的**主用例**（散文里还带 [n] 引用，真实输出必然如此）。
+    _two_part = ("检出 3 处问题：REQ-002 使用「尽可能快」属主观语言 §5.2.7 [2]；"
+                 "REQ-003 缺少验证手段 §5.2.5 [1]。\n\n"
+                 "```json\n{\"checks\":[{\"rule_id\":\"RC-04\",\"verdict\":\"fail\"}],"
+                 "\"verdict\":\"checked\"}\n```\n")
+    _tp = rc.parse_result_json(_two_part)
+    check("B", "B29 两段式（结论摘要 + 围栏 JSON）⇒ 解出且只取结构化部分",
+          bool(_tp) and len((_tp.get("checks") or [])) == 1
+          and _tp.get("verdict") == "checked", f"keys={list((_tp or {}).keys())}")
+    check("B", "B30 结论摘要里的 [n] 引用不干扰解析（不得被当 JSON 片段）",
+          bool(rc.parse_result_json("依据 §5.2.5 [1] 与 §5.2.7 [2]，判为不合格。\n"
+                                    '```json\n{"conflicts":[],"verdict":"checked"}\n```')),
+          "")
+    check("B", "B31 散文里含花括号（需求原文「{系统}应自检」）也能解出",
+          bool(rc.parse_result_json("需求「{系统}应自检」不合格 [1]。\n"
+                                    '```json\n{"checks":[{"rule_id":"RC-03"}],'
+                                    '"verdict":"checked"}\n```')), "")
+    check("B", "B32 旧形态（纯围栏 JSON，无摘要）仍兼容（不因换契约而破坏旧记录回放）",
+          bool(rc.parse_result_json('```json\n{"checks":[{"rule_id":"RC-01"}],'
+                                    '"verdict":"checked"}\n```')), "")
+    check("B", "B33 只有摘要没有任何 JSON ⇒ 仍返回 None（不把散文当结果）",
+          rc.parse_result_json("这条需求写得还行，但缺少验证手段 [1]。") is None, "")
+
     # ── C. 配置即行为（可证伪）────────────────────────────────────────────
     print("\n── C. 换档案 ⇒ 结论确实变化（唯一变量是档案）──")
     # 同一份 LLM 文本，两个档案各跑一遍
