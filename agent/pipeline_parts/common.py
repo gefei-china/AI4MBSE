@@ -264,6 +264,12 @@ PROMPT_CACHEABLE_KEYS = (
     #   见 build_prompt_blocks 里的 `"" if ctx.include_tool_rules else ...`。
     "artifact_facts",
     "citation_rules",  # L1 引用规范（无参字面量）
+    # ★ 2026-11-14：结构化输出契约（来自 `agents.output_schema`）。
+    #   此前 `output_schema` 只被 registry 存进元数据、studio 保存接口读写，
+    #   **提示词装配侧从不注入** ⇒ system_prompt 写「见 output_schema」而模型看不到，
+    #   字段名全靠猜（`covered_categories` 猜错即让"类别覆盖齐"恒判未覆盖）。
+    #   Agent 级常量 ⇒ 放静态区（可缓存）；无该配置的 Agent 返回 ""，prompt 逐字节不变。
+    "output_contract",
 )
 
 #: 分界线**以下**的块 key（动态区）。元组顺序 = 实际拼装顺序（层内按「依赖的易变度」升序，
@@ -616,6 +622,10 @@ def build_prompt_blocks(pipe, ctx: PromptBlocksCtx) -> dict:
         #   ⇒ 真机 990730/990731/990734 连续三次"虚报未落库"（产物实际都在）。
         "artifact_facts": "" if ctx.include_tool_rules else ARTIFACT_AUTO_RULES_TEXT,
         "citation_rules": pipe._build_citation_rules(),
+        # ★ 2026-11-14：结构化输出契约（`agents.output_schema` → 提示词）。
+        #   两条路径都必须有：非流式 execute 与流式 stream 共用本函数，故在此产出一次。
+        "output_contract": pipe._build_output_contract(ctx.agent_def)
+                           if hasattr(pipe, "_build_output_contract") else "",
         # ── 分界线（PROMPT_LAYER_BOUNDARY）以下为动态区 ──
         # ── L3 会话级 ──
         "intent_line": "当前意图：%s（Agent: %s，HIL 人机协作级别：%s）。\n"

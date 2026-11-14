@@ -205,12 +205,17 @@ _CASES = [
 
 #: ★ 2026-11-13：有意的后续增补块（A/B 两组共用同一份登记，避免两处漂移）。
 #: 每条都写明实证理由；新增块**必须**在此登记，否则 A/B 等价判据翻红（这是刻意的摩擦）。
-_EXTRA_KEYS = ("artifact_facts", "artifact_baseline")
+_EXTRA_KEYS = ("artifact_facts", "artifact_baseline", "output_contract")
 _EXTRA_WHY = {
     "artifact_facts": "产物自动归档事实：此前只在 tool_rules 里，execute 路径收不到 "
                       "⇒ 真机 990730/990731/990734 虚报「未落库」（产物实际都在）",
     "artifact_baseline": "当前产物基线正文：用户要求「基于产物内容与要求生成」，"
                          "此前只列产物标题不注入内容 ⇒ 每轮从零重写、版本无继承",
+    "output_contract": "结构化输出契约（agents.output_schema → 提示词）：此前该列只进 "
+                       "registry 元数据与 studio 保存接口，提示词装配侧从不注入 ⇒ "
+                       "system_prompt 写「见 output_schema」而模型看不到，字段名靠猜。"
+                       "无该配置的 Agent 返回空串，故本组 StubAgent 下逐字节仍一致；"
+                       "注入闭环由 verify_requirement_config_chain.py 单独取证（含变异）",
 }
 
 

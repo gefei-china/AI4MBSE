@@ -2421,7 +2421,17 @@ class ToolMixin:
             # 内置工具 handler
             if name == "graph_retrieve":
                 q = (arguments or {}).get("query", "")
-                r = self.rag.retrieve(q)
+                # ★ 2026-11-14（胶水 ①）：工具路径必须带上本轮的 kb_scope。
+                #   此前 `self.rag.retrieve(q)` 只传 query ⇒ Agent 的 kb_scope.docs
+                #   标准文档白名单被绕过，退化成全局检索（标准切换形同虚设）。
+                #   scope 由主链路在 _resolve_req_scope 之后算好挂到实例上，
+                #   这里只透传、不重复解析（避免两处取值链漂移）。
+                try:
+                    from services.requirement_checks import scope_for_tools as _sft
+                    _scope = _sft(self)
+                except Exception:
+                    _scope = None
+                r = self.rag.retrieve(q, kb_scope=_scope) if _scope else self.rag.retrieve(q)
                 _chunk_hits = r.get("chunk_hits") or []
                 hits = _chunk_hits or r.get("entities") or []
                 # ★ 2026-10-28（用户报「知识库明明有 OMG 规范讲 perform action，

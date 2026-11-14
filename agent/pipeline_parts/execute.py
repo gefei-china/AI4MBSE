@@ -276,6 +276,20 @@ class ExecuteMixin:
         _kb_query_tags = [t for t in kb_tags if t not in ("工程数据", "知识库")]
         kb_hint = f" + {' + '.join('#' + t for t in _kb_query_tags)}" if _kb_query_tags else ""
         req_scope, scope_att, effective_kb_scope = self._resolve_req_scope(scope_ids, scope_id, scope, agent_def)
+        # ★ 2026-11-14（胶水 ④⑤）：需求校验类意图加载标准档案。
+        #   档案（generate_rules.requirement_standard_profile）= 标准文档集 + Skill 集 + 类别子集，
+        #   全部是配置数据；这里只做「配置 → 运行时 kb_scope」的映射，不含任何业务规则。
+        _req_profile = {}
+        try:
+            from services import requirement_checks as _rc
+            with db_conn() as _pc:
+                _req_profile = _rc.load_profile(_pc)
+            if _req_profile and _rc.is_check_intent(intent):
+                effective_kb_scope = _rc.merge_scope(effective_kb_scope, _req_profile)
+            # 挂到实例：工具路径的 graph_retrieve 从这里取 scope（胶水 ①）
+            self._effective_kb_scope = effective_kb_scope
+        except Exception:
+            self._effective_kb_scope = effective_kb_scope or {}
         # P0-1 会话入口自动编排：复杂任务 → Planner-Executor（简单任务回落单 Agent）
         # 附件透传判定：带附件时仅规则信号可触发编排（附件为核心依据，优先单 Agent 直行）
         _orch = None
@@ -375,8 +389,19 @@ class ExecuteMixin:
 
         # Step 2: GraphRAG retrieval——按需检索：#标签主动引用 / Agent kb_required 配置 / 类型化报告素材 触发
         # V3：上传附件不再默认触发知识库检索（附件仍作「优先依据」注入 prompt；需查库时加 #知识库 标签）
+        # ★ 2026-11-14（胶水 ⑤ 硬门槛）：声明了 must_retrieve 的需求校验意图
+        #   必须真的检索到标准条款，否则后续 assemble_result 会把 verdict 判 insufficient，
+        #   不许把「没检索」当成「已按标准校验」。这是运行时判定，不依赖模型自觉。
+        _req_must_retrieve = False
+        try:
+            from services import requirement_checks as _rc2
+            _req_must_retrieve = (_rc2.is_check_intent(intent)
+                                  and _rc2.must_retrieve(_req_profile))
+        except Exception:
+            _req_must_retrieve = False
         should_retrieve = (bool(req_scope and req_scope.get('ok')) or bool(kb_tags) or bool(agent_def.kb_required)
-                           or (intent == "report_generation" and report_type in ("impact", "review")))
+                           or (intent == "report_generation" and report_type in ("impact", "review"))
+                           or _req_must_retrieve)
         if should_retrieve:
             retrieve_query = user_input + kb_hint
             # P1：结构化拆解的实体并入检索词（提升图谱/向量召回）
@@ -1185,6 +1210,35 @@ class ExecuteMixin:
                 report = _rg.structure(user_input[:80], llm_content, report_type=report_type)
             except Exception:
                 report = None
+        # ★ 2026-11-14（胶水 ③）：需求校验结果 → quality_report / card_data 通用通道。
+        #   前端 13-reports.js 折叠块与 06-cards.js 冲突卡现成可用，**零前端改动**。
+        #   parse 失败 / 未检索 / 类别漏检 / anchored=0 一律判 insufficient，绝不伪造结论。
+        _req_assembled = None
+        if _req_profile and _req_must_retrieve:
+            try:
+                from services import requirement_checks as _rc3
+                _configured = []
+                with db_conn() as _cc:
+                    _configured = _rc3.configured_categories(
+                        _cc, "requirement_rule_categories" if intent == "requirement_rule_check"
+                        else "requirement_completeness_categories")
+                _req_assembled = _rc3.assemble_result(
+                    llm_content, retrieval=retrieval, required=True,
+                    configured=_configured if intent in
+                    ("requirement_rule_check", "requirement_completeness_check") else None)
+                if _req_assembled.get("quality_report"):
+                    quality_report = _req_assembled["quality_report"]
+                _cd = json.loads(card_data) if isinstance(card_data, str) else dict(card_data or {})
+                _cd.update(_req_assembled.get("card_patch") or {})
+                card_data = json.dumps(_cd, ensure_ascii=False)
+                # ⚠️ card_data 在上方已随消息 INSERT 落库；这里补 UPDATE，
+                #   否则「刷新后还原」看到的仍是未带结构化结果的旧卡（两条渲染路径不一致）。
+                if not dry_run and msg_id:
+                    with db_conn() as _uc:
+                        _uc.execute("UPDATE messages SET card_data=? WHERE id=?",
+                                    (card_data, msg_id))
+            except Exception:
+                _req_assembled = None
         # P0-2 DST：回写会话级意图状态（非 dry_run 验证运行；供下轮无信号继承与槽位合并）
         if not dry_run:
             self._save_conversation_dst(conversation_id, intent, slots)
@@ -1221,6 +1275,9 @@ class ExecuteMixin:
             "attachments_info": {**att_parsed_info, "consumed": len(retrieval.get("attachment_hits") or [])},
             "matched_flows": [],   # 画布流程已移除，字段保留为空（前端不消费）
             "quality_report": quality_report,
+            # ★ 2026-11-14：配置化需求校验的可观测结果（门禁/验收直接读这两个字段）
+            "requirement_check_verdict": (_req_assembled or {}).get("verdict"),
+            "requirement_check_reasons": (_req_assembled or {}).get("reasons") or [],
             # ★ harness 持续工作：本次请求自主续跑次数（0=一次跑完未续）
             "auto_continues": _auto_continues,
         }

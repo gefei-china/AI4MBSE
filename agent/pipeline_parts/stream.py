@@ -4924,6 +4924,19 @@ class StreamMixin:
             _kb_query_tags = [t for t in kb_tags if t not in ("工程数据", "知识库")]
             kb_hint = f" + {' + '.join('#' + t for t in _kb_query_tags)}" if _kb_query_tags else ""
             req_scope, scope_att, effective_kb_scope = self._resolve_req_scope(scope_ids, scope_id, scope, agent_def)
+            # ★ 2026-11-14（胶水 ④⑤，与 execute.py 同口径）：需求校验意图加载标准档案，
+            #   并把本轮 kb_scope 挂到实例供 graph_retrieve 工具路径透传（胶水 ①）。
+            #   两条路径必须一致，否则「试跑正常、对话里标准白名单失效」。
+            _s_req_profile = {}
+            try:
+                from services import requirement_checks as _src
+                with db_conn() as _spc:
+                    _s_req_profile = _src.load_profile(_spc)
+                if _s_req_profile and _src.is_check_intent(intent):
+                    effective_kb_scope = _src.merge_scope(effective_kb_scope, _s_req_profile)
+                self._effective_kb_scope = effective_kb_scope
+            except Exception:
+                self._effective_kb_scope = effective_kb_scope or {}
             # SP-R：报告类型预识别（模型分析/变更影响/预评审/自定义大纲）
             report_type = None
             if intent == "report_generation":

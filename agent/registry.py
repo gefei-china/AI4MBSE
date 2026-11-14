@@ -307,6 +307,10 @@ class AgentRegistry:
                 model_hint="",
                 agent_role=a.get("agent_role") or "sub",
                 intent_name=name,
+                # ★ 2026-11-14：DB 的 output_schema 此前只进 `_db_meta`（元数据），
+                #   不进 AgentDefinition ⇒ 提示词装配侧拿不到 ⇒ 模型「见 output_schema」
+                #   却看不到 schema。此处置入定义对象，由 prompt 侧注入契约块。
+                output_schema=_parse_json_obj(a.get("output_schema")),
             )
             self._db_meta[name] = {
                 "display_name": a.get("display_name") or name,

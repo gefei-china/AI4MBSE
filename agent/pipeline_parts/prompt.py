@@ -284,6 +284,39 @@ class PromptMixin:
         secs.append((cur, head, "\n".join(buf)))
         return secs
 
+    def _build_output_contract(self, agent_def) -> str:
+        """结构化输出契约块（来自 `agents.output_schema`，**不是**代码里的字面量）。
+
+        ★ 2026-11-14（为什么必须有）：实测 `requirement_rule_check` / `requirement_conflict_check`
+          等 Agent 的 system_prompt 末尾写着「输出必须是结构化 JSON（见 output_schema）」，
+          但全仓 `output_schema` 只有两处消费：`registry` 存进 `_db_meta`、`studio` 保存接口 ——
+          **提示词装配侧一次都没读过**。模型因此看不到契约，字段名全靠猜：
+            · `covered_categories` 猜成 `checked_categories` ⇒ 「类别是否覆盖齐」恒判未覆盖
+              ⇒ verdict 恒 `insufficient`（真机形态是"怎么检查都是数据不足"）；
+            · `conflicts` / `checks` 猜错 ⇒ `parse_result_json` 拿不到数组 ⇒ 结论丢失。
+          与 2026-10-13 `tools.input_schema`「SQL 早查了、从不注入」属同一类缺陷。
+
+        安全边界：只注入**本 Agent 自己的** schema（DB 配置），不做任何推导或补全；
+        schema 为空 ⇒ 返回 ""（绝大多数 Agent 无此配置，prompt 逐字节不变）。
+        """
+        schema = getattr(agent_def, "output_schema", None)
+        if not isinstance(schema, dict) or not schema:
+            return ""
+        import json as _json                          # 局部导入：本模块靠 `import *` 取名字，不依赖再导出
+        try:
+            body = _json.dumps(schema, ensure_ascii=False, indent=2)
+        except Exception:
+            return ""
+        if len(body) > 4000:                      # 防御：异常大 schema 会挤掉语法权威段
+            body = body[:4000] + "\n…（schema 过长已截断）"
+        return (
+            "## 输出契约（OUTPUT CONTRACT · 必须遵守）\n"
+            "最终答复只输出**一个 JSON 对象**，字段名与层级必须与下列 JSON Schema 逐一对应"
+            "（字段名不得改写、不得省略 required、不得用同义中文键替代）；"
+            "JSON 之外不要写解释性散文，需要说明的内容放进对应字段的值里。\n"
+            "```json\n%s\n```\n" % body
+        )
+
     def _build_role_block(self, agent_def, cap: int = 0) -> str:
         """角色化首段（Agent 专属角色块）。
 
