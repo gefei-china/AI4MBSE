@@ -6,6 +6,7 @@
 `agent/pipeline.py` 现为薄 Mixin 入口，**本目录（pipeline_parts/）才是当前真源，可直接编辑**。"""
 from .common import *
 
+import json
 import re as _re
 
 # ── 身份声明剥离（2026-10-29）───────────────────────────────────────────────
@@ -333,6 +334,79 @@ class MemoryMixin:
             return _head + ("\n".join(lines) + "\n")[:_room]
         except Exception:
             return ""
+
+    # ── 产物基线（★ 2026-11-13：让「基于产物内容生成」真的成立）──
+    def _build_artifact_baseline(self, conversation_id=0, user_input="") -> str:
+        """把**当前产物基线内容**注入上下文，使迭代在既有产物上增量修改。
+
+        ## 为什么需要（用户 2026-11-13 原话）
+        「这个产物明明要**基于产物内容与要求**生成，且支持按照版本依次递增」
+
+        此前 `_build_model_context` 只列「当前会话产物：code《xxx》」——**只有标题、没有内容**
+        ⇒ 模型每次都在**从零重写**，只能靠记忆复现上一版，导致：
+          · 上一版已有的元素被丢掉（本仓已有「多版本丢元素」的实测记录）；
+          · 版本号递增了，但内容不是**演进**而是**重写**，"v0.2" 与 "v0.1" 无继承关系。
+
+        ## 注入什么（克制，避免污染）
+        · 只取**该会话最新一个 code 产物**（即当前基线）的正文，上限
+          `context.artifact_baseline_chars`（默认 6000，`<=0` 关闭）；
+        · 显式声明「这是基线，**仅在用户要求修订/迭代/更新当前产物时**在其上增量修改；
+          若要求新建另一个视图，请忽略本段」——否则会把"生成结构视图"也套进用例视图的代码里
+          （与 `_build_model_context` 里「上个任务素材被挪用」同一个坑）。
+
+        ## 为什么不用 `sysml_versions`
+        `artifacts.preview_content` 就是交付给用户的那份正文（与产物面板所见一致），
+        而 `sysml_versions.content` 存的是**视图 JSON**、代码在 `code_text` 列。
+        用 artifacts 更贴近"用户看到的产物"，且少一次 join。
+        """
+        if not conversation_id:
+            return ""
+        try:
+            from core import config as _cfg
+            cap = int(_cfg.get("context", "artifact_baseline_chars", 6000))
+        except Exception:
+            cap = 6000
+        if cap <= 0:
+            return ""
+        try:
+            from database import get_db
+            conn = get_db()
+            try:
+                row = conn.execute(
+                    "SELECT id, title, filename, meta, preview_content "
+                    "FROM artifacts WHERE conversation_id=? AND kind='code' "
+                    "  AND COALESCE(preview_content,'') <> '' "
+                    "ORDER BY id DESC LIMIT 1", (conversation_id,)).fetchone()
+            finally:
+                conn.close()
+        except Exception:
+            return ""
+        if not row:
+            return ""
+        code = str(row["preview_content"] or "")
+        if not code.strip():
+            return ""
+        try:
+            meta = json.loads(row["meta"] or "{}")
+        except Exception:
+            meta = {}
+        vlabel = str(meta.get("version_label") or "").strip()
+        fname = str(row["filename"] or "").strip()
+        _tail = "，".join([x for x in (
+            ("版本 " + vlabel) if vlabel else "",
+            ("文件 " + fname) if fname else "") if x])
+        truncated = len(code) > cap
+        body = code[:cap]
+        head = ("【当前产物基线（只读，迭代的起点）】\n"
+                "产物：《%s》%s\n"
+                "★ 用法：**仅当**本轮要求是「修订/修改/补充/迭代/更新该产物」时，"
+                "在上面这份内容的基础上**增量修改**（保留未要求改动的部分，"
+                "不要整份重写、不要丢掉已有元素）；若本轮要求是**生成另一个视图/另一份产物**，"
+                "请忽略本段内容，按新要求独立生成。\n" % (
+                    str(row["title"] or ""), ("（%s）" % _tail) if _tail else ""))
+        foot = ("\n…（基线过长已截断，仅注入前 %d 字符；如需完整内容请用产物读取能力）"
+                % cap) if truncated else ""
+        return head + "```sysml\n" + body + "\n```" + foot + "\n"
 
     # ── 多维作用域辅助（记忆读写的取值真源，单点化避免各处重复 SQL）──
     def _resolve_mem_project_id(self, conversation_id=0, project_id: str = "") -> str:

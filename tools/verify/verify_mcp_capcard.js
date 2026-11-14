@@ -1,3 +1,4 @@
+// CI-OPTIONAL: [local] tier=local（见 tools/gates_manifest.json）：真实浏览器门禁——需本机 Chromium（agent-browser）+ 8000 真实服务/真库，CI runner 无该组合 ⇒ 本机跑；改法须同步改清单 tier 并接线，不允许只删这行
 /* 回归判据 · 能力中心 MCP 卡片渲染（2026-11-06）
  * 从真实源文件抽取 capCard 函数，在 vm 里传入一个 _from_server 的 MCP 项，
  * 断言渲染出：测试/发现入口、在线徽章、凭据掩码、工具数、MCP 服务标签。

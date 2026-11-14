@@ -203,17 +203,39 @@ _CASES = [
     ("slots 只有 goal", _ctx(slots={"goal": "G"})),
 ]
 
+#: ★ 2026-11-13：有意的后续增补块（A/B 两组共用同一份登记，避免两处漂移）。
+#: 每条都写明实证理由；新增块**必须**在此登记，否则 A/B 等价判据翻红（这是刻意的摩擦）。
+_EXTRA_KEYS = ("artifact_facts", "artifact_baseline")
+_EXTRA_WHY = {
+    "artifact_facts": "产物自动归档事实：此前只在 tool_rules 里，execute 路径收不到 "
+                      "⇒ 真机 990730/990731/990734 虚报「未落库」（产物实际都在）",
+    "artifact_baseline": "当前产物基线正文：用户要求「基于产物内容与要求生成」，"
+                         "此前只列产物标题不注入内容 ⇒ 每轮从零重写、版本无继承",
+}
+
+
+def _strip_extra(d: dict) -> dict:
+    d = dict(d)
+    for k in _EXTRA_KEYS:
+        d.pop(k, None)
+    return d
+
+
 for tag, kw in _CASES:
     stub = StubPipe()
     # 旧 execute 的 role_block 在 dict 之前单独赋值 —— 从旧源码抽原文执行（不是复刻）
     ns = _exec_old("role_block = self._build_role_block(agent_def)", kw, stub)
     old = _exec_old("_r = " + OLD_EXEC_DICT, {**kw, "role_block": ns["role_block"]}, stub)["_r"]
     new = build_prompt_blocks(stub, PromptBlocksCtx(**kw, role_cap=0, include_tool_rules=False))
-    same = _norm(old) == _norm(new)
-    check("A[%s] batch 模式块集合与值逐字节一致" % tag, same,
-          "" if same else "old=%s\nnew=%s" % (_norm(old), _norm(new)))
+    # 除 `_EXTRA_KEYS`（有意增补，见上）外必须逐字节一致 ⇒ 真漂移照样红
+    same = _norm(_strip_extra(old)) == _norm(_strip_extra(new))
+    check("A[%s] batch 模式块集合与值逐字节一致（除已登记增补块）" % tag, same,
+          "" if same else "old=%s\nnew=%s" % (_norm(_strip_extra(old)), _norm(_strip_extra(new))))
     check("A[%s] 旧路径确实没有 tool_rules 块（差异未被误抹平）" % tag,
           "tool_rules" not in old and "tool_rules" not in new)
+    # 反证：增补块**确实**出现在 execute 路径（否则上面那条豁免就是在掩盖缺失）
+    check("A[%s] 产物事实块确实注入 batch 路径（否则豁免=掩盖缺失）" % tag,
+          bool(new.get("artifact_facts")), list(new.keys()))
 
 # ══════════════════════════════════════════════════════════════════════════════
 print()
@@ -236,6 +258,11 @@ for tag, kw in _CASES:
         od, nd = dict(o), dict(n)
         o_tr = od.pop("tool_rules", None)
         n_tr = nd.pop("tool_rules", None)
+        # ★ 2026-11-13：**有意的后续增补块**（登记见 `_EXTRA_KEYS` / `_EXTRA_WHY`）。
+        #   与 A 组共用同一份登记 ⇒ 两处不会漂移。其余块仍必须逐字节一致。
+        for _b in _EXTRA_KEYS:
+            od.pop(_b, None)
+            nd.pop(_b, None)
         if od != nd:
             return False                      # 其他块集合/值漂移 → 红
         if o_tr is None:

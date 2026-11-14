@@ -110,6 +110,10 @@ jobs:
         if: ${{ !cancelled() }}
         run: python tools/verify/verify_llm_context_guard.py
 
+      - name: Guard 采样参数优先级 + penalty 透传（13 项）
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_llm_sampling_params.py
+
       - name: Guard 上下文防腐 / 范围自愈（51 项）
         if: ${{ !cancelled() }}
         run: python tools/verify/verify_context_scope_guard.py

@@ -1,3 +1,4 @@
+// CI-OPTIONAL: [local] tier=local（见 tools/gates_manifest.json）：真实浏览器门禁——需本机 Chromium（agent-browser）+ 8000 真实服务/真库，CI runner 无该组合 ⇒ 本机跑；改法须同步改清单 tier 并接线，不允许只删这行
 /* 编排卡「计划校验 + 重规划」渲染门禁（2026-11-04）
  *
  * 为什么要有这条：这两块此前**只进 SSE 事件与日志**，刷新页面就没了，

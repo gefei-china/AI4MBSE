@@ -447,7 +447,14 @@ class ExecuteMixin:
         #   `skill_body_fetch` 取回时 id对不上 ⇒ 多视图连续调用时产出互相串扰
         #   （实测 usecase 与 activity 产出 md5 完全相同、ibd 与 sequence 同样）。
         #   ⇒ 会话上下文必须**先于**任何 prompt 装配建立。
-        self._tool_conv_ctx = conversation_id
+        # ★ 2026-11-13（编排子任务归属）：**子任务调用本方法时 conversation_id=0**
+        #   （子任务消息不落库，这是既有语义），若无兜底，工具留痕与确认单会被记到
+        #   「会话 0」⇒ 真机实测确认单 #104 conversation_id=0，用户在界面里看不到。
+        #   `_orch_conv_id` 由 `workflows/planner.py::_run_task` 在**调用本方法之前**设好
+        #   （父会话 id）；会话直答路径不设它 ⇒ `conversation_id` 优先，行为完全不变。
+        #   ⚠️ 不要把 `_orch_conv_id` 加进 `reset_request_state` 的清零清单 ——
+        #      本方法的入口就要重置状态，清了就读不到（顺序反了）。
+        self._tool_conv_ctx = int(conversation_id or getattr(self, "_orch_conv_id", 0) or 0)
         # P1-29（2026-10-02）：状态起点统一 —— 每轮**无条件清零**。
         # 对话走全局单例（`routers/conversations.py:14`），只"有技能时才赋值"会让上一轮的
         # 白名单残留到本轮。

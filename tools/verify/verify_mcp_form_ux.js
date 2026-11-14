@@ -1,3 +1,4 @@
+// CI-OPTIONAL: [local] tier=local（见 tools/gates_manifest.json）：真实浏览器门禁——需本机 Chromium（agent-browser）+ 8000 真实服务/真库，CI runner 无该组合 ⇒ 本机跑；改法须同步改清单 tier 并接线，不允许只删这行
 /* 回归判据 · MCP 编辑页三处优化（2026-11-06）
  *
  * ⚠️ 本脚本**取代** `verify_mcp_headers_edit.js`（后者已删除）。映射关系：

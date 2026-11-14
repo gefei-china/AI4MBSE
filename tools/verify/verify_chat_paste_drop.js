@@ -1,3 +1,4 @@
+// CI-OPTIONAL: [local] tier=local（见 tools/gates_manifest.json）：真实浏览器门禁——需本机 Chromium（agent-browser）+ 8000 真实服务/真库，CI runner 无该组合 ⇒ 本机跑；改法须同步改清单 tier 并接线，不允许只删这行
 /* 回归判据 · 会话输入框 Ctrl+V 贴图/文件、拖放文件（2026-11-06）
  *
  * 背景：输入框原先只有 <input type=file> 的按钮上传，没有 paste/drop 监听。

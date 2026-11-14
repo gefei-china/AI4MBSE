@@ -1,3 +1,4 @@
+// CI-OPTIONAL: [local] tier=local（见 tools/gates_manifest.json）：真实浏览器门禁——需本机 Chromium（agent-browser）+ 8000 真实服务/真库，CI runner 无该组合 ⇒ 本机跑；改法须同步改清单 tier 并接线，不允许只删这行
 /* HIL 确认卡真实浏览器验证（按 mbse-ui-browser-verify 技能模板）
  *
  * 关键纪律：

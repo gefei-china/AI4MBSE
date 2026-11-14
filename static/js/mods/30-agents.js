@@ -2144,6 +2144,9 @@ function addLLM() {
   document.getElementById('f-budget').value = 0;
   document.getElementById('f-top-p').value = '';
   document.getElementById('f-top-k').value = '';
+  // 2026-11-13：新增 penalty 控件清空（空 = 不下发该字段）
+  const _nfp = document.getElementById('f-freq-penalty'); if(_nfp) _nfp.value = '';
+  const _npp = document.getElementById('f-pres-penalty'); if(_npp) _npp.value = '';
   setThinkingControl('tier');       // 默认按挡位（细粒度），用户可切按开关
   setThinkingLevel('模型默认');
   syncCtxTier(8192);
@@ -2251,6 +2254,9 @@ async function editLLM(id) {
   const mp = p.model_params || {};
   document.getElementById('f-top-p').value = (mp.top_p ?? '');
   document.getElementById('f-top-k').value = (mp.top_k ?? '');
+  // 2026-11-13：penalty 回填（空 = 不下发；null 显示为空而非 "null"）
+  const _rfp = document.getElementById('f-freq-penalty'); if(_rfp) _rfp.value = (mp.frequency_penalty ?? '');
+  const _rpp = document.getElementById('f-pres-penalty'); if(_rpp) _rpp.value = (mp.presence_penalty ?? '');
   syncCtxTier(p.context_window || 8192);
   // 思考控制方式回填：新字段 thinking_control；老数据没有该字段时按值推断 ——
   //   有 thinking_level 且是 低/中/高 ⇒ tier；否则看 thinking_mode：
@@ -2307,6 +2313,12 @@ async function saveLLM() {
   }
   const level = getThinkingLevel();                 // 模型默认 | 开启 | 关闭 | 低 | 中 | 高
   const control = getThinkingControl();             // tier(挡位) | toggle(开关)
+  // 2026-11-13：penalty（-2~2，留空 = 不下发该字段）
+  //   ⚠️ 与温度同理：0 是合法值，不能用 || 兜底；留空 → parseFloat('') = NaN → null
+  const freqRaw = parseFloat(document.getElementById('f-freq-penalty')?.value);
+  const freq = (Number.isFinite(freqRaw) && freqRaw >= -2 && freqRaw <= 2) ? freqRaw : null;
+  const presRaw = parseFloat(document.getElementById('f-pres-penalty')?.value);
+  const pres = (Number.isFinite(presRaw) && presRaw >= -2 && presRaw <= 2) ? presRaw : null;
   // thinking_mode 保持三态写入（**兼容**：后端旧链路仍读它，且历史数据/其他面板依赖该字段）
   // thinking_level 是新字段（后端优先消费），二者由同一选择推导，不会互相矛盾。
   const thinking_mode = level === '关闭' ? '关闭' : (level === '模型默认' ? '模型默认' : '开启');
@@ -2327,8 +2339,10 @@ async function saveLLM() {
     const r = await api('/api/llm/providers', {method:'POST', body:JSON.stringify(body)});
     savedId = r.id || '';
   }
-  // 高级参数（top_p/top_k/thinking_mode/thinking_level）落库 model_params
-  if(savedId) await api(`/api/llm/providers/${savedId}/params`, {method:'PATCH', body:JSON.stringify({model_params:{top_p:topP, top_k:topK, thinking_mode, thinking_level:level, thinking_control:control}})});
+  // 高级参数（top_p/top_k/penalty/thinking_mode/thinking_level）落库 model_params
+  // ⚠️ PATCH /params 是**整列覆盖**（后端直接存整个 JSON）⇒ 必须把已知键一次带全，
+  //    漏一个就会把该键清掉（这正是"同一语义多处各写一份"的典型错位点）。
+  if(savedId) await api(`/api/llm/providers/${savedId}/params`, {method:'PATCH', body:JSON.stringify({model_params:{top_p:topP, top_k:topK, frequency_penalty:freq, presence_penalty:pres, thinking_mode, thinking_level:level, thinking_control:control}})});
   closeModal(); toast(id ? '已保存' : '已添加'); loadLLMProviders(); loadHome();
   // 会话入口的模型切换面板与本表同源（都读 /api/llm/providers）⇒ 改完必须同步刷新，
   // 否则"改了描述但入口列表还是旧的"（双份缓存不同步的典型症状）。

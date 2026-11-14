@@ -866,6 +866,9 @@ async function selectConv(id) {
   // 2026-09-25：打开会话先恢复「待澄清」状态（在渲染消息之前）——历史澄清卡据此决定
   // 是可作答的卡还是只读摘要，输入区上方的提示条也据此显示（刷新后作答路径）。
   if(typeof setPendingClarify === 'function') setPendingClarify(r && r.pending_clarify);
+  // ★ 2026-11-13：同构的另一半 —— 写操作确认单（通用 Ask 层的 kind='confirm'）也要能恢复。
+  //   否则刷新后 dock 提示条只剩澄清一种 ⇒ 用户看不到「有写操作待批准」。
+  if(typeof loadPendingConfirms === 'function') loadPendingConfirms(id);
   const msgs = (r && r.messages) || r || [];
   _convMsgTotal = (r && r.total) || msgs.length;
   _oldestMsgId = msgs.length ? msgs[0].id : null;

@@ -1,3 +1,4 @@
+// CI-OPTIONAL: [local] tier=local（见 tools/gates_manifest.json）：真实浏览器门禁——需本机 Chromium（agent-browser）+ 8000 真实服务/真库，CI runner 无该组合 ⇒ 本机跑；改法须同步改清单 tier 并接线，不允许只删这行
 // P1-4b 前端自检：配置页「耦合簇」渲染逻辑 + 约束校验器 + 与后端 schema 的契约一致性
 // 运行：node tools/verify/verify_ctxconfig_ui.js
 // 说明：agent-browser 在本机反复被环境 SIGTERM，故改用**纯函数单测**（比截图更有逻辑覆盖）——

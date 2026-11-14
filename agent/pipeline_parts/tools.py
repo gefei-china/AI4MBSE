@@ -1233,6 +1233,51 @@ class ToolMixin:
             pass
         return val or "read"
 
+    # ══════════════════════════════════════════════════════════════════════
+    # ★ 2026-11-13：写类判定的**唯一入口**（暂存分支与确认闸共用）
+    # ══════════════════════════════════════════════════════════════════════
+    def _classify_write(self, name: str) -> dict:
+        """执行侧写类判定 —— **双源**，返回 `{match_key, kind, source}`。
+
+        ## 为什么必须抽成一个方法（这是本轮的真因）
+        此前**两处各写一份判定**，对同一个工具给出相反结论：
+          · 编排子任务暂存分支（`tools.py` 的 `_orch_subtask` 段）用
+            `HILService.is_write_tool(name)` —— 读的是**硬编码 5 个名字**
+            （`entity_create/relation_create/entity_update/entity_delete/relation_delete`，
+            其中 `entity_create` 在 tools 表里还是 `disabled`）
+            ⇒ `is_write_tool('save_artifact') = False` ⇒ **跳过暂存**；
+          · 统一确认闸用 `classify_action(name, side_effect)` —— 双源判定
+            ⇒ `save_artifact` 的 `tools.side_effect='write'` ⇒ 命中 `write`=confirm
+            ⇒ 入队 + 中断本轮。
+        结果（真机 conv 990727 / run 990225）：**代码生成成功**（确认单里有 77 行完整代码），
+        但子任务被确认闸打断、`subtask_artifacts` 为空、`sysml_views` 为空
+        ⇒ 汇总报告写"t1、t2 尚未体现实质性完成结果" ⇒ 用户看到"生成用例视图失败"。
+        ⇒ 认定：**同一语义在两处各写一份判定，必然错位**。抽成本方法后只有一个判据。
+
+        ## 双源口径（详见 `hil_service.classify_action`）
+        · `tools.side_effect`（本地/HTTP 工具；`se_source='manual'` 时人工裁决最高）
+        · MCP 动词族（`mcp_effect_level`；`auto` 派生 + MCP 时回到家族灰度档）
+        """
+        try:
+            from hil_service import classify_action as _ca
+            _meta = self._tool_se_meta(name)
+            _ca_kw = {}
+            if _meta.get("se_source") == "manual":
+                _ca_kw = {"se_source": "manual"}
+            elif _meta.get("is_mcp"):
+                _ca_kw = {"se_source": "auto", "is_mcp": True}
+            return _ca(name, self._tool_side_effect(name), **_ca_kw)
+        except TypeError:
+            try:
+                from hil_service import classify_action as _ca2
+                return _ca2(name, self._tool_side_effect(name))       # 老签名兜底
+            except Exception:
+                return {"kind": "read", "match_key": "", "source": "fallback"}
+        except Exception:
+            # 判定失败一律按 read（= 不暂存、不拦），与既有确认闸的 fail-open 方向一致：
+            # 误判成 write 会把正常工具锁死，代价远高于"漏拦一次"（后者仍有 MCP 侧兜底）。
+            return {"kind": "read", "match_key": "", "source": "fallback"}
+
     def _tool_se_meta(self, name: str) -> dict:
         """★ 2026-11-07：副作用**连同来源**一起取（`{side_effect, se_source, is_mcp}`）。
 
@@ -1322,26 +1367,10 @@ class ToolMixin:
         #   真正的变更仍在 `hil_service.execute_confirmation` 的 `cap_*` 分支里，需人批准。
         if str(name) in _PROPOSE_WRITE_EXEMPT:
             return None
-        try:
-            from hil_service import classify_action as _ca
-            # ★ 2026-11-07：把"副作用来源"一并交给分类器 —— 自动派生的 MCP 工具
-            #   要回到 MCP 家族灰度档，否则 `mcp_write=notify` 会被本地 write=confirm 架空
-            #   （详见 `_tool_se_meta` 的说明）。
-            _meta = self._tool_se_meta(name)
-            _ca_kw = {}
-            if _meta.get("se_source") == "manual":
-                _ca_kw = {"se_source": "manual"}
-            elif _meta.get("is_mcp"):
-                _ca_kw = {"se_source": "auto", "is_mcp": True}
-            _cls = _ca(name, self._tool_side_effect(name), **_ca_kw)
-        except TypeError:
-            try:
-                from hil_service import classify_action as _ca2
-                _cls = _ca2(name, self._tool_side_effect(name))   # 老签名兜底
-            except Exception:
-                return None
-        except Exception:
-            return None
+        # ★ 2026-11-13：改用**唯一判定入口** `_classify_write`（与编排暂存分支同源）。
+        #   此前这里内联了一份 `_tool_se_meta` + `classify_action` 的组装逻辑，
+        #   与暂存分支的 `HILService.is_write_tool` 各自独立 ⇒ 同一工具两处结论相反。
+        _cls = self._classify_write(name)
         if _cls.get("kind") == "read":
             return None
 
@@ -1974,9 +2003,23 @@ class ToolMixin:
                 self._hook_warn = _hk.get("message") or f"工具「{name}」触发钩子提示（{_hk.get('name') or '-'}）"
             # T8：编排子任务写操作受控——不即时执行、不即时入队，暂存到 subtask_artifacts，
             # 由编排汇总段批量挂人工确认队列（确认归属该编排 run/task_key）
+            #
+            # ★★ 2026-11-13（真机 conv 990727 / run 990225 归因）：判定改用 `_classify_write`
+            #   ——**与下方统一确认闸同源**。修前这里用 `HILService.is_write_tool(name)`
+            #   （硬编码 5 个旧工具名），对 `save_artifact` 返回 False ⇒ 跳过暂存
+            #   ⇒ 继续下落命中统一闸 ⇒ **每个子任务各自被中断**，设计上的
+            #   "暂存→汇总统一确认"对 save_artifact 从未生效（subtask_artifacts 实测为空）。
+            #
+            # ⚠️ 必须同步应用两道豁免，否则会**反向引入**新缺陷：
+            #   `sysml_v2_autofix` 的 side_effect 也是 'write'（实测），旧实现因为
+            #   不在硬编码集合里而"自然放行"；换成同源判定后若不豁免，
+            #   它就会被暂存 ⇒ 模型调修复工具拿到"已暂存"回执 ⇒ **校验-修复闭环被卡死**
+            #   （正是 `_REPAIR_WRITE_EXEMPT` 注释里记的那个坑）。
+            #   豁免集合与确认闸共用同一对常量，语义天然一致。
             if getattr(self, "_orch_subtask", False):
-                from hil_service import HILService
-                if HILService.is_write_tool(name):
+                if (str(name) not in _REPAIR_WRITE_EXEMPT
+                        and str(name) not in _PROPOSE_WRITE_EXEMPT
+                        and self._classify_write(name).get("kind") != "read"):
                     from database import get_db
                     from services.artifact_materializer import store_write_request
                     _w_run_id = int(getattr(self, "_tool_run_ctx", 0) or 0)

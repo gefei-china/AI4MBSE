@@ -142,9 +142,34 @@ def _archive_sysml_version(conn, conversation_id: int, message_id: int,
         if dup:
             return None
         # 会话版本计数 + 上一版本（修订链）
-        row = conn.execute(
-            "SELECT COUNT(*) AS n, MAX(id) AS last_id FROM sysml_versions WHERE conversation_id=?",
-            (conversation_id,)).fetchone()
+        #
+        # ★★ 2026-11-13（真机 conv 990727 实证）：**版本链必须按「产物主体」分组**。
+        #   原实现按**会话**计数：`WHERE conversation_id=?` ⇒ label = v0.{会话版本数+1}。
+        #   后果（实测该会话）：
+        #     v0.1 = `package '串联混动汽车运行需求'`（需求视图）
+        #     v0.2 = `package '串联混动汽车用例'`（用例视图）— parent_id 竟指向 v0.1
+        #   ⇒ 两个完全不同的产物被串成一条修订链，用户在"演进路线"里看到
+        #     「用例视图是需求视图的 v0.2」，版本号与内容完全对不上。
+        #   修法：subject = `derive_subject(code_text)`（package 名 → 主定义名 → 实例名），
+        #     同 subject 才 +1 与串联 parent；不同 subject 各自从 v0.1 起。
+        #   subject 为空（无代码、只有结构化视图）时退回按会话计数，
+        #   保持旧行为（这类轮次本来只有一张视图，串链风险低）。
+        subject = ""
+        try:
+            if (code_text or "").strip():
+                from core.artifact_naming import derive_subject as _dsub
+                subject = str(_dsub(code_text, "") or "")[:80]
+        except Exception:
+            subject = ""
+        if subject:
+            row = conn.execute(
+                "SELECT COUNT(*) AS n, MAX(id) AS last_id FROM sysml_versions "
+                "WHERE conversation_id=? AND subject=?",
+                (conversation_id, subject)).fetchone()
+        else:
+            row = conn.execute(
+                "SELECT COUNT(*) AS n, MAX(id) AS last_id FROM sysml_versions WHERE conversation_id=?",
+                (conversation_id,)).fetchone()
         n = row["n"] if row else 0
         last_id = row["last_id"] if row else None
         label = f"v0.{n + 1}"
@@ -266,21 +291,32 @@ def _archive_sysml_version(conn, conversation_id: int, message_id: int,
             "lost": _lost[:200],
             "window": _CONTRACT_WINDOW,
         }
-        # 旧版本状态收敛：draft/current → superseded（只收敛最后一个 current/draft，避免误标 committed）
-        cur = conn.execute("SELECT id, status FROM sysml_versions WHERE conversation_id=? AND status IN ('draft','current') "
-                           "ORDER BY id DESC LIMIT 1", (conversation_id,)).fetchone()
+        # 旧版本状态收敛：draft/current → superseded
+        #   ★ 2026-11-13：**只在同一 subject 内收敛**。原实现是「整个会话最后一条
+        #   current/draft」无差别 supersede ⇒ 一旦按 subject 分组计数，
+        #   生成"用例视图 v0.1"会把并存的"需求视图 v0.1"也标成 superseded
+        #   ⇒ 两个独立产物互相把对方作废（版本状态失真，切版本时找不到 current）。
+        if subject:
+            cur = conn.execute(
+                "SELECT id, status FROM sysml_versions "
+                "WHERE conversation_id=? AND subject=? AND status IN ('draft','current') "
+                "ORDER BY id DESC LIMIT 1", (conversation_id, subject)).fetchone()
+        else:
+            cur = conn.execute(
+                "SELECT id, status FROM sysml_versions WHERE conversation_id=? AND status IN ('draft','current') "
+                "ORDER BY id DESC LIMIT 1", (conversation_id,)).fetchone()
         if cur:
             conn.execute("UPDATE sysml_versions SET status='superseded' WHERE id=?", (cur["id"],))
         # P1-1（2026-09-28）：project_id **写入时定格**会话所属工程（空=无工程会话，合法）。
         # 此后会话改归属，历史版本仍留在它产生时所属的工程下（写回智源的目标工程不漂移）。
         cur2 = conn.execute(
-            "INSERT INTO sysml_versions (artifact_id, conversation_id, message_id, project_id, version_label, content, diff, element_summary, parent_id, status, created_by, code_text) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+            "INSERT INTO sysml_versions (artifact_id, conversation_id, message_id, project_id, version_label, content, diff, element_summary, parent_id, status, created_by, code_text, subject) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (0, conversation_id, message_id,
              _conversation_project_id(conn, conversation_id), label,
              json.dumps(sysml_views, ensure_ascii=False), json.dumps(diff, ensure_ascii=False),
              json.dumps(summary, ensure_ascii=False), last_id, "current", created_by,
-             code_text or ""))
+             code_text or "", subject))
         # 不在此 commit：由调用方（db_conn 上下文）统一提交，保证与消息落库同事务
         return cur2.lastrowid
     except Exception:
@@ -506,24 +542,34 @@ def _resolve_code_artifact_title(conn, conversation_id, code_text: str,
     from core.artifact_naming import compose_title, derive_subject, filename_for
 
     goal = _conversation_goal_text(conn, conversation_id)
+    # ★★ 2026-11-13（真机 conv 990727 实证）：锁定必须**按产物主体匹配**，
+    #   不能"取会话第一条 code 产物"就复用。
+    #   原实现 `ORDER BY id LIMIT 1` 取最早那条的 name_base ⇒ 后续**任何**新产物
+    #   都继承第一个产物的名字：实测该会话的用例视图（`package '串联混动汽车用例'`）
+    #   被命名为「串联混动汽车运行需求 · 需求视图 … · v0.2」，用户根本认不出这是用例视图。
+    #   修法：先算出本轮的 subject，**只在 subject 相同的历史产物里**找锁定名；
+    #   找不到 ⇒ 这是新产物，用自己的 subject 重新定名（各自独立成链）。
+    _subject_now = derive_subject(code_text, goal)
     locked_base, locked_subject = "", ""
     try:
-        # 按时间正序找第一条带锁定的 code 产物（首版即锁，最早那条就是源头）
         for (m,) in conn.execute(
                 "SELECT meta FROM artifacts WHERE conversation_id=? AND kind='code' "
-                "ORDER BY id LIMIT 50", (conversation_id,)):
+                "ORDER BY id LIMIT 200", (conversation_id,)):
             try:
                 j = json.loads(m or "{}")
             except Exception:
                 j = {}
-            if isinstance(j, dict) and j.get("name_base"):
+            if not (isinstance(j, dict) and j.get("name_base")):
+                continue
+            # 同主体才复用（大小写/空白差异不算不同产物）
+            if str(j.get("name_key") or "").strip() == str(_subject_now or "").strip():
                 locked_base = str(j.get("name_base") or "")
                 locked_subject = str(j.get("name_key") or "")
                 break
     except Exception:
         pass
 
-    subject = locked_subject or derive_subject(code_text, goal)
+    subject = locked_subject or _subject_now
     base = locked_base or compose_title(subject, goal, "")
     title = f"{base} · {version_label}" if version_label else base
     return title, filename_for(subject, version_label, lang), {

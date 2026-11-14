@@ -124,6 +124,7 @@ TOOL_PREFIXES = {
     "fuseki_": "外部图库联调脚本（需 Fuseki 服务）",
     "kb_": "知识库维护脚本（一次性）",
     "patch_": "补丁脚本（一次性）",
+    "payload_": "浏览器断言的 eval 载荷（由 verify_*.js 读取后在页面里执行，不独立运行；2026-11-13 论域含 .js 后补齐）",
     "preview_": "预览页生成工具（产出静态 HTML）",
     "probe_": "探针脚本（临时观测，非稳定判据）",
     "prune_": "裁剪脚本（一次性维护）",
@@ -149,6 +150,30 @@ def all_py_files():
     return out
 
 
+def all_frontend_files():
+    """tools/verify 下的前端门禁脚本（`*.js`）。
+
+    ★ 2026-11-13 论域扩展（**这条是本文件最容易被后人改回去的地方**）：
+      原 `all_py_files()` 只扫 `.py`，而 `tools/verify/` 下已有 20+ 个
+      `verify_*.js` 真实浏览器门禁 ⇒ 它们**根本不在 G5 的论域内**，
+      「无漏网」判据对前端恒绿。这与 2026-11-09 那次「e2e_*.py 不在论域内」
+      是同一个缺陷形态：**判据再严，论域有缺口就管不到**。
+      配套：G5a/G5b 用本函数；变异 M8 锁死「不许再缩回只扫 .py」。
+    """
+    out = []
+    for p in sorted(glob.glob(os.path.join(ROOT, "tools", "verify", "*.js"))):
+        n = os.path.basename(p)
+        if n.startswith("__"):
+            continue
+        out.append(n)
+    return out
+
+
+def all_gate_candidates():
+    """G5 的完整论域：后端（.py）+ 前端（.js）。"""
+    return all_py_files() + all_frontend_files()
+
+
 def tool_prefix_of(name: str):
     """返回该文件命中的工具前缀；未命中返回 None。
 
@@ -165,8 +190,11 @@ def tool_prefix_of(name: str):
 
 
 def gate_files():
-    """门禁类文件（有 pass/fail 语义）。G5 与变异 M1 都用它。"""
-    return [n for n in all_py_files() if n.startswith(GATE_PREFIXES)]
+    """门禁类文件（有 pass/fail 语义）。G5 与变异 M1/M6/M8 都用它。
+
+    ★ 2026-11-13：论域含前端 `.js`（见 `all_frontend_files` 的说明）。
+    """
+    return [n for n in all_gate_candidates() if n.startswith(GATE_PREFIXES)]
 
 
 def ci_steps():
@@ -290,12 +318,13 @@ def check_all(m):
     dup = sorted({n for n in names if names.count(n) > 1})
     rec("G4 清单无重复条目", not dup, dup[:8])
 
-    # G5 覆盖完整 —— 论域是**全部** tools/verify/*.py，不是只认几个前缀
+    # G5 覆盖完整 —— 论域是**全部** tools/verify 脚本（.py + .js），不是只认几个前缀
     # （2026-11-09 修：原来只枚举 verify_/audit_，10 个 e2e_*.py 在论域外 ⇒ 恒绿）
+    # （2026-11-13 再修：原来只扫 .py，20+ 个 verify_*.js 前端门禁在论域外 ⇒ 同样恒绿）
     classified = set(names)
-    every = all_py_files()
+    every = all_gate_candidates()
     unclassified = [f for f in every if f not in classified and tool_prefix_of(f) is None]
-    rec("G5a 每个 tools/verify 脚本都被分类或命中工具前缀（无漏网）",
+    rec("G5a 每个 tools/verify 脚本（.py+.js）都被分类或命中工具前缀（无漏网）",
         not unclassified,
         "未分类 %d 个: %s" % (len(unclassified), unclassified[:8]))
     # 门禁类前缀必须全部进清单：工具白名单绝不能把真门禁"吃掉"
@@ -491,6 +520,18 @@ def mutations(m):
             f = rerun(mm)
             _mut.append(("M7 删掉 verify_ 门禁 ⇒ G5a 判红",
                          any(x[1].startswith("G5a") for x in f),
+                         "、".join(x[1][:26] for x in f[:3])))
+        # M8 **前端论域不得缩窄**（2026-11-13 新增）：把清单里唯一的 `.js` 门禁删掉，
+        #    G5b 必须判红。为什么单列：`all_py_files()` 只扫 `.py` 的那个缺口，
+        #    让 20+ 个 `verify_*.js` 长期不被 G5 管到；只要有人把论域改回「只扫 .py」，
+        #    或者把 `.js` 从清单里删掉，这条变异立即变红。
+        mm = copy.deepcopy(base)
+        _js = [g for g in mm["gates"] if str(g.get("script", "")).endswith(".js")]
+        if _js:
+            mm["gates"] = [g for g in mm["gates"] if not str(g.get("script", "")).endswith(".js")]
+            f = rerun(mm)
+            _mut.append(("M8 删掉 .js 前端门禁 ⇒ G5b 判红（前端论域不得缩窄）",
+                         any(x[1].startswith("G5b") for x in f),
                          "、".join(x[1][:26] for x in f[:3])))
     finally:
         _results.clear()

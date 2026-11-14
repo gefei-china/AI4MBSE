@@ -1,3 +1,4 @@
+// CI-OPTIONAL: [local] tier=local（见 tools/gates_manifest.json）：真实浏览器门禁——需本机 Chromium（agent-browser）+ 8000 真实服务/真库，CI runner 无该组合 ⇒ 本机跑；改法须同步改清单 tier 并接线，不允许只删这行
 // 2026-09-28 (B-0) 会话流下方（状态栏/输入区）与会话消息列宽度对齐 —— 真实浏览器验证
 // 用法：node tools/verify/verify_chat_bottom_align.js
 //

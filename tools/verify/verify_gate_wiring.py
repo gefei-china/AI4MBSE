@@ -47,6 +47,12 @@ _results = []
 _MUT_ROWS = []
 _IN_MUT = [False]
 OPT_PREFIX = "# CI-OPTIONAL:"
+# ★ 2026-11-13：前端门禁（`tools/verify/verify_*.js`）此前**完全在论域之外** ——
+#   本函数只 enumerate `*.py`，而 manifest 的 `all_py_files()` 同样只扫 `.py`
+#   ⇒ 22 个真实浏览器门禁「有没有接线」从来没人管，`G5 no-漏网` 恒绿。
+#   这与本仓「判据的论域有缺口，判据再严也管不到」是同一条教训（见 e2e_ 那次）。
+#   JS 用不了 `#` 注释，故豁免前缀必须多认一个 `//`，否则扩了论域也无法写豁免。
+OPT_PREFIXES = (OPT_PREFIX, "// CI-OPTIONAL:")
 
 
 def _rec(name, ok, detail=""):
@@ -56,15 +62,24 @@ def _rec(name, ok, detail=""):
 
 
 def scan_gates(root=ROOT):
+    """门禁脚本清单：(无扩展名 stem, 绝对路径)。
+
+    ★ 2026-11-13 论域扩展：原来只扫 `*.py` ⇒ 22 个 `verify_*.js` 前端门禁
+      永远不进 W1（"要么接线要么豁免"）的判据范围，等于**前端回归没人守**。
+      现在 `.py` 与 `.js` 同一口径扫（前缀规则相同：verify_ / audit_）。
+    """
     out = []
     vd = os.path.join(root, "tools", "verify")
-    for p in sorted(glob.glob(os.path.join(vd, "*.py"))):
+    files = sorted(glob.glob(os.path.join(vd, "*.py"))) + \
+            sorted(glob.glob(os.path.join(vd, "*.js")))
+    for p in files:
         n = os.path.basename(p)
+        stem, ext = os.path.splitext(n)
         if n.startswith("__") or n == "audit_dup_defs.py":
             pass  # audit_dup_defs 也是门禁，见下
-        if not (n.startswith("verify_") or n.startswith("audit_")):
+        if not (stem.startswith("verify_") or stem.startswith("audit_")):
             continue
-        out.append((n[:-3], p))
+        out.append((stem, p))
     return out
 
 
@@ -84,13 +99,18 @@ def ci_commands(root=ROOT):
 
 
 def _exemption_reason(path):
-    """读该门禁的 CI-OPTIONAL 豁免理由（非空才算有效豁免）。"""
+    """读该门禁的 CI-OPTIONAL 豁免理由（非空才算有效豁免）。
+
+    同时认 `# CI-OPTIONAL:`（Python/yml）与 `// CI-OPTIONAL:`（JS）——
+    2026-11-13 起论域含 `.js`，不认 `//` 就等于"扩了检查范围却不给豁免通道"。
+    """
     try:
         with open(path, encoding="utf-8") as f:
             for ln in f:
                 s = ln.strip()
-                if s.startswith(OPT_PREFIX):
-                    return s[len(OPT_PREFIX):].strip()
+                for p in OPT_PREFIXES:
+                    if s.startswith(p):
+                        return s[len(p):].strip()
     except OSError:
         return ""
     return None            # 没有豁免行
@@ -104,8 +124,10 @@ def t_all_gates_wired(root=ROOT):
     unwired, bad_exempt = [], []
     for name, path in gates:
         # 判据 ①：ci.yml 的**执行行**里出现（不能是注释里出现）
-        wired = ("tools/verify/%s.py" % name) in cmds or \
-                ("tools/%s.py" % name) in cmds
+        # ★ 2026-11-13：按**真实扩展名**拼路径（原来硬拼 `.py` ⇒ `.js` 门禁永远判"未接线"）
+        ext = os.path.splitext(path)[1]
+        wired = ("tools/verify/%s%s" % (name, ext)) in cmds or \
+                ("tools/%s%s" % (name, ext)) in cmds
         reason = _exemption_reason(path)
         if wired:
             continue
@@ -140,8 +162,11 @@ def t_ci_has_new_batch(root=ROOT):
             _m = json.load(f)
     except (OSError, ValueError) as e:
         return _rec("W2a 清单可读", False, str(e))
-    must = [g["script"][:-3] for g in _m.get("gates") or [] if g.get("tier") == "pr"]
-    missing = [m for m in must if ("tools/verify/%s.py" % m) not in cmds]
+    # ★ 2026-11-13：直接用清单里的 `script` 全名（含扩展名）对账。
+    #   原实现 `g["script"][:-3]` 再拼回 `.py` —— 论域含 `.js` 后，`.js` 条目会被
+    #   拼成 `xxx.js.py` ⇒ pr 层的 JS 门禁**永远判缺失**（假红）。
+    must = [g["script"] for g in _m.get("gates") or [] if g.get("tier") == "pr"]
+    missing = [m for m in must if ("tools/verify/%s" % m) not in cmds]
     ok = _rec("W2a 清单 pr 层的 %d 个门禁全部在 ci.yml 执行行里" % len(must),
               not missing, "缺：%s" % missing[:8])
     # 反证：被排除的那几个**必须不在** CI 里（否则我的分类是错的）

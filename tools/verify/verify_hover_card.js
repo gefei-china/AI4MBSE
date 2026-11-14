@@ -1,3 +1,4 @@
+// CI-OPTIONAL: [local] tier=local（见 tools/gates_manifest.json）：真实浏览器门禁——需本机 Chromium（agent-browser）+ 8000 真实服务/真库，CI runner 无该组合 ⇒ 本机跑；改法须同步改清单 tier 并接线，不允许只删这行
 // 2026-09-28 (B-1/B-2) hover 卡浏览器验证运行器
 // 用法：node tools/verify/verify_hover_card.js
 // 纪律（本仓踩坑）：① spawnSync + 文件描述符 stdio（避免 daemon 管道卡死）

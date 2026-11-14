@@ -1108,6 +1108,10 @@ class StreamMixin:
                 skill_name2 = cfg.get("skill") or None
                 evs, sub_res, sub_has_token = [], "", False
                 _sub_err = ""   # ★ 2026-11-04：error 事件的真实死因（原为永久空串）
+                # ★ 2026-11-13：本子任务是否**因等人而中断**（confirm / clarify / ""）。
+                #   与 `_sub_err` 分开：那是"出错"，这是"等人"——两者都算未完成，
+                #   但归因完全不同（修法不同：一个改代码/重试，一个去点确认单）。
+                _sub_pending, _sub_pending_note = "", ""
                 tok_used = 0
                 _t0 = _t.time()
 
@@ -1222,7 +1226,32 @@ class StreamMixin:
                                 _evq.put(e2)
                             elif _et == "done":
                                 ddata = ev.get("data") or {}
-                                if not sub_res:
+                                # ★★ 2026-11-13（conv 990727 / run 990225 归因）：
+                                #   done 帧的 `content` **有两种语义**，此前被混为一谈：
+                                #     ① 真正的子任务交付正文；
+                                #     ② HIL 确认闸 / 澄清闸的**中断提示文案**
+                                #        （"写操作已进入人工确认队列" / "AI 执行中需要你确认"）。
+                                #   原实现 `if not sub_res: sub_res = ddata.get("content")`
+                                #   无差别兜底 ⇒ ②被当成正文 ⇒ `ok=True`、`status=done`
+                                #   ⇒ 下游 t2/t3 看到"有产出"，实际一个字都没有
+                                #   ⇒ 汇总只能写"t1、t2 尚未体现实质性完成结果"，
+                                #   用户感知为「生成用例视图失败」。
+                                #   修法：先认中断标志，**中断不取 content 当正文**。
+                                _pend_kind = ""
+                                if ddata.get("hil_confirm"):
+                                    _pend_kind = "confirm"
+                                elif ddata.get("clarify_asked"):
+                                    _pend_kind = "clarify"
+                                if _pend_kind:
+                                    _sub_pending = _pend_kind
+                                    _pcid = int(ddata.get("confirmation_id") or 0)
+                                    if _pend_kind == "confirm":
+                                        _sub_pending_note = (
+                                            "等待人工确认（确认单 #%d），本子任务未产生交付物" % _pcid
+                                            if _pcid else "等待人工确认，本子任务未产生交付物")
+                                    else:
+                                        _sub_pending_note = "等待用户澄清回答，本子任务未产生交付物"
+                                elif not sub_res:
                                     sub_res = ddata.get("content") or ""
                                 _m = ddata.get("meta") or ddata.get("llm") or {}
                                 if isinstance(_m, dict):
@@ -1242,6 +1271,14 @@ class StreamMixin:
                                 _sub_err = str(ev.get("message") or "子任务流异常终止")
                                 evs.append(dict(ev))
                         ok = bool(sub_res.strip()) or sub_has_token
+                        # ★ 2026-11-13：**中断必须如实标记**，不能让下游把"在等人"当"已完成"。
+                        #   · 没有任何真实产出 ⇒ ok=False（否则汇总会基于空气泡写结论）；
+                        #   · 已有部分 token 正文 ⇒ 保留 ok=True（部分产出仍可用于汇总），
+                        #     但 error 字段仍写明"待确认"，避免被当成完整交付。
+                        if _sub_pending:
+                            if not str(sub_res or "").strip():
+                                ok = False
+                            _sub_err = _sub_err or ("pending_%s: %s" % (_sub_pending, _sub_pending_note))
                         if not tok_used:
                             tok_used = max(len(str(sub_res)) // 2, 0)   # 估算兜底：len(输出文本)//2
                         # Task 9：摘要协议收发——结果 dict→validate；纯文本（旧格式）→normalize_text 兼容解析
@@ -1366,6 +1403,35 @@ class StreamMixin:
                                 pass
                             # 协议状态 → 子任务成功标志：failed→fail（现状 tk_ok 判定保留兼容）
                             if _summary_proto and _summary_proto.get("status") == "failed":
+                                ok = False
+                            # ★★ 2026-11-13（B 项）：因等人而中断 ⇒ 摘要协议必须**如实降级**。
+                            #   为什么必须动协议而不是只改 ok：`summary_json` 是下游**唯一**的
+                            #   协议真源（物化 → 汇总 → 评审三处都只认它）。若不在这里标注，
+                            #   下游拿到的是一份"看起来正常"的摘要（status=full、missing=[]）
+                            #   ⇒ 汇总报告只能写"t1、t2 尚未体现实质性完成结果"这种含糊结论，
+                            #   用户看不出"是在等你自己点确认"。
+                            #   ⇒ 强制 status=failed（无可交付物）+ missing[] 写清真实原因，
+                            #     并记 `meta.pending_kind` 供前端/审计区分「等人」与「出错」。
+                            if _sub_pending:
+                                if not isinstance(_summary_proto, dict):
+                                    # 归一化失败也不能丢信息：造一份最小可判协议
+                                    _summary_proto = {"schema_version": 1, "status": "failed",
+                                                      "summary": "", "artifacts": [],
+                                                      "evidence": [], "risks": [], "claims": [],
+                                                      "missing": [], "confidence": 0.0,
+                                                      "meta": {"protocol_source": "missing"}}
+                                _summary_proto["status"] = "failed"
+                                _miss = _summary_proto.get("missing")
+                                if not isinstance(_miss, list):
+                                    _miss = []
+                                if _sub_pending_note and _sub_pending_note not in _miss:
+                                    _miss.append(_sub_pending_note)
+                                _summary_proto["missing"] = _miss[:20]
+                                _m3 = _summary_proto.get("meta")
+                                if not isinstance(_m3, dict):
+                                    _m3 = {}
+                                _m3["pending_kind"] = _sub_pending
+                                _summary_proto["meta"] = _m3
                                 ok = False
                         except Exception:
                             _summary_proto = None

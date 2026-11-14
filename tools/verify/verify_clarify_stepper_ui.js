@@ -1,3 +1,4 @@
+// CI-OPTIONAL: [local] tier=local（见 tools/gates_manifest.json）：真实浏览器门禁——需本机 Chromium（agent-browser）+ 8000 真实服务/真库，CI runner 无该组合 ⇒ 本机跑；改法须同步改清单 tier 并接线，不允许只删这行
 // 2026-09-28：AI 任务优化两项改动的真实浏览器验证
 //   C-1 澄清卡 stepper（一次一题 / 其他才展开输入框 / 末步补充说明多行）
 //   C-2 会话内容居中收窄 + 打开预览时向左推动

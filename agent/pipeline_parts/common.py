@@ -255,6 +255,14 @@ PROMPT_CACHEABLE_KEYS = (
     "ontology",        # L1 本体 schema（无参，读 KB 本体）
     "boundary",        # L1 本体边界说明（无参静态）
     "output_rules",    # L1 输出规范（无参字面量）
+    # ★ 2026-11-13：产物自动归档的**事实说明**（两条路径都必须有）。
+    #   为什么单独成块而不并进 `tool_rules`：`tool_rules` **仅流式路径注入**
+    #   （execute 路径 `include_tool_rules=False`），而产物认知是**事实**不是工具用法，
+    #   缺了它模型会把"没调 save_artifact"误判成"没保存" —— 真机 990730/990731/990734
+    #   三连复现（4 条消息虚报未落库，产物库里实际有 3~14 条）。
+    #   ⚠️ 注入规则：**流式路径不重复注入**（它 tool_rules 里已有同一份文案），
+    #   见 build_prompt_blocks 里的 `"" if ctx.include_tool_rules else ...`。
+    "artifact_facts",
     "citation_rules",  # L1 引用规范（无参字面量）
 )
 
@@ -284,6 +292,10 @@ PROMPT_DYNAMIC_KEYS = (
     "model_code_req",  # L3 建模输出要求 + L0 硬约束卡（依赖 intent；建模/非建模差异巨大）
     "memory",          # L4 长期记忆（依赖 user_input，但 core 层无条件常驻 ⇒ 实测恒定）
     "model_context",   # L4 建模上下文（依赖 branch + conversation ⇒ 同会话稳定）
+    # ★ 2026-11-13：**产物基线内容**（当前 code 产物的正文），让迭代是"在既有产物上增量修改"
+    #   而不是从零重写。依赖 conversation（同会话内稳定 ⇒ 排在易变块之前不破坏缓存原则）。
+    #   位置刻意紧跟 `model_context`：两者都是"当前状态"，语义相邻便于模型串起来读。
+    "artifact_baseline",
     "project_memory",  # L4 项目级记忆（依赖 user_input + conversation）
     "user_ctx",        # L4 用户上下文
     # ── 每轮可能变（必须押后：断点之后的内容一律无法命中缓存）──
@@ -427,6 +439,20 @@ ARTIFACT_AUTO_RULES_TEXT = (
     "平台已经替你保存；\n"
     "· 会话流会显示『📄 取回模型文件 …已自动存入产物』环节，提醒用户到产物面板查看"
     "或下载全文即可，你的回答里只需给出分析结论，**不要**整段复述文件全文。\n"
+    # ★★ 2026-11-13（真机 conv 990730/990731/990734 实证）：**补上此前缺失的最关键一条**。
+    #   实测 6 条助手消息声称「产物保存工具缺失 / 未完成产物落库 / 无 artifact id」，
+    #   其中 4 条的实际产物库里赫然有 3~14 条产物（含 9779 的 14 条）——
+    #   模型把"我没调 save_artifact"误当成"没保存"，在报告里写下与产物面板**自相矛盾**
+    #   的结论，还连带建了无谓的确认单、把不存在的选择推给用户。
+    #   根因就是本段此前只讲了"工具结果里的文件"会归档，**没讲正文代码块也会归档**。
+    "· ★★ 你在回答正文里给出的 ```sysml / ```kerml 代码块（或 ``` 后接 sysml 的围栏）"
+    "**会被平台自动归档为代码产物**，并按产物主体（package/主定义名）**自动递增版本**"
+    "（同一产物 v0.1 → v0.2 → …，不同产物各自独立）。\n"
+    "· ⇒ **不要把『没有调用 save_artifact』说成『没有保存 / 无法保存 / 无 artifact id』**。"
+    "只要你的正文里有完整 SysML 代码块，产物**已经存在**；用户到产物面板即可看到并可下载。"
+    "这种情况下你**不需要**也**不应该**再调 save_artifact、更不该为它发起人工确认。\n"
+    "· `save_artifact` 只在两种情形下才需要：① 要**精确指定**产物标题/类型（非代码类文档，"
+    "如 md 报告）且自动归档覆盖不到；② 自动归档**已经存在同名同型**、需要显式覆盖登记。\n"
     "· ★ 用户明确要求『存入产物/写入产物文档/保存代码』时：若内容在工具结果里且"
     "未被自动归档（如分段展示的片段），调用 **save_artifact** 工具"
     "（参数 title/content，kind 可选 code|document|sysml|report）显式登记进产物库，"
@@ -583,6 +609,12 @@ def build_prompt_blocks(pipe, ctx: PromptBlocksCtx) -> dict:
         "ontology": pipe._build_ontology_hint(),
         "boundary": pipe._build_boundary_hint(),
         "output_rules": pipe._build_output_rules(),
+        # ★ 2026-11-13（P0）：产物自动归档事实 —— **两条路径都必须有**。
+        #   流式路径已从 `tool_rules` 得到同一份文案（ARTIFACT_AUTO_RULES_TEXT 就在里面），
+        #   此处留空避免重复注入；非流式路径（execute，include_tool_rules=False）
+        #   此前**完全收不到**这段 ⇒ 模型不知道正文代码块会自动归档
+        #   ⇒ 真机 990730/990731/990734 连续三次"虚报未落库"（产物实际都在）。
+        "artifact_facts": "" if ctx.include_tool_rules else ARTIFACT_AUTO_RULES_TEXT,
         "citation_rules": pipe._build_citation_rules(),
         # ── 分界线（PROMPT_LAYER_BOUNDARY）以下为动态区 ──
         # ── L3 会话级 ──
@@ -596,6 +628,8 @@ def build_prompt_blocks(pipe, ctx: PromptBlocksCtx) -> dict:
         "memory": pipe._build_memory_hint(ctx.user_input, ctx.intent, ctx.user),
         "model_context": pipe._build_model_context(ctx.branch, ctx.conversation_id,
                                                    ctx.user_input),
+        # ★ 2026-11-13：当前产物基线正文（迭代起点，见 `_build_artifact_baseline`）
+        "artifact_baseline": pipe._build_artifact_baseline(ctx.conversation_id, ctx.user_input),
         "project_memory": pipe._build_project_memory(user_input=ctx.user_input,
                                                      conversation_id=ctx.conversation_id),
         "slots": build_slots_block(ctx.slots),

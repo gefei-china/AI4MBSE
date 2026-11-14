@@ -1,3 +1,4 @@
+// CI-OPTIONAL: [local] tier=local（见 tools/gates_manifest.json）：真实浏览器门禁——需本机 Chromium（agent-browser）+ 8000 真实服务/真库，CI runner 无该组合 ⇒ 本机跑；改法须同步改清单 tier 并接线，不允许只删这行
 /* HIL 确认卡 —— **变异自证**（证明断言有鉴别力，不是空转）
  *
  * 技能纪律：「前端断言也要做变异自证（把 bug 还原 → 断言必须 FAIL，否则是空转断言）」

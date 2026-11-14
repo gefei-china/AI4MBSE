@@ -184,7 +184,7 @@ def _migrate_columns(conn):
     _add("ontology_types", "profile_source", "TEXT DEFAULT ''")   # 来源 Profile 名
     _add("ontology_types", "profile_ref", "TEXT DEFAULT ''")      # 来源 Stereotype/metadata 元素名
     # ── P0 平台化：模型参数模板 / Skill 扩展列 / MCP 扩展列 ──
-    _add("llm_providers", "model_params", "TEXT DEFAULT '{}'")          # {"temperature":0.3,"max_tokens":8192,"top_p":0.9}
+    _add("llm_providers", "model_params", "TEXT DEFAULT '{}'")          # {"temperature":0.3,"max_tokens":8192,"top_p":0.9,"frequency_penalty":null,"presence_penalty":null,"penalty_support":"auto"}
     # ── M1 记忆增强：溯源 + 相关度（MemoryService 消费）──
     _add("agent_memory", "source", "TEXT DEFAULT 'agent'")              # agent | llm_agent | rule_agent | push | flow
     _add("agent_memory", "relevance", "REAL DEFAULT 1.0")               # 相关度权重（时间衰减/语义分）
@@ -709,6 +709,18 @@ def _migrate_columns(conn):
     # ⚠️ **存量不回填**（用户拍板 2026-09-28）：历史行的归属已不可考，宁可留空走兜底，
     #    也不按当前会话归属"倒推"历史的工程。
     _add("sysml_versions", "project_id", "TEXT DEFAULT ''")
+    # ── ★ 2026-11-13：`sysml_versions.subject` —— 版本链的**分组键** ──
+    # 为什么必须加（真机 conv 990727 实证）：版本计数原按**会话**做
+    #   `SELECT COUNT(*) FROM sysml_versions WHERE conversation_id=?` ⇒ label=v0.{n+1}。
+    #   于是同一会话里两个**完全不同**的产物被串成一条修订链：
+    #     v0.1 = `package '串联混动汽车运行需求'`（需求视图）
+    #     v0.2 = `package '串联混动汽车用例'`（用例视图），且 v0.2 的 parent_id 指向 v0.1
+    #   ⇒ 用户看到"用例视图是需求视图的 v0.2"，版本号与内容对不上。
+    # 修法：按「产物主体」（`derive_subject`：package 名 → 主定义名 → …）分组计数，
+    #   不同 subject 各自从 v0.1 起；parent_id 只在同 subject 内串联。
+    # 存量不回填（与 project_id 同策略）：旧行留空 ⇒ 归到空 subject 组，
+    #   绝不按当前内容"倒推"历史版本属于哪个产物（会制造新的错链）。
+    _add("sysml_versions", "subject", "TEXT DEFAULT ''")
     _add("artifacts", "project_id", "TEXT DEFAULT ''")
     # ── 消歧可用性（2026-10-12）：把「能否参与消歧匹配」从 `term_status` 里拆出来 ──
     # 起因：`glossary_terms.term_status` 一列同时承担了两种正交语义 ——
