@@ -620,6 +620,17 @@ jobs:
         if: ${{ !cancelled() }}
         run: python tools/verify/verify_citation_registry.py
 
+      # ── 2026-11-15 新增：SHACL 独立校验交叉验证 ────────────────────────
+      # 本工程所有实例校验都靠自研实现；若自研有 bug，**没有任何人能发现**。
+      # 接 pySHACL（W3C SHACL 参考实现之一）做独立校验，与自研逐维度比对：
+      #   数据类型 / 必填 / 枚举 三维要求"两边都检出且指向同一属性"，
+      #   唯一性维度**如实登记差异**（SHACL 无「全局唯一」构件，maxCount 只表达
+      #   单实例单值；要全局唯一须 SHACL-SPARQL）——不把差异硬凑成一致。
+      # 射程内已抓到自研漏发 sh:in（枚举约束对实例永不生效）。
+      - name: Guard SHACL 与自研校验器交叉一致（pySHACL，缺依赖 SKIP）
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_shacl_crosscheck.py
+
       - name: Guard 流式中断兜底落库（11 项）
         if: ${{ !cancelled() }}
         run: python tools/verify/verify_partial_persist.py

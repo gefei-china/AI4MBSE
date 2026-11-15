@@ -2437,6 +2437,12 @@
    "tier": "local",
    "timeout": 400,
    "reason": "真实浏览器门禁：本体编辑表单 TLO 锚点下拉 / 别名 / 语言 / JSON-LD 导出 + 端到端保存→后端回读→恢复原值 + 变异自证。需本机 Chromium(agent-browser) + 8000 真实服务与真库，CI runner 无该组合 ⇒ local。2026-11-15 新增"
+  },
+  {
+   "script": "verify_shacl_crosscheck.py",
+   "tier": "pr",
+   "timeout": 240,
+   "reason": "pySHACL 0.40.1 与自研校验器逐维度交叉一致（数据类型/必填/枚举/唯一）+ 好样本不误报 + 变异自证 + 真库形状连通性。夹具驱动（内存库），不依赖真库数据与 8000 服务；缺 pyshacl 时 SKIP(rc=2)。2026-11-15 新增：射程内抓到自研 SHACL 导出漏发 sh:in（枚举约束对实例永不生效）"
   }
  ]
 }

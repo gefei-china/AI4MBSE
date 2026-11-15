@@ -479,7 +479,16 @@ class OntologyValidator:
                 _xsd_dt = _dt(_ac.get("xsd_type"))
                 if _xsd_dt:
                     block += f" ; sh:datatype {_xsd_dt}"
+                # 枚举：**属性侧全局值** 与 **实体侧按属性名的局部覆盖** 两种格式并存
+                #   · 属性侧 `allowed_values` = 纯列表（该属性全局允许值）
+                #   · 实体侧 `allowed_values` = {属性名: [值]}（该属性在本类上的局部允许值）
+                # 局部覆盖优先（与 required/unique 同口径）。
+                # ⚠️ 2026-11-15 补：上一笔只补了 required/unique 的局部覆盖，漏了枚举 ——
+                #   交叉验证门禁的夹具当场抓到（sh:in 不生成 ⇒ 枚举约束对实例永不生效）。
                 _av2 = _ac.get("allowed_values")
+                _av_local = cons.get("allowed_values", {}).get(_an)
+                if isinstance(_av_local, list) and _av_local:
+                    _av2 = _av_local
                 if isinstance(_av2, list) and _av2:
                     block += " ; sh:in (" + " ".join(f'"{a}"' for a in _av2) + ")"
                 # 必填/唯一可由实体侧局部覆盖（实体 constraints.required/unique 内联到属性行）
