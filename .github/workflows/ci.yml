@@ -600,6 +600,17 @@ jobs:
         if: ${{ !cancelled() }}
         run: python tools/verify/verify_continuation.py
 
+      # ── 2026-11-15 新增：自主续跑「白跑一轮 + 正文重复堆叠」三道防线 ──
+      #   真机故障：conv 999999024 / msg 6585 —— 一轮问答跑了 4 次主答复 + 3 次评估
+      #   （403 秒），落库 29,774 字 = 3 个完整周期（同一件事讲三遍）。
+      #   三道防线：① EVAL_SYS 反向澄清（判定类结论 ≠ AI 自己的待办）
+      #              ② 正文级空转闸（Dice + 长度比复合判据）
+      #              ③ merge_round_content 增补 ④b/④c（措辞微调的重述也要去重）
+      #   无 mbse.db 时 C 组（真机标定）SKIP，A/B/D 组照跑。
+      - name: Guard 自主续跑停止与去重（31 项，真机标定组无库时 SKIP）
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_auto_continue_stop.py
+
       - name: Guard 流式中断兜底落库（11 项）
         if: ${{ !cancelled() }}
         run: python tools/verify/verify_partial_persist.py

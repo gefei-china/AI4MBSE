@@ -5552,6 +5552,12 @@ class StreamMixin:
             _auto_continues = 0
             _ac_cfg = self._auto_continue_cfg()
             _ac_seen_steps = []
+            # ★ 2026-11-15：**上一轮正文**（正文级空转闸用）。
+            #   为什么要它：模型每轮换句话说同一个 next_step ⇒ `is_spinning`（逐字判据）
+            #   抓不到 ⇒ 连跑 3 轮、每轮重写整份答案（真机 msg 6585：29,774 字 = 3 份）。
+            #   判据本身在 auto_continue.is_content_repeating（**只写一份**），
+            #   这里只负责把两轮正文喂进去。
+            _ac_prev_content = ""
             # ★ 2026-10-28：澄清延后计数（见评估点"待办未做完时先别问人"）。
             #   `_clarify_defer_n` 上限 2 次、`_clarify_defer_rem` 记上次剩余项数
             #   （要求确实在减少才允许继续延后，否则照常转卡）。
@@ -6962,7 +6968,9 @@ class StreamMixin:
                         budget_left=_lg.budget_left(),
                         budget_ratio=_lg.budget_ratio(),
                         degrade_ratio=_degrade_ratio,
-                        hard_stop_ratio=_hard_stop_ratio)
+                        hard_stop_ratio=_hard_stop_ratio,
+                        # ★ 2026-11-15 正文级空转闸（判据在 auto_continue 一份）
+                        content_prev=_ac_prev_content, content_cur=llm_content)
                     # ★ P1-1（2026-10-28）降级收尾：把「待续清单」**写进答复**。
                     #   为什么必须写：budget 闸本来就会停，但停得"无声" ⇒
                     #   用户看到的是"突然断了"（实测 11/89 次）。
@@ -6993,6 +7001,9 @@ class StreamMixin:
                     if _cont:
                         _auto_continues += 1
                         _ac_seen_steps.append(str(_verdict.get("next_step") or ""))
+                        # ★ 2026-11-15：记下本轮正文，供**下一轮**的空转闸比对
+                        #   （判据在 auto_continue.is_content_repeating）。
+                        _ac_prev_content = llm_content or ""
                         # 续跑 = 崭新的一轮 ReAct：本轮答复 + 续跑指令并进 messages。
                         # ⚠️ assistant 消息必须带 content（部分 provider 拒绝空 content）。
                         messages.append({"role": "assistant", "content": llm_content})

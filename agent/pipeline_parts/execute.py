@@ -714,6 +714,9 @@ class ExecuteMixin:
             _ac_deadline = ((time.time() + _ac_cfg["deadline_s"])
                             if (_ac_cfg["enabled"] and _ac_cfg["deadline_s"] > 0) else None)
             _ac_full = ""             # 跨轮全量产出（非流式路径，收口并回 llm_content）
+            # ★ 2026-11-15：**上一轮正文**（正文级空转闸用，与 stream.py 同构）。
+            #   判据在 auto_continue.is_content_repeating（只写一份），这里只喂数据。
+            _ac_prev_content = ""
             # ★ P0-2（2026-10-28）harness 强制闸的连续阻断计数（循环外，跨轮累积）。
             #   与 stream.py 同构：计数必须在 while 外，否则每轮从 0 数 ⇒ 永不触顶。
             _harness_blocks = 0
@@ -989,8 +992,11 @@ class ExecuteMixin:
                 if (_ac_cfg["enabled"] and not dry_run and (_ac_tool_n > 0 or _cont_input)
                         and not _clarify_req and _auto_continues < _ac_cfg["max"]):
                     # 本轮产出并进全量（收口/落库用全量；评估器只看本轮+工具史）
+                    # ★ 2026-11-15：改走 `_ac.merge_round_content` —— 原先这里是**直接拼接**，
+                    #   而 stream.py 走去重 ⇒ 同一件事两条路径两个口径（模型每轮重写整份时，
+                    #   非流式路径会把同一份答案堆 N 遍）。判据统一收口到 auto_continue 一份。
                     if llm_content:
-                        _ac_full = ((_ac_full + "\n\n" + llm_content) if _ac_full else llm_content)
+                        _ac_full = _ac.merge_round_content(_ac_full, llm_content)
                     _verdict = self._evaluate_completion(
                         user_input=user_input, exec_tools=_ac_tools_hist, answer=llm_content,
                         provider_id=effective_provider, agent_name=agent_def.name,
@@ -1019,7 +1025,9 @@ class ExecuteMixin:
                         budget_left=_guard.budget_left(),
                         budget_ratio=_guard.budget_ratio(),
                         degrade_ratio=_degrade_ratio,
-                        hard_stop_ratio=_hard_stop_ratio)
+                        hard_stop_ratio=_hard_stop_ratio,
+                        # ★ 2026-11-15 正文级空转闸（判据在 auto_continue 一份）
+                        content_prev=_ac_prev_content, content_cur=llm_content)
                     # ★ P1-1（2026-10-28）降级收尾：与 stream.py 同构
                     if (not _cont) and ("降级收尾" in str(_why)):
                         try:
@@ -1034,6 +1042,8 @@ class ExecuteMixin:
                     if _cont:
                         _auto_continues += 1
                         _ac_seen_steps.append(str(_verdict.get("next_step") or ""))
+                        # ★ 2026-11-15：记下本轮正文，供下一轮空转闸比对（与 stream 同构）
+                        _ac_prev_content = llm_content or ""
                         # 续跑 = 崭新一轮 ReAct：本轮答复 + 续跑指令并进 messages。
                         # ⚠️ assistant 消息必须带 content（部分 provider 拒绝空 content）。
                         messages.append({"role": "assistant", "content": llm_content})
@@ -1074,8 +1084,9 @@ class ExecuteMixin:
                     _harness_prev_rem = list(_hgate.get("remaining") or [])
                     _harness_stall = int(_hgate.get("stall_streak") or 0)
                     if llm_content:
-                        _ac_full = ((_ac_full + "\n\n" + llm_content)
-                                    if _ac_full else llm_content)
+                        # ★ 2026-11-15：与 stream.py 同构 —— 走 merge 去重，
+                        #   口径统一（原先这里直接拼接，与 stream 不一致）。
+                        _ac_full = _ac.merge_round_content(_ac_full, llm_content)
                     messages.append({"role": "assistant", "content": llm_content})
                     messages.append({"role": "user", "content": _hgate.get("feedback") or ""})
                     llm_response = llm_client.chat(messages, provider_id=effective_provider,

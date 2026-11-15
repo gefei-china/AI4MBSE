@@ -2415,6 +2415,11 @@
    "tier": "local",
    "timeout": 900,
    "reason": "需求分析与冲突检测**真机端到端**（P1 规则校验 / P2 冲突检测 / P3 换档案子集比对）：走外部 HTTP /api/conversations/{id}/chat，断言意图+技能+检索命中标准文档+verdict+quality_report≥10类+card_data 落库。需 8000 服务 + 真实 LLM，约 2~10 分钟且产生费用 ⇒ local。2026-11-14 新增"
+  },
+  {
+   "script": "verify_auto_continue_stop.py",
+   "tier": "pr",
+   "timeout": 120
   }
  ]
 }
