@@ -67,14 +67,37 @@ try:
     chk("nodes 无重复", len(es["nodes"]) == len(set(es["nodes"])), f"{es['nodes']}")
 
     print("\n[2] 双向 diff：第二版删掉 B，必须出现在 removed_nodes")
+    # ⚠️⚠️ 2026-11-15 修正本次断言的**构造**（不是改断言语义）：
+    #   原构造两版分别用 `package P1;` / `package P2;` —— 按 2026-11-13 的修复
+    #   （真机 conv 990727 实证：用例视图被串成需求视图的 v0.2），**版本链按 subject 分组**：
+    #   不同 subject ⇒ 各自 v0.1、parent=None ⇒ 根本没有"上一版"可比
+    #   ⇒ removed=[] / added=全部。实测复现：
+    #       package P1 ⇒ subject=P1 v0.1 parent=None
+    #       package P2 ⇒ subject=P2 v0.1 parent=None   ← 断链
+    #       package P1 再来 ⇒ subject=P1 v0.2 parent=v1 ⇒ removed=['B'] added=['D'] kept=2
+    #   本组要测的不变式是「双向 diff 算法能算出 removed/added/kept」——
+    #   那就必须给算法一条**真实的**父子链。故两版同用 `package P1;`（同 subject）。
+    #   注：跨 subject 不串链另由 verify_artifact_version_chain ⑬ 锁住，两者互补不冲突。
     v2 = _archive_sysml_version(
         conn, TMP_CONV, 2,
-        views(nodes_by_view={"BDD": ["A", "C"], "IBD": ["A", "D"]}), "自检", "package P2;")
+        views(nodes_by_view={"BDD": ["A", "C"], "IBD": ["A", "D"]}), "自检", "package P1;")
     df = json.loads(conn.execute("SELECT diff FROM sysml_versions WHERE id=?", (v2,)).fetchone()["diff"])
     chk("removed_nodes == ['B']", df.get("removed_nodes") == ["B"], str(df.get("removed_nodes")))
     chk("added_nodes == ['D']", df.get("added_nodes") == ["D"], str(df.get("added_nodes")))
     chk("kept_nodes == 2（A/C）", df.get("kept_nodes") == 2, str(df.get("kept_nodes")))
     chk("diff 含 removed_edges 键", "removed_edges" in df)
+    # ── 前提自证（2026-11-15 加）：上面三条**必须有真实的父子链**才成立 ──
+    #   否则就是在测"两个互不相关的产物之间的 diff"= 空转（added 会等于全部节点）。
+    #   历史上正因缺这条，构造写错（P1/P2 不同 subject）却没人发现，
+    #   红项被归因为"diff 算法坏了"，实际是测试前提不成立。
+    _r2 = conn.execute("SELECT subject, parent_id FROM sysml_versions WHERE id=?", (v2,)).fetchone()
+    _r1 = conn.execute("SELECT subject FROM sysml_versions WHERE id=?", (v1,)).fetchone()
+    chk("前提自证：v2 与 v1 同 subject（否则无父子链，本组是空转）",
+        _r2 and _r1 and _r2["subject"] == _r1["subject"],
+        "v1.subject=%r v2.subject=%r" % (_r1["subject"] if _r1 else None,
+                                         _r2["subject"] if _r2 else None))
+    chk("前提自证：v2 的 parent 确实是 v1（diff 的比对对象）",
+        _r2 and _r2["parent_id"] == v1, "parent=%r v1=%r" % (_r2["parent_id"] if _r2 else None, v1))
 
     print("\n[3] 兼容存量脏数据：上一版 nodes 未去重时，不得把重复项误判为新增")
     # 用独立临时会话，确保 parent 就是那条"脏数据"，而不是本会话的 MAX(id)。
@@ -82,15 +105,19 @@ try:
     #   于是 removed=['D'] 被误判为 bug —— 实际是正确行为（v3 相对 v2 确实少了 D）。
     #   这里改成 TMP2，让被测对象与 parent 一一对应。
     TMP2 = 990999998
+    # ⚠️ 2026-11-15：脏数据这条**必须写 subject**，否则与被测新版不同 subject ⇒
+    #   按 subject 分组的版本链不会把它当 parent ⇒ added 会算成全部（实测复现）。
+    #   「存量脏数据」的脏点是 **nodes 未去重**（A 出现 3 次），不是 subject 缺失。
     conn.execute(
         "INSERT INTO sysml_versions (artifact_id, conversation_id, message_id, project_id, version_label,"
-        " content, diff, element_summary, parent_id, status, created_by, code_text)"
-        " VALUES (0,?,?,?,?,?,?,?,?,?,?,?)",
+        " content, diff, element_summary, parent_id, status, created_by, code_text, subject)"
+        " VALUES (0,?,?,?,?,?,?,?,?,?,?,?,?)",
         (TMP2, 900, "", "v0.1", "{}", "{}",
-         json.dumps({"entities": 6, "nodes": ["A", "A", "A", "C"], "views": 2}), None, "current", "自检", ""))
+         json.dumps({"entities": 6, "nodes": ["A", "A", "A", "C"], "views": 2}), None, "current", "自检", "",
+         "P1"))
     v3 = _archive_sysml_version(
         conn, TMP2, 901,
-        views(nodes_by_view={"BDD": ["A", "C"]}), "自检", "package P3;")
+        views(nodes_by_view={"BDD": ["A", "C"]}), "自检", "package P1;")
     df3 = json.loads(conn.execute("SELECT diff FROM sysml_versions WHERE id=?", (v3,)).fetchone()["diff"])
     chk("added_nodes 为空（A/C 均已存在，重复项不算新增）", df3.get("added_nodes") == [], str(df3.get("added_nodes")))
     chk("removed_nodes 为空（A/C 都在）", df3.get("removed_nodes") == [], str(df3.get("removed_nodes")))

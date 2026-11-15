@@ -83,7 +83,17 @@ def run_one(path, timeout, db_path=None):
     # 单点标记覆盖全部门禁，无需逐个脚本改（子进程会继承）。
     env["MBSE_INVARIANT_ORIGIN"] = "verify"
     if db_path:
+        # ★★ 2026-11-15 实测事故：本仓**两种库路径口径并存**，只设一个会让隔离对另一半失效。
+        #   · 多数门禁读 `core.config.DB_PATH` ⇒ 环境变量是 **MBSE_DB_PATH**
+        #   · 少数门禁自己在模块顶部取库路径 ⇒ 读的是 **MBSE_GATE_DB**
+        #     （verify_citation_registry / verify_citation_clause_link / verify_auto_continue_stop …）
+        #   只设 MBSE_DB_PATH 时，后者**仍然连真库** ——
+        #   做"干净库对照"会得到 **「全 PASS」的假绿**（本轮实测踩到：
+        #   `MBSE_GATE_DB=/tmp/_no_such.db verify_artifact_naming.py` 是 33 全 PASS，
+        #   因为该门禁读的是 MBSE_DB_PATH，那个变量没被改 ⇒ 一直在连真库）。
+        #   两个都设，口径就对上了；不新增第三种。
         env["MBSE_DB_PATH"] = db_path
+        env["MBSE_GATE_DB"] = db_path
     t0 = time.time()
     try:
         r = subprocess.run([sys.executable, "-X", "utf8", path], cwd=ROOT,
