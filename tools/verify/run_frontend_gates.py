@@ -54,18 +54,24 @@ def declared_js():
 
 
 def node_exe():
-    """定位 node。优先 PATH，其次本机随包 node（与技能里记的坑一致：PATH 常缺）。"""
+    """定位 node：环境变量 > PATH。
+
+    ★ 2026-11-15（verify_gate_portability P5 判红）：
+      原实现第三级是**硬编码本机绝对路径** `C:/Users/<本机用户名>/.workbuddy/.../node/versions`。
+      那一条有三个问题，与 `verify_agent_name_unify.py` 里已经踩过并删掉的是同一个：
+        ① **泄露本机用户名**（隐私）；
+        ② 本机永远有、CI 永远没有 ⇒ 给本地和 CI **两套行为**
+           （本地静默用备用 node 通过，CI 一律 SKIP，问题被掩盖）；
+        ③ WorkBuddy 升级后版本目录名会漂移（22.22.2-3 → -6 实测失效）。
+      既然有 PATH 兜底、且调用方本就能用 `MBSE_NODE` 显式指定，
+      硬编码这一级没有存在理由 ⇒ 删除。没有 node 时返回 None，
+      由 main() 报 SKIP(rc=2) 并说清原因（SKIP 是"环境没有"，不是通过）。
+    """
     import shutil
-    p = shutil.which("node")
-    if p:
+    p = os.environ.get("MBSE_NODE") or ""
+    if p and os.path.isfile(p):
         return p
-    base = r"C:/Users/gefei/.workbuddy/binaries/node/versions"
-    if os.path.isdir(base):
-        for d in sorted(os.listdir(base), reverse=True):
-            cand = os.path.join(base, d, "node.exe")
-            if os.path.isfile(cand):
-                return cand
-    return None
+    return shutil.which("node") or shutil.which("node.exe") or None
 
 
 def main():
