@@ -5,13 +5,17 @@
 词表外的事件类型、且事件未带 ``ignorable`` 标记时**拒绝**，
 否则「静默跳过一个必需事件」会重建出错误的会话。
 
-词表不是编造的：下面 18 项来自本机 ``mbse.db`` 的
-``SELECT DISTINCT block_name FROM context_audit``（2026-11-09 实测）。
+词表不是编造的：下面 20 项来自本机 ``mbse.db`` 的
+``SELECT DISTINCT block_name FROM context_audit``（2026-11-09 实测 18 项，
+2026-11-15 补登记 ``artifact_facts`` / ``output_contract`` —— 二者是 2026-11-14
+``common.py::build_prompt_blocks`` 新增的 prompt 块，`verify_prompt_blocks.py`
+的 `_EXTRA_KEYS` 里早有记录，只是当时漏登记进本词表）。
 门禁会断言「生产库里出现的类型 ⊆ 词表」—— 出现新类型必须显式登记，
 这正是把「格式演进」从一次性回填脚本变成**写入时受约束**的机制。
 
-已在生效、本轮不动的部分：``agent/utils.py:219-281`` 的 diff / coverage
-本来就是写入时派生并 INSERT，报告里「靠回填脚本补齐」只针对历史数据。
+⚠️ 登记纪律：新增 prompt 块时**同一批**就要把名字加进这里。
+   漏登记的后果不是"少一条统计"，而是读路径 `validate_event` 直接抛
+   `UnknownEventError` ⇒ 会话回放失败（本文件的 docstring 第 1 段就是讲这个）。
 """
 from __future__ import annotations
 
@@ -20,6 +24,10 @@ KNOWN_EVENT_TYPES = frozenset({
     "model_code_req", "model_context", "ontology", "output_rules", "report",
     "retrieval", "role", "roster", "skill_prompt", "slots", "tool_rules",
     "tools", "user_ctx",
+    # ★ 2026-11-15 补登记（此前漏登 ⇒ 门禁红）：common.py 的 prompt 块
+    #   `artifact_facts`（产物自动归档事实，execute 路径收不到才加到 blocks）
+    #   `output_contract`（agents.output_schema → 提示词的结构化输出契约）
+    "artifact_facts", "output_contract",
 })
 
 

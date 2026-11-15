@@ -254,12 +254,47 @@ chk("装配不改动运行时配置", _cfg.get("rag", "inject_k", None) == _v_be
 section("[5] P1-3 封闭事件词表 + 前向兼容")
 from core import event_vocabulary as vocab
 
-chk("词表规模（生产实测 18 项）", len(vocab.KNOWN_EVENT_TYPES) == 18,
-    len(vocab.KNOWN_EVENT_TYPES))
+# ⚠️ 2026-11-15 判据修正：原判据是 `len(...) == 18` —— **把一次实测快照当成永久精确值**。
+#   词表会随 prompt 块演进增长（本轮就补了 artifact_facts / output_contract 两项，
+#   它们 11-14 就进了 common.py 的 build_prompt_blocks，只是当时漏登记）。
+#   锁死 `== 18` 会让"按文档要求显式登记新类型"这件**正确的事**变成红项。
+#   正确的不变式是两条（都在本文件里）：
+#     ① 只增不减：≥18（防有人图省事把冷门类型删掉绕过断言）
+#     ② 覆盖生产：下面那条 `生产库 block_name 全部被词表覆盖`（真正的正向要求）
+_VOCAB_BASELINE = 18          # 只增不减的下界（2026-11-09 首次实测值）
+def _vocab_min_ok():
+    return len(vocab.KNOWN_EVENT_TYPES) >= _VOCAB_BASELINE
+
+chk("词表规模不低于历史基线（≥%d，只增不减）" % _VOCAB_BASELINE,
+    _vocab_min_ok(), len(vocab.KNOWN_EVENT_TYPES))
 _conn = ro_db()
 if _conn and has_table(_conn, "context_audit"):
     _cov = vocab.assert_production_covered(_conn)
     chk("生产库 block_name 全部被词表覆盖", _cov["ok"] is True, _cov["unknown"])
+
+    # ── 变异自证：从词表里摘掉一项（本机真库里确实存在的），覆盖判据必须翻红 ──
+    #   为什么必须自证：这条判据是"新增块必须登记"的**唯一执行者**，
+    #   若它其实是空转（比如 unknown 恒为空），漏登记就再没人拦。
+    _seen = [r[0] for r in _conn.execute(
+        "SELECT DISTINCT block_name FROM context_audit WHERE block_name IS NOT NULL")]
+    _victim = next((x for x in ("artifact_facts", "output_contract")
+                    if x in _seen and x in vocab.KNOWN_EVENT_TYPES), None)
+    if _victim:
+        _backup = vocab.KNOWN_EVENT_TYPES
+        try:
+            vocab.KNOWN_EVENT_TYPES = frozenset(set(_backup) - {_victim})
+            _cov2 = vocab.assert_production_covered(_conn)
+            chk("变异自证：词表漏 %s ⇒ 覆盖判据必须翻红" % _victim,
+                _cov2["ok"] is False and _victim in _cov2["unknown"],
+                "unknown=%s" % _cov2.get("unknown"))
+            # (b) 缩到基线以下 ⇒ 规模判据必须翻红（证明"只增不减"有牙齿）
+            vocab.KNOWN_EVENT_TYPES = frozenset(sorted(_backup)[:_VOCAB_BASELINE - 1])
+            chk("变异自证：词表缩到 %d 项 ⇒ 规模判据必须翻红" % (_VOCAB_BASELINE - 1),
+                not _vocab_min_ok(), len(vocab.KNOWN_EVENT_TYPES))
+        finally:
+            vocab.KNOWN_EVENT_TYPES = _backup
+    else:
+        print("  [SKIP] 变异自证（词表漏项）:: 真库里找不到可摘的样本项")
     _conn.close()
 else:
     skip("生产库 block_name 词表覆盖", "空库或缺 context_audit 表")
