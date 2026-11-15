@@ -239,7 +239,9 @@ chk("E2 上限取自实际注入条数（不是写死 5）",
 # ⇒ 修法：锚点按真实性三级降级（§条款号 / 片段#区间 / 片段#序号）+ 预生成对照表。
 # ══════════════════════════════════════════════════════════════════
 section("[F] 来源锚点真实性 + 编号↔条款号对照表")
-from agent.pipeline_parts.context import source_anchor, ContextMixin   # noqa: E402
+from agent.pipeline_parts.context import ContextMixin   # noqa: E402
+# ★ 2026-11-15：`source_anchor` 已上移到 `agent/utils.py`（引用登记簿要用同一套锚点算式）
+from agent.utils import source_anchor   # noqa: E402
 
 _a_clause = source_anchor({"source_doc": "x.pdf", "section": "5.2.5 Traceability",
                            "chunk_index": 67})

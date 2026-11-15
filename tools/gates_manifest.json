@@ -2420,6 +2420,11 @@
    "script": "verify_auto_continue_stop.py",
    "tier": "pr",
    "timeout": 120
+  },
+  {
+   "script": "verify_citation_registry.py",
+   "tier": "pr",
+   "timeout": 120
   }
  ]
 }

@@ -31,6 +31,13 @@ COMMON = os.path.join(ROOT, "agent", "pipeline_parts", "common.py")
 CONSUMERS = [
     os.path.join(ROOT, "agent", "pipeline_parts", "execute.py"),
     os.path.join(ROOT, "agent", "pipeline_parts", "stream.py"),
+    # ★ 2026-11-15 补盲区：context.py / tools.py **同样**用 `from .common import *`，
+    #   此前守卫只查 execute/stream ⇒ 这两个文件引用未再导出的名字不会被抓。
+    #   实证：context.py 引用 `register_citations` / `source_anchor`，
+    #        tools.py  引用 `register_citations` / `source_anchor`
+    #        —— 二者都靠 common 再导出，漏了就是运行期 NameError。
+    os.path.join(ROOT, "agent", "pipeline_parts", "context.py"),
+    os.path.join(ROOT, "agent", "pipeline_parts", "tools.py"),
 ]
 
 _results = []
@@ -55,6 +62,15 @@ def top_defs(src):
                     for e in t.elts:
                         if isinstance(e, ast.Name):
                             names.add(e.id)
+        elif isinstance(n, ast.ImportFrom):
+            # ★ 2026-11-15 补盲区：common.py 里 `from agent.utils import (source_anchor, ...)`
+            #   这类**再导出的外部名**此前完全不在 [1] 的检查面内 ——
+            #   而 `from .common import *` 只导出 `__all__` 名单里的名字，
+            #   漏列同样导致消费方 NameError（实证：source_anchor 未列进 __all__）。
+            #   `from X import *` 无法静态枚举，跳过（只能靠 __all__ 白名单保证）。
+            if n.names and not any(a.name == "*" for a in n.names):
+                for a in n.names:
+                    names.add(a.asname or a.name)
     return names
 
 
@@ -92,18 +108,24 @@ def load_names(src):
 
 
 def foreign_refs(common_defs, src, path):
-    """该消费方引用了、属于 common 顶层定义、且非本地绑定的名字 → (名字, 首处行号)。"""
+    """该消费方引用了、属于 common 顶层定义、且非本地绑定的名字 → (名字, 首处行号)。
+
+    ★ 2026-11-15：行号改用 **AST 节点 lineno**（原实现是"按字符串在某行里找"）——
+      原实现会把**注释里**出现的名字误报成引用（实证：context.py:7 是注释，
+      真正的调用在 15 行 ⇒ 报错行号指错，排障时要来回对照）。
+      AST 定位同时天然去重（同名多次引用只报首处）。
+    """
     local = local_bindings(src)
-    loaded = load_names(src)
-    hits = sorted(loaded & common_defs - local)
+    tree = ast.parse(src)
     out = []
-    lines = src.splitlines()
-    for h in hits:
-        for i, line in enumerate(lines, 1):
-            if h in line and "import" not in line:
-                out.append((h, i))
-                break
-    return out
+    seen = set()
+    for n in ast.walk(tree):
+        if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load):
+            name = n.id
+            if name in common_defs and name not in local and name not in seen:
+                seen.add(name)
+                out.append((name, n.lineno))
+    return sorted(out, key=lambda x: x[1])
 
 
 def run_checks(mutated_all=None):

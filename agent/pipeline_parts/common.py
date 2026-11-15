@@ -46,11 +46,33 @@ from agent.intent import IntentRouter
 from agent.rag import GraphRAG, ConflictDetector
 from agent.utils import (
     _citations_payload,
+    _citations_payload_from_registry,
+    _register_citations,
+    _citation_key,
+    source_anchor,
+    _short,
     _extract_code_blocks,
     _archive_impact_analysis,
     _archive_sysml_version,
     _archive_artifacts,
 )
+
+# ★ 2026-11-15：`from .common import *` **不导出下划线开头的名字**（Python 规则），
+#   而 Mixin 正是靠 `from .common import *` 取用这些函数 ⇒ 不起别名就 NameError。
+#   （本次真机跑门禁才暴露：`NameError: name '_register_citations' is not defined`）
+#   这里给出**不带下划线的别名**，指向同一函数对象 —— 不是两份实现，
+#   而是"内部名"与"再导出名"的关系；改动必须同时改（别名即引用）。
+#
+# ⚠️⚠️ 二重陷阱（本次连续踩了两次，务必记住）：
+#   common.py **定义了 `__all__`** ⇒ `import *` **只导出 `__all__` 名单里的名字**，
+#   "公有名自动导出"那条规则在此**不生效**。
+#   ⇒ 光起别名**还不够**，别名**必须同时列进 `__all__`**，否则照样 NameError。
+#   证据：守卫 verify_common_exports.py [1] 判红
+#     缺: ['citation_key', 'citations_payload_from_registry', 'register_citations', 'short']
+register_citations = _register_citations
+citations_payload_from_registry = _citations_payload_from_registry
+citation_key = _citation_key
+short = _short
 
 # P0-2：工具结果展示上限（SSE 事件与落库共用；超出截断并标记 truncated，前端可展开全文/复制）
 # ★ 2026-10-27（截断清单 P1-B2）：6000 → 8000，与回填给模型的上限（_TOOL_MODEL_CAP）**取同值**。
@@ -495,6 +517,37 @@ class PromptBlocksCtx:
     role_cap: int = 0
     #: 是否注入 `tool_rules`：execute 原本**没有**这一块，stream 有 ⇒ 显式保留差异。
     include_tool_rules: bool = False
+
+
+def _citations_for_card(pipe, retrieval) -> list:
+    """生成前端引用数据（citations）的**唯一入口**（2026-11-15）。
+
+    ★ 为什么要有这个统一入口：
+      此前 6 处调用点各自写 `_citations_payload(retrieval.get("chunk_hits"))`，
+      而 `_citations_payload` 只认**初始检索**的 chunk_hits ⇒
+      走**工具检索**（Skill 硬门槛要求的主路径）时 citations 恒为空，
+      正文里的 [n] 全部越界、点不动（真机 conv 999999033 / msg 6603）。
+      ⇒ 现在统一走**引用登记簿**（初始检索 + 工具检索登记到同一本账）；
+      登记簿为空（无检索 / 检索未命中）⇒ 回退旧逻辑（逐字节兼容既有行为）。
+
+    ⚠️ 登记簿优先而不是"合并"：两边的编号空间不同（初始检索的编号从 1 开始，
+      工具检索接着排），合并会让编号与【来源n】对不上 —— 宁可只给登记簿那一份。
+    """
+    try:
+        reg = getattr(pipe, "_citation_registry", None)
+        if reg:
+            out = _citations_payload_from_registry(reg)
+            if out:
+                return out
+    except Exception:
+        pass
+    return _citations_payload((retrieval or {}).get("chunk_hits"))
+
+
+# `citations_for_card` 的再导出别名（stream.py / execute.py 的 6 处调用点用不带下划线的名字）。
+# ⚠️ 必须放在 `_citations_for_card` **定义之后** —— 放在前面会在模块加载时 NameError
+#   （模块顶层赋值在定义前执行 ⇒ 名字还不存在）。
+citations_for_card = _citations_for_card
 
 
 def _citation_footer(context_text: str) -> str:
@@ -1110,4 +1163,18 @@ __all__ = [
     '_lg_failed_rounds', '_lg_limit_of', '_lg_stop_reason',
     # 2026-10-28：执行闸生效值回显（卡片可证伪"我以为开了"）
     'gates_snapshot',
+    # ★ 2026-11-15：引用登记簿（citation registry）相关再导出名。
+    #   ⚠️ common.py 定义了 __all__ ⇒ `import *` 只导出本名单里的名字 ⇒
+    #      "公有名自动导出"规则在此不生效 ⇒ **新名字必须列进这里**，否则 NameError。
+    #   踩坑记录：起别名但漏加 __all__ ⇒ 守卫 [1] 判红
+    #     缺: ['citation_key', 'citations_payload_from_registry', 'register_citations', 'short']
+    'register_citations', 'citations_payload_from_registry', 'citation_key', 'short',
+    'citations_for_card', 'source_anchor',
+    # ★ 2026-11-15：`context.py::_doc_short` 仍直接调用 `_short(...)`（下划线名）——
+    #   下划线名**默认不导出**，必须显式列进 __all__（同本文件 1114 行那条约定）。
+    #   漏列 ⇒ context.py 运行期 `NameError: _short is not defined`。
+    '_short',
+    # `from dataclasses import dataclass` 是公共名，同样漏在 __all__ 外（既有问题，
+    #   本轮由守卫 [1] 增强到 ImportFrom 名字后暴露）。
+    'dataclass',
 ]

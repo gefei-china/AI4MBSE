@@ -611,6 +611,15 @@ jobs:
         if: ${{ !cancelled() }}
         run: python tools/verify/verify_auto_continue_stop.py
 
+      # ── 2026-11-15 新增：引用编号的**单一真源**（引用登记簿）──
+      #   真机故障：conv 999999033 / msg 6603 —— 走工具检索（Skill 硬门槛的主路径）时
+      #   citations 为空、正文 5 个 [n] 全部越界、点不动，而检索其实命中了 11 次。
+      #   根因：提示词注入与工具输出是**两套编号坐标系**，citations 只认前者。
+      #   修法：一本引用登记簿（初始检索 + 工具检索登记到同一处），两边都读它。
+      - name: Guard 引用编号单一真源（23 项，真机组无库时 SKIP）
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_citation_registry.py
+
       - name: Guard 流式中断兜底落库（11 项）
         if: ${{ !cancelled() }}
         run: python tools/verify/verify_partial_persist.py

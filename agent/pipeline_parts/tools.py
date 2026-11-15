@@ -2463,22 +2463,55 @@ class ToolMixin:
                     #   现改为给 top 4 条的**完整切片内容**（每条约 300 字）并标注来源，
                     #   让模型能真正引用规范原文。
                     _top = [h for h in _chunk_hits[:4] if isinstance(h, dict)]
+                    # ★ 2026-11-15：工具命中的片段**也进引用登记簿**。
+                    #   为什么要（真机 conv 999999033 / msg 6603 实证）：
+                    #     · Skill 硬门槛要求"必须先调 graph_retrieve" ⇒ **主路径就是工具检索**；
+                    #     · 但工具命中从不回写 retrieval ⇒ citations（前端可点条目）为空；
+                    #     · 而工具输出文本自带**另一套**【来源 1】~【来源 4】编号
+                    #       ⇒ 模型照着那套写 [1]~[5]，而 citations 里根本没有这些编号
+                    #       ⇒ **正文里的引用编号全部越界、点不动**（真机：5 个 [n] 全越界）。
+                    #   ⇒ 现在工具输出用**登记簿的全局编号**，与提示词注入的编号同一本账，
+                    #     编号 ⇔ citations 严格对齐；工具输出里再自带一句引用规则
+                    #     （提示词是**只组装一次**的，工具检索发生在其后的 ReAct 轮里，
+                    #       指望提示词里的"编号对照表"覆盖工具命中是不可能的）。
+                    _reg = getattr(self, "_citation_registry", None)
+                    if _reg is None:
+                        _reg = []
+                        self._citation_registry = _reg
+                    try:
+                        from core import config as _cfg_tc
+                        _inj_k = int(_cfg_tc.get("rag", "inject_k", 3) or 3)
+                        _tool_k = int(_cfg_tc.get("rag", "tool_citation_max", 5) or 5)
+                    except Exception:
+                        _inj_k, _tool_k = 3, 5
+                    _entries = register_citations(_reg, _top, limit=4,
+                                                  max_total=max(_inj_k, 1) + max(_tool_k, 1))
                     _lines = [
                         f"知识库检索到 {len(_chunk_hits)} 条相关片段"
                         f"（最高向量相似度 {_ev['max_vec']:.3f}，"
                         f"最高 BM25 {_ev['max_bm25']:.1f}）。"
                         f"以下为原文摘录，回答时请引用具体条文："
                     ]
-                    for _i, _h in enumerate(_top, 1):
-                        _src = _h.get("source_doc") or "（未知来源）"
-                        _sec = str(_h.get("section") or "").strip()
-                        _sec = f" · {_sec}" if _sec else ""
+                    for _e in _entries:
+                        _h = _e.get("chunk") or {}
+                        _src = _e.get("doc") or _h.get("source_doc") or "（未知来源）"
+                        _anchor = _e.get("anchor") or source_anchor(_h)
                         _conf = _h.get("confidence_level") or "-"
+                        _num = _e.get("n")
+                        _head = (f"\n【来源 {_num}】{_src} · {_anchor}"
+                                 if _num else f"\n【补充材料 · 未分配引用序号】{_src} · {_anchor}")
                         _lines.append(
-                            f"\n【来源 {_i}】{_src}{_sec}"
+                            f"{_head}"
                             f"（相似度 {float(_h.get('vec_score') or 0):.3f}，置信度 {_conf}）\n"
                             f"{str(_h.get('content') or '').strip()}"
                         )
+                    _numbered = [e.get("n") for e in _entries if e.get("numbered")]
+                    if _numbered:
+                        _lines.append(
+                            "\n（引用规则：以上带【来源 n】的片段可用编号 %s；"
+                            "正文引用时请紧跟该编号，写成 `§5.2.5 [3]` 这种样式；"
+                            "**未分配序号的补充材料不要编号**。）"
+                            % ("、".join(str(x) for x in _numbered)))
                     result = {"ok": True, "result": "\n".join(_lines),
                               "relevance": _rel, "hit_count": len(_chunk_hits)}
                 self._log_tool_call(name, tool_type, arguments, result, intent_ctx, agent_ctx, conv_ctx, t0)

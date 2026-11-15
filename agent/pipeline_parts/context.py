@@ -4,66 +4,9 @@
 由 tools/split_pipeline.py 从 agent/pipeline.py 机械切分而成；⚠️ 切分脚本**已一次性执行完毕、不可重跑**—— 此后本文件按普通源码维护（方法体与其它模块一样可直接改）。"""
 from .common import *
 
-
-#: 条款/章节号的**形状**（只管形状，不含任何领域词/文档名）：
-#: 形如 `5.2.7` / `4.1.22` / `9.5.9`（点分数字，允许后面跟标题文字）。
-#: 可用配置 `context_audit.citation_clause_regex` 覆盖（不同标准编号习惯不同）。
-_CLAUSE_SHAPE = re.compile(r"^\s*(\d+(?:\.\d+){1,4})(?![\d.])")
-
-
-def _clause_re():
-    try:
-        from core import config as _cfg
-        pat = str(_cfg.get("context_audit", "citation_clause_regex", "") or "").strip()
-        if pat:
-            return re.compile(pat)
-    except Exception:
-        pass
-    return _CLAUSE_SHAPE
-
-
-def source_anchor(c: dict) -> str:
-    """给一条命中片段一个**真实**的引用锚点（【来源n】标签与编号对照表共用）。
-
-    ★ 2026-11-14（米爸报「引用的片段 输出正文没有展示引用标识」）真根因：
-      原实现 `_sec = c["section_range"] or c["chunk_index"]` 后拼成 `§{_sec}`。
-      但 `section_range` **只在近邻合并时才有值，且是 chunk 区间**（见
-      `agent/retrieval_diversity.py:135`），其余一律回落成 `§406` ——
-      **把 chunk 序号伪装成条款号**。实测 5 条 citations 的 `section_range` 全为 None。
-      于是 prompt 里给模型的是「来源3 = §627」，而它真正想引的是正文里的 §5.2.5：
-      两套编号之间**没有任何映射**，模型无法低成本对应 ⇒ 干脆只写条款号、不写 [n]
-      （实测 12 条最近回答里有 9 条正文 `[n]` 数为 0，而 `§x.y` 出现 41~63 次）。
-
-    现在的优先级（**只说真话，不冒充**）：
-      ① 片段自带 `section` 且形如条款号 ⇒ `§5.2.7`（可带标题，便于模型认出来）
-      ② 有 `section_range`（近邻合并区间）⇒ `片段#12-14`
-      ③ 都没有 ⇒ `片段#406`（明确写"片段"，不写"§"）
-    """
-    sec = str(c.get("section") or "").strip()
-    if sec:
-        m = _clause_re().match(sec)
-        if m:
-            head = m.group(1)
-            tail = sec[m.end():].strip(" -–—:：·|")
-            return "§%s%s" % (head, (" " + _short(tail, 24)) if tail else "")
-    rng = str(c.get("section_range") or "").strip()
-    if rng:
-        return "片段#%s" % rng
-    idx = c.get("chunk_index", 0)
-    return "片段#%s" % idx
-
-
-def _short(s: str, cap: int) -> str:
-    """按**词边界**截断（不要在词中间切，否则 `ISO 29148-2011 Require` 这种半截词
-    反而让模型认不出是哪份文档 —— 对照表存在的意义就是让它一眼对上号）。"""
-    s = re.sub(r"\s+", " ", str(s or "").strip())
-    if len(s) <= cap:
-        return s
-    cut = s[:cap]
-    sp = cut.rfind(" ")
-    if sp >= cap * 0.55:          # 太靠前就不按词切了，否则只剩一两个词
-        cut = cut[:sp]
-    return cut.rstrip(" -–—,，。:：|") + "…"
+# ★ 2026-11-15：`source_anchor` / `_clause_re` / `_CLAUSE_SHAPE` / `_short` 已
+#   **上移到 `agent/utils.py`**（单一真源）—— 引用登记簿（也在 utils）要用同一套
+#   锚点算式与同一份截断规则；留在本文件会变成"工具路径与注入路径各写一份"。
 
 
 def _doc_short(name: str, cap: int = 28) -> str:
@@ -184,13 +127,27 @@ class ContextMixin:
                 _sel = list(chunk_hits[:_inject_k])
                 _div_stats = {}
             _anchor_rows = []
-            for i, c in enumerate(_sel[:_inject_k], 1):
-                _doc = c.get("source_doc", "")
-                _anchor = source_anchor(c)
+            # ★ 2026-11-15：**编号改由引用登记簿分配**（不再自己 enumerate）。
+            #   为什么必须改：原先【来源n】是"注入顺序号"，而 citations 数组也按
+            #   "注入顺序"生成 —— 两边各自数，一旦某一边多算/少算就整体错位
+            #   （本仓已发生过：位次 3/4/5 全错位）。现在**两边都读登记簿** ⇒ 结构上不可能错位。
+            #   同时登记簿让**工具检索**的命中也能拿到编号（见 tools.py 的 graph_retrieve），
+            #   —— 这才是 Skill 硬门槛要求的主路径（真机 conv 999999033：走工具路径时
+            #      citations 为空、正文 5 个 [n] 全部越界、点不动）。
+            _reg = getattr(self, "_citation_registry", None)
+            if _reg is None:
+                _reg = []
+                self._citation_registry = _reg
+            _entries = register_citations(_reg, _sel[:_inject_k])
+            for _e in _entries:
+                c = _e.get("chunk") or {}
+                _doc = _e.get("doc") or c.get("source_doc", "")
+                # 锚点由登记簿在**登记时**算好（单一真源）；此处只做兜底，不再各算一份。
+                _anchor = _e.get("anchor") or source_anchor(c)
                 _mf = c.get("merged_from")
                 _tag = _anchor + (f"（合并 {len(_mf)} 段）" if _mf and len(_mf) > 1 else "")
-                parts.append(f"【来源{i}】{_doc} {_tag}: {c.get('content','')}")
-                _anchor_rows.append(f"[{i}] {_doc_short(_doc)} {_anchor}")
+                parts.append(f"【来源{_e['n']}】{_doc} {_tag}: {c.get('content','')}")
+                _anchor_rows.append(f"[{_e['n']}] {_doc_short(_doc)} {_anchor}")
             # ★ 2026-11-14：**可照抄的编号对照表**（本轮关键改动）。
             #   为什么必须给：模型真正要引的是条款号（§5.2.7），而它从正文里就能读到；
             #   但"这条条款属于第几个来源"需要额外一次映射推理 —— 长文生成时它直接放弃。

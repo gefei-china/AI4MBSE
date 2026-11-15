@@ -5213,6 +5213,14 @@ class StreamMixin:
             #   用户仍会看到一个「知识库检索·未引用」的幽灵环节——
             #   这正是米爸反馈"为啥每次都有查询知识库的过程"的直接来源。
             #   口径：**没真检索就不要出现这个环节**（不是隐藏结果，而是根本不宣称做了）。
+            # ★ 2026-11-15：**引用登记簿**（【来源n】与前端 citations 的唯一真源）。
+            #   在**检索之前**建（每请求一本）：初始检索注入的片段与工具检索（ReAct 轮里）
+            #   命中的片段登记到同一本账 ⇒ 编号全局唯一 ⇒ 模型写的 [n] 必然点得动。
+            #   ⚠️ 必须在请求入口建、**不能每轮重建** —— 否则编号会在轮间漂移，
+            #      而上一轮的工具结果文本仍在 messages 里（历史编号会与新编号打架）。
+            #   ⚠️ 放在 `if should_retrieve:` **之前**：不检索的轮次工具检索仍可能命中，
+            #      登记簿必须已经存在（否则工具路径会自建一本，编号与注入对不上）。
+            self._citation_registry = []
             if should_retrieve:
                 yield {"type": "stage", "name": "知识库检索", "status": "run"}
                 retrieve_query = user_input + kb_hint
@@ -6450,7 +6458,7 @@ class StreamMixin:
                         _li = {}
                     _ret = retrieval if isinstance(retrieval, dict) else {}
                     try:
-                        _cit = _citations_payload(_ret.get("chunk_hits"))
+                        _cit = citations_for_card(self, _ret)
                     except Exception:
                         _cit = []
                     return {
@@ -7163,7 +7171,7 @@ class StreamMixin:
                     "vector_count": retrieval["vector_count"],
                     "used_mock": llm_info["used_mock"],
                     "provider": llm_info["provider"],
-                    "citations": _citations_payload(retrieval.get("chunk_hits")),  # 问答可解释性：[n] 引用来源
+                    "citations": citations_for_card(self, retrieval),  # 问答可解释性：[n] 引用来源
                     # V2.4 会话内执行过程持久化（前端历史消息按序还原思考/子智能体/工具调用）
                     "exec": {
                         # 2026-10-27（截断清单 P2-D1）：4000 → 8000。exec.reasoning 是历史消息
@@ -7321,7 +7329,7 @@ class StreamMixin:
                     #   **全文注入**（_load_attachment_text → att_text，不走 hit 通道）
                     #   ⇒ 实测附件内容被模型逐字引用（📎标注）时该字段仍 False，误导排查。
                     "attachment_used": bool(retrieval.get("attachment_hits")) or (att_parsed_info.get("parsed", 0) > 0),
-                    "citations": _citations_payload(retrieval.get("chunk_hits")),  # 问答可解释性：[n] 引用来源
+                    "citations": citations_for_card(self, retrieval),  # 问答可解释性：[n] 引用来源
                 },
                 "attachments_info": {**att_parsed_info, "consumed": len(retrieval.get("attachment_hits") or [])},
                 "matched_flows": [],   # 画布流程已移除，字段保留为空（前端不消费）

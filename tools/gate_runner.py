@@ -172,16 +172,33 @@ def main(argv=None):
         _iso = None
         if args.isolate_db:
             base = args.base_db or os.environ.get("MBSE_DB_PATH") or ""
-            if base and os.path.isfile(base):
-                _iso = os.path.join(ROOT, "tmp", "_gate_iso.db")
-                if i == 1:                      # 只在开跑时清一次残留
-                    for _suf in ("", "-wal", "-shm"):
-                        if os.path.isfile(_iso + _suf):
-                            os.remove(_iso + _suf)
-                for _suf in ("-wal", "-shm"):    # 覆盖前清掉上一轮的侧车文件
+            # ★★★ 2026-11-15 实测事故：`--isolate-db` **静默失效**，200 个门禁共用真库
+            #   ⇒ 顺序污染造出 6 个**假红**（verify_misevolution / verify_model_profile_fields /
+            #   verify_multi_project_scope / verify_p1_project_attribution / verify_setting_keys_guard
+            #   + 1），报错是 `SyntaxError: unterminated ...`（前序门禁写的脏数据被后序读出来 exec）。
+            #   这 6 个**单独跑全部全绿**，且 CI 是"每门禁独立进程 + 新建空库"⇒ 本地红、CI 绿。
+            #   根因：`MBSE_DB_PATH` 未设置时 `base=""` ⇒ 原实现只是**跳过复制**、
+            #   悄悄退化成"所有门禁共用默认真库"，用户看不到任何提示。
+            #   ⇒ 请求了隔离就必须真隔离：拿不到基准库**直接报错退出**，
+            #     不再"静默降级"（静默兜底不是稳健，是把错误变成不可见）。
+            if not base:
+                print("[gate_runner] ✗ --isolate-db 需要基准库，但 MBSE_DB_PATH 未设置。\n"
+                      "    请显式指定，例如：MBSE_DB_PATH=mbse.db python tools/gate_runner.py "
+                      "--tier pr --isolate-db\n"
+                      "    （不指定会静默退化成“所有门禁共用真库” ⇒ 顺序污染 ⇒ 假红）")
+                return 2
+            if not os.path.isfile(base):
+                print("[gate_runner] ✗ --isolate-db 的基准库不存在: %s" % base)
+                return 2
+            _iso = os.path.join(ROOT, "tmp", "_gate_iso.db")
+            if i == 1:                      # 只在开跑时清一次残留
+                for _suf in ("", "-wal", "-shm"):
                     if os.path.isfile(_iso + _suf):
                         os.remove(_iso + _suf)
-                shutil.copy2(base, _iso)
+            for _suf in ("-wal", "-shm"):    # 覆盖前清掉上一轮的侧车文件
+                if os.path.isfile(_iso + _suf):
+                    os.remove(_iso + _suf)
+            shutil.copy2(base, _iso)
 
         r = run_one(path, cap, db_path=_iso)
         r["script"] = name

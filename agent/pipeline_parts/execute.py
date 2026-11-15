@@ -419,6 +419,9 @@ class ExecuteMixin:
             # 项目/意图由 pipeline 侧算好传入（检索侧不重复解析，避免两处取值链漂移）。
             effective_kb_scope = dict(effective_kb_scope or {})
             effective_kb_scope.update(self._memory_recall_scope(intent, user))
+            # ★ 2026-11-15：**引用登记簿**（与 stream.py 同构）——
+            #   【来源n】与前端 citations 的唯一真源；初始检索与工具检索登记到同一本账。
+            self._citation_registry = []
             retrieval = self.rag.retrieve(retrieve_query, branch, attachment_text=(retrieval_att + ('\n\n' + scope_att if scope_att else '')) or None,
                                           kb_scope=effective_kb_scope,
                                           # ★ 2026-11-08：原话单独送检索侧（仅用于落 trace）。
@@ -1166,7 +1169,7 @@ class ExecuteMixin:
                     "vector_count": retrieval["vector_count"],
                     "used_mock": llm_info["used_mock"],
                     "provider": llm_info["provider"],
-                    "citations": _citations_payload(retrieval.get("chunk_hits")),  # 问答可解释性：[n] 引用来源
+                    "citations": citations_for_card(self, retrieval),  # 问答可解释性：[n] 引用来源
                     "sysml_views": sysml_views,
                     "submitted_by": audit_user(user) if isinstance(user, dict) else "会话发起人",
                     **self._build_rich_card(intent, retrieval, branch, user_input, provider_id),
@@ -1216,7 +1219,7 @@ class ExecuteMixin:
             "intent": intent, "agent": agent_def.name, "hil_level": hil_level,
             "source": retrieval["source"], "confidence": retrieval["confidence"],
             "graph_count": retrieval["graph_count"], "vector_count": retrieval["vector_count"],
-            "citations": _citations_payload(retrieval.get("chunk_hits")),
+            "citations": citations_for_card(self, retrieval),
         }, ensure_ascii=False)
         # 通用报告服务：结构化 Report（前端可下载/复用；SP-R 透传报告类型）
         report = None
@@ -1287,7 +1290,7 @@ class ExecuteMixin:
                 #   **全文注入**（_load_attachment_text → att_text，不走 hit 通道）
                 #   ⇒ 实测附件内容被模型逐字引用（📎标注）时该字段仍 False，误导排查。
                 "attachment_used": bool(retrieval.get("attachment_hits")) or (att_parsed_info.get("parsed", 0) > 0),
-                "citations": _citations_payload(retrieval.get("chunk_hits")),  # 问答可解释性：[n] 引用来源
+                "citations": citations_for_card(self, retrieval),  # 问答可解释性：[n] 引用来源
             },
             "attachments_info": {**att_parsed_info, "consumed": len(retrieval.get("attachment_hits") or [])},
             "matched_flows": [],   # 画布流程已移除，字段保留为空（前端不消费）
