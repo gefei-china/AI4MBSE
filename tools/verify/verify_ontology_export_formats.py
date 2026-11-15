@@ -143,21 +143,53 @@ def main():
     check("C 三格式三元组数同量级（max/min = %.3f ≤ 1.25）" % (hi / float(lo or 1)),
           hi <= lo * 1.25, "counts=%s" % counts)
 
-    # ── D. 变异自证：把 Turtle 的 PN_LOCAL 守卫关掉 ⇒ A-ttl 必须红 ────────
-    print("\n--- D. 变异自证（证明判据有鉴别力）---")
+    # ── D. 变异自证：PN_LOCAL 守卫必须真的在防"带 / 的前缀名" ────────────
+    #   ⚠️ 判据在 2026-11-15 修过（第一版已失效，属于"修复后好现象"）：
+    #     第一版是用**真库数据**做变异（关掉守卫 ⇒ 整份 Turtle 必须解析失败）。
+    #     但后来 `_build_name2iri` 改成按 type_kind 分流 —— relation/attribute
+    #     **强制**走 `rel/` / `prop/` 命名空间（全形 IRI，不带 `:` 前缀），
+    #     于是「G/T值」这类带 `/` 的名字**不再经过** PN_LOCAL 路径
+    #     守卫不再是唯一防线 ⇒ 变异后当然还能解析。
+    #   ⇒ 现在直接用**构造样本**测守卫本身：一个 entity 的自定义 iri 含 `/`。
+    #     它必须输出 `<全形 IRI>`（合法）；把守卫关掉后会变成 `:A/B`（非法）。
+    print("\n--- D. 变异自证（PN_LOCAL 守卫）---")
     import re as _re
+    from core import ns as _ns_mod
+
+    class _Row(dict):
+        def keys(self):
+            return list(super().keys())
+
+    _base = dict(rows[0]) if isinstance(rows[0], dict) else dict(zip(rows[0].keys(), rows[0]))
+    _bad = _Row(_base)
+    _bad["name"] = "X_SLASH_PROBE"
+    _bad["type_kind"] = "entity"
+    _bad["iri"] = _ns_mod.NS_ONTOLOGY + "A/B"      # 局部名含 `/` ⇒ 非 PN_LOCAL
+    _bad.pop("tlo_anchor", None)
+
+    _ttl_bad = O.to_turtle(con, rows=[_bad])
+    _ttl_bad = _ttl_bad[0] if isinstance(_ttl_bad, tuple) else _ttl_bad
+    _used_full_iri = ("<" + _ns_mod.NS_ONTOLOGY + "A/B>") in _ttl_bad
+    check("D1 带 `/` 的类 IRI 输出**全形** `<...A/B>`（而非 `:A/B`）",
+          _used_full_iri, "未找到全形 IRI；输出片段=%r" % _ttl_bad[-200:])
+    _g_ok = rdflib.Graph()
+    try:
+        _g_ok.parse(data=_ttl_bad, format="turtle")
+        check("D2 该输出是合法 Turtle", True, "")
+    except Exception as e:
+        check("D2 该输出是合法 Turtle", False, "%s: %s" % (type(e).__name__, str(e)[:150]))
+
+    # 变异：让 PN_LOCAL 守卫恒真（即恢复"永远拼 :local"的旧行为）
     _src_p = os.path.join(_ROOT, "ontology_owl.py")
     _raw = open(_src_p, "rb").read()
     _text = _raw.decode("utf-8")
     _anchor = 'if re.match(r"^[A-Za-z0-9_\\-.%]+$", local):'
     if _anchor in _text:
         try:
-            # 变异：让守卫**恒真**（即恢复成"永远用 :local"，含 / 时必非法）
-            _mut = _text.replace(_anchor, 'if True:', 1)
-            open(_src_p, "wb").write(_mut.encode("utf-8"))
+            open(_src_p, "wb").write(_text.replace(_anchor, "if True:", 1).encode("utf-8"))
             import importlib
             importlib.reload(O)
-            _t2 = O.to_turtle(con, rows=rows)
+            _t2 = O.to_turtle(con, rows=[_bad])
             _t2 = _t2[0] if isinstance(_t2, tuple) else _t2
             _g2 = rdflib.Graph()
             _broke = False
@@ -165,15 +197,60 @@ def main():
                 _g2.parse(data=_t2, format="turtle")
             except Exception:
                 _broke = True
-            check("D 变异自证：关掉 PN_LOCAL 守卫 ⇒ Turtle 解析必须失败",
-                  _broke, "变异后仍解析通过 —— 说明该断言是空转（没真覆盖到带 / 的名字）")
+            check("D3 变异自证：关掉 PN_LOCAL 守卫 ⇒ 该输出解析必须失败", _broke,
+                  "变异后仍解析通过 —— 说明守卫没在生产路径上（或断言空转）")
         finally:
             open(_src_p, "wb").write(_raw)          # 逐字节还原
             import importlib
             importlib.reload(O)
-            check("D 变异源文件已逐字节还原", open(_src_p, "rb").read() == _raw, "")
+            check("D4 变异源文件已逐字节还原", open(_src_p, "rb").read() == _raw, "")
     else:
-        check("D 变异锚点存在（PN_LOCAL 守卫）", False, "锚点未找到，变异无法执行")
+        check("D3 变异锚点存在（PN_LOCAL 守卫）", False, "锚点未找到，变异无法执行")
+
+    # ── E. ★ URI 必须与数据同源（否则 OWL 公理对真实数据完全失效）──────────
+    #   2026-11-15 实测的重大缺陷：`to_owl`/`to_turtle`/`to_jsonld` 三路导出
+    #   给关系/属性生成的 URI 是 `ontology#CONTAINS`，而图库数据用 `rel/CONTAINS`
+    #   ⇒ 实测 relation 13/13、attribute 11/11 全部不一致 ⇒ TBox 里 5 个
+    #   `owl:TransitiveProperty` 声明齐备，但对真实数据**一条都推不出来**
+    #   （owlrl 实测：新推 0 条），外部工具加载也一样。
+    #   修后同一次推理：CONTAINS 16→40、DERIVES 22→47。
+    #   ⇒ 这条判据是"OWL 导出到底有没有用"的唯一守门人。
+    print("\n--- E. URI 与数据同源（OWL 公理能否作用于真实数据）---")
+    from core import ns as _ns_e
+    import re as _re2
+
+    _owl_xml = outs["owl"][1]
+    _rel_uris = set(_re2.findall(r'<owl:ObjectProperty rdf:about="([^"]+)"', _owl_xml))
+    _attr_uris = set(_re2.findall(r'<owl:DatatypeProperty rdf:about="([^"]+)"', _owl_xml))
+    _rel_decl = {str(t["name"]) for t in rows if t["type_kind"] == "relation"}
+    _attr_decl = {str(t["name"]) for t in rows if t["type_kind"] == "attribute"}
+
+    _bad_rel = []
+    for _nm in _rel_decl:
+        _want = _ns_e.NS_PRED_REL + _ns_e.local(_ns_e.loc_key(_nm))
+        if _want not in _rel_uris:
+            _bad_rel.append(_nm)
+    _bad_attr = []
+    for _nm in _attr_decl:
+        _want = _ns_e.NS_PRED_PROP + _ns_e.local(_ns_e.loc_key(_nm))
+        if _want not in _attr_uris:
+            _bad_attr.append(_nm)
+
+    check("E1 每个关系类型的声明 URI == 数据侧 `rel/<enc>`（%d 个）" % len(_rel_decl),
+          not _bad_rel, "不一致 %d 个：%s" % (len(_bad_rel), _bad_rel[:5]))
+    check("E2 每个属性类型的声明 URI == 数据侧 `prop/<enc>`（%d 个）" % len(_attr_decl),
+          not _bad_attr, "不一致 %d 个：%s" % (len(_bad_attr), _bad_attr[:5]))
+    # E3：Turtle / JSON-LD 两路也必须同源（三路同一 URI，否则"换格式就失效"）
+    _ttl_txt = outs["ttl"][1]
+    _hit_ttl = sum(1 for _nm in list(_rel_decl)[:8]
+                   if (_ns_e.NS_PRED_REL + _ns_e.local(_ns_e.loc_key(_nm))) in _ttl_txt)
+    check("E3 Turtle 侧的关系 URI 同样走 `rel/`（抽样 8 个）", _hit_ttl >= min(8, len(_rel_decl)),
+          "命中 %d/%d" % (_hit_ttl, min(8, len(_rel_decl))))
+    _json_txt = outs["jsonld"][1]
+    _hit_j = sum(1 for _nm in list(_attr_decl)[:8]
+                 if (_ns_e.NS_PRED_PROP + _ns_e.local(_ns_e.loc_key(_nm))) in _json_txt)
+    check("E4 JSON-LD 侧的属性 URI 同样走 `prop/`（抽样 8 个）", _hit_j >= min(8, len(_attr_decl)),
+          "命中 %d/%d" % (_hit_j, min(8, len(_attr_decl))))
 
     con.close()
     return _summary()

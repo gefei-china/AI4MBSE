@@ -86,14 +86,50 @@ def _slug(s):
 
 
 def _build_name2iri(rows, base=BASE):
-    """P0-1：类型名 → 实体 IRI 映射（优先 iri 列，回退 base+slug(name)）。rows 为类型行列表。"""
+    """类型名 → IRI 映射。**按 type_kind 分流**（2026-11-15 修，见下）。
+
+    · entity    → `iri` 列（可被用户自定义，WebProtege 对齐）；空则 base+slug
+    · relation  → **强制 `core.ns.NS_PRED_REL`**（图库数据的谓词命名空间）
+    · attribute → **强制 `core.ns.NS_PRED_PROP`**（同上）
+
+    ## 为什么必须分流（真机实测的重大缺陷）
+
+    `core.ns` 是本工程 IRI 的**单一真源**，三套命名空间分工明确：
+        类 = `ontology#<enc>` ／ 数据属性 = `prop/<enc>` ／ 关系 = `rel/<enc>`
+    `shacl_export`、图库写入、实例投影**全部**按这套生成（shacl_export 注释里
+    还专门记着这条教训：「IRI 全部走 core.ns，否则 sh:class / sh:path 约束对
+    数据永远落空」）。
+
+    但 `to_owl` / `to_turtle` / `to_jsonld` 三路导出此前一律用
+    「iri 列 or base+slug」⇒ 关系/属性的 URI 变成 `ontology#CONTAINS`，
+    而真实数据用的是 `rel/CONTAINS`。实测：
+        · relation  13/13 与 core.ns **不一致**
+        · attribute 11/11 与 core.ns **不一致**
+    后果（用 owlrl 实测）：TBox 里 5 个 `owl:TransitiveProperty` 声明齐备，
+    但对真实数据**一条都推不出来**（推理器看到的是两个不同谓词）。
+    外部工具（Protégé/GraphDB）加载这份 OWL 也一样——公理全部落空。
+
+    ⇒ 修法：relation/attribute **不再信任 iri 列**（它的值来自更早的生成策略，
+    与数据侧不同源），强制走 core.ns；entity 保留 iri 列以维持「类 IRI 可自定义」。
+    """
     name2iri = {}
     for r in rows:
+        nm = r["name"]
+        try:
+            kind = r["type_kind"]
+        except Exception:
+            kind = ""
+        if kind == "relation":
+            name2iri[nm] = _ns.NS_PRED_REL + _ns.local(_ns.loc_key(nm))
+            continue
+        if kind == "attribute":
+            name2iri[nm] = _ns.NS_PRED_PROP + _ns.local(_ns.loc_key(nm))
+            continue
         try:
             v = r["iri"] if "iri" in r.keys() else ""
         except Exception:
             v = ""
-        name2iri[r["name"]] = v or (base + _slug(r["name"]))
+        name2iri[nm] = v or (base + _slug(nm))
     return name2iri
 
 

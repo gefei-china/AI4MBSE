@@ -131,7 +131,19 @@ def _load_all_triples(conn, branch: str = "") -> list:
         return _ns.local(_ns.loc_key(name))
 
     def _uri(name):
-        return BASE_T + _local(name)
+        """实体 URI —— **必须与图库写入侧同源**（2026-11-15 修）。
+
+        ⚠️ 此前是 `NS_ENT + local(loc_key(id))`，而 `graph_db` 用的是
+        `ns.ent_uri(name, eid)` = `NS_ENT + local(id)`。两者对**连字符**的处理不同：
+            `loc_key("S-9cba2973")` → `S_9cba2973`（连字符→下划线）
+            `ent_uri` 路径          → `S-9cba2973`（保留）
+        真库 189 个实体 id **全是连字符形态**（`S-xxxxxxxx`）⇒ 自研推理产出的
+        s/o URI **在图谱里一个都不存在**：推理"推出来了"但前端匹配不上节点，
+        与「sh:class 约束对数据永远落空」是同一类缺陷（URI 不同源）。
+
+        判据：与 `graph_db.ent_uri` 逐字节一致。
+        """
+        return _ns.ent_uri("", name)
 
     br_sql = " AND branch=?" if branch else ""
     br_params = (branch,) if branch else ()
