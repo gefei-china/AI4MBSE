@@ -3,11 +3,61 @@
  * 原行号 2300-2525  ·  全局作用域（非 module），内联 onclick 依赖全局函数名
  */
 function escMd(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+/* ★ 2026-11-15（米爸报「知识库检索 引用的片段 输出正文没有展示引用标识」的真根治）：
+   从 citations 的 `anchor` 建「条款号 → 最小编号」索引（1-based，与 [n] 同序）。
+
+   为什么必须做这一层（而不是继续加强提示词）：
+     提示词已写成**硬性要求**（`_build_citation_rules` + 检索数据尾部的 `_citation_footer`
+     都在说"凡写出条款号必须紧跟 [n]"），但真机 msg 6614 实测：
+       正文 §5.2.5 出现 **20 次**、§x.y 合计 41 次，而 `[n]`（扣除摘要里的批量标注）**0 处**。
+     原因不是"没要求到"，而是**结构化输出时模型天然写条款号**：
+       JSON 的 `clause_ref` 是"放条款引用的字段"，语义上就该写
+       `"ISO 29148:2011 §5.2.5 Unambiguous"`，让它在那儿拼 `[1]` 是反直觉的。
+     ⇒ 结论：**这类事不该指望模型自觉**。锚点本来就已在 citations 里（后端算好的），
+       前端直接用它在正文里把 `§x.y` 变成可点入口 —— 模型写多写少都能点。
+
+   可靠性边界（刻意保守）：
+     只链接**anchor 里真实存在**的条款号。模型自己写出来的、检索没命中过的号
+     （msg 6614 里的 §5.2.6 / §5.2.7 / §5.2.8）**不链接** —— 因为我们没有它的片段，
+     链过去只会打开空内容。这与 `source_anchor`「只说真话、不冒充」同一口径。 */
+function _citeClauseIndex(cites){
+  const idx = {};
+  if(!cites || !cites.length) return idx;
+  cites.forEach((c, k)=>{
+    const m = String((c && c.anchor) || '').match(/§\s*(\d+(?:\.\d+){1,4})/);
+    if(!m) return;
+    // 同一条款可能对应多个片段（真机 msg 6614：[1][2][3][4] 的 anchor 全是 §5.2.5）
+    // ⇒ 取**最小编号**，保证同一条款每次点开的都是同一份，不让用户看到编号乱跳。
+    if(idx[m[1]] === undefined) idx[m[1]] = k + 1;
+  });
+  return idx;
+}
 function inlineMd(s, cites){
   let o = escMd(s);
   o = o.replace(/`([^`]+)`/g, '<code class="md-ic">$1</code>');
   o = o.replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
-  // 问答可解释性：将 [n] / [n,m] 引用标注渲染为可点击来源链接（需 message 附带 citations 数据）
+  // ① 条款号自动链接（先做：它不产生方括号数字，不会被 ② 误伤）
+  if(cites && cites.length){
+    const _ci = _citeClauseIndex(cites);
+    const _keys = Object.keys(_ci);
+    if(_keys.length){
+      // 长的优先（§5.2.5 排在同前缀短号之前）；`(?![\d.])` 防部分匹配
+      // —— 否则 `§5.2.55` 会被 `§5.2.5` 命中并留下一个孤零零的 `5`。
+      _keys.sort((a,b)=>b.length-a.length);
+      const _re = new RegExp('§\\s*(' + _keys.map(k=>k.replace(/\./g,'\\.')).join('|') + ')(?![\\d.])', 'g');
+      o = o.replace(_re, (mm, key)=>{
+        const n = _ci[key];
+        // ⚠️⚠️ title 里**绝对不能出现 `[数字]`**（2026-11-15 实测踩坑）：
+        //   § 替换先执行、[n] 替换后执行；若 title 写成 `…片段 [1]`，
+        //   后面那条 `/\[(\d+...)\]/g` 会把 title 里的 `[1]` 也换成 `<sup>`，
+        //   ⇒ HTML 变成 `title="…片段 <sup …>[1]</sup>"`，**标签被塞进属性里**，
+        //   §5.2.5 直接点不动（门禁 A8 锁死这条）。
+        //   编号信息用户点开就能看到，没必要塞在 tooltip 里。
+        return `<sup class="cite cite-sec" data-i="${n}" onclick="openCitation(this)" title="查看该条款对应的来源片段">§${key}</sup>`;
+      });
+    }
+  }
+  // ② [n] / [n,m] 引用标注 → 可点击来源链接（需 message 附带 citations 数据）
   if(cites && cites.length){
     o = o.replace(/\[(\d+(?:[,，]\s*\d+)*)\]/g, (mm, idxs)=>{
       const nums = idxs.split(/[,，]\s*/).map(n=>parseInt(n,10)).filter(n=>n>=1 && n<=cites.length);

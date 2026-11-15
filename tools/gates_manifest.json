@@ -2427,6 +2427,11 @@
    "timeout": 120
   },
   {
+   "script": "verify_citation_clause_link.py",
+   "tier": "pr",
+   "timeout": 180
+  },
+  {
    "script": "verify_ontology_export_formats.py",
    "tier": "nightly",
    "timeout": 180,

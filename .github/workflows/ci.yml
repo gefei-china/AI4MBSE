@@ -620,6 +620,17 @@ jobs:
         if: ${{ !cancelled() }}
         run: python tools/verify/verify_citation_registry.py
 
+      # ── 2026-11-15 新增：正文条款号（§x.y）自动链接到来源片段 ────────────
+      #   同一故障的**第二层**：登记簿让 citations 有内容后，正文里仍然点不到东西 ——
+      #   真机 msg 6614：正文 §5.2.5 出现 20 次、§x.y 合计 41 次，`[n]` 0 处。
+      #   提示词已写成"硬性要求"，仍无效：结构化输出时模型天然只写条款号
+      #   （JSON 的 clause_ref 语义上就该放 "…§5.2.5 Unambiguous"）。
+      #   ⇒ 不指望模型：前端用后端已算好的 anchor，把正文 §x.y 直接渲染成可点元素。
+      #   判据用 node 跑 05-markdown.js 的**真函数体**（不复刻，避免两套实现漂移）。
+      - name: Guard 正文条款号自动链接（22 项，含 3 组变异自证；无 node/无库时 SKIP）
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_citation_clause_link.py
+
       # ── 2026-11-15 新增：SHACL 独立校验交叉验证 ────────────────────────
       # 本工程所有实例校验都靠自研实现；若自研有 bug，**没有任何人能发现**。
       # 接 pySHACL（W3C SHACL 参考实现之一）做独立校验，与自研逐维度比对：
