@@ -210,6 +210,82 @@ class OntologyValidator:
                 out.setdefault(k, v)
         return out
 
+    def bound_attributes(self, entity_type: str) -> dict:
+        """实体类型可用的数据属性 —— **单一真源**（schema_text 与 shacl_export 共用）。
+
+        ## 为什么必须合并两侧（2026-11-15 实测）
+
+        本工程的属性是「全局数据属性 + 绑定到实体」的 OWL/Protégé 模型：
+          · 属性侧 `constraints.domain_classes` = 该属性适用于哪些实体类型；
+          · 实体侧 `properties` = 历史/局部内联定义。
+        真库实测：**28 个实体的 properties 全为空**，绑定 100% 在属性侧。
+
+        而此前的 `schema_text()` 与 `shacl_export()` **都只读实体侧**
+        ⇒ 后果一（更严重）：注入 Agent system_prompt 的本体摘要里
+          **28 个实体全部显示"属性:无"、11 个属性名一个都不出现**
+          ⇒ AI 建模时根本不知道这些实体能填什么属性，只能自由发挥或干脆不填；
+        ⇒ 后果二：SHACL 里 `sh:datatype` 全库出现 0 次（xsd 强校验是死代码）。
+
+        ## 合并口径（与 required/unique/白名单的局部覆盖同构）
+
+          · 并集：两侧同名属性只算一次；
+          · **类型/单位/量纲**取属性侧（它是全局定义）；
+          · **required / unique / allowed_values** 取实体侧局部覆盖（本类的额外约束）。
+          · 属性侧的 `domain_classes` 命中**自身或任一祖先**即可（子类继承父类的适用范围）。
+
+        :returns: ``{属性名: {"type": "xsd:int"|"", "required": bool, "unique": bool,
+                              "allowed_values": list, "unit": str,
+                              "quantity_kind": str, "declared_by": "entity"|"attribute"}}``
+        """
+        atk = self._load_types()
+        cons = self._merged_constraints(entity_type)   # 含祖先的 required/unique/白名单
+        cls_chain = set(self.classify(entity_type))    # 自身 + 祖先
+
+        out = {}
+
+        # ① 实体侧内联定义（历史通路，保留；实测多为空）
+        for k, v in self.merged_properties(entity_type).items():
+            ptype = v.get("type") if isinstance(v, dict) else None
+            out[k] = {"type": typevocab.xsd_of(ptype) if ptype else "",
+                      "declared_by": "entity"}
+
+        # ② 属性侧绑定（真库唯一的实际通路）
+        for nm, t in atk.items():
+            if t["type_kind"] != "attribute":
+                continue
+            ac = t.get("constraints") or {}
+            dcs = ac.get("domain_classes")
+            if dcs is None:
+                dcs = ac.get("domain")
+            if isinstance(dcs, str):
+                dcs = [dcs]
+            if not any(str(x).strip() in cls_chain for x in (dcs or []) if str(x).strip()):
+                continue
+            slot = out.setdefault(nm, {})
+            # 属性侧是全局定义 ⇒ 类型/单位优先
+            if ac.get("xsd_type"):
+                slot["type"] = typevocab.xsd_of(ac.get("xsd_type"))
+            if ac.get("unit"):
+                slot["unit"] = str(ac.get("unit"))
+            if ac.get("quantity_kind"):
+                slot["quantity_kind"] = str(ac.get("quantity_kind"))
+            av = ac.get("allowed_values")
+            if isinstance(av, list) and av:
+                slot["allowed_values"] = list(av)
+            slot["declared_by"] = slot.get("declared_by") or "attribute"
+            slot.setdefault("type", "")
+
+        # ③ 实体侧局部约束覆盖（本类对某属性的额外要求）
+        for k, slot in out.items():
+            if k in (cons.get("required") or []):
+                slot["required"] = True
+            if k in (cons.get("unique") or []):
+                slot["unique"] = True
+            av_local = (cons.get("allowed_values") or {}).get(k)
+            if isinstance(av_local, list) and av_local:
+                slot["allowed_values"] = list(av_local)   # 局部覆盖全局
+        return out
+
     def validate_node(self, entity_type: str, props: dict) -> list:
         """校验节点实例化：类型合法（含子类）+ 必填/唯一/取值白名单（含继承）。返回错误列表（空=通过）。"""
         types = self._load_types()
@@ -346,12 +422,35 @@ class OntologyValidator:
         rels = [t for t in types.values() if t["type_kind"] == "relation"]
         lines = ["【领域本体约束】知识图谱实例化必须遵循以下类型与规则："]
         if ents:
-            # P0-1：含父类型（子类继承父类属性）与继承属性合并
+            def _attrs_of(name):
+                """属性摘要：`名:类型[单位]`，让 LLM 知道该填什么格式。
+
+                ★ 2026-11-15 修（真机实测的重大缺陷）：这里此前用
+                  `self.merged_properties()`（只读**实体侧** properties），而真库
+                  28 个实体的 properties 全为空 ⇒ 注入 system_prompt 的摘要里
+                  **28 个实体全部是"属性:无"、11 个属性名一个都不出现**
+                  ⇒ AI 建模时不知道这些实体能填什么属性，只能自由发挥。
+                  改走 `bound_attributes()`（实体侧 ∪ 属性侧绑定，单一真源）。
+                """
+                ba = self.bound_attributes(name)
+                if not ba:
+                    return "无"
+                parts = []
+                for k, m in ba.items():
+                    _t = str(m.get("type") or "").replace("xsd:", "")
+                    _u = m.get("unit") or ""
+                    s1 = k + (":" + _t if _t else "") + ("[" + _u + "]" if _u else "")
+                    if m.get("required"):
+                        s1 += "*"      # * = 必填
+                    parts.append(s1)
+                return ",".join(parts)
+
             lines.append("实体类型: " + ", ".join(
                 f"{t['name']}"
                 f"{'(' + '继承:' + '/'.join(self.ancestors(t['name'])) + ')' if self.parents_of(t['name']) else ''}"
-                f"(属性:{','.join(self.merged_properties(t['name']).keys()) or '无'})"
+                f"(属性:{_attrs_of(t['name'])})"
                 for t in ents))
+            lines.append("（属性格式：名:数据类型[单位]，带 * 者为必填）")
         if rels:
             lines.append("关系类型: " + ", ".join(t["name"] for t in rels))
         return "\n".join(lines)
@@ -408,98 +507,38 @@ class OntologyValidator:
         #   ⇒ 实例编辑器的 xsd 强校验、枚举白名单在真实数据上全是死代码。
         # 修法：两侧**并集**消费（不删任何一侧，避免"修一个新问题、断一条旧通路"），
         #   并以「属性侧的声明优先」——它是全局定义，实体侧只是历史局部覆盖。
-        attr_by_entity = {}     # 实体类型名 → [属性类型行]
-        for t in types.values():
-            if t["type_kind"] != "attribute":
-                continue
-            try:
-                _ac = t.get("constraints") or {}
-                _dcs = _ac.get("domain_classes")
-                if _dcs is None:
-                    _dcs = _ac.get("domain")
-                if isinstance(_dcs, str):
-                    _dcs = [_dcs]
-                for _dc in (_dcs or []):
-                    _dc = str(_dc).strip()
-                    if _dc:
-                        attr_by_entity.setdefault(_dc, []).append(t)
-            except Exception:
-                # 兜底不静默：单个属性解析失败不应连累整份 SHACL（但要留痕到日志）
-                pass
-
         for t in ents:
             name = t["name"]
-            merged_props = self.merged_properties(name)   # P0-1：含父类继承
             cons = self._merged_constraints(name)         # P0-1：含父类继承
-            # 属性侧绑定：本条类型 + 其全部祖先类型上绑定的数据属性（子类继承父类的属性适用范围）
-            # ⚠️ 循环变量**不得**叫 `_cls` —— 它遮蔽了上方同名的 `_cls()` 辅助函数
-            #   （2026-11-15 实测踩到：`'str' object is not callable`）。
-            bound_attrs = []
-            _seen_attr = set()
-            for _anc_name in self.classify(name):
-                for _at in attr_by_entity.get(_anc_name, []):
-                    if _at["name"] in _seen_attr:
-                        continue
-                    _seen_attr.add(_at["name"])
-                    bound_attrs.append(_at["name"])
+            # ★ 2026-11-15：属性来源收敛到 `bound_attributes()` **单一真源**
+            #   （entity 侧 properties ∪ attribute 侧 domain_classes）。
+            #   此前这里有两份循环（一份读实体侧、一份读属性侧），
+            #   而 `schema_text()` 又只读实体侧 ⇒ 同一语义两处各写一份，必然漂移
+            #   （实测：SHACL 有 56 条 datatype，而注入提示词的本体摘要里却是
+            #    28 个"属性:无"、11 个属性名一个不出现）。
             props = []
-            # ⚠️ 关键：**未声明类型就不要发 sh:datatype**。
-            #   `typevocab.xsd_of(None)` 会宽松兜底成 `xsd:string`，而 SHACL 里
-            #   `sh:datatype xsd:string` 是**强断言**（值必须是字符串）——
-            #   把"没声明"伪装成"声明为字符串"，会让数值属性在校验时被误判违规
-            #   （本仓「兜底把错误变成不可见」的又一形态）。故先判空。
-            def _dt(decl):
-                return typevocab.xsd_of(decl) if decl else ""
-
-            # ① 实体侧内联属性（历史通路，保留）
-            for k, v in merged_props.items():
-                ptype = (v.get("type") if isinstance(v, dict) else None)
+            for k, meta in self.bound_attributes(name).items():
                 block = f"[ sh:path {_prop(k)}"
-                _xsd_dt = _dt(ptype)
+                # ⚠️ 未声明类型就不发 sh:datatype：`typevocab.xsd_of(None)` 会宽松
+                #   兜底成 xsd:string，而 SHACL 里它是**强断言** ⇒ 把"没声明"伪装成
+                #   "声明为字符串"，数值属性会被误判违规。
+                _xsd_dt = meta.get("type") or ""
                 if _xsd_dt:
                     block += f" ; sh:datatype {_xsd_dt}"
-                av = cons.get("allowed_values", {}).get(k)
-                if isinstance(av, list) and av:
-                    block += " ; sh:in (" + " ".join(f'"{a}"' for a in av) + ")"
-                if k in cons.get("required", []):
+                _av = meta.get("allowed_values")
+                if isinstance(_av, list) and _av:
+                    block += " ; sh:in (" + " ".join(f'"{a}"' for a in _av) + ")"
+                if meta.get("required"):
                     block += " ; sh:minCount 1"
-                if k in cons.get("unique", []):
-                    block += " ; sh:maxCount 1"   # P1-1：sh:unique 非标准词，唯一性归 maxCount 语义
+                if meta.get("unique"):
+                    block += " ; sh:maxCount 1"   # sh:unique 非标准词，唯一性归 maxCount 语义
                 # R4：函数型特性（cardinality=1 或 characteristics 含 functional）→ 基数上限
                 if cons.get("cardinality") == "1" or "functional" in (cons.get("characteristics") or []):
                     block += " ; sh:maxCount 1"
-                props.append(block + " ]")
-            # ② 属性侧绑定（2026-11-15 新增：这是真库唯一的实际通路）
-            for _an in bound_attrs:
-                if _an in merged_props:
-                    continue          # 实体侧已有同名内联定义 ⇒ 不重复发块（会造成同 path 交集语义）
-                _at = types.get(_an) or {}
-                _ac = _at.get("constraints") or {}
-                block = f"[ sh:path {_prop(_an)}"
-                _xsd_dt = _dt(_ac.get("xsd_type"))
-                if _xsd_dt:
-                    block += f" ; sh:datatype {_xsd_dt}"
-                # 枚举：**属性侧全局值** 与 **实体侧按属性名的局部覆盖** 两种格式并存
-                #   · 属性侧 `allowed_values` = 纯列表（该属性全局允许值）
-                #   · 实体侧 `allowed_values` = {属性名: [值]}（该属性在本类上的局部允许值）
-                # 局部覆盖优先（与 required/unique 同口径）。
-                # ⚠️ 2026-11-15 补：上一笔只补了 required/unique 的局部覆盖，漏了枚举 ——
-                #   交叉验证门禁的夹具当场抓到（sh:in 不生成 ⇒ 枚举约束对实例永不生效）。
-                _av2 = _ac.get("allowed_values")
-                _av_local = cons.get("allowed_values", {}).get(_an)
-                if isinstance(_av_local, list) and _av_local:
-                    _av2 = _av_local
-                if isinstance(_av2, list) and _av2:
-                    block += " ; sh:in (" + " ".join(f'"{a}"' for a in _av2) + ")"
-                # 必填/唯一可由实体侧局部覆盖（实体 constraints.required/unique 内联到属性行）
-                if _an in cons.get("required", []):
-                    block += " ; sh:minCount 1"
-                if _an in cons.get("unique", []):
-                    block += " ; sh:maxCount 1"
                 # 单位/量纲：SHACL 无标准谓词承载，用 sh:description 作**注解**留痕
                 # （不发明自定义谓词去骗校验器；需要真校验单位时得上 SHACL-SPARQL）
-                _u = str(_ac.get("unit") or "").strip()
-                _q = str(_ac.get("quantity_kind") or "").strip()
+                _u = str(meta.get("unit") or "").strip()
+                _q = str(meta.get("quantity_kind") or "").strip()
                 if _u or _q:
                     _note = "量纲单位：" + (_u or "（无量纲）")
                     if _q:

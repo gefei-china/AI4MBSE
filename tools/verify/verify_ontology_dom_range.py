@@ -1466,6 +1466,76 @@ check("O85 ★ 坏样本：实体类型（含祖先链）无 BFO 锚点 → miss
       f"坏样本 names={sorted({x['name'] for x in _iss_tlo})} "
       f"正样本(继承)={sorted(_S_TLO_OK.get('missing_tlo_anchor') or [])}")
 
+# ── 2026-11-15：注入 LLM 的本体摘要必须**真的含属性**（此前是 28 个"属性:无"）──
+#   为什么要这一条：`schema_text()` 是注入 Agent system_prompt 的本体约束摘要，
+#   此前它只读**实体侧** `properties`（真库 28 个实体全为空）⇒ 摘要里
+#   28 个实体一律"属性:无"、11 个属性名一个都不出现 ⇒ AI 建模时不知道能填什么属性。
+#   **这个缺陷长期没人发现，正是因为没有任何判据断言"摘要里有属性"** ——
+#   空过比报错更危险，故必须单独锁死。
+#   判据取"真实数据"：至少在真库里出现一个已绑定的属性名；且它必须挂在
+#   `domain_classes` 命中的那个实体上（证明绑定关系真的被消费了，而不是碰巧拼出）。
+_schema_ok = None
+_schema_detail = ""
+try:
+    from ontology_semantics import OntologyValidator as _OV
+    _c6 = ro_conn()
+    try:
+        _vt = _OV(_c6)                      # 消费口径（快照）
+        _st = _vt.schema_text()
+        # 找一个「属性侧绑定了某个实体」的真实样本
+        _rows6 = _c6.execute(
+            "SELECT name, constraints FROM ontology_types WHERE type_kind='attribute'").fetchall()
+        _sample = None
+        for _r6 in _rows6:
+            _cons6 = json.loads(_r6["constraints"] or "{}")
+            _dcs6 = _cons6.get("domain_classes") or []
+            if isinstance(_dcs6, str):
+                _dcs6 = [_dcs6]
+            if _dcs6 and _cons6.get("xsd_type"):
+                _sample = (_r6["name"], str(_dcs6[0]))
+                break
+        if _sample:
+            _attr, _host = _sample
+            # ① 属性名必须出现
+            _has_attr = _attr in _st
+            # ② 必须出现在该实体的括号里（证明绑定被消费，而非全局罗列）
+            _seg = ""
+            for _piece in _st.split("), "):
+                if _piece.startswith(_host + "(") or (" " + _host + "(") in _piece[:40] or _piece.lstrip().startswith(_host):
+                    _seg = _piece
+                    break
+            _in_host = bool(_seg) and (_attr in _seg)
+            # ★ 内嵌自证（替代脆弱的"改源码再重跑"变异）：
+            #   该样本属性必须**只存在于属性侧**（旧实现 `merged_properties` 看不到）。
+            #   ⇒ 它出现在摘要里，就**只可能**是新通路（bound_attributes）带进来的。
+            #   一旦实现退回"只读实体侧"，`_has_attr` 立刻为 False ⇒ 本条翻红。
+            #   （此前用源码变异自证时，变异子进程在跑到本条前就崩了，
+            #     父进程把"输出里没有 FAIL"误读成"仍通过" ⇒ 假绿。这是本仓
+            #     「变异引用断言必须逐字存在」之外的新坑：**子进程崩溃 = 假绿搬运**。）
+            _old_keys = set()
+            for _n in _vt.classify(_host):
+                _old_keys |= set(_vt.merged_properties(_n).keys())
+            _new_keys = set(_vt.bound_attributes(_host).keys())
+            _discriminating = (_attr not in _old_keys) and (_attr in _new_keys) \
+                and (len(_new_keys) > len(_old_keys))
+            _schema_ok = _has_attr and _in_host and _discriminating
+            _schema_detail = (
+                "样本=%s → 宿主=%s；全文=%s，宿主片段=%s；旧实现可见=%s，新实现多出 %d 个"
+                % (_attr, _host, _has_attr, _in_host, (_attr in _old_keys),
+                   len(_new_keys) - len(_old_keys)))
+        else:
+            _schema_ok = True
+            _schema_detail = "真库无「属性侧绑定 + 有类型」样本 ⇒ 本条不适用（SKIP 而非假绿）"
+    finally:
+        _c6.close()
+except Exception as _e6:
+    _schema_ok = False
+    _schema_detail = "读取失败: %s: %s" % (type(_e6).__name__, _e6)
+
+check("O86 ★ 注入 LLM 的本体摘要（schema_text）真实含属性：属性名出现且挂在 domain_classes 命中的实体上",
+      bool(_schema_ok), _schema_detail)
+
+
 
 conn.close()
 
