@@ -373,17 +373,23 @@ check("O23 体检 total == 消费口径类型行数（体检读的就是消费�
 #   真建模缺陷，不是回归。若简单把断言删掉，"该维度不再受保护"，下次新增 warn
 #   就没人管；若继续要求 warn==0，则门禁会因"发现了真问题"而红。
 #   ⇒ 正解：把已知缺陷登记成**基线清单**，任何**新增**的 warn 仍然判红。
-_WARN_BASELINE = {
-    # (关系/类型名, 规则码)：已登记、待业务裁决的既有缺陷
-    ("ALLOCATED_TO", "functional_data_conflict"),
-}
+#   2026-11-15：(`ALLOCATED_TO`,`functional_data_conflict`) 已修复（摘掉误声明的 functional），
+#   故**移出基线** —— 基线应只剩"真的还没修"的项；留着会让该缺陷无声复发。
+#   ⚠️ 空集合要写 `set()`，写 `{}` 是 **dict**（本行踩过一次：TypeError set - dict）。
+_WARN_BASELINE = set()
+# 基线里显式登记"已清空"这件事：若日后又出现 warn，仍会被 _new_warn 抓住。
+_KNOWN_FIXED_WARN = {("ALLOCATED_TO", "functional_data_conflict")}
 _cur_warn = {(x["name"], x["code"]) for x in (rep.get("issues") or []) if x.get("severity") == "warn"}
 _new_warn = sorted(_cur_warn - _WARN_BASELINE)
 _gone_warn = sorted(_WARN_BASELINE - _cur_warn)
-check("O24 ★ 真库 warn 只来自已登记的已知缺陷（新增 warn 即红）",
-      not _new_warn,
+# 已修复项的**回归检测**：基线清空后，若它又出现，_new_warn 已经会报；
+# 这里再单独点明"这是回归"而不只是"新增"，免得排查时误以为是新问题。
+_regressed = sorted(_KNOWN_FIXED_WARN & _cur_warn)
+check("O24 ★ 真库 warn 只来自已登记的已知缺陷（新增/回归 warn 即红）",
+      not _new_warn and not _regressed,
       f"新增 warn={_new_warn}（当前 {sorted(_cur_warn)}）"
-      + (f"；已修复可移出基线：{_gone_warn}" if _gone_warn else ""))
+      + (f"；**已修复项回归**={_regressed}" if _regressed else "")
+      + (f"；可移出基线：{_gone_warn}" if _gone_warn else ""))
 
 _exp_multi = 0
 for _r in _scope_rows:
@@ -1577,6 +1583,178 @@ check("O87 ★ 坏样本：声明 functional 且同一源有多个目标 → fun
       f"坏样本={ [(x['name'], x['severity']) for x in _iss_func] } "
       f"正样本(一源单目标)={sorted(_S_FUNC_OK.get('functional_data_conflict') or [])}")
 
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 2026-11-15：unique 的两个口径（分支范围 / 排除自身）+ 三项本体整理的落地
+# ═══════════════════════════════════════════════════════════════════════════
+# 为什么要锁死 unique 的口径：这两个 bug 都会让 unique **永远不可用**，
+# 而且症状都不在 unique 自己身上 ——
+#   ① 无分支过滤：本工程同一实例在 dev/release/personal 各存一份 ⇒ 正常副本被判重复
+#      ⇒ 谁都不敢开 unique（真库 unique 因此全域为空 0/28）；
+#   ② 不排除自身：编辑已有实例时它自己就在库里 ⇒ 每次保存都被判"违反唯一约束"
+#      ⇒ 一旦开 unique，该类型实例**再也改不动**。
+# 两条都是"静默不可用/静默锁死"，没有判据就永远不会被发现。
+
+import sqlite3 as _sq3
+
+
+def _unique_fixture():
+    """内存库：同一 req_id 在三分支各一份（真实数据形态）。"""
+    c = _sq3.connect(":memory:")
+    c.row_factory = _sq3.Row
+    c.executescript("""
+        CREATE TABLE entities (id TEXT, name TEXT, entity_type TEXT, properties TEXT,
+                               status TEXT, branch TEXT, project_id TEXT);
+        CREATE TABLE ontology_types (id INTEGER PRIMARY KEY, name TEXT, type_kind TEXT,
+          parent_id INTEGER, properties TEXT DEFAULT '{}', constraints TEXT DEFAULT '{}',
+          description TEXT DEFAULT '', tlo_anchor TEXT DEFAULT '');
+    """)
+    c.execute("INSERT INTO ontology_types (id,name,type_kind,constraints) "
+              "VALUES (1,'UQ','entity',?)",
+              (json.dumps({"unique": ["req_id"]}),))
+    for br in ("dev", "release", "personal"):
+        c.execute("INSERT INTO entities VALUES (?,?,?,?,?,?,?)",
+                  ("S-" + br, "r", "UQ", json.dumps({"req_id": "STR-001"}),
+                   "reviewed", br, "p1"))
+    c.commit()
+    return c
+
+
+# ── O88/O89：unique 的两个口径（夹具，纯逻辑，任何环境都跑）──────────────
+# ⚠️ 断言写在 try 之外：编号自检用正则 `check\(\s*[rf]?"O(\d+)` 扫**全文**
+#   （连注释里的字面量也算），若兜底分支也用同一编号再断言一次，就会被解析成
+#   "编号重复" 假红（本笔踩过）。故兜底只写进 detail，不再单独断言。
+_uq = {}
+try:
+    from ontology_semantics import OntologyValidator as _UQV
+    _cu = _unique_fixture()
+    try:
+        _uv = _UQV(_cu)
+        _p = {"req_id": "STR-001"}
+        _uq["same"] = _uv.validate_node("UQ", _p, "dev")
+        _uq["other"] = _uv.validate_node("UQ", _p, "newbranch")
+        _uq["glob"] = _uv.validate_node("UQ", _p)
+        _uq["self"] = _uv.validate_node("UQ", _p, "dev", exclude_id="S-dev")
+        _uq["fresh"] = _uv.validate_node("UQ", {"req_id": "STR-999"}, "dev")
+    finally:
+        _cu.close()
+except Exception as _eu:
+    _uq["error"] = "%s: %s" % (type(_eu).__name__, _eu)
+
+check("O88 ★ unique 判定**按分支**：同分支撞值必报、跨分支副本放行、不传分支时按全库（导入口径）",
+      bool(_uq.get("same")) and not _uq.get("other") and bool(_uq.get("glob"))
+      and "分支 dev 内" in (_uq.get("same") or [""])[0]
+      and "全库" in (_uq.get("glob") or [""])[0],
+      _uq.get("error") or "同分支=%s 跨分支=%s 全库=%s"
+      % (_uq.get("same"), _uq.get("other"), _uq.get("glob")))
+
+check("O89 ★ unique **排除自身**：编辑已有实例（值不变、exclude_id=自己）不得判重复；新值仍须通过",
+      not _uq.get("self") and not _uq.get("fresh"),
+      _uq.get("error") or "编辑自身=%s 新值=%s —— 若编辑自身报重复，启用 unique 后实例改不动"
+      % (_uq.get("self"), _uq.get("fresh")))
+
+# ── O90~O92：三项本体整理在**真库**的落地结果（消费口径；无真库 ⇒ 显式 SKIP）──
+_real = {}
+try:
+    _c7 = ro_conn()
+    try:
+        _r7 = {r["name"]: dict(r) for r in _c7.execute(
+            "SELECT name, type_kind, parent_id, constraints, tlo_anchor FROM ontology_types")}
+        # ① ALLOCATED_TO 不再声明 functional，但保留 transitive/asymmetric
+        _c_al = json.loads((_r7.get("ALLOCATED_TO") or {}).get("constraints") or "{}")
+        _real["chars"] = [str(x) for x in (_c_al.get("characteristics") or [])]
+        # ② 需求 成为族根
+        _ov7 = _OV(_c7)
+        _real["chain"] = _ov7.classify("单元需求")
+        _real["isolated"] = [x["name"] for x in (rep.get("issues") or [])
+                             if x.get("code") == "isolated"]
+        # ③ req_id / priority 的声明与绑定
+        _need = {}
+        for _nm in ("req_id", "priority"):
+            _t = _r7.get(_nm) or {}
+            _cc = json.loads(_t.get("constraints") or "{}") if _t else {}
+            _need[_nm] = {"declared": (_t.get("type_kind") == "attribute"),
+                          "dom": sorted(str(x) for x in (_cc.get("domain_classes") or [])),
+                          "xsd": _cc.get("xsd_type"),
+                          "enum": _cc.get("allowed_values")}
+        _real["need"] = _need
+        _c7c = json.loads((_r7.get("利益相关方需求") or {}).get("constraints") or "{}")
+        _real["required"] = sorted(_c7c.get("required") or [])
+        _real["unique"] = sorted(_c7c.get("unique") or [])
+    finally:
+        _c7.close()
+except Exception as _e7:
+    _real["skip"] = "%s: %s" % (type(_e7).__name__, _e7)
+
+_REQ_LEGS = {"利益相关方需求", "系统需求", "子系统需求", "单元需求"}
+_ch = _real.get("chars") or []
+check("O90 ★ 真库：ALLOCATED_TO 不再声明 functional（与「一源多目标」数据矛盾），"
+      "且仍保留 transitive/asymmetric",
+      ("skip" in _real) or ("functional" not in _ch and "transitive" in _ch and "asymmetric" in _ch),
+      _real.get("skip") or "SKIP" if "skip" in _real else f"characteristics={_ch}")
+
+check("O91 ★ 真库：需求 是需求族根（classify('单元需求') 含「需求」），且「需求」不再是孤立类",
+      ("skip" in _real) or ("需求" in (_real.get("chain") or [])
+                            and "需求" not in (_real.get("isolated") or [])),
+      _real.get("skip") or "SKIP" if "skip" in _real
+      else f"chain={_real.get('chain')} isolated={_real.get('isolated')}")
+
+_nd = _real.get("need") or {}
+check("O92 ★ 真库：req_id / priority 已声明并绑定全部 4 个需求子类型，"
+      "required 与 unique 真的挂上，priority 带枚举",
+      ("skip" in _real)
+      or (all(_nd.get(n, {}).get("declared") and set(_nd.get(n, {}).get("dom") or []) >= _REQ_LEGS
+              for n in ("req_id", "priority"))
+          and _nd.get("priority", {}).get("enum") == ["high", "medium", "low"]
+          and {"req_id", "priority"} <= set(_real.get("required") or [])
+          and "req_id" in (_real.get("unique") or [])),
+      _real.get("skip") or "SKIP" if "skip" in _real
+      else f"req_id={_nd.get('req_id')} priority={_nd.get('priority')} "
+           f"required={_real.get('required')} unique={_real.get('unique')}")
+
+# ── O93：注入「已解析成 dict 的行」时，约束不得被静默丢成 {} ──────────────
+# 这是本笔踩到的**假绿陷阱**：`_load_types` 对 constraints 一律 json.loads，
+# 而注入方（门禁夹具 / 影响面模拟）给的常是已解析 dict ⇒ TypeError 被 except 吞掉
+# ⇒ 全部约束变成 {} ⇒ "校验全绿"，而其实什么都没校验。
+# 实测代价：把 required 硬挂到有缺属性实例的类型上，影响面竟报 0 违规。
+_il = {}
+try:
+    from ontology_semantics import OntologyValidator as _ILV
+    _ic = _sq3.connect(":memory:")
+    _ic.row_factory = _sq3.Row
+    _ic.executescript("CREATE TABLE entities (id TEXT, name TEXT, entity_type TEXT,"
+                      " properties TEXT, status TEXT, branch TEXT, project_id TEXT);"
+                      # validate_node 的 xsd 校验会直查 ontology_types，缺表就 500；
+                      # 行数据由 _load_types 注入，故这里建空表即可。
+                      "CREATE TABLE ontology_types (id INTEGER PRIMARY KEY, name TEXT,"
+                      " type_kind TEXT, parent_id INTEGER, properties TEXT DEFAULT '{}',"
+                      " constraints TEXT DEFAULT '{}', description TEXT DEFAULT '',"
+                      " tlo_anchor TEXT DEFAULT '');")
+    _inj = [
+        {"id": 1, "name": "INJ_E", "type_kind": "entity", "parent_id": None,
+         "properties": {},                       # 已是 dict（非 JSON 字符串）
+         "constraints": {"required": ["req_id"]},  # 已是 dict
+         "tlo_anchor": "Object"},
+        {"id": 2, "name": "req_id", "type_kind": "attribute", "parent_id": None,
+         "properties": {},
+         "constraints": {"xsd_type": "string", "domain_classes": ["INJ_E"]},
+         "tlo_anchor": ""},
+    ]
+    _iv = _ILV(_ic, rows=_inj)
+    _il["required"] = _iv._merged_constraints("INJ_E").get("required")
+    _il["battr"] = sorted(_iv.bound_attributes("INJ_E").keys())
+    _il["errs"] = _iv.validate_node("INJ_E", {})
+    _ic.close()
+except Exception as _ei:
+    _il["error"] = "%s: %s" % (type(_ei).__name__, _ei)
+
+check("O93 ★ 注入「已解析 dict 行」时约束不丢失（required 仍生效、属性仍绑定）",
+      (not _il.get("error"))
+      and _il.get("required") == ["req_id"]
+      and _il.get("battr") == ["req_id"]
+      and any("缺少必填属性" in e for e in (_il.get("errs") or [])),
+      _il.get("error") or "required=%s bound_attributes=%s errs=%s"
+      % (_il.get("required"), _il.get("battr"), _il.get("errs")))
 
 
 conn.close()

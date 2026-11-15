@@ -122,14 +122,21 @@ class OntologyValidator:
                 rows = active_rows(self.conn)
             for r in rows:
                 d = dict(r)
-                try:
-                    d["constraints"] = json.loads(d.get("constraints") or "{}")
-                except Exception:
-                    d["constraints"] = {}
-                try:
-                    d["properties"] = json.loads(d.get("properties") or "{}")
-                except Exception:
-                    d["properties"] = {}
+                # ★ 2026-11-15：**已解析的结构体不能再 json.loads**。
+                #   DB 取出的行是 JSON 字符串，但调用方注入的内存行（`rows=` 参数、
+                #   门禁夹具、影响面模拟）常常已经是 dict。此前一律 json.loads ⇒
+                #   `TypeError` 被下面的 except 吞掉 ⇒ `constraints` 静默变成 `{}`
+                #   ⇒ **所有约束凭空消失**，校验"全绿"（本笔实测踩到：影响面恒为 0，
+                #   把 required 硬挂到有 2 个缺属性实例的根类上竟也报 0 违规）。
+                #   这是"兜底把错误变成不可见"的典型：宁可让类型显式分流，不要靠 except。
+                for _k in ("constraints", "properties"):
+                    _v = d.get(_k)
+                    if isinstance(_v, (dict, list)):
+                        continue
+                    try:
+                        d[_k] = json.loads(_v or "{}")
+                    except Exception:
+                        d[_k] = {}
                 self._types[d["name"]] = d
         return self._types
 
@@ -286,8 +293,32 @@ class OntologyValidator:
                 slot["allowed_values"] = list(av_local)   # 局部覆盖全局
         return out
 
-    def validate_node(self, entity_type: str, props: dict) -> list:
-        """校验节点实例化：类型合法（含子类）+ 必填/唯一/取值白名单（含继承）。返回错误列表（空=通过）。"""
+    def validate_node(self, entity_type: str, props: dict, branch: str = "",
+                      exclude_id: str = "") -> list:
+        """校验节点实例化：类型合法（含子类）+ 必填/唯一/取值白名单（含继承）。返回错误列表（空=通过）。
+
+        :param branch: **唯一性的判定范围**（2026-11-15 新增，见下）。
+        :param exclude_id: **唯一性比对时排除自身**（2026-11-15 新增，编辑路径必须传）。
+
+        ## 为什么唯一性必须带分支（真缺陷，非洁癖）
+
+        本工程 `entities` 的主键是复合键 `(id, branch)`：同一个逻辑实例在
+        dev / release / personal 三个分支**各存一份**（实测 24 个需求 × 3 分支，
+        同分支内 req_id 24/24 不重复，跨分支合计仍是 24 个唯一值）。
+
+        而原实现的唯一性查询是**全库比对**（`WHERE entity_type=? AND properties LIKE ?`，
+        无 branch 过滤）⇒ 每一条正常的跨分支副本都被判成"违反唯一约束"
+        ⇒ **任何 unique 约束在本工程都必然误报**，这解释了为什么真库
+        `constraints.unique` 全域为空（0/28）—— 不是业务没填，是填了就报错。
+
+        ## 两种口径的适用面（显式声明，避免"同一语义两套写法"）
+
+        · **传 branch（写入路径）**：编辑/新建已落分支的实例 —— 分支内判重，正确语义。
+          `routers/knowledge_parts/graph.py`（PUT 保存）、`GraphStore.create_node`。
+        · **不传 branch（导入/候选路径）**：数据尚未落分支（`v2g_candidates` 是待审候选、
+          sysml 导入在分配分支之前）—— 只能按全局判重，且**更严**：可防"同一需求
+          被重复导入到另一个分支"。调用方不传即为该语义，不是"忘了传"。
+        """
         types = self._load_types()
         errs = []
         if entity_type not in types:
@@ -310,12 +341,23 @@ class OntologyValidator:
         for k in cons.get("unique", []):
             v = props.get(k)
             if v is not None:
-                dup = self.conn.execute(
-                    "SELECT id FROM entities WHERE entity_type=? AND properties LIKE ? AND status!='deprecated' LIMIT 1",
-                    (entity_type, f'%"{k}": "{v}"%'),
-                ).fetchone()
+                # 判定范围：传 branch ⇒ 分支内判重；不传 ⇒ 全局判重（见 docstring）
+                _sql = ("SELECT id FROM entities WHERE entity_type=? AND properties LIKE ?"
+                        " AND status!='deprecated'")
+                _args = [entity_type, f'%"{k}": "{v}"%']
+                if branch:
+                    _sql += " AND branch=?"
+                    _args.append(branch)
+                # ★ 必须排除自身：编辑已有实例时（PUT 保存）它自己就在库里，
+                #   不排除 ⇒ 每次保存都判"违反唯一约束" ⇒ 一旦启用 unique，
+                #   该类型的实例就**再也改不动**（与"编辑入口被 400 堵死"同型）。
+                if exclude_id:
+                    _sql += " AND id != ?"
+                    _args.append(exclude_id)
+                dup = self.conn.execute(_sql + " LIMIT 1", tuple(_args)).fetchone()
                 if dup:
-                    errs.append(f"[{entity_type}] 属性 {k}={v} 违反唯一约束")
+                    _scope = f"（分支 {branch} 内）" if branch else "（全库）"
+                    errs.append(f"[{entity_type}] 属性 {k}={v} 违反唯一约束{_scope}")
         for k, allowed in (cons.get("allowed_values") or {}).items():
             v = props.get(k)
             if v is not None and v not in allowed:
@@ -690,7 +732,8 @@ class GraphStore:
         版本化语义：同 id 允许在**不同分支**分别创建版本行（支撑 dev fork），
         仅拦截「同 id 同分支」重复创建。
         """
-        errs = self.validator.validate_node(entity_type, props)
+        # 2026-11-15：传 branch ⇒ 唯一性按分支判定（同一实例在三分支各存一份）
+        errs = self.validator.validate_node(entity_type, props, branch)
         if errs:
             return False, errs
         from repositories.knowledge_repo import KnowledgeRepo
