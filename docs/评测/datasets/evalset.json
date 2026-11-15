@@ -1,11 +1,11 @@
 {
  "schema": "p1-6/evalset@1",
- "built_at": "2026-11-11 19:37:27",
+ "built_at": "2026-11-15 16:56:21",
  "seed": 20260921,
  "fingerprint": {
   "documents": 14,
   "document_chunks": 7394,
-  "entities": 189,
+  "entities": 184,
   "relations": 249,
   "release_entity_names_sha1": "77e0c39603cded89",
   "chunk_sections_sha1": "d7b41722d9554887",

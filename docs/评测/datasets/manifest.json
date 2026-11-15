@@ -1,7 +1,7 @@
 {
  "schema": "dataset-manifest@1",
- "dataset_id": "54e04d95f3f5",
- "built_at": "2026-11-11T19:37:27",
+ "dataset_id": "3293342db856",
+ "built_at": "2026-11-15T16:56:21",
  "generator": {
   "build_evalset": "1",
   "trace2dataset": "p1-1/trace-evalset@1"
@@ -14,7 +14,7 @@
   "fingerprint": {
    "documents": 14,
    "document_chunks": 7394,
-   "entities": 189,
+   "entities": 184,
    "relations": 249,
    "release_entity_names_sha1": "77e0c39603cded89",
    "chunk_sections_sha1": "d7b41722d9554887",
@@ -47,18 +47,18 @@
    }
   },
   "fingerprint": {
-   "conversations": 294,
-   "messages": 1073,
-   "feedback": 8,
-   "llm_usage_stats": 25412,
-   "hil_confirmations": 40,
+   "conversations": 372,
+   "messages": 1232,
+   "feedback": 9,
+   "llm_usage_stats": 27791,
+   "hil_confirmations": 46,
    "flow_runs": 11,
-   "intent_samples": 562,
+   "intent_samples": 568,
    "bad_cases": 6,
-   "tool_call_logs": 7320,
-   "messages_content_sha1": "e5322c62ada84a4d",
+   "tool_call_logs": 8862,
+   "messages_content_sha1": "e53eb32a066aa175",
    "confirmed_intent_texts_sha1": "66571ebcec5ad12e",
-   "hil_previews_sha1": "f10c822c3ec87026",
+   "hil_previews_sha1": "3922dbe1377595e6",
    "flow_runs_sha1": "50d152607182717a",
    "badcase_subjects_sha1": "bbd516dec0491398",
    "schema_version": 1
