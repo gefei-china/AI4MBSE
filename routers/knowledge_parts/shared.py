@@ -342,7 +342,8 @@ def _ont_edit_rows(conn):
     #   `tools/verify/verify_ontology_dom_range.py` 的手写 DDL 夹具当场
     #   `no such column` 崩掉（本仓「夹具手抄 DDL 漂移」老坑的又一次复发）。
     #   用 `SELECT *` ⇒ 以后再加列不会破任何夹具；下游按需取键即可。
-    return conn.execute("SELECT * FROM ontology_types").fetchall()
+    # 2026-11-15：下沉到仓储层（layering 门禁 L1c 要求 routers 不直连读 SQL）。
+    return KnowledgeRepo(conn).all_ontology_types_raw()
 
 
 def _scan_edge_conflicts(conn, decl, limit=50):
@@ -695,11 +696,8 @@ def _ontology_check(conn, rows=None, instances=False, scope=None) -> dict:
         if "functional" not in _chf:
             continue
         try:
-            _multi = conn.execute(
-                "SELECT source_id, COUNT(*) c FROM relations "
-                "WHERE relation_type=? AND status!='deprecated' "
-                "GROUP BY source_id HAVING c > 1 ORDER BY c DESC",
-                (t["name"],)).fetchall()
+            # 2026-11-15：下沉到仓储层（layering L1c 要求 routers 不直连读 SQL）
+            _multi = KnowledgeRepo(conn).relation_source_multi_target(t["name"])
         except Exception as _e:
             degraded.append(f"functional_data_conflict 跳过（{t['name']} 边聚合失败）："
                             f"{type(_e).__name__}: {_e}")

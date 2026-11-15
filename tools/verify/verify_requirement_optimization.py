@@ -62,7 +62,14 @@ if _ROOT not in sys.path:
 
 PASS, FAIL = "PASS", "FAIL"
 _results, _MUT = [], []
+_SKIP = []          # ★ 2026-11-15：无依赖 SKIP 项（SKIP ≠ 通过，必须显式打印）
 _IN = [False]
+
+
+def skip(name, why):
+    """记一条 SKIP。**不计入 PASS**（否则就是静默变绿），但也不判红。"""
+    _SKIP.append((name, why))
+    print("[SKIP] %s　— %s" % (name, why))
 
 
 def check(name, ok, detail=""):
@@ -166,18 +173,43 @@ def a_group():
           _cleaned[:200])
 
     # A7：生成代码过 checker.jar（这是本仓铁律，改 SysML 必验）
+    #
+    # ★ 2026-11-15 拆分：原 A7 把**三件事**捆在一条断言里 ——
+    #   ① 代码含 acceptanceCriteria（纯文本检查，任何环境都能验）
+    #   ② checker.jar 硬错 = 0（**依赖 java-runtime + checker.jar**）
+    #   ③ 不生成 package 层 verify（纯文本检查）
+    #   后果：CI 无 java ⇒ ② 恒失败 ⇒ 整条 A7 红，把 ①③ 这两个**本可验证**
+    #   的结论一起拖下水（"一条不可验的混进可验的" ⇒ 可验的那部分也失去保护）。
+    #   ⇒ 拆成 A7a（代码结构，必跑）+ A7b（checker，不可用时 SKIP 并打印原因）。
     _ac_lines = [l for l in code.split("\n") if "acceptanceCriteria" in l]
     _has_verify = any(l.strip().startswith("verify ") for l in code.split("\n"))
+    check("A7a 生成代码含 ≥4 处 acceptanceCriteria 且不生成 package 层 verify",
+          len(_ac_lines) >= 4 and not _has_verify,
+          {"ac_lines": len(_ac_lines), "verify_stmt": _has_verify})
+
     _chk = {"n_hard": -1, "verdict": "未跑"}
+    _unavail = ""
     try:
         import sysml_v2_check as _sv
-        r = _sv.check_code(code, use_cache=True)
-        _chk = {"n_hard": r.get("n_hard"), "verdict": r.get("verdict")}
+        _r = _sv.check_code(code, use_cache=True)
+        _chk = {"n_hard": _r.get("n_hard"), "verdict": _r.get("verdict")}
+        # ★ 用产品自带的 verdict() 判「环境降级」：它把 ok=False / rc 缺失
+        #   统一折叠成 'unavailable'，比自己拼判据可靠（不抄第二份口径）。
+        try:
+            if _sv.verdict(_r) == "unavailable":
+                _unavail = "check_code 返回 unavailable（缺 java-runtime / checker.jar）"
+        except Exception:
+            pass
+        if _r.get("n_hard") is None and not _unavail:
+            _unavail = "n_hard 为 None（checker 未真正执行）"
     except Exception as e:
-        _chk = {"n_hard": -1, "verdict": "ERR:%s" % type(e).__name__}
-    check("A7 生成代码含 acceptanceCriteria 且 checker.jar 硬错=0（且不生成 package 层 verify）",
-          len(_ac_lines) >= 4 and _chk.get("n_hard") == 0 and not _has_verify,
-          {"ac_lines": len(_ac_lines), "verify_stmt": _has_verify, "checker": _chk})
+        _unavail = "%s: %s" % (type(e).__name__, e)
+
+    if _unavail:
+        skip("A7b checker.jar 硬错=0", _unavail)
+    else:
+        check("A7b checker.jar 硬错 = 0（OMG 官方校验器）",
+              _chk.get("n_hard") == 0, _chk)
 
 
 # ── B 组 ────────────────────────────────────────────────────────────────────
@@ -464,11 +496,15 @@ def main():
     n_pass = sum(1 for r in _results if r[0] == PASS)
     n_mut = sum(1 for r in _MUT if r[0] == PASS)
     n_fail = sum(1 for r in _results + _MUT if r[0] == FAIL)
-    print("\n结果：%d PASS / %d FAIL　（其中变异自证 %d 条）　%.1fs"
-          % (n_pass, n_fail, n_mut, time.time() - t0))
+    print("\n结果：%d PASS / %d FAIL / %d SKIP　（其中变异自证 %d 条）　%.1fs"
+          % (n_pass, n_fail, len(_SKIP), n_mut, time.time() - t0))
     for st, name, det in _results + _MUT:
         if st == FAIL:
             print("  ✗ %s　%s" % (name, det))
+    if _SKIP:
+        # SKIP 不是通过：必须显式列出，否则"没验证"会被读成"验过了"
+        print("  SKIP 项（未验证，不等于通过）：%s"
+              % "、".join(n for n, _ in _SKIP))
     return 0 if n_fail == 0 else 1
 
 

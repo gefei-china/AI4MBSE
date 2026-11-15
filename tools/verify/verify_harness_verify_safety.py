@@ -154,23 +154,84 @@ def _legacy_parse(raw: str) -> dict:
 
 
 def case_replay() -> None:
-    print("\nB. 历史回放（真实库 761 条 verify；旧实现 333 条误判为对照）")
+    print("\nB. 回放对照（旧实现 vs 新实现）")
+
+    # ── B-0：**合成对照**（数据无关，必跑）────────────────────────────────
+    #
+    # ★ 2026-11-15：此前的 B1/B2 只依赖真库 `agent_todos.verify` 的历史数据
+    #   （本地 761 条），而 CI 干净库里该表为空 ⇒ `legacy_tool=0` ⇒ B1/B2 必红。
+    #   但这两条断言要证明的是**算法差异**（旧实现把首段 ASCII 词当工具名），
+    #   这件事用合成样本就能严格复现，不需要历史数据。
+    #   ⇒ 合成对照作为**主判据**（任何环境都跑），真库回放降级为**额外证据**。
+    #   这比"无数据就 SKIP"强：SKIP 等于该维度在 CI 上永远不受保护。
+    #
+    # 样本设计（每条对应一个必须成立的行为，实测两版解析器均确认过）：
+    #   · 自然语言首段恰好是英文动词 ⇒ 旧实现误判工具，新实现必须判 manual
+    #   · 真工具名 + 写类/交互类 ⇒ 旧实现当"验收步骤执行"（事故面）
+    #   · 中文自然语言 ⇒ 旧实现本就判 manual（反向对照，防"全都判 tool"式假一致）
+    synth = [
+        # (verify 串, 旧判 tool?, 旧判出的工具是否写类/交互类)
+        ("run this and report back", True, False),
+        ("check the EIRP value of transponder", True, False),
+        ("please validate the link budget", True, False),
+        ("save_artifact {\"name\": \"x\"}", True, True),
+        ("export_sysml_v2 {\"id\": 1}", True, True),
+        ("ask_user 确认是否继续", True, True),
+        # 反向：中文开头，旧实现本就判 manual —— 若这里反而判 tool，说明对照写错了
+        ("检查一下转发器的EIRP", False, False),
+        ("核对轨道高度是否满足要求", False, False),
+        ("人工确认", False, False),
+    ]
+    WRITE = {"save_artifact", "requirement_commit", "export_sysml_v2",
+             "zhiyuan_sysmlv2_import", "import_sysml_text", "file_write",
+             "autofix", "sysml_v2_autofix", "ask_user"}
+
+    s_legacy_tool = s_legacy_write = s_new_tool = 0
+    mism = []
+    for raw, want_legacy_tool, _ in synth:
+        lp = _legacy_parse(raw)
+        np_ = hg.parse_verify_spec(raw or "")
+        got_legacy_tool = lp["kind"] == "tool"
+        if got_legacy_tool != want_legacy_tool:
+            mism.append((raw, want_legacy_tool, got_legacy_tool))
+        if got_legacy_tool:
+            s_legacy_tool += 1
+            if lp["tool"] in WRITE:
+                s_legacy_write += 1
+        if np_["kind"] == "tool":
+            s_new_tool += 1
+    print("    合成样本 %d 条：旧判 tool=%d（写类/交互类 %d）；新判 tool=%d"
+          % (len(synth), s_legacy_tool, s_legacy_write, s_new_tool))
+    check("B1 旧实现确实会误判（合成对照非空，证明修的是真问题）", s_legacy_tool > 0,
+          "旧实现判 tool=%d" % s_legacy_tool)
+    check("B2 旧实现会把写类/交互类当验收执行（合成样本覆盖事故面）", s_legacy_write > 0,
+          "写类 %d 条" % s_legacy_write)
+    check("B3 新实现对这些样本判 tool 的条数 = 0（全是人工/建议执行）", s_new_tool == 0,
+          "新实现判 tool=%d 条" % s_new_tool)
+    check("B0 合成样本自身可信：每条旧实现的判定与预期一致（对照没写错）", not mism,
+          "不一致: %s" % mism[:3])
+
+    # ── B-4：真库回放（额外证据；无数据则 SKIP，不再判红）──────────────────
     db = os.path.join(REPO, "mbse.db")
     if not os.path.exists(db):
-        print("  [SKIP] 找不到 mbse.db，跳过历史回放")
+        print("  [SKIP] 真库回放：找不到 mbse.db（主判据 B0~B3 已用合成样本完成）")
         return
     try:
         c = sqlite3.connect(db)
         rows = c.execute("SELECT verify FROM agent_todos").fetchall()
         c.close()
     except Exception as e:
-        print("  [SKIP] 读库失败：%r" % (e,))
+        print("  [SKIP] 真库回放：读库失败 %r（主判据 B0~B3 已用合成样本完成）" % (e,))
         return
+    if not rows:
+        # ★ 不判红：干净库/CI 的 agent_todos 本就为空。算法差异已由合成对照证明，
+        #   历史数据只能提供"规模"层面的额外证据，缺它不等于产品有问题。
+        print("  [SKIP] 真库回放：agent_todos 无历史 verify 记录"
+              "（干净库/CI 常态；算法差异已由 B0~B3 合成对照证明）")
+        return
+
     total = len(rows)
     new_tool = legacy_tool = legacy_write = 0
-    WRITE = {"save_artifact", "requirement_commit", "export_sysml_v2",
-             "zhiyuan_sysmlv2_import", "import_sysml_text", "file_write",
-             "autofix", "sysml_v2_autofix", "ask_user"}
     for (v,) in rows:
         if hg.parse_verify_spec(v or "")["kind"] == "tool":
             new_tool += 1
@@ -179,14 +240,12 @@ def case_replay() -> None:
             legacy_tool += 1
             if lp["tool"] in WRITE:
                 legacy_write += 1
-    print("    样本 %d 条：旧实现判 tool=%d（其中写类/交互类 %d）；新实现判 tool=%d"
+    print("    真库回放 %d 条：旧实现判 tool=%d（其中写类/交互类 %d）；新实现判 tool=%d"
           % (total, legacy_tool, legacy_write, new_tool))
-    check("B1 旧实现确实会误判（对照组非空，证明修的是真问题）", legacy_tool > 0,
-          "旧实现判 tool=%d" % legacy_tool)
-    check("B2 旧实现会把写类/交互类当验收执行（事故面）", legacy_write > 0,
-          "写类 %d 条" % legacy_write)
-    check("B3 新实现判 tool 的条数 = 0（全是自然语言 ⇒ 全 manual）", new_tool == 0,
-          "新实现判 tool=%d 条" % new_tool)
+    check("B4 真库回放：旧实现误判规模非 0（历史数据层面的额外证据）",
+          legacy_tool > 0, "旧实现判 tool=%d" % legacy_tool)
+    check("B5 真库回放：新实现判 tool 的条数 = 0（历史数据上同样成立）",
+          new_tool == 0, "新实现判 tool=%d 条" % new_tool)
 
 
 # ── C. shadow 零执行 ───────────────────────────────────────────

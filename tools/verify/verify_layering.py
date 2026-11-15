@@ -87,7 +87,30 @@ _IN_MUT = [False]
 #   （权限过滤漏一个就是多租户越界）远高于"架构整洁"的收益 —— 这个权衡在
 #   2026-10-04 立项时已写明（见文件头「为什么是卡增量而不是清存量」）。
 #   重测基线是**承认存量已随特性评审过**，同时把"从现在起不许再涨"重新钉死。
-BASELINE_DIRECT_SQL = 354   # 由 scan_direct_sql() 实测得出（2026-11-08 重测；323→354 归因见上）
+#
+# 2026-11-15 重测记录（354 → **353**，-1）—— 本次是**真下沉**而非放行：
+#   归因方式同前（对 git archive 快照复测）：cab71f0e=344 → 0745148=357（+13）→ 下沉后=353。
+#   ① **本次下沉 4 处**（把 routers 里的直连读收敛到 `repositories/knowledge_repo.py`
+#      新增的 `ontology_anchor_rows` / `ontology_anchor_plan_rows` /
+#      `all_ontology_types_raw` / `relation_source_multi_target`）：
+#        routers/knowledge_parts/ontology.py  29 → 27（-2，回到基线值）
+#        routers/knowledge_parts/shared.py    18 → 16（-2，比基线 17 还少 1）
+#      这 4 处本是 11-15 本体语义层新增的，而 `knowledge_repo` 的 docstring
+#      早就声明自己管 `ontology_types / relations` —— 声明与实现不一致就是绕过。
+#   ② **保留的 +9 处（未下沉，来源已查明，登记为待办）**：
+#        routers/sysml_versions.py        7 → 14（+7）
+#        routers/studio_parts/mcp.py      2 →  3（+1）
+#        routers/studio_parts/skills.py   1 →  2（+1）
+#        routers/intent_samples.py        0 →  1（+1，新文件）
+#      这 9 处来自 11-05 之后 47 笔提交里的特性扩张（通用 Agent 内核 P0–P2、
+#      技能/工具控制面、意图样本治理），**不是我这一轮改的**。
+#      为什么这次不降：它们分散在 4 个文件、各带自己的过滤语义（分支/权限/批次），
+#      搬迁属独立重构，塞进"修 CI 红"这一笔会把风险面放大且难以回滚。
+#      ⇒ 明确登记为待办，而不是假装"评审过了"。
+#   ③ 基线取 353 而非 354 的**必要性**：若保留 354，则"注入 1 条 SQL"的变异
+#      只会到 354、仍 ≤ 基线 ⇒ M1 变异不判红（实测：mutation 1/3 未判红）。
+#      **基线必须等于实测真值**，否则门禁与它的自证同时失效（口径虚高=门禁虚设）。
+BASELINE_DIRECT_SQL = 353   # 由 scan_direct_sql() 实测得出（2026-11-15 重测；354→353 归因见上）
 BASELINE_FILE = "tools/verify/verify_layering.py"
 ALLOW_FILE = "tools/verify/layering_exemptions.txt"
 

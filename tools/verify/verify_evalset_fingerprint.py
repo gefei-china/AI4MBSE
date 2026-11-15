@@ -58,9 +58,32 @@ def _load(name):
 def main() -> int:
     checks = []
     observations = []
+    skips = []
 
     def chk(label, cond, detail=""):
         checks.append((label, bool(cond), detail))
+
+    def skip(label, why):
+        """SKIP 不计入通过（否则是静默变绿），但也不判红。"""
+        skips.append((label, why))
+
+    def _corpus_empty(c):
+        """本库是否**没有任何评测语料**。
+
+        判据用 `documents` + `document_chunks` 双双为 0 —— 这两个是评测集的
+        语料底座（`evalset.json` 的 fingerprint 正是在记它们的规模与 sha1）。
+        干净库/CI 必然是 0/0；生产库只要导入过文档就 >0。
+
+        ★ 为什么必须区分而不是一律 SKIP（2026-11-15）：
+          指纹门禁的全部价值在于"生产库语料漂移时必须响"。若无条件 SKIP，
+          真漂移会被静默吞掉 —— 那才是真正的假绿。
+        """
+        try:
+            d = c.execute("SELECT COUNT(*) FROM documents").fetchone()[0]
+            k = c.execute("SELECT COUNT(*) FROM document_chunks").fetchone()[0]
+            return d == 0 and k == 0
+        except Exception:
+            return True          # 表都没有 ⇒ 更谈不上语料
 
     conn = sqlite3.connect(DB)
     try:
@@ -68,18 +91,28 @@ def main() -> int:
             e = _load("evalset.json")
             fp = e.get("fingerprint") or {}
             chk("评测集存在且带 fingerprint", bool(fp), "%d 键" % len(fp))
-            chk("正常指纹可打分", fg.check_gate(fp, conn, strict=False) is True)
 
-            # 变异：挑一个确实存在的计数字段改掉。若指纹结构再次变成
-            # 「构建器自造的另一套」，正常比对本来就会失败，这里也仍会拒绝。
-            keys = [k for k, v in fp.items() if isinstance(v, int) and k != "schema_version"]
-            if keys:
-                bad = dict(fp)
-                bad[keys[0]] = int(bad[keys[0]]) + 1
-                chk("变异指纹被拒绝", fg.check_gate(bad, conn, strict=False) is False,
-                    "变异字段 %s" % keys[0])
+            # ★ 2026-11-15：本库无语料时，「正常指纹可打分 / 变异指纹被拒绝」两条
+            #   **都无法验证**（正常比对必然 False，变异也 False ⇒ 判据无牙齿），
+            #   故 SKIP 而不是判红。CI 干净库此前就是在这里红的：
+            #   `FAIL 正常指纹可打分`，而红因是"库里没有语料"，不是评测集坏了。
+            if _corpus_empty(conn):
+                skip("正常指纹可打分", "本库无评测语料（documents/document_chunks 均 0）"
+                                       "—— 指纹无从比对，干净库/CI 常态")
+                skip("变异指纹被拒绝", "同上：无语料时正常与变异恒为 False，无法证明判据有牙齿")
             else:
-                chk("变异指纹被拒绝", False, "指纹里没有可变异的计数字段")
+                chk("正常指纹可打分", fg.check_gate(fp, conn, strict=False) is True)
+
+                # 变异：挑一个确实存在的计数字段改掉。若指纹结构再次变成
+                # 「构建器自造的另一套」，正常比对本来就会失败，这里也仍会拒绝。
+                keys = [k for k, v in fp.items() if isinstance(v, int) and k != "schema_version"]
+                if keys:
+                    bad = dict(fp)
+                    bad[keys[0]] = int(bad[keys[0]]) + 1
+                    chk("变异指纹被拒绝", fg.check_gate(bad, conn, strict=False) is False,
+                        "变异字段 %s" % keys[0])
+                else:
+                    chk("变异指纹被拒绝", False, "指纹里没有可变异的计数字段")
 
             t = _load("trace_evalset.json")
             tfp = t.get("fingerprint") or {}
@@ -98,14 +131,20 @@ def main() -> int:
     print("=" * 70)
     for label, ok, detail in checks:
         print("  [%s] %-24s %s" % ("OK  " if ok else "FAIL", label, detail))
+    for label, why in skips:
+        print("  [SKIP] %-22s %s" % (label, why))
     for label, val in observations:
         print("  [观测] %-24s %s" % (label, val))
     n_ok = sum(1 for _l, ok, _d in checks if ok)
     print("-" * 70)
-    print("通过 %d/%d" % (n_ok, len(checks)))
+    print("通过 %d/%d%s" % (n_ok, len(checks),
+                            ("，SKIP %d 项（未验证 ≠ 通过）" % len(skips)) if skips else ""))
     print("=" * 70)
     if n_ok == len(checks):
-        print("✅ 全绿：评测集可用于打分，且门禁未被绕过")
+        if skips:
+            print("✅ 全绿（含 %d 项 SKIP：本库无语料，指纹维度未验证）" % len(skips))
+        else:
+            print("✅ 全绿：评测集可用于打分，且门禁未被绕过")
         return 0
     print("❌ 未通过：评测集不可用于打分（先跑 tools/eval/build_evalset.py 重建）")
     return 1

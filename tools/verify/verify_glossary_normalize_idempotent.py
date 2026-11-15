@@ -231,21 +231,78 @@ def main():
         for n in ("N7", "N8", "N9", "N10", "N11", "N12", "N13", "N14"):
             skip("%s 真实词表/真库" % n, "无 mbse.db 或无词条（CI 环境）")
     else:
+        # ★ 2026-11-15：真实词表断言改为**按词条存在性判定**，不再假定词条存在。
+        #
+        # 为什么（CI 上这 8 条里 N7/N9b 长期红，本地却绿）：
+        #   本门禁的"真实词表"组用的是**业务词条**（`SysML v2` / `巡飞弹` / `宽带载荷`…），
+        #   它们只存在于人工/LLM 积累的 `glossary_concepts`+`glossary_terms`，
+        #   而 `database/seeds.py::_seed_glossary` **刻意只播 `glossary` 表**（11 条通用词），
+        #   不播概念层 —— 概念层是业务数据，硬编码进 seeds 会把业务词表钉死在代码里。
+        #   ⇒ CI 的干净库必然缺这些词条 ⇒ 旧写法必红，红的不是产品、是"拿业务数据当判据"。
+        #
+        # 判据（既不假绿也不误红）：
+        #   · 声明该条**依赖哪个词条**；词条不存在 ⇒ SKIP 并打印缺哪个（可审计）；
+        #   · 词条存在 ⇒ 必须归一成期望值（此时才对产品有约束力）。
+        #   ⚠️ 刻意**不用"hits 为空就 SKIP"**：那样当"词条该命中却没命中"这个真 bug 出现时，
+        #     会因为 hits 空被误判成 SKIP ⇒ 假绿。依赖必须显式声明、逐词核对。
+        _term_set = set()
+        # 依赖要覆盖**词条可能出现的全部位置**：匹配器同时吃「别名侧」
+        # （user_term / term）与「规范侧」（canonical_term / pref_label）。
+        # 只查别名侧会让「本身就是规范词」的条目（如 `宽带通信` 只在 canonical_term）
+        # 被误判成"不存在"⇒ 无故 SKIP（实测踩到）。
+        for _sql in ("SELECT user_term FROM glossary WHERE active=1",
+                     "SELECT canonical_term FROM glossary WHERE active=1",
+                     "SELECT term FROM glossary_terms WHERE term_status!='deprecated'",
+                     "SELECT pref_label FROM glossary_concepts "
+                     " WHERE concept_status!='retired'"):
+            try:
+                for r in m.conn.execute(_sql):
+                    _term_set.add(str(r[0]).strip())
+            except Exception:
+                pass
+
+        def _has_term(t):
+            """词条是否存在于词表任一位置。
+
+            ⚠️ 归一尺度的边界（本笔实测踩到，别放宽）：
+              · **可**归一：大小写、空格（`SysML v2` vs `sysmlv2`）；
+              · **不可**归一：下划线。`SysML_V2` 是**规范形态**，`SysML V2` 是**别名**，
+                二者是不同词条。第一版把下划线也归掉了 ⇒ `SysML V2` 因词表里
+                恰好有 canonical `SysML_V2` 被判"存在" ⇒ N7 不 SKIP ⇒ 在干净库上
+                真跑并失败（`SysML v2` 被拆成 `sysml`+`v2` 两段，得到 `SysML SysML_V2`）。
+                **匹配尺度过宽 = SKIP 失效 = 改了等于没改。**
+            """
+            if t in _term_set:
+                return True
+            low = t.lower().replace(" ", "")
+            return any(low == x.lower().replace(" ", "") for x in _term_set)
+
+        # (tag, query, want, [依赖词条...])
+        # ⚠️ 依赖必须精确到「能产出该归一的那个整词条」，不能写短词。
+        #   反例（本笔踩到）：N7 原先写依赖 `sysml`，而 `seeds._seed_glossary` 恰好播了
+        #   `sysml → SysML` 这个**短词** ⇒ CI 上判定"依赖存在"⇒ 不 SKIP ⇒ 真跑 ⇒
+        #   `SysML v2` 被拆成 `sysml`+`v2` 两段匹配，得到 `SysML SysML_V2` ≠ 期望
+        #   `SysML_V2` ⇒ 依旧红。**依赖写宽了会让 SKIP 失效，等于没改。**
         exp = [
             ("N7", "用一句话说明什么是 SysML v2 的 part definition。",
-             "用一句话说明什么是 SysML_V2 的 part definition。"),
-            ("N8a", "宽带通信 载荷", "宽带通信 载荷"),
-            ("N8b", "宽带载荷 转发器", "宽带通信载荷 转发器"),
-            ("N9a", "巡飞待机弹 参数", "巡飞待机弹 参数"),
-            ("N9b", "巡飞弹 战斗部", "巡飞待机弹 战斗部"),
-            ("N10a", "内部块图_IBD 是什么", "内部块图_IBD 是什么"),
-            ("N10b", "热管理系统_TMS 指标", "热管理系统_TMS 指标"),
+             "用一句话说明什么是 SysML_V2 的 part definition。",
+             ["SysML V2"]),
+            ("N8a", "宽带通信 载荷", "宽带通信 载荷", ["宽带通信"]),
+            ("N8b", "宽带载荷 转发器", "宽带通信载荷 转发器", ["宽带载荷"]),
+            ("N9a", "巡飞待机弹 参数", "巡飞待机弹 参数", ["巡飞待机弹"]),
+            ("N9b", "巡飞弹 战斗部", "巡飞待机弹 战斗部", ["巡飞弹"]),
+            ("N10a", "内部块图_IBD 是什么", "内部块图_IBD 是什么", ["内部块图_IBD"]),
+            ("N10b", "热管理系统_TMS 指标", "热管理系统_TMS 指标", ["热管理系统_TMS"]),
             # R2（2026-11-11）：规范词已与首选术语对齐，`语法规范` 现在是等值
             # 映射 ⇒ 归一化后原样。若这里仍期望 `SysML_V2 语法规范`，等于把
             # 词表治理决策用门禁锁死在旧值上。
-            ("N11", "语法规范 查询", "语法规范 查询"),
+            ("N11", "语法规范 查询", "语法规范 查询", ["语法规范"]),
         ]
-        for tag, q, want in exp:
+        for tag, q, want, deps in exp:
+            if not any(_has_term(d) for d in deps):
+                skip("%s %s" % (tag, q[:22]),
+                     "词条不存在（需其一：%s）—— 概念层是业务数据，seeds 不播" % "/".join(deps))
+                continue
             got, _ = m.normalize(q)
             check("%s %s" % (tag, q[:22]), got == want,
                   "期望 %r，实得 %r" % (want, got))

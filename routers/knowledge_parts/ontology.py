@@ -97,8 +97,8 @@ def _resolve_tlo_anchor(conn, body, tid, before=None):
                       f"{'/'.join(sorted(ontology_tlo.TLO_LOCALS))}）"}, 400)
     # ③ 祖先已锚定且不同 ⇒ 拦截（改一处错一片）
     if before is not None:
-        _by_id = {str(r["id"]): r for r in conn.execute(
-            "SELECT id, parent_id, tlo_anchor FROM ontology_types").fetchall()}
+        from repositories.knowledge_repo import KnowledgeRepo
+        _by_id = {str(r["id"]): r for r in KnowledgeRepo(conn).ontology_anchor_rows()}
         _p = before["parent_id"]
         _hop = 0
         while _p and _hop < 30:
@@ -126,9 +126,7 @@ def ontology_tlo_options(conn=Depends(db_session), user=Depends(current_user)):
     返回 {classes:[{local,label,iri,parent,note,mbse_hint}], root, coverage:{...}}。
     coverage 用于让「锚点覆盖率」这个数字**有口径**（真库实测，不是文档自述）。
     """
-    rows = conn.execute(
-        "SELECT id, name, type_kind, parent_id, tlo_anchor FROM ontology_types "
-        "WHERE type_kind='entity'").fetchall()
+    rows = KnowledgeRepo(conn).ontology_anchor_plan_rows(type_kind="entity")
     by_id = {str(r["id"]): r for r in rows}
     anchored, unanchored = [], []
     for r in rows:

@@ -15,6 +15,91 @@ def _migrate_glossary_tables(conn):
         updated_at TEXT DEFAULT CURRENT_TIMESTAMP
     )""")
     c.execute("CREATE INDEX IF NOT EXISTS idx_glossary_active ON glossary(active)")
+
+    # ══════════════════════════════════════════════════════════════════════
+    # ★ 2026-11-15 补：概念层两张表此前**产品代码里根本没有建表语句**
+    #
+    # 取证：全仓 `CREATE TABLE ... glossary_concepts|glossary_terms` 只在
+    #   `tools/verify/verify_glossary_prefix_adjacency.py` 的**门禁自建夹具**里出现过；
+    #   本迁移函数与其它任何产品代码都不建。本地真库之所以有这两张表，是历史遗留
+    #   （早期某次外部脚本/手工建的，建表语句未随代码提交）。
+    #
+    # 后果（在任何**新部署**上，含 CI 与客户现场）：
+    #   `GlossaryMatcher._load_concepts()` 查询失败 → `except` 兜底成 `[]`
+    #   ⇒ 概念层（P0-3 术语召回、R1 意图/boost 汇总、maps_to_* 图谱召回）
+    #     **永久为空且不报错**。这不是"数据没填"，是**表都不存在**。
+    #   实测：只用本迁移建内存库，`_load_concepts()` 返回 0 条、
+    #   `_load()` 也返回 0 条（glossary 表虽建了但无种子）。
+    #   CI 上 `verify_glossary_prefix_adjacency` 报 `no such table: glossary_terms`
+    #   正是这条缺陷的外部症状。
+    #
+    # 口径：一次建全列（而不是照抄真库里被 ALTER 滚出来的列序），
+    #   再对老库做幂等补列（`PRAGMA table_info` 探测），两条路都安全。
+    # ══════════════════════════════════════════════════════════════════════
+    c.execute("""CREATE TABLE IF NOT EXISTS glossary_concepts (
+        concept_id     TEXT PRIMARY KEY,
+        pref_label     TEXT NOT NULL,
+        definition     TEXT NOT NULL DEFAULT '',
+        domain         TEXT DEFAULT 'unknown',
+        concept_status TEXT DEFAULT 'candidate',   -- candidate|approved|deprecated|retired
+        maps_to_class  TEXT DEFAULT '',            -- 本体映射：类
+        maps_to_prop   TEXT DEFAULT '',            -- 本体映射：属性
+        maps_to_inst   TEXT DEFAULT '',            -- 本体映射：实例
+        replaced_by    TEXT DEFAULT '',            -- deprecated 时的替代概念
+        version        INTEGER DEFAULT 1,
+        created_by     TEXT DEFAULT 'migration',
+        created_at     TEXT DEFAULT CURRENT_TIMESTAMP,
+        updated_at     TEXT DEFAULT CURRENT_TIMESTAMP,
+        intent         TEXT DEFAULT '',            -- R1：命中即路由到该 Agent
+        boost          REAL DEFAULT 1.0,           -- R1：检索加权
+        context        TEXT DEFAULT '',
+        note           TEXT DEFAULT '',
+        source         TEXT DEFAULT '',
+        broader        TEXT DEFAULT '',            -- SKOS 上位
+        related        TEXT DEFAULT ''             -- SKOS 关联
+    )""")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_gc_status ON glossary_concepts(concept_status)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_gc_domain ON glossary_concepts(domain)")
+
+    c.execute("""CREATE TABLE IF NOT EXISTS glossary_terms (
+        id              INTEGER PRIMARY KEY AUTOINCREMENT,
+        concept_id      TEXT NOT NULL REFERENCES glossary_concepts(concept_id),
+        term            TEXT NOT NULL,
+        lang            TEXT DEFAULT 'zh',
+        term_kind       TEXT DEFAULT 'synonym',    -- pref|synonym|abbr|variant
+        term_status     TEXT DEFAULT 'admitted',   -- admitted|deprecated|proposed
+        source          TEXT DEFAULT '',
+        reliability     INTEGER DEFAULT 5,
+        created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+        note            TEXT DEFAULT '',
+        part_of_speech  TEXT DEFAULT '',
+        geography       TEXT DEFAULT '',
+        -- NULL 有含义：未声明（沿用默认参与匹配）；0 才是显式排除
+        use_in_matching INTEGER,
+        UNIQUE(term, lang, concept_id)
+    )""")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_gt_term ON glossary_terms(term)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_gt_concept ON glossary_terms(concept_id)")
+
+    # 老库补列（幂等）：真库里的这两张表是被 ALTER 逐列滚出来的，
+    # 列序与上面的新建口径不同；只补"缺的那几列"，不动既有列与数据。
+    for _tab, _cols in (
+        ("glossary_concepts", (
+            ("intent", "TEXT DEFAULT ''"), ("boost", "REAL DEFAULT 1.0"),
+            ("context", "TEXT DEFAULT ''"), ("note", "TEXT DEFAULT ''"),
+            ("source", "TEXT DEFAULT ''"), ("broader", "TEXT DEFAULT ''"),
+            ("related", "TEXT DEFAULT ''"),
+        )),
+        ("glossary_terms", (
+            ("note", "TEXT DEFAULT ''"), ("part_of_speech", "TEXT DEFAULT ''"),
+            ("geography", "TEXT DEFAULT ''"), ("use_in_matching", "INTEGER"),
+        )),
+    ):
+        _have = [r[1] for r in c.execute("PRAGMA table_info(%s)" % _tab).fetchall()]
+        for _col, _decl in _cols:
+            if _col not in _have:
+                c.execute("ALTER TABLE %s ADD COLUMN %s %s" % (_tab, _col, _decl))
+
     # P0 方案 v2 / S2：词典体系统一——kind 区分映射类型，provenance 记来源（审计可追溯）
     cols = [r[1] for r in c.execute("PRAGMA table_info(glossary)").fetchall()]
     if "kind" not in cols:

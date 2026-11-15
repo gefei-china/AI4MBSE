@@ -66,7 +66,17 @@ def has_adjacent_prefix_mutant(text):
 
 
 def _fixture():
-    """最小可跑夹具：真迁移建 glossary/trace，另补概念层三表。"""
+    """最小可跑夹具：真迁移建 glossary/trace（含概念层），再补 changelog。
+
+    ★ 2026-11-15：夹具的建表必须 **IF NOT EXISTS**。
+      本夹具原先写 `CREATE TABLE glossary_concepts`（无 IF NOT EXISTS），
+      其前提是"产品迁移**不建**概念层这两张表，由夹具补上"。
+      而 2026-11-15 修掉的真缺陷正是「产品根本不建 glossary_concepts/glossary_terms」
+      （⇒ 任何新部署的概念层永久为空），补进 `_migrate_glossary_tables` 之后，
+      这条夹具当场 `table glossary_concepts already exists` 崩掉。
+      ⇒ 夹具应当**幂等**：产品建了就复用，没建才补。假设"产品不做某件事"
+        写进夹具，会在产品补上那天变成假红。
+    """
     from database.migrations.glossary import _migrate_glossary_tables
     from glossary import GlossaryMatcher
 
@@ -74,25 +84,33 @@ def _fixture():
     conn.row_factory = sqlite3.Row
     _migrate_glossary_tables(conn)
     conn.executescript("""
-        CREATE TABLE glossary_concepts (
+        CREATE TABLE IF NOT EXISTS glossary_concepts (
             concept_id TEXT PRIMARY KEY, pref_label TEXT, definition TEXT DEFAULT '',
             domain TEXT DEFAULT '', concept_status TEXT DEFAULT 'approved',
             intent TEXT DEFAULT '', boost REAL DEFAULT 1.0,
             maps_to_class TEXT DEFAULT '', maps_to_inst TEXT DEFAULT '',
             replaced_by TEXT DEFAULT '', version INTEGER DEFAULT 1,
             note TEXT DEFAULT '', created_at TEXT DEFAULT CURRENT_TIMESTAMP);
-        CREATE TABLE glossary_terms (
+        CREATE TABLE IF NOT EXISTS glossary_terms (
             id INTEGER PRIMARY KEY, concept_id TEXT, term TEXT, lang TEXT DEFAULT 'zh',
             term_kind TEXT DEFAULT 'preferred', term_status TEXT DEFAULT 'approved',
             use_in_matching INTEGER, note TEXT DEFAULT '');
-        CREATE TABLE glossary_changelog (
+        CREATE TABLE IF NOT EXISTS glossary_changelog (
             id INTEGER PRIMARY KEY, concept_id TEXT, action TEXT, detail TEXT,
             reason TEXT, operator TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP);
     """)
-    conn.execute("INSERT INTO glossary_concepts (concept_id,pref_label,domain) VALUES (?,?,?)",
+    conn.execute("INSERT INTO glossary_concepts (concept_id,pref_label,domain,concept_status) "
+                 "VALUES (?,?,?,'approved')",
                  ("C-语法规范", OLD_LABEL, "sysml_norm"))
-    conn.execute("INSERT INTO glossary_concepts (concept_id,pref_label,domain) VALUES (?,?,?)",
+    conn.execute("INSERT INTO glossary_concepts (concept_id,pref_label,domain,concept_status) "
+                 "VALUES (?,?,?,'approved')",
                  ("C-SysML_V2", "SysML_V2", "sysml_norm"))
+    # ⚠️ `term_status` / `concept_status` 必须**显式**写入，不能依赖表默认值。
+    #   2026-11-15：产品迁移补建这两张表后，默认值来自**产品**（term_status 默认
+    #   'admitted'、concept_status 默认 'candidate'），而本夹具原先假设默认值是自己
+    #   DDL 里的 'approved' ⇒ 插入行变成 'admitted' ⇒ `_mismatch()` 的
+    #   `term_status='approved'` 过滤查不到 ⇒ A0「初始应有 1 条不一致」变成 0 条而失败。
+    #   ⇒ 夹具数据必须自带状态，与"表是谁建的"解耦。
     for cid, term, kind in (
         ("C-语法规范", "语法规范", "preferred"),
         ("C-语法规范", "代码规范", "synonym"),
@@ -101,8 +119,8 @@ def _fixture():
         ("C-SysML_V2", "v2", "alias"),
         ("C-SysML_V2", "sysml", "alias"),
     ):
-        conn.execute("INSERT INTO glossary_terms (concept_id,term,term_kind) VALUES (?,?,?)",
-                     (cid, term, kind))
+        conn.execute("INSERT INTO glossary_terms (concept_id,term,term_kind,term_status) "
+                     "VALUES (?,?,?,'approved')", (cid, term, kind))
     for term, canonical in (("语法规范", OLD_LABEL), ("代码规范", OLD_LABEL),
                             ("v2", "SysML_V2")):
         conn.execute("INSERT INTO glossary (user_term,canonical_term,kind,active) "

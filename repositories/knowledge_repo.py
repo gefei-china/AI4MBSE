@@ -584,3 +584,42 @@ class KnowledgeRepo(BaseRepo):
     # ── ontology ──
     def list_ontology_types(self) -> list:
         return self.rows("SELECT * FROM ontology_types ORDER BY type_kind, name")
+
+    # ★ 2026-11-15（门禁 verify_layering L1c 的 +4 下沉）：
+    #   下面四个方法把 routers 里的直连读收敛到仓储层。它们原先散在
+    #   `routers/knowledge_parts/{ontology,shared}.py` 里直接 `conn.execute(...)`，
+    #   而本模块的 docstring 早就声明自己管 `entities / relations / ontology_types`
+    #   —— 声明与实现不一致，就是分层门禁要抓的"绕过"。
+    #   刻意**只读常量列**（不写 SELECT *）：
+    #     `ontology_anchor_rows` / `ontology_anchor_plan_rows` 只取调用方真正用到的列，
+    #     加列时它们不会静默多取；真要全列时用 `all_ontology_types_raw`。
+    def ontology_anchor_rows(self) -> list:
+        """锚点解析用：id / parent_id / tlo_anchor。"""
+        return self.rows("SELECT id, parent_id, tlo_anchor FROM ontology_types")
+
+    def ontology_anchor_plan_rows(self, type_kind: str | None = None) -> list:
+        """锚点建议/覆盖率统计用：带 name 与 type_kind。
+
+        :param type_kind: 只取某一类（`'entity'` 等）；None=全部。
+        """
+        if type_kind:
+            return self.rows(
+                "SELECT id, name, type_kind, parent_id, tlo_anchor FROM ontology_types"
+                " WHERE type_kind=?", (type_kind,))
+        return self.rows(
+            "SELECT id, name, type_kind, parent_id, tlo_anchor FROM ontology_types")
+
+    def all_ontology_types_raw(self) -> list:
+        """编辑态全列（供体检/校验器按需取键；`SELECT *` 保证加列不破夹具）。"""
+        return self.rows("SELECT * FROM ontology_types")
+
+    def relation_source_multi_target(self, relation_type: str) -> list:
+        """某关系类型下「一源多目标」的源节点及目标数（降序）。
+
+        用于 `functional_data_conflict` 规则：声明 functional 的关系若出现一源多目标，
+        OWL 推理器会判多目标 sameAs 并合并节点（属性/类型互相继承）。
+        """
+        return self.rows(
+            "SELECT source_id, COUNT(*) AS c FROM relations"
+            " WHERE relation_type=? AND status!='deprecated'"
+            " GROUP BY source_id HAVING c > 1 ORDER BY c DESC", (relation_type,))
