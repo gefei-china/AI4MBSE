@@ -421,7 +421,7 @@ def ontology_version_publish(body: dict = None, conn=Depends(db_session),
         return JSONResponse(gate, 400)
 
     cur = conn.execute("SELECT id, name, type_kind, parent_id, properties, constraints, "
-                       "description, icon, color, iri FROM ontology_types").fetchall()
+                       "description, icon, color, iri, tlo_anchor FROM ontology_types").fetchall()
     cur_names = {(r["name"], r["type_kind"]) for r in cur}
     added, removed, dom_changed = [], [], 0
     constr_changed = 0   # P1-5 配套缺口修复（2026-10-15）：此前 diff 只认增删/dom-range，
@@ -496,11 +496,12 @@ def ontology_version_publish(body: dict = None, conn=Depends(db_session),
     for r in cur:
         conn.execute(
             "INSERT INTO ontology_version_snapshots "
-            "(version_id, type_id, name, type_kind, parent_id, properties, constraints, description, icon, color, iri) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+            "(version_id, type_id, name, type_kind, parent_id, properties, constraints, description, icon, color, iri, tlo_anchor) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
             (vid, r["id"], r["name"], r["type_kind"], r["parent_id"],
              r["properties"] or "{}", r["constraints"] or "{}",
-             r["description"] or "", r["icon"] or "", r["color"] or "#185FA5", r["iri"] or ""))
+             r["description"] or "", r["icon"] or "", r["color"] or "#185FA5", r["iri"] or "",
+             (r["tlo_anchor"] if "tlo_anchor" in r.keys() else "") or ""))
     conn.execute(
         "UPDATE ontology_versions SET snapshot_count=?, snapshot_created_at=?, active=1 WHERE id=?",
         (len(cur), now, vid))
@@ -771,29 +772,39 @@ def ontology_binding(branch: str = "", conn=Depends(db_session)):
 
 @router.get("/api/knowledge/ontology/export")
 def ontology_export(fmt: str = "owl", type_id: Optional[int] = None, conn=Depends(db_session)):
-    """O-2：导出本体为 W3C 标准序列化。
-    fmt=owl → OWL/RDF-XML（供 Protégé 使用）
-    fmt=ttl → Turtle（RDF 三元组文本语法，W3C 标准）
+    """O-2：导出本体为 W3C 标准序列化（2026-11-15 起支持三种等价语法）。
+
+    fmt=owl   → OWL/RDF-XML      （Protégé 生态）
+    fmt=ttl   → Turtle           （工业界惯用的可读三元组语法）
+    fmt=jsonld→ **JSON-LD**      （P2-1：SysML v2 API 原生格式 / 现代 Web 栈 / n10s）
+
+    ⚠️ 三种格式是**同一套三元组的三种语法**，不是三份不同的模型 ——
+    改一处 schema，三者同步变化（都从 `_active_ont_rows` 同一份消费口径生成）。
+
     2026-09-02 四轮调整：type_id 可选——节点级 OWL 视图只导出所选类型及其直接语境。
     """
-    from ontology_owl import to_owl, to_turtle
+    from ontology_owl import to_owl, to_turtle, to_jsonld
     from fastapi.responses import Response
     rows = _active_ont_rows(conn)   # 2026-09-02 消费侧以已发布快照为准
     if type_id:
         rows = _filter_ont_rows_for_type(rows, type_id)
-    if fmt == "ttl":
+    fmt = (fmt or "owl").lower()
+    if fmt in ("ttl", "turtle"):
         text, warns = to_turtle(conn, rows=rows)
+        ext, media = "ttl", "text/turtle"
+    elif fmt in ("jsonld", "json-ld", "ld"):
+        text, warns = to_jsonld(conn, rows=rows)
+        ext, media = "jsonld", "application/ld+json"
     else:
-        xml, warns = to_owl(conn, rows=rows)
-        text = xml
+        text, warns = to_owl(conn, rows=rows)
+        ext, media = "owl", "application/rdf+xml"
     # 方案 A3（2026-08-29）：导出完整性警告随响应头返回（X-Ont-Warnings），前端可 toast 提示
-    headers = {"Content-Disposition": f"attachment; filename=ontology.{'ttl' if fmt == 'ttl' else 'owl'}"}
+    headers = {"Content-Disposition": f"attachment; filename=ontology.{ext}"}
     if warns:
         # HTTP 头仅允许 latin-1：中文警告须 URL 编码（同 doc_download Content-Disposition 教训）
         from urllib.parse import quote as _q
         headers["X-Ont-Warnings"] = _q(f"{len(warns)}; " + " | ".join(warns[:3])[:400])
-    return Response(text, media_type="text/turtle" if fmt == "ttl" else "application/rdf+xml",
-                    headers=headers)
+    return Response(text, media_type=media, headers=headers)
 
 
 @router.post("/api/knowledge/ontology/import")

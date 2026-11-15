@@ -37,9 +37,20 @@ def active_rows(conn):
         v = conn.execute(
             "SELECT id FROM ontology_versions WHERE active=1 ORDER BY id DESC LIMIT 1").fetchone()
         if v:
+            # ⚠️ 列清单按**实际表结构探测**，不硬枚举：
+            #   2026-11-15 加 tlo_anchor 时，硬枚举让手写 DDL 夹具崩掉
+            #   （`no such column: tlo_anchor`）。探测写法下：
+            #   · 真库有该列 → 正常返回；
+            #   · 夹具/老库没有 → 少该键，下游用 `"tlo_anchor" in r.keys()` 守卫，
+            #     并把"该维度未检查"登记进 degraded（不静默当成"全部合规"）。
+            _scols = [x[1] for x in conn.execute(
+                "PRAGMA table_info(ontology_version_snapshots)")]
+            _sel = ("type_id AS id, name, type_kind, parent_id, properties, constraints, "
+                    "description, icon, color, iri")
+            if "tlo_anchor" in _scols:
+                _sel += ", tlo_anchor"
             rows = conn.execute(
-                "SELECT type_id AS id, name, type_kind, parent_id, properties, constraints, "
-                "description, icon, color, iri FROM ontology_version_snapshots WHERE version_id=?",
+                "SELECT " + _sel + " FROM ontology_version_snapshots WHERE version_id=?",
                 (v["id"],)).fetchall()
             if rows:                      # active 版本有快照 → 消费快照
                 return rows
@@ -386,15 +397,65 @@ class OntologyValidator:
         ents = [t for t in types.values() if t["type_kind"] in ("entity", "class")]
         rels = [t for t in types.values() if t["type_kind"] == "relation"]
 
+        # ── P0-1（2026-11-15）：属性绑定**双轨**归一 ─────────────────────────
+        # 本工程的属性是「全局数据属性 + 绑定到实体」的 OWL/Protégé 模型：
+        #   · 属性类型行的 `constraints.domain_classes` = 该属性适⽤于哪些实体类型；
+        #   · 实体行的 `properties` = （历史/局部）内联属性定义。
+        # 实测（2026-11-15 真库）：**28 个实体的 properties 全部为空**，
+        # 绑定关系 100% 存在于 attribute.domain_classes 一侧。
+        # 而 shacl_export 此前只读 `merged_properties()`（→ 实体 properties），
+        # ⇒ **结构性地看不到任何属性** ⇒ 全库 `sh:datatype` 出现 0 次
+        #   ⇒ 实例编辑器的 xsd 强校验、枚举白名单在真实数据上全是死代码。
+        # 修法：两侧**并集**消费（不删任何一侧，避免"修一个新问题、断一条旧通路"），
+        #   并以「属性侧的声明优先」——它是全局定义，实体侧只是历史局部覆盖。
+        attr_by_entity = {}     # 实体类型名 → [属性类型行]
+        for t in types.values():
+            if t["type_kind"] != "attribute":
+                continue
+            try:
+                _ac = t.get("constraints") or {}
+                _dcs = _ac.get("domain_classes")
+                if _dcs is None:
+                    _dcs = _ac.get("domain")
+                if isinstance(_dcs, str):
+                    _dcs = [_dcs]
+                for _dc in (_dcs or []):
+                    _dc = str(_dc).strip()
+                    if _dc:
+                        attr_by_entity.setdefault(_dc, []).append(t)
+            except Exception:
+                # 兜底不静默：单个属性解析失败不应连累整份 SHACL（但要留痕到日志）
+                pass
+
         for t in ents:
             name = t["name"]
             merged_props = self.merged_properties(name)   # P0-1：含父类继承
             cons = self._merged_constraints(name)         # P0-1：含父类继承
+            # 属性侧绑定：本条类型 + 其全部祖先类型上绑定的数据属性（子类继承父类的属性适用范围）
+            # ⚠️ 循环变量**不得**叫 `_cls` —— 它遮蔽了上方同名的 `_cls()` 辅助函数
+            #   （2026-11-15 实测踩到：`'str' object is not callable`）。
+            bound_attrs = []
+            _seen_attr = set()
+            for _anc_name in self.classify(name):
+                for _at in attr_by_entity.get(_anc_name, []):
+                    if _at["name"] in _seen_attr:
+                        continue
+                    _seen_attr.add(_at["name"])
+                    bound_attrs.append(_at["name"])
             props = []
+            # ⚠️ 关键：**未声明类型就不要发 sh:datatype**。
+            #   `typevocab.xsd_of(None)` 会宽松兜底成 `xsd:string`，而 SHACL 里
+            #   `sh:datatype xsd:string` 是**强断言**（值必须是字符串）——
+            #   把"没声明"伪装成"声明为字符串"，会让数值属性在校验时被误判违规
+            #   （本仓「兜底把错误变成不可见」的又一形态）。故先判空。
+            def _dt(decl):
+                return typevocab.xsd_of(decl) if decl else ""
+
+            # ① 实体侧内联属性（历史通路，保留）
             for k, v in merged_props.items():
-                ptype = (v.get("type") if isinstance(v, dict) else "string") or "string"
+                ptype = (v.get("type") if isinstance(v, dict) else None)
                 block = f"[ sh:path {_prop(k)}"
-                _xsd_dt = typevocab.xsd_of(ptype)
+                _xsd_dt = _dt(ptype)
                 if _xsd_dt:
                     block += f" ; sh:datatype {_xsd_dt}"
                 av = cons.get("allowed_values", {}).get(k)
@@ -407,6 +468,34 @@ class OntologyValidator:
                 # R4：函数型特性（cardinality=1 或 characteristics 含 functional）→ 基数上限
                 if cons.get("cardinality") == "1" or "functional" in (cons.get("characteristics") or []):
                     block += " ; sh:maxCount 1"
+                props.append(block + " ]")
+            # ② 属性侧绑定（2026-11-15 新增：这是真库唯一的实际通路）
+            for _an in bound_attrs:
+                if _an in merged_props:
+                    continue          # 实体侧已有同名内联定义 ⇒ 不重复发块（会造成同 path 交集语义）
+                _at = types.get(_an) or {}
+                _ac = _at.get("constraints") or {}
+                block = f"[ sh:path {_prop(_an)}"
+                _xsd_dt = _dt(_ac.get("xsd_type"))
+                if _xsd_dt:
+                    block += f" ; sh:datatype {_xsd_dt}"
+                _av2 = _ac.get("allowed_values")
+                if isinstance(_av2, list) and _av2:
+                    block += " ; sh:in (" + " ".join(f'"{a}"' for a in _av2) + ")"
+                # 必填/唯一可由实体侧局部覆盖（实体 constraints.required/unique 内联到属性行）
+                if _an in cons.get("required", []):
+                    block += " ; sh:minCount 1"
+                if _an in cons.get("unique", []):
+                    block += " ; sh:maxCount 1"
+                # 单位/量纲：SHACL 无标准谓词承载，用 sh:description 作**注解**留痕
+                # （不发明自定义谓词去骗校验器；需要真校验单位时得上 SHACL-SPARQL）
+                _u = str(_ac.get("unit") or "").strip()
+                _q = str(_ac.get("quantity_kind") or "").strip()
+                if _u or _q:
+                    _note = "量纲单位：" + (_u or "（无量纲）")
+                    if _q:
+                        _note += f"；量纲类别：{_q}"
+                    block += f' ; sh:description "{_note}"'
                 props.append(block + " ]")
             # 出边关系（本类型作为 domain 的关系 → sh:class 约束 range）
             # P1-2 修复（2026-09-06）：同一 path 的多个目标类必须合并为一个 sh:or

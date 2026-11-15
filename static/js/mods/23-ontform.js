@@ -146,6 +146,10 @@ function ontologyAddType() {
   document.getElementById('ot-attr-allowed').value = '';
   const domEl = document.getElementById('ot-attr-domain'); if(domEl) Array.from(domEl.options).forEach(o=>o.selected=false);
   document.getElementById('ot-abstract').checked = false;
+  // P0-1 / D1=A（2026-11-15）：新建时锚点默认留空（不猜；由人选择或沿父类型继承）
+  window._ontPendingTlo = '';
+  { const _a = document.getElementById('ot-alt-labels'); if(_a) _a.value = '';
+    const _l = document.getElementById('ot-lang'); if(_l) _l.value = ''; }
   document.getElementById('ot-func').checked = false;
   document.querySelectorAll('.ot-char').forEach(c=>c.checked=false);
   document.getElementById('ot-profile-src').value = '';
@@ -182,6 +186,16 @@ function ontologyEditType(id, name, kind, consStr) {
   const domElInit = document.getElementById('ot-attr-domain');
   if(domElInit) Array.from(domElInit.options).forEach(o => { o.selected = domArr.includes(o.value); });
   document.getElementById('ot-abstract').checked = !!cons.abstract;
+  // P0-1 / D1=A（2026-11-15）：上层本体锚点回填（选项异步加载，故先存待回填值）
+  window._ontPendingTlo = t.tlo_anchor || '';
+  // P1-1（2026-11-15）：别名/语言回填（constraints.alt_labels 为列表；兼容历史字符串写法）
+  (function(){
+    const al = cons.alt_labels;
+    const el = document.getElementById('ot-alt-labels');
+    if(el) el.value = Array.isArray(al) ? al.join('、') : (al ? String(al) : '');
+    const lg = document.getElementById('ot-lang');
+    if(lg) lg.value = cons.lang || '';
+  })();
   document.getElementById('ot-func').checked = cons.cardinality === '1';
   document.querySelectorAll('.ot-char').forEach(c=>{ c.checked = (cons.characteristics||[]).includes(c.value); });
   document.getElementById('ot-profile-src').value = t.profile_source || '';
@@ -227,6 +241,18 @@ function toggleOntKindFields(kind) {
   // 类型特征章节内的"实体/属性"专属行
   show('ot-abstract-row', isEnt, 'block');
   show('ot-disjoint-row', isEnt, 'block');
+  // P0-1 / D1=A（2026-11-15）：上层本体锚点仅实体类型有（attribute 天然=Quality，
+  // relation 不是独立范畴）。选项异步加载 → 渲染后再回填当前值，避免"先设值后渲染"被清空。
+  show('ot-tlo-row', isEnt, 'block');
+  if (isEnt) {
+    const _want = window._ontPendingTlo || '';
+    loadTloClasses().then(() => {
+      renderTloOptions('ot-tlo', _want);
+      ontTloHint();
+      const el = document.getElementById('ot-tlo');
+      if (el && !el._tloBound) { el._tloBound = true; el.addEventListener('change', ontTloHint); }
+    });
+  }
   show('ot-parent-row', (isEnt || isAttr), 'block');
   const pl = document.getElementById('ot-parent-label');
   if(pl) pl.innerHTML = isAttr
@@ -236,6 +262,51 @@ function toggleOntKindFields(kind) {
   if(isAttr) { populateEntityTypeSelects(); populateOntAttrDomainSelect(); }
   if(isEnt || isAttr) populateOntParentSelect(window._ontTypeEditId||null, window._ontTypeEditName||'', kind);
   if(isEnt) { renderOntEntProps(); populateDisjointSelect(); }
+}
+// ══════════════════════════════════════════════════════════════════════
+// P0-1 / D1=A（2026-11-15）：上层本体（BFO 轻量子集）锚点 —— 下拉与提示
+// ══════════════════════════════════════════════════════════════════════
+// 词表来自后端 /api/knowledge/ontology/tlo（**单一真源** core/ontology_tlo.py）。
+// 前端不硬编码 BFO 类清单 —— 与本仓「档位/标签只许后端持一份」同一条纪律。
+let _tloClasses = null;
+async function loadTloClasses() {
+  if (_tloClasses) return _tloClasses;
+  try {
+    const r = await api('/api/knowledge/ontology/tlo');
+    _tloClasses = (r && r.classes) || [];
+  } catch (e) { console.warn('[tlo] 加载词表失败', e); _tloClasses = []; }
+  return _tloClasses;
+}
+// 渲染下拉：按父子层级缩进（Entity → Continuant → Object …），并标注 MBSE 对应
+function renderTloOptions(sel, cur) {
+  const el = document.getElementById(sel || 'ot-tlo');
+  if (!el) return;
+  const list = _tloClasses || [];
+  const depth = (c) => { let d = 0, p = c.parent, g = 0; while (p && g < 10) { const pp = list.find(x => x.local === p); if (!pp) break; d++; p = pp.parent; g++; } return d; };
+  const opts = ['<option value="">（不锚定 / 沿父类型继承）</option>'];
+  list.forEach(c => {
+    const d = depth(c);
+    const pad = '　'.repeat(d);
+    const tip = c.mbse_hint ? ' — ' + c.mbse_hint : '';
+    opts.push(`<option value="${esc(c.local)}" title="${esc((c.note || '') + tip)}">${pad}${esc(c.label)}（${esc(c.local)}）</option>`);
+  });
+  el.innerHTML = opts.join('');
+  if (cur) el.value = cur;
+}
+// 锚点选中后的说明（为什么这个范畴重要 / 是否与祖先冲突的前置提示）
+function ontTloHint() {
+  const el = document.getElementById('ot-tlo');
+  const box = document.getElementById('ot-tlo-hint');
+  if (!el || !box) return;
+  const v = el.value;
+  if (!v) {
+    box.textContent = '留空 = 沿父类型继承（子类无需重复设置）。';
+    box.style.color = 'var(--mut)';
+    return;
+  }
+  const c = (_tloClasses || []).find(x => x.local === v) || {};
+  box.textContent = (c.mbse_hint ? '适用：' + c.mbse_hint : '') || (c.note || '');
+  box.style.color = 'var(--mut)';
 }
 // 2026-09-07：数据属性「适用类型」多选候选 = 所有 entity 类型名（不排除自身——
 // 自身是 attribute 不会出现在 entity 列表中，逻辑天然安全）
@@ -432,6 +503,16 @@ async function saveOntType() {
     const dj = getSelectValues('ot-disjoint');
     if(dj.length) constraints.disjoint_with = dj; else delete constraints.disjoint_with;
   }
+  // P1-1（2026-11-15）：别名/语言 —— 三种 kind 通用，故在 kind 分支之后统一写入。
+  //   前端只做"切分"，去重/剔除与主名相同/语言形状校验全部交给后端
+  //   （`_normalize_alt_labels`）—— 两侧各写一份归一逻辑必然漂移。
+  {
+    const _rawAlt = (document.getElementById('ot-alt-labels') || {}).value || '';
+    const _alts = _rawAlt.split(/[,，、;；]/).map(x => x.trim()).filter(Boolean);
+    if (_alts.length) constraints.alt_labels = _alts; else delete constraints.alt_labels;
+    const _lang = ((document.getElementById('ot-lang') || {}).value || '').trim();
+    if (_lang) constraints.lang = _lang; else delete constraints.lang;
+  }
   const body = {
     name, type_kind: kind,
     properties: props,
@@ -456,6 +537,12 @@ async function saveOntType() {
     // 2026-09-08 二轮审计：replaced_by/deprecated_note 表单无输入项，编辑路径须从旧值透传（否则 PUT 清空）
     replaced_by: oldT ? (oldT.replaced_by||'') : '',
     deprecated_note: oldT ? (oldT.deprecated_note||'') : '',
+    // P0-1 / D1=A（2026-11-15）：上层本体（BFO 轻量子集）锚点。
+    //   仅实体类型有意义；非实体传 null（后端按"字段缺省=不变更"处理）。
+    //   ⚠️ 传空串 = 显式清空锚点；传 null = 不变更 —— 二者语义不同，故用三元表达式区分。
+    tlo_anchor: kind === 'entity'
+      ? ((document.getElementById('ot-tlo')||{}).value || '')
+      : null,
   };
   try {
     if(ontTypeEditId) {

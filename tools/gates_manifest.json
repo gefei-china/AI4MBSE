@@ -2425,6 +2425,18 @@
    "script": "verify_citation_registry.py",
    "tier": "pr",
    "timeout": 120
+  },
+  {
+   "script": "verify_ontology_export_formats.py",
+   "tier": "nightly",
+   "timeout": 180,
+   "reason": "本体导出三格式（RDF/XML/Turtle/JSON-LD）rdflib 解析合法性 + 关键事实三路齐备 + 规模同量级 + 变异自证。读真库全量本体并依赖 rdflib，无库/无 rdflib 时 SKIP(rc=2)。2026-11-15 新增：该门禁射程内抓到 3 个真 bug（PN_LOCAL 非法 / skos 前缀未声明 / JSON-LD 顶层 @id 构成命名图导致解析出 0 条）"
+  },
+  {
+   "script": "verify_ontology_form.js",
+   "tier": "local",
+   "timeout": 400,
+   "reason": "真实浏览器门禁：本体编辑表单 TLO 锚点下拉 / 别名 / 语言 / JSON-LD 导出 + 端到端保存→后端回读→恢复原值 + 变异自证。需本机 Chromium(agent-browser) + 8000 真实服务与真库，CI runner 无该组合 ⇒ local。2026-11-15 新增"
   }
  ]
 }

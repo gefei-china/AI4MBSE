@@ -221,7 +221,11 @@ def _fx_ontology(with_version=True, with_snapshot=True):
         CREATE TABLE ontology_types (
             id INTEGER PRIMARY KEY, name TEXT, type_kind TEXT, parent_id INTEGER,
             properties TEXT DEFAULT '{}', constraints TEXT DEFAULT '{}',
-            description TEXT DEFAULT '', icon TEXT DEFAULT '', color TEXT DEFAULT '', iri TEXT DEFAULT '');
+            description TEXT DEFAULT '', icon TEXT DEFAULT '', color TEXT DEFAULT '',
+            iri TEXT DEFAULT '',
+            -- 2026-11-15 P0-1/D1=A：上层本体锚点（**夹具必须与真库同列**，
+            -- 缺列会让体检登记 degraded，把"夹具不全"误判成"有维度未检查"）
+            tlo_anchor TEXT DEFAULT '');
         CREATE TABLE entities (
             id INTEGER PRIMARY KEY, entity_type TEXT, status TEXT DEFAULT 'reviewed',
             branch TEXT DEFAULT 'dev');
@@ -549,7 +553,8 @@ def _fx_db(entities=(), relations=(), types=()):
             branch TEXT DEFAULT 'dev', project_id TEXT DEFAULT 'p1');
         CREATE TABLE ontology_types (
             id INTEGER PRIMARY KEY, name TEXT, type_kind TEXT, parent_id INTEGER,
-            properties TEXT DEFAULT '{}', constraints TEXT DEFAULT '{}');
+            properties TEXT DEFAULT '{}', constraints TEXT DEFAULT '{}',
+            tlo_anchor TEXT DEFAULT '');   -- 2026-11-15 P0-1/D1=A：与真库同列
         CREATE TABLE swrl_rules (
             id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, comment TEXT DEFAULT '',
             body TEXT DEFAULT '', head TEXT DEFAULT '', priority INTEGER DEFAULT 0,
@@ -566,10 +571,14 @@ def _fx_db(entities=(), relations=(), types=()):
                   (r["id"], r["source_id"], r["target_id"], r["relation_type"],
                    r.get("status", "reviewed"), r.get("branch", "dev"), r.get("project_id", "p1")))
     for t in types:
-        c.execute("INSERT INTO ontology_types (id,name,type_kind,parent_id,properties,constraints) "
-                  "VALUES (?,?,?,?,?,?)",
+        c.execute("INSERT INTO ontology_types "
+                  "(id,name,type_kind,parent_id,properties,constraints,tlo_anchor) "
+                  "VALUES (?,?,?,?,?,?,?)",
                   (t["id"], t["name"], t["type_kind"], t.get("parent_id"),
-                   t.get("properties", "{}"), t.get("constraints", "{}")))
+                   t.get("properties", "{}"), t.get("constraints", "{}"),
+                   # 好样本默认给 Object 锚点（否则每个用例都会带 missing_tlo_anchor 噪声）；
+                   # 专测该规则的坏样本显式传 tlo_anchor="" 即可触发。
+                   t.get("tlo_anchor", "Object")))
     c.commit()
     return c
 
@@ -583,6 +592,11 @@ def _bad_sample(rows, entities=(), relations=(), instances=False):
     ⚠️ 副作用（有意为之）：把本次产出的 code 记进 `_SEEN_CODES` 覆盖台账，
     供 O50 断言「目录全集 ↔ 实现可触发」双向一致，省得每个用例手工收集。
     """
+    # 2026-11-15：入参 rows 是 Python 字典而非 DB 行 —— 必须显式补 tlo_anchor 键，
+    #   否则 `_ontology_check` 的列探测（`"tlo_anchor" in rows[0].keys()`）判为缺列
+    #   ⇒ 登记 degraded ⇒ O35「好样本无降级项」永远红。
+    #   默认给 Object 锚点（好样本不该因新规则带噪声）；专测该规则的样本显式传 ""。
+    rows = [dict(t, tlo_anchor=t.get("tlo_anchor", "Object")) for t in rows]
     c = _fx_db(entities=entities, relations=relations, types=rows)
     try:
         r = _ontology_check(c, rows=rows, instances=instances)
@@ -771,6 +785,20 @@ _S_CONF2 = _bad_sample(_GOOD + [
     entities=_E_OK, relations=_R_OK)[0]
 # P2-4（2026-10-15）：swrl_orphan —— active SWRL 规则引用本体不存在的类型（真库曾 4 条全灭）。
 # _fx_db 已建 swrl_rules 表；坏样本插入一条引用 Person（不存在类型）的 active 死规则。
+# P0-1/D1=A（2026-11-15）：missing_tlo_anchor —— 实体类型（含祖先链）无 BFO 锚点。
+# 真库现状：52 个类型 0 个锚定（故规则定 low、不阻断发布）；此处只验"能被触发"。
+_S_TLO = _bad_sample(
+    [dict(_T_E1, tlo_anchor=""),            # 根类型未锚定
+     dict(_T_E2, tlo_anchor="", parent_id=1),   # 子类未锚定且祖先也没锚点
+     dict(_T_ROK, tlo_anchor="")],          # relation 不该被这条规则命中
+    entities=_E_OK, relations=_R_OK)[0]
+# 正样本：父类有锚点 ⇒ 子类继承，不报（关键：判据是"有效锚点"而非"自身字段"）
+_S_TLO_OK = _bad_sample(
+    [dict(_T_E1, tlo_anchor="Object"),
+     dict(_T_E2, tlo_anchor="", parent_id=1),     # 继承 E1 的 Object
+     dict(_T_ROK, tlo_anchor="")],
+    entities=_E_OK, relations=_R_OK)[0]
+
 _S_SWRL = _bad_sample(_GOOD, entities=_E_OK, relations=_R_OK)[0]   # 先跑一遍空表基线
 _c = _fx_db(entities=_E_OK, relations=_R_OK, types=_GOOD)
 _c.execute("INSERT INTO swrl_rules (name, body, head, is_active) VALUES "
@@ -1063,7 +1091,7 @@ MUT = [
 
     ("前端停止渲染修复建议 fix（问题不再自解释）",
      "static/js/mods/09-impact.js",
-     "${x.fix?`<div style=\"font-size:11px;color:var(--mut);margin-top:3px;\">🛠 ${esc(x.fix)}</div>`:''}",
+     "${x.fix?`<div style=\"font-size:12.5px;color:var(--mut);margin-top:3px;\">🛠 ${esc(x.fix)}</div>`:''}",
      "",
      ["O8 前端渲染修复建议 x.fix + 逐条 why（问题可自解释）"]),
 
@@ -1427,6 +1455,17 @@ check("O84 SWRL 幂等落库（内容 upsert 替代清空重插，id 稳定）+ 
       _d4_ok and _d3_ok,
       f"D4={'facts_deduped/keep_keys/陈旧清理' if _d4_ok else '契约缺失'} "
       f"D3={_dep_script.exists()}")
+# ── P0-1/D1=A（2026-11-15）：上层本体锚点规则 ─────────────────────────────
+_iss_tlo = _S_TLO.get("missing_tlo_anchor") or []
+check("O85 ★ 坏样本：实体类型（含祖先链）无 BFO 锚点 → missing_tlo_anchor 且 low；父类已锚定时子类继承不报",
+      len(_iss_tlo) == 2
+      and all(x["severity"] == "low" for x in _iss_tlo)
+      and {x["name"] for x in _iss_tlo} == {"E1", "E2"}
+      and "R_OK" not in {x["name"] for x in _iss_tlo}          # relation 不得命中
+      and not _S_TLO_OK.get("missing_tlo_anchor"),             # 继承生效 ⇒ 正样本不报
+      f"坏样本 names={sorted({x['name'] for x in _iss_tlo})} "
+      f"正样本(继承)={sorted(_S_TLO_OK.get('missing_tlo_anchor') or [])}")
+
 
 conn.close()
 

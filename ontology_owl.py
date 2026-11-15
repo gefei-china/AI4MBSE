@@ -13,6 +13,7 @@ import re
 import xml.etree.ElementTree as ET
 
 from core import typevocab
+from core import ontology_tlo
 
 
 # ── 自定义公理编译（2026-09-07 Q1 做实）：此前 axioms 仅序列化为注释（# axiom: ... /
@@ -46,13 +47,18 @@ OWL_CHAR_TYPE = {
     "functional": "owl:FunctionalProperty",
     "inverse_functional": "owl:InverseFunctionalProperty",
 }
-NS = {"rdf": RDF, "rdfs": RDFS, "owl": OWL, "xsd": XSD, "time": TIME}
+# P1-1（2026-11-15）：SKOS 别名/多语言。`skos:altLabel` 是行业通行的"同义词/别名"
+# 标准谓词（SKOS 是 W3C 推荐标准，Protégé/TopBraid/Neo4j n10s 全部原生识别）。
+# 为什么不自造 `ex:alias`：自造谓词只有本工程认识，导出给别人等于没写。
+SKOS = "http://www.w3.org/2004/02/skos/core#"
+NS = {"rdf": RDF, "rdfs": RDFS, "owl": OWL, "xsd": XSD, "time": TIME, "skos": SKOS}
 NSMAP = {
     "xmlns:rdf": RDF,
     "xmlns:rdfs": RDFS,
     "xmlns:owl": OWL,
     "xmlns:xsd": XSD,
     "xmlns:time": TIME,
+    "xmlns:skos": SKOS,
 }
 # P0-1：与图库共享同一命名空间规则（core.ns 为单一事实来源）。
 # 此前本体用 http://.../ontology#、图库用 urn:mbse:*，OWL 公理对图库数据完全无效。
@@ -191,6 +197,13 @@ def to_owl(conn, ontology_name: str = "XingWangDomain", rows=None):
         if kind == "entity":
             cls = ET.SubElement(root, f"{{{OWL}}}Class", **{f"{{{RDF}}}about": uri})
             ET.SubElement(cls, f"{{{RDFS}}}label").text = str(name)
+            # P1-1（2026-11-15）：别名 → skos:altLabel（带语言标签）。
+            # 用标准 SKOS 谓词而非自造 ex:alias：Protégé/TopBraid/n10s 都原生识别。
+            _lang = str(cons.get("lang") or "").strip() or "zh"
+            for _a in _alt_labels(cons):
+                ET.SubElement(cls, f"{{{SKOS}}}altLabel",
+                              **{"{http://www.w3.org/XML/1998/namespace}lang": _lang}
+                              ).text = _a
             # P0-1：子类（subClassOf 层级）；方案 A3：悬空时行内 XML 注释（不再静默丢失）
             pname = _parent_name(conn, r, rows)
             if pname:
@@ -198,6 +211,24 @@ def to_owl(conn, ontology_name: str = "XingWangDomain", rows=None):
                               **{f"{{{RDF}}}resource": _uri(pname)})
             elif r["parent_id"]:
                 cls.append(ET.Comment(f" WARNING: dangling parent (id={r['parent_id']}) — subClassOf omitted "))
+            # P0-1 / D1=A（2026-11-15）：上层本体锚点 → 真 OWL 公理 subClassOf <BFO IRI>。
+            #   ⚠️ 只在本类型**自身**声明了锚点时才发；继承来的锚点**不重复发**——
+            #   子类已经通过 subClassOf 父类自然继承该范畴，重复声明会在
+            #   父类锚点变更时留下"陈旧公理"（改一处、错两处的经典来源）。
+            _own_tlo = ""
+            try:
+                if "tlo_anchor" in r.keys():
+                    _own_tlo = ontology_tlo.normalize(r["tlo_anchor"])
+            except Exception:
+                _own_tlo = ""
+            if _own_tlo:
+                _tlo_iri = ontology_tlo.tlo_iri(_own_tlo)
+                if _tlo_iri:
+                    ET.SubElement(cls, f"{{{RDFS}}}subClassOf",
+                                  **{f"{{{RDF}}}resource": _tlo_iri})
+                    # 注解属性留痕：外部工具（Protégé）里可读，且便于回溯是本工程加的锚点
+                    _seen = ET.SubElement(cls, f"{{{RDFS}}}comment")
+                    _seen.text = f"TLO anchor: BFO {_own_tlo} ({_tlo_iri})"
             # 方案 C（2026-08-29）：公理双写——owl:Restriction（required=minCardinality 1 / unique=cardinality 1）
             for k in cons.get("required", []):
                 restr = ET.SubElement(cls, f"{{{RDFS}}}subClassOf")
@@ -264,6 +295,18 @@ def to_owl(conn, ontology_name: str = "XingWangDomain", rows=None):
         elif kind == "attribute":
             prop = ET.SubElement(root, f"{{{OWL}}}DatatypeProperty", **{f"{{{RDF}}}about": uri})
             ET.SubElement(prop, f"{{{RDFS}}}label").text = str(name)
+            # P1-1（2026-11-15）：别名 → skos:altLabel（与 to_turtle/JSON-LD 三路同口径）
+            _alang = str(cons.get("lang") or "").strip() or "zh"
+            for _a in _alt_labels(cons):
+                ET.SubElement(prop, f"{{{SKOS}}}altLabel",
+                              **{"{http://www.w3.org/XML/1998/namespace}lang": _alang}
+                              ).text = _a
+            # P0-3（2026-11-15）：单位/量纲用 rdfs:comment 留痕（OWL 无标准 unit 谓词）
+            _u2 = str(cons.get("unit") or "").strip()
+            _q2 = str(cons.get("quantity_kind") or "").strip()
+            if _u2 or _q2:
+                _n2 = "量纲单位：" + (_u2 or "（无量纲）") + (("；量纲类别：" + _q2) if _q2 else "")
+                ET.SubElement(prop, f"{{{RDFS}}}comment").text = _n2
             # P0-1：属性类型也支持层级（父属性）
             pname = _parent_name(conn, r, rows)
             if pname:
@@ -325,6 +368,57 @@ def to_owl(conn, ontology_name: str = "XingWangDomain", rows=None):
     return ET.tostring(root, encoding="unicode"), _warns
 
 
+
+def _alt_labels(cons) -> list:
+    """从 constraints 取别名（alt_labels）与语言（lang），做归一与清洗。
+
+    存储口径（与前端/API 一致）：`constraints.alt_labels` 为字符串列表；
+    `constraints.lang` 为 BCP-47 语言标签（默认 zh）。
+    兼容：字符串（逗号/顿号分隔）也接受 —— 历史导入可能这么写。
+    """
+    try:
+        raw = (cons or {}).get("alt_labels")
+    except Exception:
+        return []
+    if raw is None:
+        return []
+    if isinstance(raw, str):
+        import re as _re
+        raw = [_re.split(r"[,，、;；]", raw)]
+        raw = raw[0] if raw else []
+    if not isinstance(raw, (list, tuple)):
+        return []
+    out, seen = [], set()
+    for x in raw:
+        v = str(x or "").strip()
+        if not v or v in seen or v == "":
+            continue
+        seen.add(v)
+        out.append(v)
+    return out
+
+
+def _alt_lines(L, cons):
+    """Turtle：把别名追加为 skos:altLabel 续行（末行**不**收尾，由调用方统一收尾）。
+
+    两个必须的细节（2026-11-15 实测各踩一次）：
+      ① **前一行要补 " ;"**：本函数紧跟在 `rdfs:label "X"` 之后，若不补分隔符会产出
+         `rdfs:label "X"\nskos:altLabel ...` —— 缺分号的非法 Turtle
+         （rdflib / Protégé 直接 BadSyntax）。
+      ② **末行不要收尾**：三处调用点后续会按"有无更多内容"决定补 " ;" 还是 " ."，
+         在这里收尾会把语句提前终结（历史上踩过 `rdfs:label "X" . ;`）。
+      多个别名之间用 " ;" 相连（Turtle 谓词-宾语列表）。
+    """
+    alts = _alt_labels(cons)
+    if not alts:
+        return
+    lang = str((cons or {}).get("lang") or "").strip() or "zh"
+    L[-1] += " ;"                      # ① 给 label 行补分隔符
+    for i, a in enumerate(alts):
+        sep = " ;" if i < len(alts) - 1 else ""   # ② 末行不收尾
+        L.append(f'    skos:altLabel "{a}"@{lang}{sep}')
+
+
 def to_turtle(conn, ontology_name: str = "XingWangDomain", rows=None):
     """ontology_types → W3C Turtle 序列化（RDF 三元组的可读文本语法）。
 
@@ -342,6 +436,9 @@ def to_turtle(conn, ontology_name: str = "XingWangDomain", rows=None):
     L.append("@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .")
     L.append("@prefix owl: <http://www.w3.org/2002/07/owl#> .")
     L.append("@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .")
+    # P1-1（2026-11-15）：SKOS（别名/多语言）。用了 skos: 就必须声明前缀，
+    # 否则整份 Turtle 非法（不是"少一行提示"，是解析失败）。
+    L.append(f"@prefix skos: <{SKOS}> .")
     # P0-1：namespace 动态读 ontology_meta，IRI 主轴（CURIE 尾段用真实 iri，跨 namespace 回退 <完整iri>）
     try:
         from ontology_semantics import get_ontology_meta
@@ -354,10 +451,20 @@ def to_turtle(conn, ontology_name: str = "XingWangDomain", rows=None):
     L.append("")
 
     _name2iri = _build_name2iri(rows, base=_ns)
+
     def _uri(name):
         iri = _name2iri.get(name) or (_ns + _slug(name))
         if iri.startswith(_ns):
-            return ":" + iri[len(_ns):]
+            local = iri[len(_ns):]
+            # ★ 2026-11-15（真机 rdflib 解析抓出）：**前缀名的局部名有字符限制**。
+            #   PN_LOCAL 不允许 `/`（也不允许空格、括号等），而本工程的 IRI 里会出现
+            #   真实业务名，如「G/T值」→ 局部名 `G/T%E5%80%BC` ⇒ 产出 `:G/T…`
+            #   ⇒ **整份 Turtle 非法**（rdflib / Protégé 直接 BadSyntax）。
+            #   此前一直没被发现，是因为从没对**全量**导出跑过真正的 RDF 解析器。
+            #   守卫：局部名只允许 [字母 数字 _ - . %]；否则退回 `<完整IRI>` 全形
+            #   （与 shacl_export 里"统一用 <IRI> 全形"的口径一致）。
+            if re.match(r"^[A-Za-z0-9_\-.%]+$", local):
+                return ":" + local
         return f"<{iri}>"
 
     for r in rows:
@@ -371,6 +478,7 @@ def to_turtle(conn, ontology_name: str = "XingWangDomain", rows=None):
         if kind == "entity":
             L.append(f"{u} a owl:Class ;")
             L.append(f'    rdfs:label "{name}"')
+            _alt_lines(L, cons)
             # P0-1：子类（subClassOf 层级）；方案 A3：悬空时行内 WARNING（不再静默丢失）
             pname = _parent_name(conn, r, rows)
             if pname:
@@ -380,6 +488,18 @@ def to_turtle(conn, ontology_name: str = "XingWangDomain", rows=None):
                 L[-1] += " ."
                 if r["parent_id"]:
                     L.append(f"# WARNING: dangling parent (id={r['parent_id']}) for {u} — subClassOf 省略")
+            # P0-1 / D1=A（2026-11-15）：上层本体锚点 → rdfs:subClassOf <BFO IRI>。
+            # 只发**自身**声明的锚点（继承来的不发，理由见 to_owl 同处注释）。
+            _own_tlo = ""
+            try:
+                if "tlo_anchor" in r.keys():
+                    _own_tlo = ontology_tlo.normalize(r["tlo_anchor"])
+            except Exception:
+                _own_tlo = ""
+            if _own_tlo:
+                _tlo_iri = ontology_tlo.tlo_iri(_own_tlo)
+                if _tlo_iri:
+                    L.append(f"{u} rdfs:subClassOf <{_tlo_iri}> .   # TLO anchor: BFO {_own_tlo}")
             # Q1 做实（2026-09-07）：可编译模式 → rdfs:subClassOf Restriction 真公理；未识别 → 注释
             for x in cons.get("axioms", []):
                 _ax = _compile_axiom(x)
@@ -394,6 +514,7 @@ def to_turtle(conn, ontology_name: str = "XingWangDomain", rows=None):
         elif kind == "relation":
             L.append(f"{u} a owl:ObjectProperty ;")
             L.append(f'    rdfs:label "{name}"')
+            _alt_lines(L, cons)
             allowed = cons.get("allowed_values") or {}
             srcs = allowed.get("src", [])
             tgts = allowed.get("tgt", [])
@@ -421,6 +542,14 @@ def to_turtle(conn, ontology_name: str = "XingWangDomain", rows=None):
         elif kind == "attribute":
             L.append(f"{u} a owl:DatatypeProperty ;")
             L.append(f'    rdfs:label "{name}"')
+            _alt_lines(L, cons)
+            # P0-3（2026-11-15）：单位/量纲 —— OWL 无标准 unit 谓词，用 rdfs:comment 留痕
+            #   （不自造谓词去"看起来支持"；与 SHACL 的 sh:description 同口径）。
+            _u, _q = str(cons.get("unit") or "").strip(), str(cons.get("quantity_kind") or "").strip()
+            if _u or _q:
+                _note = "量纲单位：" + (_u or "（无量纲）") + (("；量纲类别：" + _q) if _q else "")
+                L[-1] += " ;"
+                L.append(f'    rdfs:comment "{_note}"')
             # P1-2 修复（2026-09-06）：subPropertyOf 与 domain/range 必须合并到
             # 同一条语句后再统一收尾。原先两个独立 if 各自续接，第二个块在语句
             # 已以 " ." 收尾后再加 " ;" → 产出 'rdfs:label "发射功率" . ;'
@@ -497,6 +626,141 @@ def to_turtle(conn, ontology_name: str = "XingWangDomain", rows=None):
                 L.append(f"# axiom: {x}")
         L.append("")
     return chr(10).join(L), _warns
+
+
+
+def to_jsonld(conn, ontology_name: str = "XingWangDomain", rows=None):
+    """ontology_types → **JSON-LD** 序列化。方案：返回 (text, warnings)。
+
+    ## 为什么加这一路（P2-1 / 决策 D2=A，2026-11-15）
+
+    与 SysML v2 的互操作路径就在这里：OMG SysML v2 的 API **用 JSON-LD 编码模型数据**
+    （支持 REST/OSLC 绑定），并已完成到 RDF/OWL 2 DL 的初始映射。本工程若要
+    「SysML v2 模型 ↔ 知识图谱」打通，JSON-LD 是**两边都能读**的那个交点：
+      · 对 RDF 生态：`@context` 把 `@id`/`@type` 映射到 OWL 词汇，等价于 Turtle；
+      · 对 SysML v2 / oslc / 现代 Web 栈：它就是原生 JSON，无需 RDF 工具链。
+
+    ## 与 Turtle 的关系（不是替代）
+
+    同一套三元组的**第三种语法**（RDF/XML、Turtle、JSON-LD 三者等价）。
+    之所以要三种：Protégé 吃 RDF/XML、工业界惯用 Turtle、Web/SysML 栈吃 JSON-LD。
+    只有一种时，总有一端要额外装工具 —— 这是"多语言协同"而非"多套事实"。
+    """
+    _L = __import__("json")
+    if rows is None:
+        rows = conn.execute("SELECT * FROM ontology_types").fetchall()
+    try:
+        from ontology_semantics import get_ontology_meta
+        _ns = get_ontology_meta(conn).get("namespace") or BASE
+    except Exception:
+        _ns = BASE
+    name2iri = _build_name2iri(rows, base=_ns)
+
+    def _uri(nm):
+        return name2iri.get(nm) or (_ns + _slug(nm))
+
+    graph = []
+    # 本体节点
+    graph.append({"@id": f"{_ns}{_slug(ontology_name)}",
+                  "@type": "http://www.w3.org/2002/07/owl#Ontology"})
+
+    for r in rows:
+        name = r["name"]
+        kind = r["type_kind"]
+        try:
+            cons = _L.loads(r["constraints"] or "{}")
+        except Exception:
+            cons = {}
+        node = {"@id": _uri(name)}
+        labels = []
+        lang = str(cons.get("lang") or "").strip() or "zh"
+        if name:
+            labels.append({"@value": str(name), "@language": lang})
+        node["http://www.w3.org/2000/01/rdf-schema#label"] = (
+            labels[0] if len(labels) == 1 else labels)
+        alts = _alt_labels(cons)
+        if alts:
+            node["http://www.w3.org/2004/02/skos/core#altLabel"] = [
+                {"@value": a, "@language": lang} for a in alts]
+        if kind == "entity":
+            node["@type"] = "http://www.w3.org/2002/07/owl#Class"
+            pname = _parent_name(conn, r, rows)
+            if pname:
+                node["http://www.w3.org/2000/01/rdf-schema#subClassOf"] = {"@id": _uri(pname)}
+            # TLO 锚点（只发自身声明的，理由见 to_owl）
+            _own = ""
+            try:
+                if "tlo_anchor" in r.keys():
+                    _own = ontology_tlo.normalize(r["tlo_anchor"])
+            except Exception:
+                _own = ""
+            if _own:
+                _iri = ontology_tlo.tlo_iri(_own)
+                if _iri:
+                    node["https://w3id.org/ontox/bfoAnchor"] = {"@id": _iri}
+        elif kind == "relation":
+            node["@type"] = "http://www.w3.org/2002/07/owl#ObjectProperty"
+            av = cons.get("allowed_values") or {}
+            srcs = av.get("src") or []
+            tgts = av.get("tgt") or []
+            srcs = [srcs] if isinstance(srcs, str) else list(srcs)
+            tgts = [tgts] if isinstance(tgts, str) else list(tgts)
+            if srcs:
+                node["http://www.w3.org/2000/01/rdf-schema#domain"] = [{"@id": _uri(x)} for x in srcs]
+            if tgts:
+                node["http://www.w3.org/2000/01/rdf-schema#range"] = [{"@id": _uri(x)} for x in tgts]
+            chars = [str(c) for c in (cons.get("characteristics") or [])]
+            if chars:
+                # ⚠️ 必须发成**真 @type**（owl:TransitiveProperty 等），不能用自定义谓词
+                #   承载 —— 否则 JSON-LD 只是"长得像"，下游推理器读不到公理，
+                #   与 RDF/XML、Turtle 两路**语义不等价**（本轮修掉的正是这个）。
+                _OWL_T = {"transitive": "http://www.w3.org/2002/07/owl#TransitiveProperty",
+                          "symmetric": "http://www.w3.org/2002/07/owl#SymmetricProperty",
+                          "asymmetric": "http://www.w3.org/2002/07/owl#AsymmetricProperty",
+                          "reflexive": "http://www.w3.org/2002/07/owl#ReflexiveProperty",
+                          "functional": "http://www.w3.org/2002/07/owl#FunctionalProperty",
+                          "inverse_functional": "http://www.w3.org/2002/07/owl#InverseFunctionalProperty"}
+                _types = ["http://www.w3.org/2002/07/owl#ObjectProperty"]
+                for c in chars:
+                    if c in _OWL_T:
+                        _types.append(_OWL_T[c])
+                node["@type"] = _types if len(_types) > 1 else _types[0]
+        else:
+            node["@type"] = "http://www.w3.org/2002/07/owl#DatatypeProperty"
+            _xsd = typevocab.xsd_of(cons.get("xsd_type")) if cons.get("xsd_type") else ""
+            if _xsd:
+                node["http://www.w3.org/2000/01/rdf-schema#range"] = {"@id": _xsd.replace("xsd:", "http://www.w3.org/2001/XMLSchema#")}
+            dc = cons.get("domain_classes") or []
+            dc = [dc] if isinstance(dc, str) else list(dc)
+            if dc:
+                node["http://www.w3.org/2000/01/rdf-schema#domain"] = [{"@id": _uri(x)} for x in dc if x]
+            if cons.get("unit"):
+                node["https://w3id.org/ontox/unit"] = str(cons["unit"])
+            if cons.get("quantity_kind"):
+                node["https://w3id.org/ontox/quantityKind"] = str(cons["quantity_kind"])
+        graph.append(node)
+
+    doc = {
+        "@context": {
+            "@vocab": _ns,
+            "rdfs": "http://www.w3.org/2000/01/rdf-schema#",
+            "owl": "http://www.w3.org/2002/07/owl#",
+            "skos": "http://www.w3.org/2004/02/skos/core#",
+            "xsd": "http://www.w3.org/2001/XMLSchema#",
+            "subClassOf": {"@id": "rdfs:subClassOf", "@type": "@id"},
+            "domain": {"@id": "rdfs:domain", "@type": "@id"},
+            "range": {"@id": "rdfs:range", "@type": "@id"},
+            "label": "rdfs:label",
+            "altLabel": "skos:altLabel",
+        },
+        # ⚠️ **顶层不要再写 @id**：JSON-LD 里「`@id` + `@graph` 同时出现在顶层」
+        #   表示**命名图**（triples 进入该 IRI 名下的子图）——于是用普通 Graph 解析
+        #   得到 **0 条三元组**（2026-11-15 实测：rdflib 解析出 0 条）。
+        #   本体节点已经在 @graph 的第一项里，删掉顶层 @id 后即为默认图。
+        "@graph": graph,
+    }
+    warn = _export_warnings(conn)
+    return _L.dumps(doc, ensure_ascii=False, indent=1), warn
 
 
 def from_owl(xml_text: str, conn) -> dict:

@@ -281,6 +281,9 @@ const MODAL_FORMS = {
           <div id="ot-parent-hint" style="font-size:12.5px;color:var(--mut);margin-top:3px;"></div></div>
         <div class="form-row" id="ot-abstract-row" style="display:none;"><label>抽象类型 <span class="info-tip" title="勾选后该类型不可直接创建实例，仅作分类节点">ⓘ</span></label>
           <input type="checkbox" id="ot-abstract" style="width:16px;height:16px;"></div>
+        <div class="form-row" id="ot-tlo-row" style="display:none;"><label>上层本体锚点 <span class="info-tip" title="BFO 轻量子集（决策 D1=A）：把本类型归入基本范畴。对象=在时间中保持同一性的东西（部件/设备/系统）；过程=在时间中展开的事（功能/验证活动）；质量=可测量特征（属性）；信息内容实体=需求/规范/用例。留空则沿父类型继承。">ⓘ</span></label>
+          <select id="ot-tlo" style="border:1px solid var(--line);border-radius:6px;padding:5px 8px;font-size:13.5px;"></select>
+          <div id="ot-tlo-hint" style="font-size:12.5px;color:var(--mut);margin-top:3px;"></div></div>
         <div class="form-row" id="ot-disjoint-row" style="display:none;"><label>互斥类型 <span class="info-tip" title="disjointWith：本类型实例与所选类型实例无交集（如 人 互斥 部件）。多选=对多互斥">ⓘ</span></label>
           <select id="ot-disjoint" multiple size="4" style="border:1px solid var(--line);border-radius:6px;padding:5px 8px;font-size:13.5px;width:100%;"></select><small class="multi-hint"><b>按住 Ctrl/Shift 多选</b> = 与所有选中类型互斥（disjointWith）</small></div>
         <div class="form-row" id="ot-status-row"><label>生命周期 <span class="info-tip" title="draft=草稿（仅自用）/ review=评审中（待发布）/ released=已发布（生效）/ deprecated=已弃用（被新类型替代）">ⓘ</span></label>
@@ -290,6 +293,10 @@ const MODAL_FORMS = {
             <option value="released">released（已发布）</option>
             <option value="deprecated">deprecated（已弃用）</option>
           </select></div>
+        <div class="form-row" id="ot-alt-row"><label>别名 / 同义词 <span class="info-tip" title="SKOS altLabel：同一概念的其它叫法（如「通信载荷分系统」的别名「载荷舱」）。导出为 skos:altLabel，Protégé/TopBraid 原生识别；检索与实体消歧也会用到。">ⓘ</span></label>
+          <input id="ot-alt-labels" placeholder="逗号分隔，如：载荷舱、通信载荷"></div>
+        <div class="form-row" id="ot-lang-row"><label>语言 <span class="info-tip" title="BCP-47 语言标签（zh / en / zh-CN）。用于给 rdfs:label 与 skos:altLabel 打语言标记。">ⓘ</span></label>
+          <input id="ot-lang" placeholder="留空默认 zh" style="max-width:140px;"></div>
       </div>
       <div class="form-section" id="ot-props-section">
         <!-- 2026-09-07 方案A（Protégé/OWL 对齐）：属性全局定义（数据属性），类视图=只读引用＋局部约束覆盖 -->

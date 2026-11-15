@@ -385,6 +385,14 @@ def _migrate_columns(conn):
     _add("ontology_types", "updated_by", "TEXT DEFAULT ''")       # 最近修改人
     _add("ontology_types", "replaced_by", "TEXT DEFAULT ''")      # 弃用后替代类型名（entity/relation/attribute 通用）
     _add("ontology_types", "deprecated_note", "TEXT DEFAULT ''")  # 弃用原因/说明
+    # ── P0-1 / D1=A（2026-11-15）：上层本体（TLO）锚点 ──
+    #   存 BFO 轻量子集的 local name（Object / Process / Quality /
+    #   InformationContentEntity …），词表唯一真源是 core/ontology_tlo.py。
+    #   为什么存 local name 而不是 IRI：本工程内部只需范畴判别；IRI 集中在
+    #   ontology_tlo.tlo_iri() 一处生成，将来核对/替换 OBO 官方标识符只改一个地方。
+    #   为什么不做成 ontology_types 的行：那张表是「领域类型」集合，
+    #   用户的实例创建/定义域候选/图谱节点都读它，混入 BFO 范畴类会污染候选且永无实例。
+    _add("ontology_types", "tlo_anchor", "TEXT DEFAULT ''")       # BFO 轻量子集 local name（空=未锚定，沿 parent 继承）
     # ── D4 Skills 分层结构：allowed_tools 白名单 + 渐进披露资源（reference/examples/scripts）──
     _add("skills", "allowed_tools", "TEXT DEFAULT '[]'")  # 工具白名单（skill 触发时限制可调用工具，空=不限制）
     _add("skills", "references", "TEXT DEFAULT '[]'")     # 参考文档清单（渐进披露，按需加载）

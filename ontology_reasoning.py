@@ -24,19 +24,37 @@ RDF_TYPE = "a"
 def load_transitive_properties(conn) -> set:
     """P1-2：从本体公理读传递关系，替代硬编码。
 
-    读取 ontology_types（type_kind='relation'）的 properties JSON，识别：
-    - properties.transitive == true
-    - properties.characteristics 列表含 'transitive'
-    返回标记为传递的关系名集合；本体一个都没标时回退 TRANSITIVE_RELATIONS 兜底。
+    ★ 2026-11-15 修：**此前只读 `properties`，读错了源**。
+      写路径（`routers/knowledge_parts/ontology.py` 的 PUT、前端 `.ot-char` 勾选、
+      OWL 导出）一律写入 **`constraints.characteristics`**；而本函数只读
+      `properties`（JSON）。
+      实测真库：`properties.transitive` 只有 CONTAINS/DERIVES 两条**旧数据**，
+      而 `constraints.characteristics` 里有 9 个关系（含早已声明传递的
+      ALLOCATED_TO / TRACE）⇒ **声明了但推理从没生效**（"同一语义两处各写一份，
+      必然错位"的又一例；症状不在错位那一环：界面上明明勾着"传递"）。
+      ⇒ 现以 `constraints.characteristics` 为**主源**，`properties` 仅作旧数据兼容。
+
+    :returns: 标记为传递的关系名集合；本体一个都没标时回退 TRANSITIVE_RELATIONS 兜底。
     """
     marked = set()
     try:
         rows = conn.execute(
-            "SELECT name, properties FROM ontology_types WHERE type_kind='relation'"
+            "SELECT name, properties, constraints FROM ontology_types "
+            "WHERE type_kind='relation'"
         ).fetchall()
     except Exception:
         rows = []
     for r in rows:
+        # 主源：constraints.characteristics（API/前端/OWL 统一的写入口）
+        try:
+            cons = json.loads(r["constraints"] or "{}")
+        except Exception:
+            cons = {}
+        if isinstance(cons, dict) and \
+                "transitive" in [str(c).lower() for c in (cons.get("characteristics") or [])]:
+            marked.add(r["name"])
+            continue
+        # 兼容：旧数据写在 properties（仅 2 条历史行）
         try:
             props = json.loads(r["properties"] or "{}")
         except Exception:

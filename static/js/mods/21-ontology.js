@@ -537,6 +537,9 @@ let ontGlobalView = null; // 中栏全局内联视图：null | 'changelog' | 'ow
 // ── OWL/RDF 序列化（2026-09-02 四轮调整：中栏内联展示，右侧滑窗已移除）──
 function ontOwlUrl(fmt, typeId){
   if(fmt==='ttl') return '/api/knowledge/ontology/export?fmt=ttl' + (typeId?('&type_id='+typeId):'');
+  // P2-1（2026-11-15）：JSON-LD —— 与 Turtle/RDF-XML 是同一套三元组的第三种语法；
+  // 选它是因为 OMG SysML v2 的 API 就用 JSON-LD 编码模型，现代 Web 栈也无需 RDF 工具链。
+  if(fmt==='jsonld') return '/api/knowledge/ontology/export?fmt=jsonld' + (typeId?('&type_id='+typeId):'');
   if(fmt==='shacl') return '/api/knowledge/ontology/shacl' + (typeId?('?type_id='+typeId):'');
   return '/api/knowledge/ontology/export' + (typeId?('?type_id='+typeId):'');
 }
@@ -550,7 +553,9 @@ async function ontOwlFetch(preId, fmt, typeId){
 function ontOwlChipsHtml(scope){
   const cur = scope==='global' ? rdfFmt : owlNodeFmt;
   const chip = (f,label)=>`<span class="st" id="ont-owl-fmt-${scope}-${f}" onclick="ontOwlSetFmt('${scope}','${f}')" style="cursor:pointer;padding:2px 10px;border-radius:10px;${cur===f?'background:var(--blue-l);color:var(--blue-d);font-weight:600;':''}">${label}</span>`;
-  return chip('owl','RDF/XML（OWL）')+chip('ttl','Turtle')+chip('shacl','SHACL');
+  return chip('owl','RDF/XML（OWL）')+chip('ttl','Turtle')
+    + chip('jsonld','JSON-LD')   // P2-1（2026-11-15）：第三种等价语法，SysML v2 原生格式
+    + chip('shacl','SHACL');
 }
 function ontOwlSetFmt(scope, fmt){
   if(scope==='global') rdfFmt = fmt; else owlNodeFmt = fmt;
@@ -558,7 +563,7 @@ function ontOwlSetFmt(scope, fmt){
 }
 function ontOwlRefresh(scope){
   const fmt = scope==='global' ? rdfFmt : owlNodeFmt;
-  ['owl','ttl','shacl'].forEach(f=>{
+  ['owl','ttl','jsonld','shacl'].forEach(f=>{
     const el=document.getElementById(`ont-owl-fmt-${scope}-${f}`);
     if(el){ const on=f===fmt; el.style.background=on?'var(--blue-l)':''; el.style.color=on?'var(--blue-d)':''; el.style.fontWeight=on?'600':'400'; }
   });
@@ -574,7 +579,9 @@ function ontOwlDownload(scope){
   const fmt = scope==='global' ? rdfFmt : owlNodeFmt;
   const typeId = scope==='global' ? null : owlNodeId;
   window.open(ontOwlUrl(fmt, typeId), '_blank');
-  toast(fmt==='ttl'?'Turtle 已导出':(fmt==='shacl'?'SHACL 已导出':'OWL/RDF-XML 已导出'));
+  toast(fmt==='ttl'?'Turtle 已导出'
+    : (fmt==='jsonld'?'JSON-LD 已导出'
+    : (fmt==='shacl'?'SHACL 已导出':'OWL/RDF-XML 已导出')));
 }
 // 中栏全局内联视图：进入（隐藏 编辑/图谱/节点OWL/节点变更历史 四态，清空 toggle 高亮）
 // 五轮调整：全局视图不基于节点 → 隐藏左栏（#ont-left）与中栏工具条（#ont-center-bar，含编辑/图谱/OWL toggle）

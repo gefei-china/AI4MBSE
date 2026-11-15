@@ -1790,6 +1790,19 @@ jobs:
       - name: Guard 多工程作用域与新建任务归属 · 变异版（干净库绿，>15s）
         if: ${{ !cancelled() }}
         run: python tools/verify/verify_multi_project_scope_mutate.py
+
+      # ── 2026-11-15 新增：本体导出三格式（RDF/XML / Turtle / JSON-LD）────────
+      # 为什么进 nightly 而不是 pr：它要**真库全量本体**（读 mbse.db）+ rdflib
+      #   解析器；干净库/无 rdflib 时按设计 SKIP(rc=2)。
+      # 该门禁射程内抓到 3 个真 bug（都不是"没写"，而是"写了但读不出来"）：
+      #   ① to_turtle 局部名含 `/`（G/T值）⇒ PN_LOCAL 非法 ⇒ 整份 Turtle BadSyntax；
+      #   ② 插 skos:altLabel 时漏了分隔符 `;` 与 `@prefix skos:` ⇒ 非法；
+      #   ③ JSON-LD 顶层 `@id` + `@graph` 构成**命名图** ⇒ 普通 Graph 解析出 0 条
+      #      （"看起来有内容、读出来是空"最隐蔽）。
+      # 判据：三格式都能被 rdflib 解析 + 关键事实三路齐备 + 规模同量级 + 变异自证。
+      - name: Guard 本体导出三格式合法与语义等价（rdflib 全量解析 + 变异自证）
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_ontology_export_formats.py
   nightly-evals:
     # 同 nightly-guards：只在定时 / 手动触发。此前无 `if:` ⇒ 每个 PR 都跑评测
     #（还带 secrets.OPENAI_API_KEY），PR 上要么白等、要么因缺 secret 空转。
