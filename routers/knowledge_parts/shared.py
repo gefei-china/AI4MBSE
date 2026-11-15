@@ -682,6 +682,36 @@ def _ontology_check(conn, rows=None, instances=False, scope=None) -> dict:
         degraded.append(f"P1-5 边计数跳过（relations 聚合失败）：{type(_e).__name__}: {_e}")
         print(f"[ontology_check] P1-5 边计数失败，对称/方向类规则本次跳过："
               f"{type(_e).__name__}: {_e}", flush=True)
+    # ── 2026-11-15：函数型声明 vs 存量边「一源多目标」──────────────────────
+    #   实测取证（真库 ALLOCATED_TO）：声明 functional，而 5 个源节点有多个目标。
+    #   危害是**数据污染**：OWL 推理器会判多个目标 owl:sameAs 并合并节点，
+    #   被合并方的属性/类型全部互相继承（owlrl 实测：一个功能节点被误推成 20 多个类）。
+    #   为什么不并进 `rule_data_conflict`：那条只比 domain/range 与边端点，
+    #   **完全不看 characteristics** —— 这是它一直的盲区，混进去会让"为什么报"说不清。
+    for t in rows:
+        if t["type_kind"] != "relation":
+            continue
+        _chf = rel_meta.get(t["name"], {}).get("chars") or []
+        if "functional" not in _chf:
+            continue
+        try:
+            _multi = conn.execute(
+                "SELECT source_id, COUNT(*) c FROM relations "
+                "WHERE relation_type=? AND status!='deprecated' "
+                "GROUP BY source_id HAVING c > 1 ORDER BY c DESC",
+                (t["name"],)).fetchall()
+        except Exception as _e:
+            degraded.append(f"functional_data_conflict 跳过（{t['name']} 边聚合失败）："
+                            f"{type(_e).__name__}: {_e}")
+            continue
+        if _multi:
+            _mx = int(_multi[0]["c"]) if _multi else 0
+            issues.append(_issue(
+                "functional_data_conflict", t["name"],
+                f"声明 functional 但 {len(_multi)} 个源节点有多个目标（最多 {_mx} 个）"
+                f"—— 推理器会判这些目标 owl:sameAs 并合并节点（属性/类型互相继承）",
+                multi_src=len(_multi), max_targets=_mx))
+
     for _nm, (_dl5, _rl5) in decl.items():
         _m5 = rel_meta.get(_nm) or {}
         _ch5 = _m5.get("chars") or []

@@ -367,8 +367,23 @@ check("O23 体检 total == 消费口径类型行数（体检读的就是消费�
 # O24/O25 是**独立重算**的金标，不是把当前输出抄进断言：
 #   · warn==0：rule_data_conflict / dangling_instance 两条新规则在真库都必须是 0（修复完整的证据）；
 #   · info 计数：从原始约束行**重新数**「一侧声明 >1 个类型」的类型个数，与报告比对。
-check("O24 ★ 真库 warn==0（声明 vs 存量边 0 冲突；无未注册实例类型；无互斥特性/对称非成对）",
-      rep["warn"] == 0, f"warn={rep['warn']}")
+# 2026-11-15：O24 判据从「warn==0」改为「warn 只来自**已登记的已知缺陷**」。
+#   为什么必须改而不是删：新规则 `functional_data_conflict` 在真库**真实命中**
+#   ALLOCATED_TO（声明 functional，但 5 个源节点有多个目标）—— 那是本笔刚发现的
+#   真建模缺陷，不是回归。若简单把断言删掉，"该维度不再受保护"，下次新增 warn
+#   就没人管；若继续要求 warn==0，则门禁会因"发现了真问题"而红。
+#   ⇒ 正解：把已知缺陷登记成**基线清单**，任何**新增**的 warn 仍然判红。
+_WARN_BASELINE = {
+    # (关系/类型名, 规则码)：已登记、待业务裁决的既有缺陷
+    ("ALLOCATED_TO", "functional_data_conflict"),
+}
+_cur_warn = {(x["name"], x["code"]) for x in (rep.get("issues") or []) if x.get("severity") == "warn"}
+_new_warn = sorted(_cur_warn - _WARN_BASELINE)
+_gone_warn = sorted(_WARN_BASELINE - _cur_warn)
+check("O24 ★ 真库 warn 只来自已登记的已知缺陷（新增 warn 即红）",
+      not _new_warn,
+      f"新增 warn={_new_warn}（当前 {sorted(_cur_warn)}）"
+      + (f"；已修复可移出基线：{_gone_warn}" if _gone_warn else ""))
 
 _exp_multi = 0
 for _r in _scope_rows:
@@ -785,6 +800,23 @@ _S_CONF2 = _bad_sample(_GOOD + [
     entities=_E_OK, relations=_R_OK)[0]
 # P2-4（2026-10-15）：swrl_orphan —— active SWRL 规则引用本体不存在的类型（真库曾 4 条全灭）。
 # _fx_db 已建 swrl_rules 表；坏样本插入一条引用 Person（不存在类型）的 active 死规则。
+# 2026-11-15：functional_data_conflict —— 函数型声明 + 一源多目标。
+# 真库 ALLOCATED_TO 即此伤（5 个源有多个目标），但坏样本要独立构造才可复现。
+_T_E3 = {"id": 5, "name": "E3", "type_kind": "entity", "parent_id": None, "constraints": "{}"}
+_T_RFUNC = {"id": 6, "name": "R_FUNC", "type_kind": "relation", "parent_id": None,
+            "constraints": json.dumps({"allowed_values": {"src": ["E1"], "tgt": ["E2", "E3"]},
+                                       "characteristics": ["functional"]})}
+_S_FUNC = _bad_sample(
+    _GOOD + [_T_E3, _T_RFUNC],
+    entities=_E_OK + [{"id": 3, "name": "e3", "entity_type": "E3"}],
+    relations=_R_OK + [{"id": 2, "source_id": 1, "target_id": 2, "relation_type": "R_FUNC"},
+                       {"id": 3, "source_id": 1, "target_id": 3, "relation_type": "R_FUNC"}])[0]
+# 正样本：声明 functional 但**每个源只有一个目标** ⇒ 不该报
+_S_FUNC_OK = _bad_sample(
+    _GOOD + [_T_E3, _T_RFUNC],
+    entities=_E_OK + [{"id": 3, "name": "e3", "entity_type": "E3"}],
+    relations=_R_OK + [{"id": 2, "source_id": 1, "target_id": 2, "relation_type": "R_FUNC"}])[0]
+
 # P0-1/D1=A（2026-11-15）：missing_tlo_anchor —— 实体类型（含祖先链）无 BFO 锚点。
 # 真库现状：52 个类型 0 个锚定（故规则定 low、不阻断发布）；此处只验"能被触发"。
 _S_TLO = _bad_sample(
@@ -1534,6 +1566,16 @@ except Exception as _e6:
 
 check("O86 ★ 注入 LLM 的本体摘要（schema_text）真实含属性：属性名出现且挂在 domain_classes 命中的实体上",
       bool(_schema_ok), _schema_detail)
+
+# 2026-11-15：函数型声明 vs 一源多目标（真库 ALLOCATED_TO 即此伤）
+_iss_func = _S_FUNC.get("functional_data_conflict") or []
+check("O87 ★ 坏样本：声明 functional 且同一源有多个目标 → functional_data_conflict 且 warn；一源单目标不报",
+      len(_iss_func) == 1
+      and _iss_func[0]["severity"] == "warn"
+      and _iss_func[0]["name"] == "R_FUNC"
+      and not _S_FUNC_OK.get("functional_data_conflict"),
+      f"坏样本={ [(x['name'], x['severity']) for x in _iss_func] } "
+      f"正样本(一源单目标)={sorted(_S_FUNC_OK.get('functional_data_conflict') or [])}")
 
 
 
