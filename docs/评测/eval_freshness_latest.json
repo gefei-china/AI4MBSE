@@ -1,0 +1,37 @@
+{
+  "schema": "p0/eval-freshness@1",
+  "checked_at_utc": "2026-11-16 02:53:00",
+  "thresholds": {
+    "max_age_days": 7.0,
+    "max_pending": 0
+  },
+  "eval_reports": {
+    "rows": 26,
+    "latest_created_at_utc": "2026-11-15 15:21:45",
+    "age_days": 0.48,
+    "is_golden_rows": 1,
+    "by_eval_kind": {
+      "": 5,
+      "generation_quality": 8,
+      "golden_e2e": 1,
+      "rag_retrieval": 1,
+      "trace_consistency": 11
+    }
+  },
+  "online_eval_queue": {
+    "pending": 0,
+    "dismissed": 46
+  },
+  "golden_set": {
+    "dataset_id": "eb245949e0d84ed1",
+    "cases": 12,
+    "baseline_dataset_id": "eb245949e0d84ed1"
+  },
+  "nightly_latest_age_days": 23.681307835798613,
+  "warnings": [
+    "nightly/latest.json 陈旧或未带时间戳（age=23.681307835798613 d）；本机跑批器 tools/eval/run_nightly_local.py 需人工触发"
+  ],
+  "pass": 4,
+  "fail": 0,
+  "note": "库内 created_at 为 UTC；本门禁只读业务库，不调用 LLM、不写业务库"
+}

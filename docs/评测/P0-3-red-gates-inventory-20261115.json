@@ -1,0 +1,689 @@
+{
+  "schema": "p0/red-gates-inventory@1",
+  "generated_at_utc": "2026-11-15 15:29:53",
+  "source": "tools/gates_manifest.json",
+  "gates_total": 441,
+  "tiers": {
+    "pr": 202,
+    "local": 117,
+    "broken": 36,
+    "backlog": 68,
+    "nightly": 18
+  },
+  "budget": {
+    "broken": 38,
+    "backlog": 68,
+    "tolerated_steps": 39
+  },
+  "red_count": 104,
+  "classification": [
+    {
+      "tier": "broken",
+      "n": 35,
+      "reason_prefix": "两库都红 [FAIL]",
+      "disposition": "记账不进 CI；本批未逐条复跑"
+    },
+    {
+      "tier": "broken",
+      "n": 1,
+      "reason_prefix": "两库都红 [TIMEOUT]",
+      "disposition": "记账不进 CI；超时非断言失败"
+    },
+    {
+      "tier": "backlog",
+      "n": 68,
+      "reason_prefix": "未接线（2026-11-04 盘点未覆盖，待逐个定性）",
+      "disposition": "存量未接线，待评估"
+    }
+  ],
+  "continue_on_error": [
+    {
+      "line": 434,
+      "kind": "step",
+      "script": "verify_largefile_pipeline.py",
+      "keep": true,
+      "why": "本体仍红，取消会让 PR 直接失败"
+    },
+    {
+      "line": 1833,
+      "kind": "job",
+      "script": "nightly-evals",
+      "keep": true,
+      "why": "语料不在 CI；改由本机跑批器+新鲜度门禁承担"
+    },
+    {
+      "line": 1364,
+      "kind": "comment",
+      "keep": true,
+      "why": "注释引用，非配置"
+    }
+  ],
+  "decision": "本批不取消任何 continue-on-error：先完成定性 + 恢复可测量能力；取消前置=对应门禁实测转绿",
+  "caveat": "清单标注值不等于实测；本批未执行这 104 个脚本",
+  "gates": [
+    {
+      "script": "verify_agent_loop_protocol.py",
+      "tier": "broken",
+      "timeout": 240,
+      "reason": "两库都红 [FAIL] FAIL F5 ★合法空参数在真实循环里正常执行（未被误判为截断）"
+    },
+    {
+      "script": "verify_alternatives_platform.py",
+      "tier": "backlog",
+      "timeout": 180,
+      "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+    },
+    {
+      "script": "verify_attribution.py",
+      "tier": "broken",
+      "timeout": 240,
+      "reason": "两库都红 [FAIL] [FAIL] D1 ★引擎计数 == 裸 SQL 对账（total/bad/good 三通道 + 首坏+级联=坏）  ← engine={'total': 25, 'good': 15, 'bad': 10, 'bad_"
+    },
+    {
+      "script": "verify_autonomy_and_clarify.py",
+      "tier": "backlog",
+      "timeout": 180,
+      "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+    },
+    {
+      "script": "verify_badcase.py",
+      "tier": "broken",
+      "timeout": 240,
+      "reason": "两库都红 [FAIL] [FAIL] A1 检测器注册表三类（llm_call_failed/user_negative_feedback/llm_truncated）  ← got=['llm_call_failed', 'user_nega"
+    },
+    {
+      "script": "verify_capability_chain.py",
+      "tier": "backlog",
+      "timeout": 180,
+      "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+    },
+    {
+      "script": "verify_capability_registry.py",
+      "tier": "broken",
+      "timeout": 240,
+      "reason": "两库都红 [FAIL] [FAIL] B1 删 skills 源行 ⇒ 其投影随之删除  ← got 29（应只剩 A 段夹具 1 行）"
+    },
+    {
+      "script": "verify_chat_clarify_partial.py",
+      "tier": "backlog",
+      "timeout": 180,
+      "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+    },
+    {
+      "script": "verify_chat_contract_e2e.py",
+      "tier": "backlog",
+      "timeout": 180,
+      "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+    },
+    {
+      "script": "verify_chat_task_intent.py",
+      "tier": "backlog",
+      "timeout": 180,
+      "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+    },
+    {
+      "script": "verify_checker_three_paths.py",
+      "tier": "backlog",
+      "timeout": 180,
+      "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+    },
+    {
+      "script": "verify_clarify_single_turn.py",
+      "tier": "backlog",
+      "timeout": 180,
+      "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+    },
+    {
+      "script": "verify_compression_anchor.py",
+      "tier": "broken",
+      "timeout": 240,
+      "reason": "两库都红 [FAIL] [FAIL] [1] 压缩锚点覆盖组装侧真实产出的全部块名　— 未覆盖 3 个：['【%s %s】\\\\n%s%s', '【%s 已取回】\\\\n%s\\\\n\\\\n（父章 %s 上一轮已取回，', '【%s 已取回】\\\\n%s"
+    },
+    {
+      "script": "verify_conflict_check_retired.py",
+      "tier": "broken",
+      "timeout": 240,
+      "reason": "两库都红 [FAIL] [FAIL] B4 ReAct 默认串仍含它（走 workflows 那套）"
+    },
+    {
+      "script": "verify_content_budget.py",
+      "tier": "backlog",
+      "timeout": 180,
+      "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+    },
+    {
+      "script": "verify_context_audit_api.py",
+      "tier": "backlog",
+      "timeout": 180,
+      "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+    },
+    {
+      "script": "verify_conv9736_write.py",
+      "tier": "backlog",
+      "timeout": 180,
+      "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+    },
+    {
+      "script": "verify_conv_llm_scoped.py",
+      "tier": "backlog",
+      "timeout": 180,
+      "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+    },
+    {
+      "script": "verify_conv_model_e2e.py",
+      "tier": "backlog",
+      "timeout": 180,
+      "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+    },
+    {
+      "script": "verify_conv_model_scoped.py",
+      "tier": "backlog",
+      "timeout": 180,
+      "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+    },
+    {
+      "script": "verify_conv_scope_guard.py",
+      "tier": "broken",
+      "timeout": 240,
+      "reason": "两库都红 [FAIL] [FAIL] B3 匿名不加 user 条件（口径②）"
+    },
+    {
+      "script": "verify_conv_summary_api.py",
+      "tier": "backlog",
+      "timeout": 180,
+      "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+    },
+    {
+      "script": "verify_doc_summary.py",
+      "tier": "backlog",
+      "timeout": 180,
+      "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+    },
+    {
+      "script": "verify_e2e_chat.py",
+      "tier": "backlog",
+      "timeout": 180,
+      "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+    },
+    {
+      "script": "verify_entity_resolver.py",
+      "tier": "backlog",
+      "timeout": 180,
+      "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+    },
+    {
+      "script": "verify_eval_routing.py",
+      "tier": "broken",
+      "timeout": 240,
+      "reason": "两库都红 [FAIL] [FAIL] E2 run1 macro_f1=0.7909 >= 阈值 0.84（基线 0.9158）  <- f1=0.7909 thr=0.84"
+    },
+    {
+      "script": "verify_fact_inference.py",
+      "tier": "broken",
+      "timeout": 240,
+      "reason": "两库都红 [FAIL] [FAIL] F1 记录到改动前基线（evidence 本就全空，basis 无从谈起）  真库已有 473 条带 basis ⇒ 基线描述需更新"
+    },
+    {
+      "script": "verify_failure_class.py",
+      "tier": "broken",
+      "timeout": 240,
+      "reason": "两库都红 [FAIL] [FAIL] F1 存量全覆盖（无 internal 兜底）  以下 error 落到兜底未归类：['子任务未产生输出']"
+    },
+    {
+      "script": "verify_frontend_modeling_e2e.py",
+      "tier": "backlog",
+      "timeout": 180,
+      "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+    },
+    {
+      "script": "verify_fuseki_integration.py",
+      "tier": "backlog",
+      "timeout": 180,
+      "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+    },
+    {
+      "script": "verify_fuseki_readwrite.py",
+      "tier": "backlog",
+      "timeout": 180,
+      "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+    },
+    {
+      "script": "verify_generation_quality_gate.py",
+      "tier": "backlog",
+      "timeout": 180,
+      "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+    },
+    {
+      "script": "verify_ingest_tx.py",
+      "tier": "broken",
+      "timeout": 240,
+      "reason": "两库都红 [FAIL] [FAIL] T1d commit 在 chunks INSERT 之后（锁已释放）  ← insert@17404 commit@12993"
+    },
+    {
+      "script": "verify_intent_db_kw.py",
+      "tier": "broken",
+      "timeout": 240,
+      "reason": "两库都红 [FAIL] FAIL T2 真库各 Agent 在纯净 db 层下自认领成功  <- 异常=[('methodology_resolver', '方法论解析', 'knowledge_qa')]"
+    },
+    {
+      "script": "verify_intent_history.py",
+      "tier": "broken",
+      "timeout": 240,
+      "reason": "两库都红 [FAIL] [FAIL] C7 与 prev 一致 + 弱置信(0.70) → 采纳为 llm_history  <- 实得=llm_first_weak"
+    },
+    {
+      "script": "verify_intent_kw_layers.py",
+      "tier": "broken",
+      "timeout": 240,
+      "reason": "两库都红 [FAIL] FAIL F4 内置意图完整性：9 个系统级意图名都在 db 层  <- 缺失={'system_mgmt'}"
+    },
+    {
+      "script": "verify_intent_llm_fusion.py",
+      "tier": "backlog",
+      "timeout": 180,
+      "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+    },
+    {
+      "script": "verify_intent_routing_baseline.py",
+      "tier": "backlog",
+      "timeout": 300,
+      "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+    },
+    {
+      "script": "verify_job_handpoints_live.py",
+      "tier": "backlog",
+      "timeout": 180,
+      "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+    },
+    {
+      "script": "verify_kb_dashboard.py",
+      "tier": "backlog",
+      "timeout": 180,
+      "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+    },
+    {
+      "script": "verify_kb_scope_effective.py",
+      "tier": "backlog",
+      "timeout": 180,
+      "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+    },
+    {
+      "script": "verify_lifecycle.py",
+      "tier": "broken",
+      "timeout": 240,
+      "reason": "两库都红 [FAIL] [FAIL] D4 ★真库 'design' 使用证据非零（agent_tasks 按 name join 生效）  ← got=(13, 0)"
+    },
+    {
+      "script": "verify_llm_context_guard_mutate.py",
+      "tier": "broken",
+      "timeout": 240,
+      "reason": "两库都红 [FAIL] FAIL 1.3 guard=warn → **不截断**（放开假天花板）  | 实收=8192"
+    },
+    {
+      "script": "verify_llm_cost_cache.py",
+      "tier": "backlog",
+      "timeout": 180,
+      "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+    },
+    {
+      "script": "verify_load_aware_assign.py",
+      "tier": "broken",
+      "timeout": 240,
+      "reason": "两库都红 [FAIL] [FAIL] D1 能力域任务 top-1 命中 ≥ 7/8  只中 6/8"
+    },
+    {
+      "script": "verify_main_agent_execution.py",
+      "tier": "backlog",
+      "timeout": 180,
+      "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+    },
+    {
+      "script": "verify_main_agent_persistence.py",
+      "tier": "backlog",
+      "timeout": 180,
+      "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+    },
+    {
+      "script": "verify_mcp_availability.py",
+      "tier": "backlog",
+      "timeout": 180,
+      "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+    },
+    {
+      "script": "verify_mcp_edit_and_resume_gate.py",
+      "tier": "broken",
+      "timeout": 240,
+      "reason": "两库都红 [FAIL] [FAIL] M6 变异（接返回值判真假）被 C9 抓住"
+    },
+    {
+      "script": "verify_mcp_tool_meta.py",
+      "tier": "backlog",
+      "timeout": 180,
+      "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+    },
+    {
+      "script": "verify_mcp_whitelist_exempt.py",
+      "tier": "backlog",
+      "timeout": 180,
+      "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+    },
+    {
+      "script": "verify_mcp_write_path.py",
+      "tier": "backlog",
+      "timeout": 180,
+      "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+    },
+    {
+      "script": "verify_multiturn_context.py",
+      "tier": "broken",
+      "timeout": 240,
+      "reason": "两库都红 [FAIL] FAIL B5 默认值：enabled=True / max_chars=900 / versions=3"
+    },
+    {
+      "script": "verify_n2_skeleton.py",
+      "tier": "backlog",
+      "timeout": 180,
+      "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+    },
+    {
+      "script": "verify_n3_e2e_real.py",
+      "tier": "backlog",
+      "timeout": 180,
+      "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+    },
+    {
+      "script": "verify_n3_stability.py",
+      "tier": "backlog",
+      "timeout": 180,
+      "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+    },
+    {
+      "script": "verify_n3_view_expansion.py",
+      "tier": "backlog",
+      "timeout": 180,
+      "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+    },
+    {
+      "script": "verify_norm_summary.py",
+      "tier": "backlog",
+      "timeout": 180,
+      "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+    },
+    {
+      "script": "verify_ontology_dom_range.py",
+      "tier": "backlog",
+      "timeout": 180,
+      "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+    },
+    {
+      "script": "verify_orphan_agent_ref.py",
+      "tier": "broken",
+      "timeout": 240,
+      "reason": "两库都红 [FAIL] [FAIL] B1 INSERT 语句含 agent_name_snapshot"
+    },
+    {
+      "script": "verify_p0_failure_kind.py",
+      "tier": "backlog",
+      "timeout": 180,
+      "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+    },
+    {
+      "script": "verify_p0_repair_round_tools.py",
+      "tier": "backlog",
+      "timeout": 180,
+      "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+    },
+    {
+      "script": "verify_partial_persist_on_failure.py",
+      "tier": "backlog",
+      "timeout": 180,
+      "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+    },
+    {
+      "script": "verify_plan_cycle_guard.py",
+      "tier": "broken",
+      "timeout": 240,
+      "reason": "两库都红 [FAIL] ...<3 lines>... | \"请改用当前在役的 Agent 名后重试。\" % \"、\".join(_unresolved)) | ValueError: 计划引用了无法解析的 Agent：design（不在 age"
+    },
+    {
+      "script": "verify_probe_mark.py",
+      "tier": "backlog",
+      "timeout": 180,
+      "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+    },
+    {
+      "script": "verify_progress_guard.py",
+      "tier": "backlog",
+      "timeout": 180,
+      "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+    },
+    {
+      "script": "verify_projects_nav.py",
+      "tier": "backlog",
+      "timeout": 180,
+      "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+    },
+    {
+      "script": "verify_prompt_cache_order.py",
+      "tier": "backlog",
+      "timeout": 180,
+      "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+    },
+    {
+      "script": "verify_q1_q2_q3.py",
+      "tier": "backlog",
+      "timeout": 180,
+      "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+    },
+    {
+      "script": "verify_quality_review_wiring.py",
+      "tier": "broken",
+      "timeout": 240,
+      "reason": "两库都红 [FAIL] [FAIL] B4 ★ 标注上线后 reflection 与 plan_eval 双留痕一致（每轮评审恰好一次 eval）  ← 缺归属：{9779: (10, 4), 9999: (3, 0), 10012: (1, "
+    },
+    {
+      "script": "verify_rag_eval_gate.py",
+      "tier": "backlog",
+      "timeout": 180,
+      "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+    },
+    {
+      "script": "verify_ragflow_adapter.py",
+      "tier": "backlog",
+      "timeout": 180,
+      "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+    },
+    {
+      "script": "verify_replan_p2.py",
+      "tier": "broken",
+      "timeout": 240,
+      "reason": "两库都红 [FAIL] FAIL  S3d 保守默认：配置读取失败取 enabled=False（不会因读不到配置就开重画）"
+    },
+    {
+      "script": "verify_replan_p3.py",
+      "tier": "broken",
+      "timeout": 240,
+      "reason": "两库都红 [FAIL] FAIL  X1c ★ 挂点段整体 try/except（观测旁路铁律）"
+    },
+    {
+      "script": "verify_request_state_reset.py",
+      "tier": "broken",
+      "timeout": 240,
+      "reason": "两库都红 [FAIL] [FAIL] A2 有 1 个 `self._xxx` 赋值字段未在reset_request_state 中登记（跨请求会残留）：['_llm_overrides_effective']"
+    },
+    {
+      "script": "verify_rerank_effective.py",
+      "tier": "backlog",
+      "timeout": 180,
+      "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+    },
+    {
+      "script": "verify_rerank_logging_fmt.py",
+      "tier": "broken",
+      "timeout": 240,
+      "reason": "两库都红 [FAIL] [FAIL] B2 解析失败告警：真的写出了内容"
+    },
+    {
+      "script": "verify_rerun_gain.py",
+      "tier": "backlog",
+      "timeout": 180,
+      "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+    },
+    {
+      "script": "verify_retrieval_low_conf.py",
+      "tier": "backlog",
+      "timeout": 180,
+      "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+    },
+    {
+      "script": "verify_retrieval_relevance.py",
+      "tier": "backlog",
+      "timeout": 180,
+      "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+    },
+    {
+      "script": "verify_role_block_sections.py",
+      "tier": "backlog",
+      "timeout": 180,
+      "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+    },
+    {
+      "script": "verify_role_manual_filter.py",
+      "tier": "backlog",
+      "timeout": 180,
+      "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+    },
+    {
+      "script": "verify_s3_e2e.py",
+      "tier": "backlog",
+      "timeout": 180,
+      "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+    },
+    {
+      "script": "verify_s4_llm_params.py",
+      "tier": "backlog",
+      "timeout": 180,
+      "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+    },
+    {
+      "script": "verify_s4_prompt.py",
+      "tier": "broken",
+      "timeout": 240,
+      "reason": "两库都红 [FAIL] FAIL  common.py 定义 _AGENT_ROLE_CAP = 1200"
+    },
+    {
+      "script": "verify_s4_toolname.py",
+      "tier": "broken",
+      "timeout": 240,
+      "reason": "两库都红 [FAIL] FAIL  llm/__init__.py 在 except 分支加 WARNING"
+    },
+    {
+      "script": "verify_semantic_cache_stream.py",
+      "tier": "backlog",
+      "timeout": 180,
+      "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+    },
+    {
+      "script": "verify_settings_data_audit.py",
+      "tier": "broken",
+      "timeout": 240,
+      "reason": "两库都红 [TIMEOUT] "
+    },
+    {
+      "script": "verify_skill_frontmatter.py",
+      "tier": "backlog",
+      "timeout": 180,
+      "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+    },
+    {
+      "script": "verify_skill_prompt_budget.py",
+      "tier": "backlog",
+      "timeout": 180,
+      "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+    },
+    {
+      "script": "verify_sse_heartbeat.py",
+      "tier": "broken",
+      "timeout": 240,
+      "reason": "两库都红 [FAIL] ^^^^^^^^^^^^^ | AssertionError: 变异锚点丢失：            _terminal = True | yield f\"event: error"
+    },
+    {
+      "script": "verify_statemachine.py",
+      "tier": "broken",
+      "timeout": 240,
+      "reason": "两库都红 [FAIL] [FAIL] D hil_confirmations.status ∈ hil_confirmation 状态域  ← 越界值 {'executed': 1}；实测分布 {'executed': 1, 'pending'"
+    },
+    {
+      "script": "verify_team_defined_orchestration.py",
+      "tier": "backlog",
+      "timeout": 180,
+      "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+    },
+    {
+      "script": "verify_thinking_policy.py",
+      "tier": "broken",
+      "timeout": 240,
+      "reason": "两库都红 [FAIL] [FAIL] ★ off 列表含实测确认的 4 个廉价任务 + `chat_probe`（有A/B 证据）"
+    },
+    {
+      "script": "verify_token_budget.py",
+      "tier": "broken",
+      "timeout": 240,
+      "reason": "两库都红 [FAIL] ~~~~^^^^^^^^^^^ | File \"<string>\", line 73, in <module> | NameError: name '_pg_stop_now' is not defined"
+    },
+    {
+      "script": "verify_tool_input_schema.py",
+      "tier": "broken",
+      "timeout": 240,
+      "reason": "两库都红 [FAIL] [FAIL] C6b 内置写操作工具拿到真 schema（高危操作有契约了）  parameters={'type': 'object', 'properties': {}, 'additionalProperties'"
+    },
+    {
+      "script": "verify_trace_quality_gate.py",
+      "tier": "backlog",
+      "timeout": 180,
+      "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+    },
+    {
+      "script": "verify_truncation_policy.py",
+      "tier": "backlog",
+      "timeout": 180,
+      "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+    },
+    {
+      "script": "verify_turn_override_e2e.py",
+      "tier": "backlog",
+      "timeout": 180,
+      "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+    },
+    {
+      "script": "verify_typography_scale.py",
+      "tier": "broken",
+      "timeout": 240,
+      "reason": "两库都红 [FAIL] [FAIL] F1 字号档位 ⊆ 标准集合（25 档）  ← 越界档位：[10.5, 11.0, 13.0]（示例：['chat.css:32', 'alternatives.css:33', 'alternatives"
+    },
+    {
+      "script": "verify_ui_intent_brief.py",
+      "tier": "backlog",
+      "timeout": 180,
+      "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+    },
+    {
+      "script": "verify_ui_render_live.py",
+      "tier": "backlog",
+      "timeout": 180,
+      "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+    },
+    {
+      "script": "verify_vector_binary_cache.py",
+      "tier": "broken",
+      "timeout": 240,
+      "reason": "两库都红 [FAIL] [FAIL] ★ 第二次命中二进制（hit_bin 增量=+0，应为 1）"
+    },
+    {
+      "script": "verify_zhiyuan_matching.py",
+      "tier": "backlog",
+      "timeout": 180,
+      "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+    }
+  ]
+}
