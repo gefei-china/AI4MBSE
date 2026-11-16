@@ -650,6 +650,16 @@ jobs:
         if: ${{ !cancelled() }}
         run: python tools/verify/verify_memory_eval_reanchor.py
 
+      # ── 2026-11-16 新增：记忆证据链必须真的通电 ────────────────────────
+      #   真机实测：295 条记忆全 `unverifiable`、`evidence_ref` 全空 ——
+      #   校验机制（_verify_claim 否定优先两遍判定）建好了，但没有 apply 入口，
+      #   等于「建好了没通电」。dream() 扫 80 条就能产出 84 个候选、75 条带证据。
+      #   本门禁锁：① dream 能产出且只读 ② 落库只改状态列（content/tier 不变）
+      #   ③ 默认分级不含 contradicted（它会被召回侧排除，误判即丢真记忆）。
+      - name: Guard 记忆证据链通电（13 项，含变异自证）
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_memory_evidence_chain.py
+
       # ── 2026-11-15 新增：SHACL 独立校验交叉验证 ────────────────────────
       # 本工程所有实例校验都靠自研实现；若自研有 bug，**没有任何人能发现**。
       # 接 pySHACL（W3C SHACL 参考实现之一）做独立校验，与自研逐维度比对：

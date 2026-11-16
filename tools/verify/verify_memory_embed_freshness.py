@@ -1,3 +1,4 @@
+# CI-OPTIONAL: [local] tier=local（见 tools/gates_manifest.json）：需真实 embedding 服务（内网 192.168.100.202:8004）+ 真库 mbse.db，CI runner 无该组合 ⇒ 本机跑。判据：库内记忆向量与当前模型自洽（>=0.9）；服务不可用时整组 SKIP（测不了不等于没问题）。2026-11-16 新增：该缺陷（换模型旧向量没重算）使记忆评测 27.3%->63.6%。改法须同步改清单 tier 并接线，不允许只删这行
 # -*- coding: utf-8 -*-
 """verify_memory_embed_freshness.py —— 记忆向量必须与**当前** embedding 模型同源。
 
