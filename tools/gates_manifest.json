@@ -2490,6 +2490,12 @@
    "tier": "pr",
    "timeout": 300,
    "reason": "P1 前置常驻门禁：把方案 §6「P1 合并必须等 P0 跑出基线」从文档文字变成判据。P 组验证前置机制健全（数据集指纹/12 例三链路/_live_case 断流守卫/golden_e2e 拒伪造 live 报告/live-preflight 桩自检全绿）；S 组如实报告真库 live 基线数（当前 0 ⇒ p1_release=blocked，属状态不判红）；H 组禁止任何 ready 声明指不到合格 live 基线；M1~M4 变异自证判据有牙齿。零真实 LLM/零服务/零临时文件；无真库时 P7 与 S 组降级并打印 DEGRADED。2026-11-16 新增"
+  },
+  {
+   "script": "verify_p1_3_view_agent_plugins.py",
+   "tier": "local",
+   "timeout": 180,
+   "reason": "P1-3 常驻门禁：8 个视图生成 Agent 已从**插件库**移除（D1 只清了 agents 表与资产快照）。R 组查 plugins.status=removed + capability_registry=disabled/deprecated + agents 无残留；C 组查承接方 9 个 Skill 仍 published 且挂在 view_expansion；M 组按 plugin_system/store/queries 的真实 where 子句复算市场可见性（含负对照防空转）；X1~X7 变异自证判据有牙齿——特别是「误用 disabled 会让市场重新可见」这一陷阱。需连真库 mbse.db，干净 checkout 降级为 X 组并打印 DEGRADED；只读、不调 LLM、不写库。2026-11-16 新增"
   }
  ]
 }
