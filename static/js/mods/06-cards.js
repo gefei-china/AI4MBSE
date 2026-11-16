@@ -403,6 +403,19 @@ function svmVmFromEl(el){
   if(k && _svmVmStore.has(k)) return _svmVmStore.get(k);
   try{ return JSON.parse(decodeURIComponent(el.dataset.v||'')); }catch(e){ return null; }
 }
+/* ★ 2026-11-16（米爸报「视图需要展示对应的名称，和代码同样的逻辑，不能只给个笼统的描述」）：
+   视图模型里 `view.name` 是**图类型名**（"状态机图"），所有人都一样；
+   真正标识"这是哪个视图"的是 nodes[0].name —— 真机 conv 999999065 里是
+   「驾驶员生命周期状态机」，而代码 pane 里写的也是 `state '驾驶员生命周期状态机'`。
+   ⇒ 取 nodes 里的主定义名作为视图的**具体名称**，让代码 tab 与视图 tab 对得上。 */
+function svmViewSubject(vm){
+  if(!vm) return '';
+  for(const n of (vm.nodes||[])){
+    const nm = String((n && n.name) || '').trim();
+    if(nm) return nm;
+  }
+  return String((vm.view && vm.view.name) || '').trim();
+}
 function svmThumbsHtml(sv) {
   const entries = Object.entries(sv.views||{});
   if(!entries.length) return '';
@@ -412,9 +425,12 @@ function svmThumbsHtml(sv) {
     const thumbId = 'svm-thumb-'+t+'-'+_ts;
     const vk = 'vmk-' + (_svmVmSeq++);
     _svmVmStore.set(vk, v);             // 视图数据入内存 store（DOM 只带轻量 key）
-    return `<div class="sv-thumb${cnt?'':' empty'}" title="${esc(v.view.name)}（${esc(v.view.v1)}）· 点击查看大图" data-vk="${vk}" onclick="openSvmPreview(this)">
+    const _type = String((v.view && v.view.name) || t).split('（')[0];
+    const _subj = svmViewSubject(v);
+    const _cap = (_subj && _subj !== _type) ? (_type + ' · ' + _subj) : _type;
+    return `<div class="sv-thumb${cnt?'':' empty'}" title="${esc(_cap)}（${esc((v.view||{}).v1||'')}）· 点击查看大图" data-vk="${vk}" onclick="openSvmPreview(this)">
       <div class="sv-thumb-svg" id="${thumbId}" style="height:170px;"></div>
-      <div class="sv-thumb-cap"><b>${t}</b><span>${esc(v.view.name.split('（')[0])}</span><i class="sv-cnt">${cnt} 元素</i></div>
+      <div class="sv-thumb-cap"><b>${t}</b><span title="${esc(_cap)}">${esc(_cap)}</span><i class="sv-cnt">${cnt} 元素</i></div>
     </div>`;
   }).join('');
   // 懒挂载：缩略图进入视口才创建 Cytoscape（消息流内大量缩略图不再一次性全挂）
@@ -467,16 +483,28 @@ function cardSysmlTabs(cd, content) {
   const entries = Object.entries(sv.views);
   if(!entries.length) return '';
   const parsed = sv.parsed || {nodes:0, edges:0};
+  // 视图栏展示**具体名称**（如「驾驶员生命周期状态机」），不再是
+  // 「按 view_expansion 意图投影」那种对所有消息都一样的笼统描述。
+  const _viewNames = entries.map(([k,v])=>{
+    const _type = String((v.view && v.view.name) || k).split('（')[0];
+    const _subj = svmViewSubject(v);
+    return (_subj && _subj !== _type) ? _subj : _type;
+  }).filter(Boolean).slice(0,3).join(' / ') || 'SysML 视图';
   const code = extractSysmlCode(content) || '';
-  const codeCnt = content ? Math.floor((String(content).match(/```/g)||[]).length / 2) : 0;
+  // ★ 2026-11-16（米爸报「代码块中数字显示 2，不合理，就是一段代码，不存在多个的说法」）：
+  //   原实现 `codeCnt = 正文里所有 ``` 围栏数 / 2` —— 把 A 方案两段式输出里的
+  //   **json 结论块**和 **sysml 代码块**都算成"代码"，tab 上就显示「代码 2」。
+  //   但整合卡里的代码 pane 只有 `extractSysmlCode()` 拼出来的**那一段** SysML 代码，
+  //   json 是给人看的结论、不是第二段代码 ⇒ 数字与内容根本对不上。
+  //   既然只有一段，**不显示数字**（视图 tab 的数字保留：那确实可能有多个视图）。
   const codePane = code
     ? `<pre class="svm-code"><code>${escMd(code)}</code></pre>`
     : `<div style="color:var(--mut);font-size:13.5px;padding:14px;text-align:center;">未检测到 SysML v2 代码块</div>`;
   return `<div class="sv-card svm-card-wrap">
     <div class="svm-tabs">
-      <span class="svm-tab active" data-tab="code" onclick="svmTabSwitch(this)" title="SysML v2 代码">代码<i class="sv-cnt">${codeCnt>0?codeCnt:''}</i></span>
-      <span class="svm-tab" data-tab="view" onclick="svmTabSwitch(this)" title="按「${esc(sv.intent||'模型')}」意图即时投影">视图<i class="sv-cnt">${entries.length}</i></span>
-      <span style="flex:1;display:flex;align-items:center;justify-content:flex-end;font-size:12px;color:var(--mut);padding-right:6px;">按「${esc(sv.intent||'模型')}」意图投影 · ${parsed.nodes} 元素 / ${parsed.edges} 关系</span>
+      <span class="svm-tab active" data-tab="code" onclick="svmTabSwitch(this)" title="SysML v2 代码">代码</span>
+      <span class="svm-tab" data-tab="view" onclick="svmTabSwitch(this)" title="本轮生成的视图">视图<i class="sv-cnt">${entries.length}</i></span>
+      <span style="flex:1;display:flex;align-items:center;justify-content:flex-end;font-size:12px;color:var(--mut);padding-right:6px;" title="${esc(_viewNames)}">${esc(_viewNames)} · ${parsed.nodes} 元素 / ${parsed.edges} 关系</span>
       <button class="btn sm ghost" style="padding:1px 8px;font-size:12px;flex:none;" onclick="svmCopyCode(this)" title="复制本消息全部 SysML v2 代码">📋 复制</button>
     </div>
     <div class="svm-pane" data-pane="code">${codePane}</div>

@@ -116,30 +116,44 @@ def run_node(node, js_src, timeout=60):
 
 # ── 真机样本：正文 + citations（取锚点机制上线后的最新一条）──────────────
 def real_sample():
-    """从真库取一条带 citations 的消息；取不到返回 None（干净库 ⇒ C 组 SKIP）。"""
+    """从真库取**确实能验本门禁**的消息；取不到返回 None（干净库 ⇒ C 组 SKIP）。
+
+    ⚠️ 2026-11-16 实测踩坑：原实现 `ORDER BY id DESC LIMIT 1` 只取最新一条带
+    `anchor` 的消息。真机后续产生了状态机会话（msg 6678），它的 citations 有
+    anchor 但**正文里没有任何 §x.y** ⇒ C1「正文里出现了 anchor 覆盖的条款号」
+    立刻翻红 —— 而产品代码根本没变。这是**样本漂移**，不是回归。
+
+    修法：扫最近 30 条，选出第一条「正文有 §x.y 且 citations 的 anchor 也有 §x.y」
+    的消息 —— 只挑真正落在本门禁射程内的样本。新消息没有 § 就跳过它，
+    不把"没东西可验"伪装成"验证失败"（SKIP 与 FAIL 必须分开）。
+    """
     if not os.path.exists(DB):
         return None
     try:
         con = sqlite3.connect(DB, timeout=15)
         try:
-            r = con.execute(
+            rows = con.execute(
                 "select id, content, card_data from messages "
                 "where card_data like '%\"anchor\"%' and card_data not like '%\"citations\": []%' "
-                "order by id desc limit 1").fetchone()
+                "order by id desc limit 30").fetchall()
         finally:
             con.close()
     except Exception:
         return None
-    if not r:
-        return None
-    try:
-        cd = json.loads(r[2] or "{}")
-    except Exception:
-        return None
-    cits = cd.get("citations") or []
-    if not cits or not (r[1] or ""):
-        return None
-    return {"id": r[0], "body": r[1], "cites": cits}
+    for r in rows:
+        if not r[1] or "§" not in r[1]:
+            continue
+        try:
+            cd = json.loads(r[2] or "{}")
+        except Exception:
+            continue
+        cits = cd.get("citations") or []
+        if not cits:
+            continue
+        if not any("§" in str(x.get("anchor") or "") for x in cits):
+            continue
+        return {"id": r[0], "body": r[1], "cites": cits}
+    return None
 
 
 def group_a_behavior(node):

@@ -6,7 +6,11 @@ function openSvmPreview(el) {
   const vm = svmVmFromEl(el);
   if(!vm) return;
   const vname = (vm.view && vm.view.name) || 'SysML 视图';
-  openPreviewTab({id:null, kind:'sysml', kind_label:'SysML', title:`${vname}（${(vm.view&&vm.view.v1)||''}）`,
+  // ★ 2026-11-16：大图标题显示**视图自己的名字**（真机：驾驶员生命周期状态机），
+  //   而不是只有"状态机图"这种所有状态机视图都一样的类型名。
+  const subj = (typeof svmViewSubject === 'function') ? svmViewSubject(vm) : '';
+  const title = (subj && subj !== vname) ? (vname + ' · ' + subj) : vname;
+  openPreviewTab({id:null, kind:'sysml', kind_label:'SysML', title:`${title}（${(vm.view&&vm.view.v1)||''}）`,
     preview_type:'sysml', preview_content:'', message_id:null,
     meta:{sysml_views:{views:{[vname]:vm}}}});
 }

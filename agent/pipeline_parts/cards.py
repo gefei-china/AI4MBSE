@@ -209,28 +209,42 @@ class CardMixin:
         # 视图诉求信号：输入须明确出现「视图/图/diagram/view」等要图字样才认定指定视图
         if not re.search(r"视图|图|diagram|view", user_input, re.I):
             return None
-        # 关键词映射：英文缩写 → 视图类型；中文名 → 视图类型
+        # ⚠️ 2026-11-16（真机 conv 999999065，米爸报「只让生成状态机却展示 3 个视图」）：
+        #   原实现用**大小写不敏感的子串**匹配 alias，在长需求文本上必然误命中：
+        #     · 单字「包」→ PKG：命中「**包**含以下状态（State）」
+        #     · 英文缩写 PAR → PAR：命中「实例化定义（**Par**t）」「**Park**ed」
+        #     ⇒ 631 字的需求被抽成 ['PKG','PAR','STM'] ⇒ 前端展示 3 个视图。
+        #   而本函数 docstring 明明写着「避免普通词被误判」—— 实现与契约自相矛盾。
+        #
+        #   修法（最小、保持既有正向用法）：
+        #     ① 删掉单字词「包」（"包图" 仍保留，明确要图才能命中）
+        #     ② 英文缩写走 **词边界** 正则（避免 Part/Parked/action 之类子串误命中）
+        #     ③ 补「状态视图」「状态机视图」→ STM（用户原话就是"黑盒状态视图"，
+        #        原 alias 只有"状态机"/"状态图"，导致这类说法抽不到）
+        #   不删「参数/需求/用例/活动」等中文词：它们在「只看需求」这类省略说法里
+        #   仍是有效诉求，贸然删会引入新的漏判。真正的代价不对称：
+        #   **多出错误视图的代价 > 少生成视图**（用户会明确追问"为什么展示三个"）。
         alias = {
             "BDD": "BDD", "块定义图": "BDD", "块定义": "BDD", "结构图": "BDD",
             "IBD": "IBD", "内部块图": "IBD", "内部块": "IBD",
-            "PKG": "PKG", "包图": "PKG", "包": "PKG",
+            "PKG": "PKG", "包图": "PKG",
             "PAR": "PAR", "参数图": "PAR", "参数": "PAR",
             "REQ": "REQ", "需求图": "REQ", "需求": "REQ",
             "UC": "UC", "用例图": "UC", "用例": "UC",
             "ACT": "ACT", "活动图": "ACT", "活动": "ACT",
             "SEQ": "SEQ", "顺序图": "SEQ", "时序": "SEQ",
             "STM": "STM", "状态机": "STM", "状态图": "STM",
+            "状态视图": "STM", "状态机视图": "STM",
             "TRACE": "TRACE", "追溯图": "TRACE", "追溯": "TRACE",
-            "视图": None,  # 通用词
         }
         hits = []
-        text_lower = user_input.lower()
         for key, view_type in alias.items():
-            if view_type is None:
+            if view_type is None or view_type in hits:
                 continue
-            if key.lower() in text_lower:
-                if view_type not in hits:
-                    hits.append(view_type)
+            # 英文缩写（纯 ASCII）必须有词边界；中文词保持原样子串匹配
+            pat = (r"\b" + re.escape(key) + r"\b") if key.isascii() else re.escape(key)
+            if re.search(pat, user_input, re.I):
+                hits.append(view_type)
         return hits if hits else None
 
     def _infer_view_types(self, user_input: str) -> list | None:

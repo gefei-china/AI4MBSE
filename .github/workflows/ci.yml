@@ -631,6 +631,16 @@ jobs:
         if: ${{ !cancelled() }}
         run: python tools/verify/verify_citation_clause_link.py
 
+      # ── 2026-11-16 新增：要一个视图就只给一个 + 代码/视图卡显示具体名称 ────
+      #   真机 conv 999999065：用户明确只要「黑盒状态视图」，产物面板却展示
+      #   包图/参数图/状态机图 3 个。根因是 alias 把单字「包」和英文缩写 PAR
+      #   拿去做大小写不敏感子串匹配 ⇒「包含」「Part」「Parked」全被误命中。
+      #   同条消息还抱怨代码 tab 显示数字 2（数了 json 结论块+sysml 块）、
+      #   视图只有「按 view_expansion 意图投影」这种笼统描述。
+      - name: Guard 视图意图抽取与名称（19 项；无 node/无库时 SKIP）
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_view_intent_extraction.py
+
       # ── 2026-11-15 新增：SHACL 独立校验交叉验证 ────────────────────────
       # 本工程所有实例校验都靠自研实现；若自研有 bug，**没有任何人能发现**。
       # 接 pySHACL（W3C SHACL 参考实现之一）做独立校验，与自研逐维度比对：
