@@ -431,7 +431,7 @@ jobs:
       #   P2   pipeline_detail 无阶段耗时 ⇒ 排查"慢在哪"只能靠 cProfile 反推
       - name: Guard 大文件链路（35 项 + 7 变异）
         if: ${{ !cancelled() }}
-        continue-on-error: true   # 已知红（2026-11-04 盘点，见 gates_manifest.json）
+        continue-on-error: true   # 已知红（2026-11-04 盘点 + 2026-11-15 P0-3 逐条定性，见 docs/评测/P0-3评测常态化与红项定性-20261115.md）
         run: python tools/verify/verify_largefile_pipeline.py
 
       # ── P1-10（2026-10-04）：分层绕过**卡增量**，不清存量 ─────────────────
@@ -694,6 +694,22 @@ jobs:
       - name: Guard 环境可重建（资产快照 ↔ 库漂移 + 空库自举覆盖）
         if: ${{ !cancelled() }}
         run: python tools/verify/verify_asset_snapshot_sync.py
+
+      # 2026-11-15 P0/D1：视图生成能力已由 sysml_view_generation_* 技能承接，
+      # 8 个视图 Agent 已从库与快照同步永久移除。
+      # 只删库行会被资产快照自举复活：快照 agents 记录不含 status 列 ⇒
+      # INSERT 分支走 DDL 默认 'active'，比停用前更糟。
+      # 本步骤真跑 init_db() 到隔离空库，证明重建后 8 个名字仍 0 命中。
+      - name: Guard P0/D1 视图 Agent 已移除且不被资产自举复活
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_d1_view_agents_removed.py
+
+      # 2026-11-16 P1 前置：方案 §6 规定「P1 任何合并动作必须等 P0 跑出基线」。
+      # 本步骤把这条纪律变成判据：前置机制不健全 / 有人伪造 ready 声明即红；
+      # 当前无 live 基线时只报告 p1_release=blocked，不判红（属状态而非缺陷）。
+      - name: Guard P1 前置（基线门禁 + 拒绝伪造 ready 声明）
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_p1_prerequisite.py
 
       # pr 层的准入判据 = 「全新克隆 + 空库能绿」。本门禁是其静态部分：
       # 本机绝对路径 / 平台特定解释器 / 引用了未入库的 data 文件，三者任一即红。
@@ -1830,7 +1846,7 @@ jobs:
     #（还带 secrets.OPENAI_API_KEY），PR 上要么白等、要么因缺 secret 空转。
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
-    continue-on-error: true          # 定时跑失败不阻断（评测集漂移单独通知），见末尾
+    continue-on-error: true          # 定时跑失败不阻断（评测集漂移单独通知）；P0-3 已逐条定性，见 docs/评测/P0-3评测常态化与红项定性-20261115.md
     env:
       PYTHONIOENCODING: utf-8
     steps:
@@ -1888,14 +1904,19 @@ jobs:
       # 原设计是"失败并不静默绿"（防恒绿占位作业）—— 那是在本作业**什么都不跑**
       # 的前提下成立的。现在意图段每天真跑，作业不再是占位；检索段每日失败
       # 只会制造告警疲劳（结论永远是"未接线"，没有新信息）。
-      # 不静默的保证换成三样：①本步骤名与 ::warning:: 明说未接线及原因；
+      # 2026-11-15 P0-3 接线形态已明确：CI 侧**有意不跑检索**（语料库不入 git），
+      # 主路径是本机跑批器 tools/eval/run_nightly_local.py + 常驻门禁
+      # tools/verify/verify_eval_freshness.py（检查 eval_reports 新鲜度 /
+      # online_eval_queue pending / Golden Set 基线漂移，并写 checked-in 快照）。
+      # ⇒ 不再是「未接线」，而是「不在这一层跑、由另一层跑且可被机器验证」。
+      # 不静默的保证换成三样：①本步骤名与 ::warning:: 明说主路径在哪及原因；
       # ②注释里留全四方案决策矩阵；③ PR 门禁消费本地跑批器的 checked-in
       # 快照（docs/评测/nightly/），检索指标的退化不会因为这里跳过而看不见。
-      - name: ⚠ 检索段未接线（语料库不入 git；方案决策见上方注释）
+      - name: 检索段由本机跑批器承接（CI 不含语料库）
         if: steps.corpus.outputs.found != 'true'
         run: |
-          echo "::warning title=nightly 检索段未接线::mbse.db（约378MB，含用户会话/附件）不入 git，干净 checkout 无语料。"
-          echo "::warning::检索/生成质量评测的主路径是本机跑批器 tools/eval/run_nightly_local.py（报告 checked-in 后 PR 门禁消费）。"
+          echo "::warning title=检索段不在 CI 跑::mbse.db（约378MB，含用户会话/附件）不入 git，干净 checkout 无语料。"
+          echo "::warning::主路径=本机 tools/eval/run_nightly_local.py + tools/verify/verify_eval_freshness.py（常驻门禁，消费真库与 checked-in 快照）。"
           echo "::warning::本作业的意图路由段（上方）不受影响，每日真跑。"
 
       - name: 构建评测集（从真实语料派生 gold）
