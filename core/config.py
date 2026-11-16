@@ -2815,6 +2815,24 @@ _EXTRA_SCHEMA = {
 for _sec, _items in _EXTRA_SCHEMA.items():
     CONFIG_SCHEMA.setdefault(_sec, {}).update(_items)
 
+# ── P0-4（2026-11-15）：配置审计标记（只加 meta，不改任何生效值）──────────────
+# 以前只能靠人肉核对两类键：SCHEMA 有 DEFAULT 无（get() 返回 None，只能靠 override）、
+# 业务侧零消费点（改了不影响业务行为，但可能在 tools/eval 或前端 JS 被消费）。
+# 现在显式打 audit_flags，供 GET /api/system/config/schema 与后续 UI 消费。
+# ⚠️ 只加 meta 键：不改 type/desc/default、不改 get() 行为、不删任何键。
+# 清单真源 = core/config_audit.py；防漂移 = tools/verify/verify_p0_config_audit.py。
+try:
+    from . import config_audit as _ca
+    for _sec, _items in CONFIG_SCHEMA.items():
+        for _key, _meta in _items.items():
+            _f = _ca.flags(_sec, _key)
+            if _f:
+                _meta["audit_flags"] = _f
+except Exception:
+    # 少数验证脚本用 importlib 独立加载 config.py（无包上下文），相对导入会失败。
+    # 此时标注可缺席，但绝不能让配置模块崩掉或改变取值；正常 import 路径由门禁守。
+    pass
+
 
 def schema() -> dict:
     """配置项元数据（含当前值脱敏、来源层、默认值），供 REST schema 接口与前端渲染。"""

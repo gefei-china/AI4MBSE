@@ -553,6 +553,11 @@ def init_db():
         install_count INTEGER DEFAULT 0,   -- 市场安装计数
         share_status TEXT DEFAULT '',      -- 个人分享审核：'' | submitted | approved | rejected
         origin TEXT DEFAULT '',            -- 来源：admin（管理员创建）| share（个人分享通过）
+        -- ── P0-4 / D2（2026-11-15）：Skill 治理元数据（团队维护的硬前提）──
+        -- 老库由 database/migrations/columns.py 的 _add 幂等补列；新库建表时直接带齐。
+        owner TEXT DEFAULT '',             -- 业务负责人（空=未指派）
+        eval_set TEXT DEFAULT '',          -- 关联评估集 id/路径（空=未纳管）
+        last_reviewed TEXT DEFAULT '',     -- 最近一次人工体检时间（空=从未）
         created_at TEXT DEFAULT CURRENT_TIMESTAMP
     )""")
 
@@ -612,6 +617,9 @@ def init_db():
         pinned INTEGER DEFAULT 0,          -- 市场置顶 1=置顶（市场管理后台）
         install_count INTEGER DEFAULT 0,   -- 市场安装计数
         origin TEXT DEFAULT '',            -- 来源：admin（管理员创建）| share（个人分享通过）
+        -- ── P0-4 / D2（2026-11-15）：工具侧补齐评估集与体检位（owner 由既有迁移补）──
+        eval_set TEXT DEFAULT '',          -- 关联评估集 id/路径（空=未纳管）
+        last_reviewed TEXT DEFAULT '',     -- 最近一次人工体检时间（空=从未）
         created_at TEXT DEFAULT CURRENT_TIMESTAMP
     )""")
 

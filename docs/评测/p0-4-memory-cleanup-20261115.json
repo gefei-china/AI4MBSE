@@ -1,0 +1,545 @@
+{
+  "schema": "p0/memory-cleanup@1",
+  "applied_at_utc": "2026-11-15 15:55:29",
+  "evidence": {
+    "before": {
+      "conflict_rows": 42,
+      "duplicate_groups": 7,
+      "duplicate_rows": 19,
+      "superseded_by_nonzero": 0,
+      "agent_memory": 294,
+      "skills": 36,
+      "tools": 122,
+      "agents": 34,
+      "eval_reports": 26
+    },
+    "after": {
+      "conflict_rows": 0,
+      "duplicate_groups_still_physical": 7,
+      "superseded_by_nonzero": 12,
+      "agent_memory": 294,
+      "skills": 36,
+      "tools": 122,
+      "agents": 34,
+      "eval_reports": 26
+    },
+    "ab_proof": {
+      "visible_before": {
+        "search_any": 197,
+        "search_core": 5
+      },
+      "visible_after": {
+        "search_any": 197,
+        "search_core": 5
+      },
+      "identical": true,
+      "mutation_caught": true,
+      "sandbox_db": "内存副本（由清理前备份 backup 得到，未落盘）"
+    },
+    "why_zero_behavior_change": "memory_service.search 的 _base 恒含 forgotten=0 + 排除 archival + COALESCE(superseded_by,0)=0；search_core 同样含 tier='core' AND forgotten=0。本批只动 forgotten=1 的行，故两路可见集合不变。"
+  },
+  "backup": "C:\\Users\\gefei\\WorkBuddy\\2026-08-04-19-05-52\\mbse_system\\backups\\mbse.db.bak-before-p0-4-memory-20261115_235529.db",
+  "backup_objects": 182,
+  "tier_fix": [
+    {
+      "id": 82,
+      "from": "recall",
+      "to": "archival",
+      "forgotten": 1
+    },
+    {
+      "id": 83,
+      "from": "recall",
+      "to": "archival",
+      "forgotten": 1
+    },
+    {
+      "id": 89,
+      "from": "recall",
+      "to": "archival",
+      "forgotten": 1
+    },
+    {
+      "id": 90,
+      "from": "recall",
+      "to": "archival",
+      "forgotten": 1
+    },
+    {
+      "id": 130,
+      "from": "recall",
+      "to": "archival",
+      "forgotten": 1
+    },
+    {
+      "id": 131,
+      "from": "recall",
+      "to": "archival",
+      "forgotten": 1
+    },
+    {
+      "id": 145,
+      "from": "recall",
+      "to": "archival",
+      "forgotten": 1
+    },
+    {
+      "id": 146,
+      "from": "recall",
+      "to": "archival",
+      "forgotten": 1
+    },
+    {
+      "id": 147,
+      "from": "recall",
+      "to": "archival",
+      "forgotten": 1
+    },
+    {
+      "id": 148,
+      "from": "recall",
+      "to": "archival",
+      "forgotten": 1
+    },
+    {
+      "id": 150,
+      "from": "recall",
+      "to": "archival",
+      "forgotten": 1
+    },
+    {
+      "id": 151,
+      "from": "recall",
+      "to": "archival",
+      "forgotten": 1
+    },
+    {
+      "id": 153,
+      "from": "recall",
+      "to": "archival",
+      "forgotten": 1
+    },
+    {
+      "id": 155,
+      "from": "recall",
+      "to": "archival",
+      "forgotten": 1
+    },
+    {
+      "id": 156,
+      "from": "recall",
+      "to": "archival",
+      "forgotten": 1
+    },
+    {
+      "id": 157,
+      "from": "recall",
+      "to": "archival",
+      "forgotten": 1
+    },
+    {
+      "id": 158,
+      "from": "recall",
+      "to": "archival",
+      "forgotten": 1
+    },
+    {
+      "id": 159,
+      "from": "recall",
+      "to": "archival",
+      "forgotten": 1
+    },
+    {
+      "id": 162,
+      "from": "recall",
+      "to": "archival",
+      "forgotten": 1
+    },
+    {
+      "id": 167,
+      "from": "recall",
+      "to": "archival",
+      "forgotten": 1
+    },
+    {
+      "id": 168,
+      "from": "recall",
+      "to": "archival",
+      "forgotten": 1
+    },
+    {
+      "id": 169,
+      "from": "recall",
+      "to": "archival",
+      "forgotten": 1
+    },
+    {
+      "id": 170,
+      "from": "recall",
+      "to": "archival",
+      "forgotten": 1
+    },
+    {
+      "id": 172,
+      "from": "recall",
+      "to": "archival",
+      "forgotten": 1
+    },
+    {
+      "id": 173,
+      "from": "recall",
+      "to": "archival",
+      "forgotten": 1
+    },
+    {
+      "id": 174,
+      "from": "recall",
+      "to": "archival",
+      "forgotten": 1
+    },
+    {
+      "id": 176,
+      "from": "recall",
+      "to": "archival",
+      "forgotten": 1
+    },
+    {
+      "id": 178,
+      "from": "recall",
+      "to": "archival",
+      "forgotten": 1
+    },
+    {
+      "id": 181,
+      "from": "recall",
+      "to": "archival",
+      "forgotten": 1
+    },
+    {
+      "id": 182,
+      "from": "recall",
+      "to": "archival",
+      "forgotten": 1
+    },
+    {
+      "id": 184,
+      "from": "recall",
+      "to": "archival",
+      "forgotten": 1
+    },
+    {
+      "id": 185,
+      "from": "recall",
+      "to": "archival",
+      "forgotten": 1
+    },
+    {
+      "id": 276,
+      "from": "recall",
+      "to": "archival",
+      "forgotten": 1
+    },
+    {
+      "id": 283,
+      "from": "recall",
+      "to": "archival",
+      "forgotten": 1
+    },
+    {
+      "id": 367,
+      "from": "recall",
+      "to": "archival",
+      "forgotten": 1
+    },
+    {
+      "id": 372,
+      "from": "recall",
+      "to": "archival",
+      "forgotten": 1
+    },
+    {
+      "id": 373,
+      "from": "recall",
+      "to": "archival",
+      "forgotten": 1
+    },
+    {
+      "id": 374,
+      "from": "recall",
+      "to": "archival",
+      "forgotten": 1
+    },
+    {
+      "id": 375,
+      "from": "recall",
+      "to": "archival",
+      "forgotten": 1
+    },
+    {
+      "id": 376,
+      "from": "recall",
+      "to": "archival",
+      "forgotten": 1
+    },
+    {
+      "id": 378,
+      "from": "recall",
+      "to": "archival",
+      "forgotten": 1
+    },
+    {
+      "id": 379,
+      "from": "recall",
+      "to": "archival",
+      "forgotten": 1
+    }
+  ],
+  "duplicate_groups": [
+    {
+      "content": "IP67防护等级要求：系统必须满足IP67防护等级，属于环境适应性需求（来源 test-reg）",
+      "n": 4,
+      "keep_id": 138,
+      "dup_ids": [
+        203,
+        220,
+        232
+      ]
+    },
+    {
+      "content": "IP67防护等级要求：系统必须满足IP67防护等级，属于防护性能需求（来源 test-reg）",
+      "n": 2,
+      "keep_id": 142,
+      "dup_ids": [
+        252
+      ]
+    },
+    {
+      "content": "CAN总线通信接口：系统接口采用CAN总线进行通信（来源 test-reg）",
+      "n": 3,
+      "keep_id": 192,
+      "dup_ids": [
+        225,
+        237
+      ]
+    },
+    {
+      "content": "CAN总线通信接口：系统接口采用CAN总线通信方式（来源 test-reg）",
+      "n": 4,
+      "keep_id": 204,
+      "dup_ids": [
+        221,
+        233,
+        253
+      ]
+    },
+    {
+      "content": "CAN总线通信接口：系统接口采用CAN总线通信方式。（来源 test-reg）",
+      "n": 2,
+      "keep_id": 229,
+      "dup_ids": [
+        249
+      ]
+    },
+    {
+      "content": "CAN总线通信接口：系统接口采用CAN总线通信。（来源 test-reg）",
+      "n": 2,
+      "keep_id": 241,
+      "dup_ids": [
+        245
+      ]
+    },
+    {
+      "content": "IP67防护等级要求：系统必须满足IP67防护等级，属于防护性能需求。（来源 test-reg）",
+      "n": 2,
+      "keep_id": 244,
+      "dup_ids": [
+        248
+      ]
+    }
+  ],
+  "dup_fix": [
+    {
+      "id": 203,
+      "keep_id": 138,
+      "before": {
+        "superseded_by": 0,
+        "superseded_at": ""
+      },
+      "forgotten": 1,
+      "tier": "archival"
+    },
+    {
+      "id": 220,
+      "keep_id": 138,
+      "before": {
+        "superseded_by": 0,
+        "superseded_at": ""
+      },
+      "forgotten": 1,
+      "tier": "archival"
+    },
+    {
+      "id": 232,
+      "keep_id": 138,
+      "before": {
+        "superseded_by": 0,
+        "superseded_at": ""
+      },
+      "forgotten": 1,
+      "tier": "archival"
+    },
+    {
+      "id": 252,
+      "keep_id": 142,
+      "before": {
+        "superseded_by": 0,
+        "superseded_at": ""
+      },
+      "forgotten": 1,
+      "tier": "archival"
+    },
+    {
+      "id": 225,
+      "keep_id": 192,
+      "before": {
+        "superseded_by": 0,
+        "superseded_at": ""
+      },
+      "forgotten": 1,
+      "tier": "archival"
+    },
+    {
+      "id": 237,
+      "keep_id": 192,
+      "before": {
+        "superseded_by": 0,
+        "superseded_at": ""
+      },
+      "forgotten": 1,
+      "tier": "archival"
+    },
+    {
+      "id": 221,
+      "keep_id": 204,
+      "before": {
+        "superseded_by": 0,
+        "superseded_at": ""
+      },
+      "forgotten": 1,
+      "tier": "archival"
+    },
+    {
+      "id": 233,
+      "keep_id": 204,
+      "before": {
+        "superseded_by": 0,
+        "superseded_at": ""
+      },
+      "forgotten": 1,
+      "tier": "archival"
+    },
+    {
+      "id": 253,
+      "keep_id": 204,
+      "before": {
+        "superseded_by": 0,
+        "superseded_at": ""
+      },
+      "forgotten": 1,
+      "tier": "archival"
+    },
+    {
+      "id": 249,
+      "keep_id": 229,
+      "before": {
+        "superseded_by": 0,
+        "superseded_at": ""
+      },
+      "forgotten": 1,
+      "tier": "archival"
+    },
+    {
+      "id": 245,
+      "keep_id": 241,
+      "before": {
+        "superseded_by": 0,
+        "superseded_at": ""
+      },
+      "forgotten": 1,
+      "tier": "archival"
+    },
+    {
+      "id": 248,
+      "keep_id": 244,
+      "before": {
+        "superseded_by": 0,
+        "superseded_at": ""
+      },
+      "forgotten": 1,
+      "tier": "archival"
+    }
+  ],
+  "rollback_sql": [
+    "UPDATE agent_memory SET tier='recall' WHERE id=82;",
+    "UPDATE agent_memory SET tier='recall' WHERE id=83;",
+    "UPDATE agent_memory SET tier='recall' WHERE id=89;",
+    "UPDATE agent_memory SET tier='recall' WHERE id=90;",
+    "UPDATE agent_memory SET tier='recall' WHERE id=130;",
+    "UPDATE agent_memory SET tier='recall' WHERE id=131;",
+    "UPDATE agent_memory SET tier='recall' WHERE id=145;",
+    "UPDATE agent_memory SET tier='recall' WHERE id=146;",
+    "UPDATE agent_memory SET tier='recall' WHERE id=147;",
+    "UPDATE agent_memory SET tier='recall' WHERE id=148;",
+    "UPDATE agent_memory SET tier='recall' WHERE id=150;",
+    "UPDATE agent_memory SET tier='recall' WHERE id=151;",
+    "UPDATE agent_memory SET tier='recall' WHERE id=153;",
+    "UPDATE agent_memory SET tier='recall' WHERE id=155;",
+    "UPDATE agent_memory SET tier='recall' WHERE id=156;",
+    "UPDATE agent_memory SET tier='recall' WHERE id=157;",
+    "UPDATE agent_memory SET tier='recall' WHERE id=158;",
+    "UPDATE agent_memory SET tier='recall' WHERE id=159;",
+    "UPDATE agent_memory SET tier='recall' WHERE id=162;",
+    "UPDATE agent_memory SET tier='recall' WHERE id=167;",
+    "UPDATE agent_memory SET tier='recall' WHERE id=168;",
+    "UPDATE agent_memory SET tier='recall' WHERE id=169;",
+    "UPDATE agent_memory SET tier='recall' WHERE id=170;",
+    "UPDATE agent_memory SET tier='recall' WHERE id=172;",
+    "UPDATE agent_memory SET tier='recall' WHERE id=173;",
+    "UPDATE agent_memory SET tier='recall' WHERE id=174;",
+    "UPDATE agent_memory SET tier='recall' WHERE id=176;",
+    "UPDATE agent_memory SET tier='recall' WHERE id=178;",
+    "UPDATE agent_memory SET tier='recall' WHERE id=181;",
+    "UPDATE agent_memory SET tier='recall' WHERE id=182;",
+    "UPDATE agent_memory SET tier='recall' WHERE id=184;",
+    "UPDATE agent_memory SET tier='recall' WHERE id=185;",
+    "UPDATE agent_memory SET tier='recall' WHERE id=276;",
+    "UPDATE agent_memory SET tier='recall' WHERE id=283;",
+    "UPDATE agent_memory SET tier='recall' WHERE id=367;",
+    "UPDATE agent_memory SET tier='recall' WHERE id=372;",
+    "UPDATE agent_memory SET tier='recall' WHERE id=373;",
+    "UPDATE agent_memory SET tier='recall' WHERE id=374;",
+    "UPDATE agent_memory SET tier='recall' WHERE id=375;",
+    "UPDATE agent_memory SET tier='recall' WHERE id=376;",
+    "UPDATE agent_memory SET tier='recall' WHERE id=378;",
+    "UPDATE agent_memory SET tier='recall' WHERE id=379;",
+    "UPDATE agent_memory SET superseded_by=0, superseded_at='' WHERE id=203;",
+    "UPDATE agent_memory SET superseded_by=0, superseded_at='' WHERE id=220;",
+    "UPDATE agent_memory SET superseded_by=0, superseded_at='' WHERE id=232;",
+    "UPDATE agent_memory SET superseded_by=0, superseded_at='' WHERE id=252;",
+    "UPDATE agent_memory SET superseded_by=0, superseded_at='' WHERE id=225;",
+    "UPDATE agent_memory SET superseded_by=0, superseded_at='' WHERE id=237;",
+    "UPDATE agent_memory SET superseded_by=0, superseded_at='' WHERE id=221;",
+    "UPDATE agent_memory SET superseded_by=0, superseded_at='' WHERE id=233;",
+    "UPDATE agent_memory SET superseded_by=0, superseded_at='' WHERE id=253;",
+    "UPDATE agent_memory SET superseded_by=0, superseded_at='' WHERE id=249;",
+    "UPDATE agent_memory SET superseded_by=0, superseded_at='' WHERE id=245;",
+    "UPDATE agent_memory SET superseded_by=0, superseded_at='' WHERE id=248;"
+  ],
+  "not_done_p1_5": [
+    "verify_state 294/294 unverifiable",
+    "evidence_ref 全空",
+    "跨域可见记忆命中率量化",
+    "记忆质量 A/B（需评估集）"
+  ],
+  "caveat": "不删任何行；重复组仍物理存在，靠 superseded_by 区分主行/副本。回滚优先用 backup 整库恢复（若之后又有其它写入），或逐行执行 rollback_sql。"
+}

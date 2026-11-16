@@ -406,6 +406,16 @@ def _migrate_columns(conn):
     # ── P0-5 技能使用中自改进：使用反馈采集（命中执行后聚合统计 + 最近失败备注滚动）──
     _add("skills", "use_stats", "TEXT DEFAULT '{}'")      # {"uses":n,"success":n,"fail":n,"last_used":"..."} 聚合统计
     _add("skills", "feedback_notes", "TEXT DEFAULT '[]'") # 最近 5 条失败/改进备注 [{"ts","run_id","intent","note"}]（滚动保留）
+    # ── P0-4 / D2（2026-11-15）：Skill / Tool 治理元数据 ──────────────────────
+    # 文章「团队维护 Skills」的硬前提：owner 决定谁负责修订、eval_set 把 Skill 接到
+    # Golden Set、last_reviewed 让「闲置 / 无评估集」可判定。tools.owner 已在上方补过。
+    # ⚠️ 只加列、**不建引用新列的索引**：本工程踩过「先建索引后补列」导致启动失败；
+    #    将来若要建索引，必须排在这些 _add 之后（同一函数内顺序即执行顺序）。
+    _add("skills", "owner", "TEXT DEFAULT ''")
+    _add("skills", "eval_set", "TEXT DEFAULT ''")
+    _add("skills", "last_reviewed", "TEXT DEFAULT ''")
+    _add("tools", "eval_set", "TEXT DEFAULT ''")
+    _add("tools", "last_reviewed", "TEXT DEFAULT ''")
     # ── TR-P0/P1：工具注册表完备化（行业标准 Tool Registry：schema/版本/副作用/风险/状态机）──
     _add("tools", "input_schema", "TEXT DEFAULT '{}'")    # JSON Schema（LLM function calling 参数定义）
     _add("tools", "version", "TEXT DEFAULT 'v1.0'")       # 语义版本 name@semver
