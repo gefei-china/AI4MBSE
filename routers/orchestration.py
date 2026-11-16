@@ -112,13 +112,21 @@ def get_run(run_id: int, conn=Depends(db_session), user=Depends(current_user)):
     except Exception:
         rows = []
     dec = prepare_resume(conn, run_id, stale_s=_stale_default(conn))
+    # ★ 2026-11-10（可中断）：把中断台账与"待消费的补充指令"一并回传，
+    #   前端才能回答"这批是被谁停的、我当时说了什么"（否则只剩一个 phase 字符串）。
+    try:
+        from agent.orch_interrupt import interrupt_history as _ih, latest_instruction as _li
+        _ints, _ins = _ih(conn, run_id), _li(conn, run_id)
+    except Exception:
+        _ints, _ins = [], ""
     return {"checkpoint": {k: v for k, v in ck.items() if k not in ("plan",)},
             "phase_terminal": (ck.get("phase") or "") in TERMINAL_PHASES,
             "stale_s": round(stale_seconds(conn, run_id), 1),
             "tasks": rows,
             "resumable": bool(dec.get("ok")), "resume_block_reason": dec.get("reason"),
             "resume_mode": dec.get("mode") or "", "resume_detail": dec.get("detail", ""),
-            "requeue_ids": dec.get("requeue_ids") or [], "reuse_ids": dec.get("reuse_ids") or []}
+            "requeue_ids": dec.get("requeue_ids") or [], "reuse_ids": dec.get("reuse_ids") or [],
+            "interrupts": _ints, "interrupt_instruction": _ins}
 
 
 # NOTE: 写端点为何要权限门 —— 与 ux_metrics 相反：resume 会真实触发 LLM 调用与**写库/写图谱**，
@@ -202,9 +210,16 @@ def rerun_tasks(run_id: int, body: dict = None, conn=Depends(db_session),
     cleared = 0
     for r in rows:
         if str(r["task_key"]) in rerun_keys:
-            conn.execute(
-                "UPDATE agent_tasks SET status='ready', result='', summary_json=NULL, "
-                "error='', updated_at=CURRENT_TIMESTAMP WHERE id=?", (r["id"],))
+            # ★ 2026-11-15 P0-6：重跑必须清 error_class，否则上一轮失败标签污染新一轮
+            #   （orch_checkpoint.apply_resume 早已这么写，此处补齐口径一致性）。
+            try:
+                conn.execute(
+                    "UPDATE agent_tasks SET status='ready', result='', summary_json=NULL, "
+                    "error='', error_class='', updated_at=CURRENT_TIMESTAMP WHERE id=?", (r["id"],))
+            except Exception:
+                conn.execute(
+                    "UPDATE agent_tasks SET status='ready', result='', summary_json=NULL, "
+                    "error='', updated_at=CURRENT_TIMESTAMP WHERE id=?", (r["id"],))
             cleared += 1
     # 终态检查点回退：done/failed ⇒ executing，attempt 清零（用户显式动作给全新额度）
     ck_reset = False
@@ -227,8 +242,99 @@ def rerun_tasks(run_id: int, body: dict = None, conn=Depends(db_session),
             "next": "调用 POST /api/orchestration/runs/{run_id}/resume 执行重跑"}
 
 
+def _do_interrupt(conn, run_id: int, body: dict, user) -> dict:
+    """中断的公共实现（run 级端点与会话级端点共用，避免两处行为漂移）。"""
+    from agent.orch_interrupt import request_interrupt
+    body = body or {}
+    _reason = str(body.get("reason") or "").strip()[:500]
+    _ins = str(body.get("instruction") or "").strip()[:2000]
+    _kind = "cancel" if str(body.get("kind") or "").lower() == "cancel" else "interrupt"
+    # ⚠️ 取人名必须走 `audit_user`（本仓单一真源）：身份 dict 里**没有** name 键，
+    #   用 `(user or {}).get("name")` 恒取默认值 —— `verify_no_fake_actor` 的 B4 就是抓这个。
+    try:
+        from core.audit import audit_user as _au
+        _by = str(_au(user) or "")[:100]
+    except Exception:
+        _by = ""
+    res = request_interrupt(conn, run_id, instruction=_ins, reason=_reason,
+                            requested_by=_by, kind=_kind)
+    try:
+        from core.audit import audit, audit_user
+        audit(audit_user(user), "orchestration_interrupt",
+              "批次 #%s %s：停止 %d 个任务%s"
+              % (run_id, "取消" if _kind == "cancel" else "中断",
+                 int(res.get("cancelled_tasks") or 0),
+                 ("；补充指令：%s" % _ins[:120]) if _ins else ""), conn=conn)
+    except Exception:
+        pass          # 审计失败不阻断（中断已经生效，那是用户意图）
+    return res
+
+
+@router.post("/api/orchestration/runs/{run_id}/interrupt")
+def interrupt_run(run_id: int, body: dict = None, conn=Depends(db_session),
+                  user=Depends(current_user)):
+    """中断一个正在跑的编排批次（2026-11-10，可中断策略）。
+
+    **与 /resume 是配对的**：interrupt 之后 checkpoint 停在 `interrupted`，
+    `resume` 仍可用（被中断的 cancelled 任务会被重排队），可选带 `instruction`
+    把用户的新指令注入到被重排任务的上下文里。
+
+    与"取消"的区别（body.kind='cancel' 才是取消）：
+      · interrupt ⇒ phase='interrupted'，**保留续跑资格**；
+      · cancel    ⇒ phase='cancelled'，不进可恢复清单（真正的"不要了"）。
+
+    为什么是协作式：子任务线程持有 LLM 连接/DB 事务/文件句柄，强杀会泄漏。
+    这里只把任务置 cancelled，worker 在产出热路径上的探针会自行收敛
+    ⇒ 代价是"正在飞行的那一次 LLM 调用会跑完"，换来的是**不会留下悬挂事务**。
+    """
+    _own_run(conn, run_id, user)
+    require_permission("ai_chat", "generate")(user=user)
+    res = _do_interrupt(conn, run_id, body or {}, user)
+    if not res.get("ok"):
+        return JSONResponse({"error": res.get("error") or "中断失败", "run_id": run_id,
+                             "phase": res.get("phase") or ""}, 409)
+    return {"ok": True, "run_id": run_id, "phase": res.get("phase"),
+            "cancelled_tasks": res.get("cancelled_tasks"),
+            "instruction": res.get("instruction") or "",
+            "next": "可调用 POST /api/orchestration/runs/%s/resume 继续（可带 instruction 改向）"
+                    % run_id}
+
+
+@router.post("/api/conversations/{conv_id}/interrupt")
+def interrupt_conversation(conv_id: int, body: dict = None, conn=Depends(db_session),
+                           user=Depends(current_user)):
+    """按**会话**中断当前在跑的编排批次（前端「停止」按钮用这个）。
+
+    为什么需要会话级入口：用户在界面上看到的是"这个会话在跑"，不是 run_id；
+    而 run_id 只在流式过程中才出现（且可能还没收到）。
+    定位口径：该会话下**最新一个非终态**批次；找不到时退化为"没有在跑的批次"（200 + ok=false），
+    不报 404 —— 用户点停止时批次可能刚好正常结束，那是竞态不是错误。
+    """
+    from fastapi import HTTPException
+    from repositories.conversation_repo import ConversationRepo, conv_visible_to
+    # ⚠️ 归属校验走**仓储层**而不是在 router 里写 SQL：
+    #   `verify_layering.py` 的 L1c 盯的就是"routers 里直连读 SQL 的处数"（超出基线即红）。
+    #   本轮首版在这里写了两条 SELECT，直接把基线 +2 ⇒ 门禁抓红（正是它该做的事）。
+    row = ConversationRepo(conn).get_conversation(conv_id)
+    if not conv_visible_to(row, user):
+        raise HTTPException(status_code=404, detail="会话不存在")
+    require_permission("ai_chat", "generate")(user=user)
+    from agent.orch_interrupt import active_run as _active_run
+    r = _active_run(conn, conv_id)
+    if not r:
+        return {"ok": False, "reason": "no_active_run",
+                "message": "该会话当前没有在跑的编排批次（可能已结束）"}
+    run_id = int(r["run_id"])
+    res = _do_interrupt(conn, run_id, body or {}, user)
+    if not res.get("ok"):
+        return JSONResponse({"error": res.get("error") or "中断失败", "run_id": run_id}, 409)
+    return {"ok": True, "run_id": run_id, "phase": res.get("phase"),
+            "cancelled_tasks": res.get("cancelled_tasks"),
+            "instruction": res.get("instruction") or ""}
+
+
 @router.post("/api/orchestration/runs/{run_id}/resume")
-def resume_run(run_id: int, conn=Depends(db_session),
+def resume_run(run_id: int, body: dict = None, conn=Depends(db_session),
                include_failed: bool = False, user=Depends(current_user)):
     """断点续跑：只补跑未完成子任务，已完成的结果直接复用（SSE 事件协议与 /chat/stream 同构）。
 
@@ -282,8 +388,21 @@ def resume_run(run_id: int, conn=Depends(db_session),
     ck = dec.get("checkpoint") or {}
     conv_id = int(ck.get("conversation_id") or 0)
     mode = dec.get("mode") or "tasks"
+    # ★ 2026-11-10（可中断）：续跑可以带"改向指令"。
+    #   优先级：请求体显式 instruction > 中断时记下的未消费指令（consume 一次即失效）。
+    #   为什么必须 consume：resume 可能被连点多次，同一条指令反复追加会污染任务上下文
+    #   （本仓有"同一段文本进 3 次"的前科）。
+    _ins = str((body or {}).get("instruction") or "").strip()
+    try:
+        from agent.orch_interrupt import consume_instruction as _ci
+        if not _ins:
+            _ins = (_ci(conn, run_id) or "").strip()
+        else:
+            _ci(conn, run_id)      # 显式指令优先，同时把旧的那条标消费掉，避免下次又注入
+    except Exception:
+        _ins = _ins or ""
     if mode == "tasks":
-        applied = apply_resume(conn, dec)
+        applied = apply_resume(conn, dec, instruction=_ins)
         if not applied:
             return JSONResponse({"error": "任务重排队失败，未触发执行", "run_id": run_id}, 500)
     else:

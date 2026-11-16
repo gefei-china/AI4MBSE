@@ -330,6 +330,16 @@ def ingest_document(conn, filename: str, file_type: str, content: bytes,
 
         _stage._cur = None
 
+        # 1.2) 内容指纹（2026-11-10 上传去重的前提）
+        #   为什么放在"保存源副本"之前：指纹是**入库这条路上唯一一次能拿到原始字节**
+        #   的机会（异步路径的 worker 只读副本，读回来的字节可能已被换行翻译过）。
+        #   失败不阻断（贴纸式信息，不是门禁）。
+        try:
+            from .dedup import stamp_content_hash as _stamp
+            _stamp(conn, doc_id, content)
+        except Exception:
+            pass
+
         # 1.3) 保存源文件副本（源文件预览 + 失败重试）
         _save_source_copy(doc_id, filename, content)
 
@@ -735,6 +745,12 @@ def stage_upload_document(conn, filename: str, file_type: str, content: bytes,
          json.dumps({"staged": "queued"}, ensure_ascii=False)))
     doc_id = int(cur.lastrowid)
     conn.commit()
+    # 异步路径同样要记指纹（否则异步上传的文档永远不参与内容判重）
+    try:
+        from .dedup import stamp_content_hash as _stamp
+        _stamp(conn, doc_id, content)
+    except Exception:
+        pass
     _save_source_copy(doc_id, filename, content)
     # 元数据先落一份：worker 跑管道时会用同一份 ON CONFLICT 更新，不会重复插入
     try:

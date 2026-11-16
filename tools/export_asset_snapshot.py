@@ -57,6 +57,12 @@ def main() -> int:
                 print("  同名字段不一致 %d 处:" % len(d["field_diff"]))
                 for n in d["field_diff"][:20]:
                     print("     ~", n)
+            # ⚠️ 2026-11-07：此前**算出来了却不打印** —— 绑定漏导出时只显示"不一致"
+            # 而没有任何条目，等于把人挡在"看不出来哪里不一致"里。
+            if d.get("relation_drift"):
+                print("  绑定漂移 %d 处:" % len(d["relation_drift"]))
+                for n in d["relation_drift"][:20]:
+                    print("     *", n)
             return 0 if d["ok"] else 1
 
         # 预览 / 导出

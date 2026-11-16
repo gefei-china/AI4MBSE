@@ -23,6 +23,7 @@ from .columns import (
     _migrate_columns,
     _migrate_branch_protection,
     _migrate_skill_revision_rejects,
+    _migrate_run_dimension,         # 2026-11-10 run 维度下沉（判据面补批次坐标）
     _backfill_probe_marks,
 )
 from .ontology import (
@@ -55,6 +56,7 @@ from .documents import (
     _migrate_project_ingest_logs,
     _migrate_document_lifecycle,
     _migrate_artifact_ingest,
+    _migrate_doc_dedupe,
 )
 from .glossary import (
     _migrate_glossary_tables,
@@ -63,6 +65,10 @@ from .glossary import (
     _seed_knowledge_categories,
     _migrate_glossary_changelog,
     _migrate_glossary_discoveries,
+    _migrate_glossary_canonical_align,  # 2026-11-11 R2 规范名与首选术语对齐
+)
+from .memory import (
+    _migrate_memory_layer,  # 2026-11-11 P0/P1 记忆层：evidence 列 + notes 视图 + 流水 FTS
 )
 from .plugins import (
     _migrate_builtin_flags,
@@ -100,7 +106,10 @@ from .misc import (
     _migrate_misevolution_p21,         # 2026-10-19 安全信号基线 + 晋升复测（P2-1，红线 #5）
     _migrate_curriculum_p22,           # 2026-10-19 失败驱动任务提案队列（P2-2，只提议不自动执行）
     _migrate_agent_archive_p23,        # 2026-10-19 Agent 变体台账 + 死路记忆（P2-3，只记录不切换生效版本）
-    _migrate_flow_topology_p24,        # 2026-10-19 画布拓扑台账 + 结构体检（P2-4，只记录不改拓扑）
+    _migrate_feedback_consumed_at_utc,  # 2026-11-06 feedback.consumed_at 本地→UTC 校正
+    _migrate_feedback_link_sanity,  # 2026-11-06 解绑指向更早采样项的错误关联
+    _migrate_orch_interrupts,       # 2026-11-10 编排可中断台账
+    _migrate_requirement_acceptance,  # 2026-11-10 需求验收标准两列（P0-1）
 )
 from .events import (
     _migrate_event_tables,            # 2026-11-01 事件驱动底座三表（Super-agent 落地 P0-2/P0-4）
@@ -143,6 +152,8 @@ __all__ = [
     "_migrate_document_lifecycle",
     "_migrate_artifact_ingest",
     "_migrate_glossary_tables",
+    "_migrate_glossary_canonical_align",
+    "_migrate_memory_layer",
     "_migrate_domain_review_queue_orphans",
     "_seed_departments",
     "_seed_knowledge_categories",
@@ -180,6 +191,8 @@ __all__ = [
     "_migrate_misevolution_p21",  # 2026-10-19 安全信号基线 + 晋升复测（P2-1）
     "_migrate_curriculum_p22",  # 2026-10-19 失败驱动任务提案队列（P2-2）
     "_migrate_agent_archive_p23",  # 2026-10-19 Agent 变体台账 + 死路记忆（P2-3）
-    "_migrate_flow_topology_p24",  # 2026-10-19 画布拓扑台账 + 结构体检（P2-4）
+    "_migrate_feedback_consumed_at_utc",  # 2026-11-06 feedback 时间基准校正
+    "_migrate_feedback_link_sanity",  # 2026-11-06 错误关联自愈
+    "_migrate_requirement_acceptance",  # 2026-11-10 需求验收标准
     "_migrate_event_tables",  # 2026-11-01 事件驱动底座三表（Super-agent 落地 P0-2/P0-4）
 ]

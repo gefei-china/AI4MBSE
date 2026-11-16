@@ -24,6 +24,7 @@
 失败一律返回 None（调用方回落到旧解析器），绝不抛异常打断主流程。
 """
 import json
+import locale
 import os
 import subprocess
 import tempfile
@@ -81,6 +82,31 @@ def _ensure_class():
     return p.returncode == 0 and os.path.isfile(CLASS)
 
 
+def _decode_stdout(raw: bytes) -> str:
+    """解码 Java 子进程的 stdout，**先严格后兜底**。
+
+    2026-11-09 实测事故：JVM 在 Windows 上按系统代码页（GBK）写 stdout，
+    而这里按 utf-8 解码 ⇒ `通信子系统时序图` 变成 `ͨ����ϵͳʱ��ͼ`
+    （GBK 的 CD A8 恰是合法的 utf-8 两字节序列 U+0368，所以 `replace`
+    连「出现了替换符」都不会报，乱码静默流进视图标签和产物名）。
+
+    对策：① Java 侧已把 System.out 钉成 UTF-8（见 SysMLAstExport.java）；
+         ② 这里仍按「utf-8 严格 → 系统代码页严格 → utf-8 replace」三级解码，
+            因为胶水类可能被旧 class 文件顶替（编译失败时沿用旧产物）。
+    判据：只要严格 utf-8 解出来**不含替换符**就用它。
+    """
+    if not raw:
+        return ""
+    for enc in ("utf-8", locale.getpreferredencoding(False) or "gbk", "gbk"):
+        try:
+            s = raw.decode(enc)
+            if "\ufffd" not in s:
+                return s
+        except (UnicodeDecodeError, LookupError):
+            continue
+    return raw.decode("utf-8", "replace")
+
+
 def parse_ast(code_text: str, timeout: int = 180):
     """用 OMG 解析器解析代码 → 语法树 JSON。失败返回 None。"""
     if not (code_text or "").strip() or not available() or not _ensure_class():
@@ -90,7 +116,8 @@ def parse_ast(code_text: str, timeout: int = 180):
         os.close(fd)
         with open(path, "w", encoding="utf-8", newline="\n") as f:
             f.write(code_text)
-        p = subprocess.run([JAVA, "-cp", "%s;%s" % (JAR, OUTDIR), "SysMLAstExport", path, LIB],
+        p = subprocess.run([JAVA, "-Dfile.encoding=UTF-8", "-Dstdout.encoding=UTF-8",
+                            "-cp", "%s;%s" % (JAR, OUTDIR), "SysMLAstExport", path, LIB],
                            cwd=ROOT, capture_output=True, timeout=timeout)
     except Exception:
         return None
@@ -99,7 +126,7 @@ def parse_ast(code_text: str, timeout: int = 180):
         # 语义，实测在 COM 临界区死锁 40+ 分钟，把编排流整条卡死（见 core/fs_guard.py）。
         # 用看门狗删除：超时即泄漏一个临时文件，绝不阻塞解析/管线。
         bounded_unlink(path)
-    out = (p.stdout or b"").decode("utf-8", "replace")
+    out = _decode_stdout(p.stdout or b"")
     # ⚠️ 官方实现会在 stdout 前面打 100+ 行 `Reading <库文件>...`，必须先过滤再取 JSON
     for line in out.splitlines():
         s = line.strip()

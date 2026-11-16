@@ -1,3 +1,4 @@
+// CI-OPTIONAL: [local] tier=local（见 tools/gates_manifest.json）：真实浏览器门禁——需本机 Chromium（agent-browser）+ 8000 真实服务/真库，CI runner 无该组合 ⇒ 本机跑；改法须同步改清单 tier 并接线，不允许只删这行
 // qualityRow 的行为验证（node 跑真实函数，不做静态断言）。
 // 判据核心：**quality_score=0 必须不显示**（实测全库 12 行都是 0，
 // 若把 0 当"质量极差"显示就是误导），>0 才显示且口径写明是 OCR 均分。

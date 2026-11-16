@@ -114,17 +114,49 @@ def _load_rule_layer(conn, profile_id):
     } for r in rows], None
 
 
-def _load_ontology_layer(conn, profile_name):
-    """B 本体型：ontology_profiles 读取。0 行则如实报告。"""
-    if not _table_exists(conn, "ontology_profiles"):
-        return None, "表 ontology_profiles 不存在"
+def _resolve_profile_row(conn, profile_name):
+    """画像名解析：`(row, how)`，`how ∈ {'exact','derived_fallback',None}`。
+
+    为什么要解析而不是直接按名查（第 19 轮）：
+      调用方默认传 `profile_id='omg_sysml_v2_default'`（`DEFAULT_PROFILE` 的常量名），
+      而库里 `ontology_profiles` 从来没有这个**名字**的行（它是一份兜底常量，不是一张画像记录），
+      ⇒ B 层（"能用什么"）**恒为空警告**，而 `ontology_types` 里明明有 28 实体 / 13 关系。
+    解析顺序（全部基于库内事实，无硬编码名）：
+      ① 精确名命中 active 行；
+      ② 回退到**派生画像**（`services.ontology_profile_service.ID_PREFIX` 开头的行，取最近创建的一条）
+         —— 它由 `ontology_types` 实时投影而来，正是"这个工程当前能用什么"。
+    回退必须**显式告知**（返回值带 warn），不能让调用方以为拿到了它点名的那份画像。
+    """
     row = conn.execute(
         "SELECT name, profile_type, entities, relations, description, status "
         "FROM ontology_profiles WHERE name=? AND status='active'", (profile_name,)).fetchone()
+    if row:
+        return row, "exact"
+    try:
+        from services.ontology_profile_service import ID_PREFIX
+        row = conn.execute(
+            "SELECT name, profile_type, entities, relations, description, status "
+            "FROM ontology_profiles WHERE id LIKE ? AND status='active' "
+            "ORDER BY created_at DESC, id DESC LIMIT 1", (ID_PREFIX + "%",)).fetchone()
+    except Exception:                    # noqa: BLE001
+        row = None
+    return (row, "derived_fallback") if row else (None, None)
+
+
+def _load_ontology_layer(conn, profile_name):
+    """B 本体型：ontology_profiles 读取。**无可用画像时如实报告为空**（不编造）。"""
+    if not _table_exists(conn, "ontology_profiles"):
+        return None, "表 ontology_profiles 不存在"
+    row, how = _resolve_profile_row(conn, profile_name)
     if not row:
         n = conn.execute("SELECT COUNT(*) FROM ontology_profiles").fetchone()[0]
         return {"profile": profile_name, "entity_count": 0, "relation_count": 0}, \
                f"未找到 profile={profile_name} 的 active 行（表内共 {n} 行，方法论本体层尚为空）"
+    warn = None
+    if how == "derived_fallback":
+        warn = ("未找到 profile=%s；已按派生画像「%s」回退（由 ontology_types 当前类型集投影，"
+                "非点名画像）。如需精确控制，请给 profile_id 传真实画像名或绑定 project_methodology。"
+                % (profile_name, row["name"]))
     def _cnt(v):
         try:
             x = json.loads(v or "{}")
@@ -132,8 +164,8 @@ def _load_ontology_layer(conn, profile_name):
         except Exception:                # noqa: BLE001
             return 0
     return {"profile": row["name"], "profile_type": row["profile_type"],
-            "description": row["description"],
-            "entity_count": _cnt(row["entities"]), "relation_count": _cnt(row["relations"])}, None
+            "description": row["description"], "resolved_by": how,
+            "entity_count": _cnt(row["entities"]), "relation_count": _cnt(row["relations"])}, warn
 
 
 def _load_doc_layer(conn, doc_ids, max_chars=2400):

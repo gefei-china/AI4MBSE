@@ -162,7 +162,6 @@ def r_group():
     #    若只有主路径标了口径，复用路径仍是**用户看不出的盲区**。
     paths = (
         ("stream.py 主路径", src, '"mode": "subtasks_executed"'),
-        ("stream.py 复用路径", src, '"mode": "template_reuse"'),
         ("orchestration.py 非流式", open(ORCH, encoding="utf-8").read(),
          '"mode": "subtasks_executed"'),
     )
@@ -171,9 +170,11 @@ def r_group():
               "capability_scope" in text and mode in text,
               "未找到 capability_scope 或 mode=%s" % mode)
     # R3b 复用路径必须显式声明"未执行子任务"
-    check("R3b 复用路径显式声明未执行子任务（用户能看出区别）",
-          '"subtasks_executed": False' in src and '"mode": "template_reuse"' in src,
-          "复用路径未声明 subtasks_executed=False")
+    # ★ 2026-11-05：画布复用路径（`_stream_orchestrated`）已随画布工作流移除，
+    #   改为**防回归**：不得再出现 `template_reuse` 标记（防该路径被加回来）。
+    check("R3b 画布复用路径已移除（不得再出现 template_reuse 标记）",
+          '"mode": "template_reuse"' not in src,
+          "仍存在 template_reuse 标记 ⇒ 复用路径可能被加回来了")
 
 
 def main() -> int:

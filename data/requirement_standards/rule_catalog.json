@@ -1,0 +1,336 @@
+{
+ "schema_version": 1,
+ "name": "requirement_rule_catalog_v1",
+ "description": "需求文本校验规则清单（配置资产，非代码）。每条规则的 clause_ref 指向知识库里真实存在的标准条款；判定由 Skill SOP 驱动 LLM 执行，不在代码里实现判据。",
+ "sources": [
+  {
+   "standard_id": "ISO/IEC/IEEE 29148:2011",
+   "doc_id": 846,
+   "filename": "ISO 29148-2011 Requirements Engineering.pdf",
+   "chunks": 610,
+   "note": "库内现为 2011 版；29148:2018 / IEEE 830-1998 / 汇川内部标准尚未入库，后续上传后只改本文件 sources 与 clause_ref，不改代码。"
+  },
+  {
+   "standard_id": "INCOSE Guide to Writing Requirements v4",
+   "doc_id": 793,
+   "filename": "Guide to writing Requirements.pdf",
+   "chunks": 855,
+   "note": "SECTION 4 含 R01-R42 规则，附录 D 为规则适用性矩阵；PDF 切片有粘连，标题可确证 7 条，其余以规则编号引用。"
+  }
+ ],
+ "rule_categories": [
+  {
+   "id": "RC-01",
+   "name": "编写模板与句式规范",
+   "clause_ref": [
+    "29148:2011 §5.2.7",
+    "Guide R1 Structured Statements"
+   ],
+   "criterion": "需求应陈述 what is needed 而非 how；采用结构化句式（主语 + 动作 + 可测量判据），模板可用但不得引入设计决策。",
+   "severity": "medium"
+  },
+  {
+   "id": "RC-02",
+   "name": "唯一标识",
+   "clause_ref": [
+    "29148:2011 §5.2.8 Identification"
+   ],
+   "criterion": "每条需求应有唯一标识（number / name tag / mnemonic），标识一经分配不更改、不复用。",
+   "severity": "high"
+  },
+  {
+   "id": "RC-03",
+   "name": "单一性与无复合条件",
+   "clause_ref": [
+    "29148:2011 §5.2.5 Singular",
+    "Guide R11 Separate Clauses",
+    "Guide R18 Single-Thought Sentence"
+   ],
+   "criterion": "一条需求只含一个要求、不用连词拼接多个动作；复合条件应拆分。",
+   "severity": "high"
+  },
+  {
+   "id": "RC-04",
+   "name": "无歧义词与模糊表述",
+   "clause_ref": [
+    "29148:2011 §5.2.5 Unambiguous",
+    "29148:2011 §5.2.7"
+   ],
+   "criterion": "避免最高级（best/most）、主观词（user friendly/easy to use）、模糊代词、歧义副词、开放式不可验证措辞（as appropriate / if possible / as a minimum）、比较短语、漏洞词、不完整引用、否定式能力陈述。",
+   "severity": "high"
+  },
+  {
+   "id": "RC-05",
+   "name": "可量化验收标准",
+   "clause_ref": [
+    "29148:2011 §5.2.5 Complete",
+    "29148:2011 §5.2.5 Verifiable"
+   ],
+   "criterion": "需求须 measurable 且足够描述能力/特性；数值须带合规单位与量纲。",
+   "severity": "high"
+  },
+  {
+   "id": "RC-06",
+   "name": "可验证性",
+   "clause_ref": [
+    "29148:2011 §5.2.5 Verifiable"
+   ],
+   "criterion": "存在证明系统满足该需求的手段，可收集证据；可测量性增强可验证性。",
+   "severity": "high"
+  },
+  {
+   "id": "RC-07",
+   "name": "必要性与来源",
+   "clause_ref": [
+    "29148:2011 §5.2.5 Necessary",
+    "29148:2011 §5.2.8 Rationale"
+   ],
+   "criterion": "需求定义 essential capability/characteristic/constraint/quality factor；删除后会出现无法由其他能力弥补的缺陷；当前适用、未过时。",
+   "severity": "medium"
+  },
+  {
+   "id": "RC-08",
+   "name": "实现无关（无设计约束）",
+   "clause_ref": [
+    "29148:2011 §5.2.5 Implementation Free"
+   ],
+   "criterion": "陈述 what is required 而非 how；不对架构设计施加不必要约束，不隐含商业现货/特定方案。",
+   "severity": "medium"
+  },
+  {
+   "id": "RC-09",
+   "name": "可行性与约束适配",
+   "clause_ref": [
+    "29148:2011 §5.2.5 Feasible",
+    "29148:2011 §5.2.6 Affordable"
+   ],
+   "criterion": "技术上可实现，无需重大技术突破，且在成本/进度/技术/法律/法规约束内、风险可接受。",
+   "severity": "medium"
+  },
+  {
+   "id": "RC-10",
+   "name": "可追溯性",
+   "clause_ref": [
+    "29148:2011 §5.2.5 Traceable",
+    "29148:2011 §5.2.8 Dependency"
+   ],
+   "criterion": "向上追溯到涉众需求/上层需求/来源，向下追溯到下层规格或系统定义；父子关系已识别；依赖项已定义。",
+   "severity": "high"
+  },
+  {
+   "id": "RC-11",
+   "name": "术语一致与定义",
+   "clause_ref": [
+    "29148:2011 §5.2.6 Consistent",
+    "Guide R4 Define terms"
+   ],
+   "criterion": "同一对象在所有需求中用同一术语；术语须定义，定义用陈述句而非需求句。",
+   "severity": "medium"
+  },
+  {
+   "id": "RC-12",
+   "name": "条件显式与多条件处理",
+   "clause_ref": [
+    "Guide R27 Explicit Conditions",
+    "Guide R28 Multiple Conditions"
+   ],
+   "criterion": "触发条件/适用工况显式写出；多条件须明确 AND/OR 与优先级，不留隐含假设。",
+   "severity": "medium"
+  },
+  {
+   "id": "RC-13",
+   "name": "需求集一致性（无矛盾无重复）",
+   "clause_ref": [
+    "29148:2011 §5.2.5 Consistent",
+    "29148:2011 §5.2.6 Consistent",
+    "Guide R41 Related Requirements"
+   ],
+   "criterion": "单条需求不与其他需求冲突；需求集内无相互矛盾、无重复；相关需求已建立关联。",
+   "severity": "high"
+  },
+  {
+   "id": "RC-14",
+   "name": "需求集范围与优先级属性",
+   "clause_ref": [
+    "29148:2011 §5.2.6 Bounded scope",
+    "29148:2011 §5.2.8 Stakeholder Priority",
+    "29148:2011 §5.2.8 Risk"
+   ],
+   "criterion": "需求集维持既定范围不发生需求蔓延；每条有优先级与风险等级属性。",
+   "severity": "low"
+  }
+ ],
+ "completeness_categories": [
+  {
+   "id": "CC-01",
+   "name": "单条需求完整性",
+   "clause_ref": [
+    "29148:2011 §5.2.5 Complete"
+   ],
+   "criterion": "无需进一步展开即可 measurable 且足够描述满足涉众需要的能力与特性。"
+  },
+  {
+   "id": "CC-02",
+   "name": "需求集完整性（无 TBx 占位）",
+   "clause_ref": [
+    "29148:2011 §5.2.6 Complete"
+   ],
+   "criterion": "集合包含定义系统所需全部内容，且不含 TBD / TBS / TBR 未决项。"
+  },
+  {
+   "id": "CC-03",
+   "name": "需求类型覆盖",
+   "clause_ref": [
+    "29148:2011 §5.2.6 NOTE"
+   ],
+   "criterion": "覆盖所有 requirements types（功能/性能/接口/约束/质量等），按项目定义检查清单。"
+  },
+  {
+   "id": "CC-04",
+   "name": "生命周期阶段覆盖",
+   "clause_ref": [
+    "29148:2011 §5.2.6 NOTE"
+   ],
+   "criterion": "覆盖生命周期各阶段的需求（运行/维护/退役/异常等），不遗漏阶段。"
+  },
+  {
+   "id": "CC-05",
+   "name": "涉众覆盖",
+   "clause_ref": [
+    "29148:2011 §5.2.6 NOTE"
+   ],
+   "criterion": "所有相关涉众均参与需求获取，各涉众需要都有对应需求条目。"
+  },
+  {
+   "id": "CC-06",
+   "name": "属性完整性",
+   "clause_ref": [
+    "29148:2011 §5.2.8 Requirements attributes",
+    "29148:2011 §5.2.8"
+   ],
+   "criterion": "每条需求具备 identification / priority / dependency / risk / rationale 等属性字段。"
+  },
+  {
+   "id": "CC-07",
+   "name": "追溯链完整性",
+   "clause_ref": [
+    "29148:2011 §5.2.5 Traceable"
+   ],
+   "criterion": "每条需求可向上与向下追溯，父子关系无断点。"
+  },
+  {
+   "id": "CC-08",
+   "name": "验证手段完整性",
+   "clause_ref": [
+    "29148:2011 §5.2.5 Verifiable"
+   ],
+   "criterion": "每条需求都有可执行的验证方法与可接受判据。"
+  }
+ ],
+ "conflict_types": [
+  {
+   "id": "CT-01",
+   "name": "语义冲突",
+   "criterion": "行为或条件描述互斥",
+   "clause_ref": [
+    "29148:2011 §5.2.6",
+    "Guide C11 Consistent"
+   ],
+   "severity": "medium"
+  },
+  {
+   "id": "CT-02",
+   "name": "重复",
+   "criterion": "条目语义等价",
+   "clause_ref": [
+    "29148:2011 §5.2.6",
+    "Guide C11 Consistent"
+   ],
+   "severity": "high"
+  },
+  {
+   "id": "CT-03",
+   "name": "覆盖重叠",
+   "criterion": "适用范围存在交集且结论不一致",
+   "clause_ref": [
+    "29148:2011 §5.2.5",
+    "Guide C11 Consistent"
+   ],
+   "severity": "medium"
+  },
+  {
+   "id": "CT-04",
+   "name": "指标矛盾",
+   "criterion": "同一指标阈值/单位/量纲不一致",
+   "clause_ref": [
+    "29148:2011 §5.2.6",
+    "Guide C11 Consistent"
+   ],
+   "severity": "high"
+  },
+  {
+   "id": "CT-05",
+   "name": "术语不一致",
+   "criterion": "同一对象使用不同术语",
+   "clause_ref": [
+    "29148:2011 §5.2.7",
+    "Guide C11 Consistent（术语使用一致）"
+   ],
+   "severity": "medium"
+  }
+ ],
+ "severity_levels": [
+  "high",
+  "medium",
+  "low"
+ ],
+ "output_contract": {
+  "check_result": {
+   "required": [
+    "req_id",
+    "rule_id",
+    "category",
+    "verdict",
+    "severity",
+    "evidence",
+    "clause_ref",
+    "suggestion"
+   ],
+   "verdict_values": [
+    "pass",
+    "fail",
+    "to_verify"
+   ],
+   "note": "无条款出处或无原文证据的结论一律标 to_verify，不得写 fact"
+  },
+  "completeness_result": {
+   "required": [
+    "category",
+    "covered",
+    "missing",
+    "evidence",
+    "clause_ref"
+   ]
+  },
+  "conflict_result": {
+   "required": [
+    "conflict_id",
+    "type",
+    "req_ids",
+    "severity",
+    "description",
+    "evidence",
+    "suggestion"
+   ]
+  }
+ },
+ "provenance": {
+  "extracted_from": [
+   "document_chunks where document_id=846 and chunk_index between 100 and 120",
+   "document_chunks where document_id=793 (SECTION 4 R rules, Appendix D)"
+  ],
+  "verified_on": "2026-11-14",
+  "note": "条款号与原文均来自知识库真实 chunk；Guide 部分规则标题因 PDF 切片粘连只保留可确证的 7 条，其余以 R 编号引用，未编造标题。",
+  "clause_ref_audit": "2026-11-14 核对：29148-2011 全文实有 5.2.1/5.2.3/5.2.4/5.2.5/5.2.6/5.2.7/5.2.8/5.2.8.6，**不存在 5.2.8.1**（初版曾误引，已全部回落为 §5.2.8）；Guide 实有 R1-R42 与 C1-C15，其中 C11=Consistent、C12=Feasible(Set)。5 类冲突初版无依据，已补为上述确证锚点。"
+ }
+}

@@ -23,7 +23,9 @@ def _seed(conn):
         "branch_dev": ["create", "switch", "merge_request", "delete"],
         "branch_release": ["view"],
         "report": ["view", "export"],
-        "admin": []
+        "admin": [],
+        # P0-5 / D3（2026-11-15）：配置读写门。独立域，不进 admin（进 admin = 超级用户）。
+        "system_config": ["read", "write"]
     })
     knowledge_perms = json.dumps({
         "ai_chat": ["view", "generate", "confirm", "reject"],
@@ -34,12 +36,14 @@ def _seed(conn):
         "branch_dev": ["create", "switch", "merge_request", "delete"],
         "branch_release": ["view", "review_merge", "rollback"],
         "report": ["view", "export"],
-        "admin": []
+        "admin": [],
+        "system_config": ["read", "write"]
     })
     admin_perms = json.dumps({
         "ai_chat": [], "ai_studio": [], "kb_browse": [], "kb_ontology": [],
         "kb_review": [], "branch_dev": [], "branch_release": [], "report": [],
-        "admin": ["user_manage", "role_manage", "audit_view", "integration_config", "ops_manage"]
+        "admin": ["user_manage", "role_manage", "audit_view", "integration_config", "ops_manage"],
+        "system_config": ["read", "write"]
     })
 
     for name, rtype, perms in [
@@ -269,8 +273,8 @@ def _seed_agents(conn):
          "解析输入文本，提取条目化需求并标注来源追溯",
          "", "L2", 1,
          '["需求", "解析", "条目", "需求分析", "requirement"]', "📋"),
-        ("design", "方案设计Agent",
-         "基于需求与互联数据生成多方案架构设计",
+        ("design", "工程建模方案设计Agent",
+         "模型设计智能体：依据需求描述匹配视图生成技能（sysml_view_generation_*）产出对应视图的 SysML v2 代码并自校验，具备多方案/变体设计与对比能力",
          "", "L1", 1,
          '["方案", "设计", "架构", "方案设计", "design"]', "🎨"),
         ("impact", "变更影响Agent",
@@ -447,8 +451,11 @@ def _seed_glossary(conn):
         # (user_term, canonical_term, domain, intent, boost, description)
         ("v2", "SysML_V2", "sysml_norm", "knowledge_qa", 1.8, "SysML V2 建模语言（区别于 V波段通信频段）"),
         ("sysml", "SysML", "sysml_norm", "knowledge_qa", 1.5, "系统建模语言"),
-        ("代码规范", "SysML_V2 语法规范", "sysml_norm", "knowledge_qa", 1.5, "代码规范 = SysML 语法规范"),
-        ("语法规范", "SysML_V2 语法规范", "sysml_norm", "knowledge_qa", 1.5, ""),
+        # R2（2026-11-11）：canonical 与 preferred term 等值，不再把消歧前缀
+        # `SysML_V2 ` 写进规范词 —— 否则与 `SysML V2 → SysML_V2` 相邻命中时
+        # 会拼出 `SysML_V2 SysML_V2 语法规范`。同形异义核查见迁移说明。
+        ("代码规范", "语法规范", "sysml_norm", "knowledge_qa", 1.5, "代码规范 = SysML 语法规范"),
+        ("语法规范", "语法规范", "sysml_norm", "knowledge_qa", 1.5, ""),
         ("ibd", "内部块图_IBD", "sysml_norm", "knowledge_qa", 1.5, "内部块图（Internal Block Diagram）"),
         ("bdd", "模块定义图_BDD", "sysml_norm", "knowledge_qa", 1.5, "模块定义图（Block Definition Diagram）"),
         ("tms", "热管理系统_TMS", "thermal_mgmt", "knowledge_qa", 1.5, "热管理系统（Thermal Management System）"),

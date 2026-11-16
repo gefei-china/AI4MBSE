@@ -460,12 +460,106 @@ INTENT_VIEWS = {
 }
 
 
+def _attach_package_hierarchy(nodes: list, edges: list) -> list:
+    """把「包包含」关系提升为真正的父子层级（Cytoscape 复合节点）。
+
+    为什么需要（2026-11-09 实测）：全库 332 个视图、其中 BDD 54 + PKG 30，
+    **节点里 parent 字段一个都没有**。渲染层的 `node:parent` 样式（包框）因此从未生效，
+    层级视图一律画成扁平方块 —— 这是"元素与布局不好看"的第一因，与布局算法无关。
+    根因在投影层：解析器其实已产出 package→X 的包含边（`_REL_CONTAINMENT`），
+    但这里只把它当普通 `composition` 连线输出，没有转成 parent。
+
+    语义边界（很重要）：
+      · **只有 package 能当父节点**。BDD 里 part/block 之间的组合关系是**连线语义**，
+        画成嵌套会改变模型含义（组合 ≠ 包归属）。
+      · 一个节点只能有一个父（多父在 SysML 里要经由 import，不在本层处理）。
+      · 防环：A 包 B、B 包 A 这种脏数据不能让渲染层无限递归。
+    """
+    ids = {n["id"] for n in nodes}
+    kind_of = {n["id"]: n.get("kind") for n in nodes}
+    parent_of = {}
+    # ① 包 → 成员（非包）
+    for e in edges:
+        if e.get("kind") != "composition":
+            continue
+        s, t = e.get("source"), e.get("target")
+        if s in ids and t in ids and s != t and kind_of.get(s) == "package" \
+                and kind_of.get(t) != "package" and t not in parent_of:
+            parent_of[t] = s
+    # ② 包 → 子包
+    for e in edges:
+        if e.get("kind") != "composition":
+            continue
+        s, t = e.get("source"), e.get("target")
+        if s in ids and t in ids and s != t and kind_of.get(s) == "package" \
+                and kind_of.get(t) == "package" and t not in parent_of:
+            parent_of[t] = s
+    # ③ 防环（脏数据兜底：出现环就断开该节点的父关系）
+    for c in list(parent_of.keys()):
+        seen, cur = set(), parent_of.get(c)
+        while cur and cur not in seen:
+            if cur == c:
+                parent_of.pop(c, None)
+                break
+            seen.add(cur)
+            cur = parent_of.get(cur)
+    for n in nodes:
+        p = parent_of.get(n["id"])
+        if p:
+            n["parent"] = p
+    return nodes
+
+
+def _dedupe_view(nodes: list, edges: list) -> tuple:
+    """同 id 节点去重、同 (source,target,kind) 边去重。
+
+    ★ 2026-11-09 实测：模型给的代码本身可能整块重复（conv 9736 的 634 行里有
+    5 份一模一样的 `package '通信子系统时序图'`），解析器如实产出 90 个节点、
+    其中每个名字各 5 份 ⇒ 视图 45 个节点里只有 9 个是唯一的。
+    Cytoscape 的 id 必须唯一，重复项要么被静默合并、要么把布局撑成 5 层重叠方块。
+    判据是「视图里每个 id 只出现一次」，与代码是否重复无关 —— 去重是**布局的
+    前置条件**，不是对数据问题的掩盖（代码重复本身另有 `sysml_v2_validate` 兜底）。
+    """
+    seen, out = {}, []
+    for n in nodes:
+        k = str(n.get("id"))
+        if k in seen:
+            # 保留首条，但把后续重复项里**携带的信息**补进来（如 parent/attrs）
+            cur = seen[k]
+            for kk, vv in n.items():
+                if vv not in (None, "", [], {}) and cur.get(kk) in (None, "", [], {}):
+                    cur[kk] = vv
+            continue
+        seen[k] = n
+        out.append(n)
+    ekey, eout = set(), []
+    for e in edges:
+        s, t = str(e.get("source")), str(e.get("target"))
+        if s not in seen or t not in seen:
+            continue
+        k = (s, t, str(e.get("kind") or ""))
+        if k in ekey:
+            continue
+        ekey.add(k)
+        eout.append(e)
+    return out, eout
+
+
 def _finalize(view_type: str, nodes: list, edges: list, warnings: list) -> dict:
     """统一收尾：过滤无效边 → 最小输入集校验 → 组装 ViewModel（DB 投影与代码投影共用）。"""
     vt = VIEW_TYPES.get(view_type)
+    nodes, edges = _dedupe_view(nodes or [], edges or [])
     # 边有效性兜底：两端节点必须都在本视图节点集内
     nids = {n["id"] for n in nodes}
     edges = [e for e in edges if e["source"] in nids and e["target"] in nids]
+
+    # 2026-11-09：包包含 → 父子层级（渲染层据此画包框并自动包裹子节点）
+    try:
+        from core import config as _cfg
+        if _cfg.as_bool("sysml", "view_package_nesting", True):
+            _attach_package_hierarchy(nodes, edges)
+    except Exception:
+        _attach_package_hierarchy(nodes, edges)
 
     # 最小输入集校验：每组（同义词元组）命中任一即算满足，未命中的组才计入 missing
     required = VIEW_REQUIRED_KINDS.get(view_type, [])
@@ -503,8 +597,10 @@ def _project(view_type: str, entities: list, rels: list, conn) -> tuple:
     valid_rels = [r for r in rels if r["source"] in emap and r["target"] in emap]
 
     if view_type == "BDD":
-        # 结构层级：部件/块/参与者 + 组合/依赖边（端口是部件特征，不独立显示）
-        sel = [e for e in entities if _elem_kind(e) in ("block", "part", "actor")]
+        # 结构层级：包 + 部件/块/参与者 + 组合/依赖边（端口是部件特征，不独立显示）
+        # ★ 2026-11-09：把 package 纳入节点集 —— 层级要靠包节点承载（见 _attach_package_hierarchy）。
+        #   此前不含包，于是"包内元素"没有可挂的父，BDD 只能是平铺方块。
+        sel = [e for e in entities if _elem_kind(e) in ("package", "block", "part", "actor")]
         edges = []
         for r in valid_rels:
             k = _edge_kind(r["type"])

@@ -21,14 +21,19 @@ routers/monitor.py（S4 接线）。
    query_trace_id），转正时按外键回查原文，不留孤儿标签。
 
 **阈值校准记录**（判据跟着真实数据改，MEMORY 纪律）：
-    设计文档 §7 的 low_conf_threshold 默认 0.5 是**拍脑袋值**——2026-10-25
-    对 mbse.db 只读实测：query_trace.top_score 全域量级 [0, 0.096]
-    （p25=0.036 / p50=0.055 / avg=0.0498），0.5 会命中**全表 3276 行**。
-    故默认改 0.036（=p25，取最低四分位为"低置信"），并加 sample_batch 上限
-    （默认 20）与 sample_window_days（默认 30，同 badcase 窗口）——无上限时
-    低置信单源即 ~819 行，队列会被一次采样撑爆（R12 积压告警失去意义）。
+    ① 2026-10-25：设计文档 §7 的 low_conf_threshold 默认 0.5 是**拍脑袋值**——
+      对 mbse.db 只读实测：query_trace.top_score 全域量级 [0, 0.096]，0.5 会命中
+      全表 3276 行，故改 0.036（=p25）。
+    ② 2026-11-08：**0.036 本身也是错的**，因为"全域量级"这个说法掩盖了
+      两种不同量纲混在同一列。按 route 分组重测：
+          vector  n=6514  [0, 0.632]  → 0.036 命中 20.0%
+          mixed   n=27    [0, 0.0]    → 0.036 命中 100%（这 27 行是 bug 写出的 0）
+      结论：绝对阈值这条路走不通，改为 **按 score_kind 分组取组内分位**
+      （low_conf_quantile，默认 0.25），并用**组内相对位次**跨组混排。
+      这样跨量纲不需要可比，也不维护任何魔法数字。
 """
 import json
+import math
 import os
 import random
 import sqlite3
@@ -46,13 +51,25 @@ from core.feedback_types import (
 _SETTING_DEFAULTS = {
     "enabled": True,               # 总开关（False 时采样返空而非 500）
     "random_rate": 0.05,           # 随机采样比例（负反馈/低置信优先不受此限）
-    "low_conf_threshold": 0.036,   # query_trace.top_score 低于此值入队（实测 p25）
+    # ★ 2026-11-08 废弃：`low_conf_threshold`（绝对值阈值）不再参与低置信判断。
+    #   原因：`query_trace.top_score` 的量纲**随 route 变**（图置信度 0~1，
+    #   融合检索分实测 0~0.63），一个绝对阈值同时套两种分布必然只在其中一种上准。
+    #   实证：0.036 在 vector 上命中 20%，而 mixed 路因旧 bug 全为 0.0 ⇒ 100% 命中
+    #   且恒占 ORDER BY 榜首。键保留只为兼容既有配置文件，读它不会再有效果。
+    "low_conf_threshold": 0.036,   # @deprecated 用 low_conf_quantile 替代
+    "low_conf_quantile": 0.25,     # 各组内取最低的 q 比例（组内分位，跨组不比较绝对值）
     "sample_window_days": 30,      # 采样窗口（同 badcase：只扫最近 N 天）
     "sample_batch": 20,            # 单次采样入队上限（防低置信单源撑爆队列）
     "auto_eval_limit": 50,         # 单次自动评批量
     "backlog_alert": 20,           # R12 阈值（权威值在 seed_registry._ALERT_RULES，此处仅默认）
     "promote_window_days": 7,      # R13 统计窗口
 }
+
+#: 参与"低置信"判断的分数种类。两类被**刻意排除**：
+#:   `''`          —— 本次没有可用分数（≠ 0 分）。当 0 分采会污染判断。
+#:   `legacy_zero` —— 旧 bug 写出的 0（图路从实体对象上取不存在的 score 字段），
+#:                    0 在这里的含义是"没取到"，当"最低分"采会永久霸榜。
+_LOW_CONF_KINDS = ("graph_conf", "chunk_score", "vec_score", "legacy_fusion")
 
 #: 负反馈信号源一：ux_metrics 事件白名单中的负向事件（repositories/ux_metrics_repo.EVENTS）
 _UX_NEG_EVENTS = NEGATIVE_BEHAVIOR_EVENTS
@@ -158,24 +175,66 @@ def _cand_neg_feedback(conn, window_arg, failures: list) -> list:
     return out
 
 
-def _cand_low_conf(conn, window_arg, threshold: float, cap: int,
+def _cand_low_conf(conn, window_arg, quantile: float, cap: int,
                    failures: list) -> list:
-    """低置信候选（第二优先）：query_trace.top_score < threshold（升序，最没底先采）。
+    """低置信候选（第二优先）：**按 score_kind 分组、组内取最低分位**。
 
-    sample_type='retrieval'（置信度是**检索侧**信号）。cap 限制单源条数——
-    实测全表 3276 行 top_score 全域 <0.096，无 cap 会一次采上千条。
+    为什么不再用绝对值阈值（2026-11-08）
+    ------------------------------------
+    旧实现 `WHERE top_score < 0.036 ORDER BY top_score ASC`，前提是"所有 top_score
+    可以互相比较"。但实测这个前提不成立：
+
+    | route  | 分数含义                        | 量纲（实测）       |
+    |--------|--------------------------------|-------------------|
+    | graph  | `graph_confidence` 多因子加权   | 0 ~ 1（样本 0.96） |
+    | vector | 融合检索分（chunk_hits）        | 0 ~ 0.63（样本 0.195） |
+
+    一个 0.036 在两个分布里的**分位完全不同**，所以采出来的是"某个量纲里最低的"，
+    而不是"系统最没底的"。更糟的是旧 bug 让 mixed 路的 top_score 恒为 0.0
+    ⇒ 那 27 行永远排在榜首，每次采样都采同一批，**采样偏置且看不出来**。
+
+    现在的做法：各组内按分位取，再按**组内相对位次**混排。
+    跨组不比较绝对值，只比较"在本组里有多差"—— 这正是"量纲不同不可直接比较"
+    的正确处理，且阈值完全由数据分布决定，不维护任何魔法数字。
     """
     if not _tbl_exists(conn, "query_trace"):
         return []
     try:
-        rows = conn.execute(
-            "SELECT id, query, intent, route, top_score FROM query_trace "
-            "WHERE top_score < ? AND created_at >= datetime('now', ?) "
-            "ORDER BY top_score ASC, id ASC LIMIT ?",
-            (float(threshold), window_arg[0], int(cap))).fetchall()
+        q = float(quantile)
+    except (TypeError, ValueError):
+        q = 0.25
+    q = max(0.0, min(1.0, q))
+    ph = ",".join(["?"] * len(_LOW_CONF_KINDS))
+    picked = []          # [(组内相对位次, 行, kind)]
+    try:
+        stats = conn.execute(
+            "SELECT score_kind AS k, COUNT(*) AS n FROM query_trace "
+            "WHERE created_at >= datetime('now', ?) AND score_kind IN (%s) "
+            "GROUP BY score_kind" % ph,
+            (window_arg[0], *_LOW_CONF_KINDS)).fetchall()
+        for st in stats or []:
+            kind, n = st["k"], int(st["n"] or 0)
+            if n <= 0:
+                continue
+            take = max(1, int(math.ceil(n * q)))    # 该组"最差"的条数，随组规模伸缩
+            limit = min(take, int(cap))
+            # 每组取多少条属于"该组最差"，由组自身规模决定；cap 防单组撑爆
+            rows = conn.execute(
+                "SELECT id, query, intent, route, top_score FROM query_trace "
+                "WHERE score_kind=? AND created_at >= datetime('now', ?) "
+                "ORDER BY top_score ASC, id ASC LIMIT ?",
+                (kind, window_arg[0], limit)).fetchall()
+            # ⚠️ 分母必须是**实际取出条数**而非 take：组大时 take 可达上千，
+            #   而 limit 只有几十，用 take 做分母会让所有相对位次挤在 0 附近，
+            #   "组内最差优先"的排序退化成按 id 排（实测 22 条位次全为 0.00）。
+            denom = float(max(1, len(rows or [])))
+            for rank, r in enumerate(rows or []):
+                # 相对位次 ∈ [0,1)：0 = 本组最差。跨组可比，且不依赖绝对分数。
+                picked.append((rank / denom, r, kind))
     except Exception as e:                                     # noqa: BLE001
         failures.append("low_conf: %s: %s" % (type(e).__name__, str(e)[:160]))
         return []
+    picked.sort(key=lambda x: (x[0], x[1]["id"]))
     return [{
         "sample_type": "retrieval",
         "conversation_id": 0,
@@ -183,9 +242,10 @@ def _cand_low_conf(conn, window_arg, threshold: float, cap: int,
         "query_trace_id": int(r["id"]),
         "trace_id": "",
         "sample_reason": "low_conf",
-        "reason_detail": "top_score=%.4f<%.4f route=%s" % (
-            float(r["top_score"] or 0), float(threshold), r["route"] or "-"),
-    } for r in rows]
+        # kind 必须写进 reason：否则看到 `top_score=0.96` 被标成低置信会莫名其妙
+        "reason_detail": "top_score=%.4f kind=%s 组内位次=%.2f route=%s" % (
+            float(r["top_score"] or 0), kind, rel, r["route"] or "-"),
+    } for rel, r, kind in picked]
 
 
 def _cand_random(conn, window_arg, rate: float, cap: int,
@@ -274,7 +334,7 @@ def sample_candidates(conn, *, apply: bool = False, settings=None) -> dict:
     try:
         cands = (_cand_neg_feedback(conn, window_arg, failures)
                  + _cand_low_conf(conn, window_arg,
-                                  float(cfg.get("low_conf_threshold") or 0.036),
+                                  float(cfg.get("low_conf_quantile") or 0.25),
                                   out["batch"], failures)
                  + _cand_random(conn, window_arg,
                                 float(cfg.get("random_rate") or 0.05),
@@ -509,10 +569,60 @@ def online_eval_metrics(conn) -> dict:
     return out
 
 
+def _col_exists(conn, table: str, col: str) -> bool:
+    """列存在性探测（老库可能还没跑迁移，直接 SELECT 该列会抛）。"""
+    try:
+        return any(r[1] == col
+                   for r in conn.execute("PRAGMA table_info(%s)" % table).fetchall())
+    except Exception:                                          # noqa: BLE001
+        return False
+
+
+def _trace_texts(conn, trace_ids) -> dict:
+    """批量取 query_trace 的「用户原话 / 检索串 / 归一化」三件事（2026-11-08）。
+
+    为什么标注面需要这一步：`online_eval_queue` 只存 `query_trace_id` 外键，
+    标注员在队列里看到的原本只有 `qt 6885` 这种编号 —— 要看查询就得自己回查
+    `query_trace`，而那一列 `query` 存的是**已拼装且已归一化**的串
+    （`宽带载荷` → `宽带通信载荷`），拿它当"用户原话"标注等于给样本喂了错的前提。
+
+    返回 {trace_id: {"query":…, "normalized":…, "query_raw":…}}；
+    老库/缺列/任何异常 ⇒ 返回已取到的部分，异常走 `observe_fail` 留痕（不静默）。
+    """
+    ids = sorted({int(i or 0) for i in (trace_ids or [])} - {0})
+    if not ids or not _tbl_exists(conn, "query_trace"):
+        return {}
+    has_raw = _col_exists(conn, "query_trace", "query_raw")
+    sel = "id, query, normalized" + (", query_raw" if has_raw else ", NULL AS query_raw")
+    out = {}
+    try:
+        ph = ",".join(["?"] * len(ids))
+        for r in conn.execute(
+                "SELECT %s FROM query_trace WHERE id IN (%s)" % (sel, ph), ids).fetchall():
+            out[int(r["id"])] = {"query": r["query"] or "",
+                                 "normalized": r["normalized"] or "",
+                                 "query_raw": r["query_raw"]}
+    except Exception as e:                                     # noqa: BLE001
+        # 读不到就少这一段展示，但必须留痕：否则"标注员看不到原话"会表现成
+        # "这些样本本来就没有原话"，与"确实来自 2026-11-08 之前"无法区分。
+        try:
+            from core.observe_fail import note as _note
+            _note("online_eval.trace_texts", e, n=len(ids), has_raw=has_raw)
+        except Exception:                                      # noqa: BLE001
+            pass
+    return out
+
+
 def queue_rows(conn, status: str = "pending", limit: int = 50) -> tuple:
     """队列列表（routers 层经此取数，不直连 SQL——layering L1 卡 routers 直连）。
 
     返回 (items, total)。老库无表 ⇒ ([], 0)。
+
+    ★ 2026-11-08：每行附 `trace_query_raw`（用户原话）/ `trace_query`（实际检索串）/
+    `trace_normalized`，并给 `trace_raw_missing` 标记。**该标记只表示"这一行写于
+    query_raw 列存在之前"，不表示用户没说话** —— 历史行的原话不可恢复（上游早已
+    把 kb_hint/槽位/附件片段拼进去并归一化），所以前端必须把它显示成
+    「原话未记录」而不是退化成展示归一化后的串去冒充原话。
     """
     if not _tbl_exists(conn, "online_eval_queue"):
         return [], 0
@@ -526,6 +636,17 @@ def queue_rows(conn, status: str = "pending", limit: int = 50) -> tuple:
     rows = [dict(r) for r in conn.execute(
         "SELECT * FROM online_eval_queue%s ORDER BY id LIMIT ?" % where,
         (*args, int(limit))).fetchall()]
+    _texts = _trace_texts(conn, [r.get("query_trace_id") for r in rows])
+    for r in rows:
+        _t = _texts.get(int(r.get("query_trace_id") or 0))
+        if not _t:
+            continue
+        r["trace_query"] = _t["query"]
+        r["trace_normalized"] = _t["normalized"]
+        r["trace_query_raw"] = _t["query_raw"]
+        # NULL 与空白同判「未记录」：与 `_query_of` 的判据保持一致
+        # （两处各写一套判据，迟早出现"这里说有、那里说没有"）。
+        r["trace_raw_missing"] = not str(_t["query_raw"] or "").strip()
     return rows, int(total)
 
 
@@ -550,27 +671,41 @@ _QRELS_PATH = os.path.join(
 
 
 def _query_of(conn, r: dict) -> tuple:
-    """样本 → (query, intent)。回查链：query_trace → 同会话上一条 user 消息。
+    """样本 → (query, intent, src)。回查链：query_trace → 同会话上一条 user 消息。
 
-    取不到返 ("","")——转正时留空比编造好（编造的 query 会污染 dataset，
+    ★ 2026-11-08：**优先取用户原话 `query_raw`**，取不到才退回 `query`。
+    为什么这条比展示层更要紧：转正是**唯一真写**，写进 `qrels.jsonl` /
+    `intent_samples` 的 query 会成为评测集的"标准问法"。若写的是 `query`
+    （= 上游拼过 kb_hint/槽位/附件片段、再被 Glossary 归一化的串），那评测集
+    测的就是**另一句话**：用户问「宽带载荷」，集合里存「宽带通信载荷」，日后
+    评测刷分好坏都与真实提问无关，且这种失真**在数据里看不出来**。
+
+    src 取值：raw（原话）/ retrieval（历史行，原话不可恢复）/ message（回查消息）/
+    ''. 必须随 query 一起返回：下游据此标注"这条样本的问法来源"，否则将来无法
+    区分"数据集里本来就是归一化串"和"有人又把链路改回去了"。
+    取不到返 ("","",'')——转正时留空比编造好（编造的 query 会污染 dataset，
     而空 query 在下游评测里显性失败，可追查）。
     """
     qtid = int(r.get("query_trace_id") or 0)
     if qtid:
+        has_raw = _col_exists(conn, "query_trace", "query_raw")
+        sel = "query, intent" + (", query_raw" if has_raw else ", NULL AS query_raw")
         row = conn.execute(
-            "SELECT query, intent FROM query_trace WHERE id=?",
-            (qtid,)).fetchone()
+            "SELECT %s FROM query_trace WHERE id=?" % sel, (qtid,)).fetchone()
         if row:
             row = dict(row)
-            return (row.get("query") or ""), (row.get("intent") or "")
+            raw = row.get("query_raw")
+            if raw is not None and str(raw).strip():
+                return str(raw), (row.get("intent") or ""), "raw"
+            return (row.get("query") or ""), (row.get("intent") or ""), "retrieval"
     cid = int(r.get("conversation_id") or 0)
     if cid:
         row = conn.execute(
             "SELECT content FROM messages WHERE conversation_id=? "
             "AND role='user' ORDER BY id DESC LIMIT 1", (cid,)).fetchone()
         if row:
-            return (dict(row).get("content") or "")[:200], ""
-    return "", ""
+            return (dict(row).get("content") or "")[:200], "", "message"
+    return "", "", ""
 
 
 def _promote_intent(conn, r: dict, out: dict, failures: list) -> None:
@@ -579,7 +714,7 @@ def _promote_intent(conn, r: dict, out: dict, failures: list) -> None:
     幂等靠 text UNIQUE（同 query 只应有一行）；queue_id 累积进 note，
     二次 apply 时 note 不变（不重复追加）⇒ 行数与内容双幂等。
     """
-    query, intent = _query_of(conn, r)
+    query, intent, src = _query_of(conn, r)
     if not query:
         failures.append("promote intent qid=%s: query 回查为空，跳过（不编造）"
                         % r["id"])
@@ -591,7 +726,9 @@ def _promote_intent(conn, r: dict, out: dict, failures: list) -> None:
             "(text, intent, status, source, note, created_by) "
             "VALUES (?,?,?,?,?,?)",
             (query, intent or "unknown", "confirmed", "prod",
-             "online_eval_queue#%d" % qid, "online-eval"))
+             # src 随 note 落库：日后要回答"这条样本的问法是原话还是历史归一化串"
+             # 只能靠它（intent_samples 没有独立列，也不值得为此加列）。
+             "online_eval_queue#%d src=%s" % (qid, src or "none"), "online-eval"))
         if cur.rowcount:
             out["intent_samples"] += 1
         else:
@@ -616,7 +753,7 @@ def _promote_retrieval(conn, r: dict, out: dict, failures: list) -> None:
     被人工认可"，**没有**指出哪些 chunk 相关；留 [] 是诚实，编 relevant
     会让 recall 虚高（口径纪律：没测到 ≠ 测到 0）。
     """
-    query, _ = _query_of(conn, r)
+    query, _, src = _query_of(conn, r)
     qid = int(r["id"])
     if not query:
         failures.append("promote retrieval qid=%d: query 回查为空，跳过" % qid)
@@ -632,8 +769,11 @@ def _promote_retrieval(conn, r: dict, out: dict, failures: list) -> None:
                         break
         if existed:
             return
+        # query_src 与 query 同行落盘：qrels 是评测集的"标准问法"，必须能分辨
+        # 它是用户原话（raw）还是历史行的归一化串（retrieval）—— 否则日后
+        # 看到"召回率掉了"无法判断是检索退步还是这批样本的问法本来就不同。
         rec = {"query": query, "relevant": [], "human_confirmed": True,
-               "queue_id": qid,
+               "queue_id": qid, "query_src": src or "none",
                "conversation_id": int(r.get("conversation_id") or 0),
                "note": "生产回流人工确认；相关集待人工补（标注卡未指定 chunk）"}
         with open(_QRELS_PATH, "a", encoding="utf-8") as f:

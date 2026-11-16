@@ -4,154 +4,24 @@
 由 tools/split_pipeline.py 从 agent/pipeline.py 机械切分而成；⚠️ 切分脚本**已一次性执行完毕、不可重跑**—— 此后本文件按普通源码维护（方法体与其它模块一样可直接改）。"""
 from .common import *
 
+# ★ 2026-11-15：`source_anchor` / `_clause_re` / `_CLAUSE_SHAPE` / `_short` 已
+#   **上移到 `agent/utils.py`**（单一真源）—— 引用登记簿（也在 utils）要用同一套
+#   锚点算式与同一份截断规则；留在本文件会变成"工具路径与注入路径各写一份"。
+
+
+def _doc_short(name: str, cap: int = 28) -> str:
+    """文档短名（去扩展名 + 词边界截断）—— 编号对照表要短，否则比正文还长。"""
+    s = re.sub(r"\.(pdf|docx?|pptx?|xlsx?|md|txt)$", "", str(name or "").strip(), flags=re.I)
+    return _short(s, cap)
+
 
 class ContextMixin:
     """流程匹配、上下文组装与重排。"""
 
-    @staticmethod
-    def _flow_tokens(text):
-        """中文 2-4 字滑动窗口 + 英文单词分词（中文无空格，直接 split 无法切词）。
-
-        下划线兼容：'SysML_V2' 同时产出 'sysml_v2' 与 'sysml'/'v2'（Glossary 归一化产物可匹配原生写法）。
-        """
-        text = re.sub(r"[@#]", "", text or "")
-        toks = set()
-        for w in re.findall(r"[a-zA-Z][a-zA-Z0-9_]{1,}", text.lower()):
-            toks.add(w)
-            for part in w.split("_"):
-                if len(part) >= 2:
-                    toks.add(part)
-        cjk = re.sub(r"[^\u4e00-\u9fff]", "", text)
-        stop = set("的了是在和与及或把被让对从向为以于就都也很而但并且如果因为所以这些那些我们您请帮我")
-        n = len(cjk)
-        for i in range(n):
-            for L in (2, 3, 4):
-                w = cjk[i:i + L]
-                if len(w) == L and not all(ch in stop for ch in w):
-                    toks.add(w)
-        return toks
-
-    def _match_flows(self, user_input, limit=3):
-        """匹配已保存工作流（名称/描述/节点标签）——双通道语义升级版。
-
-        P0-2 行业对齐：
-        - Glossary 归一化：输入先过术语表（v2→SysML_V2），跨写法对齐
-        - 词法通道：name×3 / desc×2 / label×1 分级加权（名称最能代表流程主题）；
-          名称完整命中 +5；阈值 ≥2（排除单个公共词误命中）
-        - 语义通道：SemanticSearch（真 embedding 优先，bigram 降级），阈值 0.15
-        - RRF 融合（k=60）：两通道按排名合并，免调参（juejin RAG 三板斧）
-        """
-        try:
-            conn = get_db()
-            rows = conn.execute(
-                "SELECT id, name, description, nodes FROM agent_flows ORDER BY id DESC LIMIT 200").fetchall()
-            conn.close()
-            if not rows:
-                return []
-            # 1) Glossary 归一化（v2→SysML_V2 等跨写法对齐）
-            norm_input = user_input
-            try:
-                from glossary import GlossaryMatcher
-                _c2 = get_db()
-                try:
-                    norm_input, _ = GlossaryMatcher(_c2).normalize(user_input)
-                finally:
-                    _c2.close()
-            except Exception:
-                pass
-            q_tokens = self._flow_tokens(norm_input)
-            if not q_tokens:
-                return []
-
-            # 2) 词法通道：分级加权（name 3 > desc 2 > label 1）
-            lex_scored = []  # (score, row, matched)
-            for r in rows:
-                name = r["name"] or ""
-                desc = r["description"] or ""
-                try:
-                    nodes = json.loads(r["nodes"] or "[]")
-                except Exception:
-                    nodes = []
-                labels = " ".join((n.get("label") or "") for n in nodes if isinstance(n, dict))
-                qn = q_tokens & self._flow_tokens(name)
-                qd = q_tokens & self._flow_tokens(desc)
-                ql = q_tokens & self._flow_tokens(labels)
-                score = len(qn) * 3 + len(qd) * 2 + len(ql)
-                if name and name in norm_input:
-                    score += 5  # 名称完整命中加权
-                if score > 0:
-                    lex_scored.append((score, r, sorted(list(qn | qd | ql))[:6]))
-            # 阈值 ≥2：排除单个公共词（如只命中 label 的"设计"）误命中
-            lex_top = [(s, r, m) for s, r, m in lex_scored if s >= 2]
-            lex_top.sort(key=lambda x: -x[0])
-
-            # 3) 语义通道：SemanticSearch（真向量优先 / bigram 降级）——**仅精排，不独立召回**
-            #    行业漏斗式：词法召回（粗筛）→ 语义排序（细排）。词法零命中的候选不进最终结果，
-            #    避免「随便聊聊」这类无关节被 bigram 0.3 分拉进来。
-            sem_scored = []
-            try:
-                from semantic import rank_items
-                sem_items = []
-                for r in rows:
-                    name = r["name"] or ""
-                    desc = r["description"] or ""
-                    try:
-                        nodes = json.loads(r["nodes"] or "[]")
-                    except Exception:
-                        nodes = []
-                    labels = " ".join((n.get("label") or "") for n in nodes if isinstance(n, dict))
-                    sem_items.append({"id": r["id"], "text": f"{name} {desc} {labels}"})
-                _sc = rank_items(norm_input, sem_items, top_k=20, threshold=0.0, key="text", conn=None)
-                sem_scored = [(s, it) for s, it in _sc]
-            except Exception:
-                sem_scored = []
-            sem_by_id = {it["id"]: s for s, it in sem_scored}
-            # 语义补召：词法全零命中时，若语义第一名显著才放行 top1。
-            # 2026-09-19：门槛按**本次实际走的路**选（两路余弦量纲不同，实测同批 top1 dense 0.51 / bigram 0.10）——
-            #   bigram → 0.5（原口径）；dense → semantic_fallback_gate_dense（0.79 = 0.5 的分位等价值，分位等价标定）。
-            try:
-                import semantic as _sem
-                _is_dense = _sem.last_backend() == "dense"
-            except Exception:
-                _is_dense = False
-            if _is_dense:
-                from core import config as _cfg
-                _gate = float(_cfg.get("context", "semantic_fallback_gate_dense", 0.79) or 0.79)
-            else:
-                _gate = 0.5
-            semantic_fallback = []
-            if not lex_top and sem_scored and sem_scored[0][0] >= _gate:
-                top_s, top_it = sem_scored[0]
-                semantic_fallback = [(top_s, by_id.get(top_it["id"]))]
-
-            # 4) 精排融合：词法分为主序，语义分做同分/相近排序微调
-            #    final = 词法分（主） + 语义分归一化（次，≤1.0 权重）；词法零命中仅 semantic_fallback 兜底
-            ranked = []
-            for s, r, m in lex_top:
-                fid = r["id"]
-                sem = sem_by_id.get(fid, 0.0)
-                # bigram 语义分 0-1，词法分通常 ≥2；语义只做小数位微调，不压过词法主序
-                ranked.append((s + sem * 0.5, r, m, s, sem))
-            for s, r in semantic_fallback:
-                if r is not None:
-                    ranked.append((s * 0.5 + 0.01, r, [], 0, s))  # 兜底置后
-            ranked.sort(key=lambda x: -x[0])
-
-            # 5) 组装结果（保留原返回结构：id/name/score/nodes/desc/matched）
-            out = []
-            for final_score, r, m, lex_s, sem_s in ranked[:limit]:
-                try:
-                    nodes = json.loads(r["nodes"] or "[]")
-                except Exception:
-                    nodes = []
-                out.append({"id": r["id"], "name": r["name"] or "",
-                            "score": round(final_score, 3), "nodes": len(nodes),
-                            "desc": (r["description"] or "")[:60], "matched": m,
-                            "lex_score": lex_s, "sem_score": round(sem_s, 3)})
-            return out
-        except Exception:
-            return []
-
+    # ★ 2026-11-05：`_flow_tokens` / `_match_flows` 随画布工作流一并移除。
+    #   它们只服务"匹配已保存的画布流程"，而画布已明确舍弃、前端 0 处消费
+    #   （`matched_flows` 字段前端从未读取）。调用方保留**字段形状**（恒返回 []），
+    #   以免既有 API 消费者因缺键而报错。
     def _build_context(self, retrieval, query=None):
         parts = []
         # P1：知识库检索后 LLM 重排（context.rerank 开关，粗筛→细排；失败返回原顺序）
@@ -256,12 +126,35 @@ class ContextMixin:
             except Exception:
                 _sel = list(chunk_hits[:_inject_k])
                 _div_stats = {}
-            for i, c in enumerate(_sel[:_inject_k], 1):
-                _doc = c.get("source_doc", "")
-                _sec = c.get("section_range") or c.get("chunk_index", 0)
+            _anchor_rows = []
+            # ★ 2026-11-15：**编号改由引用登记簿分配**（不再自己 enumerate）。
+            #   为什么必须改：原先【来源n】是"注入顺序号"，而 citations 数组也按
+            #   "注入顺序"生成 —— 两边各自数，一旦某一边多算/少算就整体错位
+            #   （本仓已发生过：位次 3/4/5 全错位）。现在**两边都读登记簿** ⇒ 结构上不可能错位。
+            #   同时登记簿让**工具检索**的命中也能拿到编号（见 tools.py 的 graph_retrieve），
+            #   —— 这才是 Skill 硬门槛要求的主路径（真机 conv 999999033：走工具路径时
+            #      citations 为空、正文 5 个 [n] 全部越界、点不动）。
+            _reg = getattr(self, "_citation_registry", None)
+            if _reg is None:
+                _reg = []
+                self._citation_registry = _reg
+            _entries = register_citations(_reg, _sel[:_inject_k])
+            for _e in _entries:
+                c = _e.get("chunk") or {}
+                _doc = _e.get("doc") or c.get("source_doc", "")
+                # 锚点由登记簿在**登记时**算好（单一真源）；此处只做兜底，不再各算一份。
+                _anchor = _e.get("anchor") or source_anchor(c)
                 _mf = c.get("merged_from")
-                _tag = f"§{_sec}" + (f"（合并 {len(_mf)} 段）" if _mf and len(_mf) > 1 else "")
-                parts.append(f"【来源{i}】{_doc} {_tag}: {c.get('content','')}")
+                _tag = _anchor + (f"（合并 {len(_mf)} 段）" if _mf and len(_mf) > 1 else "")
+                parts.append(f"【来源{_e['n']}】{_doc} {_tag}: {c.get('content','')}")
+                _anchor_rows.append(f"[{_e['n']}] {_doc_short(_doc)} {_anchor}")
+            # ★ 2026-11-14：**可照抄的编号对照表**（本轮关键改动）。
+            #   为什么必须给：模型真正要引的是条款号（§5.2.7），而它从正文里就能读到；
+            #   但"这条条款属于第几个来源"需要额外一次映射推理 —— 长文生成时它直接放弃。
+            #   把映射**预先算好摆出来**，写 `§5.2.7 [2]` 就变成"抄"而不是"想"。
+            if _anchor_rows:
+                parts.append("【可引用编号对照（正文标 [n] 就按这张表）】\n"
+                             + "\n".join(_anchor_rows))
             # ★ 2026-11-02：**显式给出可引用编号范围**。
             #   实测缺陷（会话 9986）：注入 5 条【来源1-5】，模型却在正文写了 [6][7][8] ——
             #   这三条在 citations 里不存在，用户点它们没有任何反应（"死编号"）。
@@ -274,7 +167,14 @@ class ContextMixin:
                 parts.append(
                     "（引用规则：正文中的 [n] **只能取 1–%d**，分别对应上面的【来源n】；"
                     "**不得写超出该范围的编号**，也不要为未列出的材料编号。"
-                    "若要用的证据不在这 %d 条里，请直说「现有材料未覆盖」。）"
+                    "若要用的证据不在这 %d 条里，请直说「现有材料未覆盖」。"
+                    # ★ 2026-11-14：条款号与来源序号**必须成对出现**。
+                    #   实测模型只写 §5.2.7（41~63 次/条）而 `[n]` 为 0 —— 因为它把
+                    #   "引标准条款"当成常识引用，没意识到还要给出处序号。
+                    #   这里把要求变成**可直接照抄的样式**（§x.y [n]），代价接近 0。
+                    "**若正文写出了条款号（如 §5.2.7 / §4.1.22），必须在条款号后紧跟"
+                    "该条款所在片段的来源序号，写成 `§5.2.7 [2]` 这种样式**；"
+                    "只写条款号不写序号，用户点不到证据。）"
                     % (_n_src, _n_src))
             # 归因：把"名义条数 vs 有效条数"喂给 context_audit（可观测）
             if _div_stats:

@@ -19,7 +19,47 @@ from datetime import datetime
 #   ⇒ 现在改为**从平台能力表动态派生**，这份常量只保证「数据库不可用时页面仍能渲染」。
 VALID_INTENTS = ("requirement_analysis", "requirement_quality", "design", "impact",
                  "review", "report_generation", "system_mgmt", "knowledge_qa", "chat")
-VALID_STATUS = ("new", "suggested", "confirmed", "rejected")
+VALID_STATUS = ("new", "suggested", "silver", "synth", "confirmed", "rejected")
+
+# ── 标注档位（2026-11-07 第 19 轮）──────────────────────────────────────────
+#   new       仅采集，系统还没给建议
+#   suggested 系统给了建议（弱标注），**等人确认** —— 这才是真正的人工待办
+#   silver    双视图独立标注一致（`created_by='dual_label_v1'`），已定档，用于**回归集**
+#   synth     手写改写（`source='aug'`），标签由构造决定，用于**边界覆盖**
+#   confirmed 人工确认 —— **唯一**的金标、**唯一**进评测集
+#   rejected  人工判定无效
+#
+# 为什么必须把 silver/synth 从 suggested 里拆出来（实测依据）：
+#   491 条 `suggested` 里 **347 条是银标、17 条是合成**，真待人工的只有 **127 条**。
+#   挤在一个状态里 ⇒ 页面「待确认 491」把两档已定档样本也算成人工待办，
+#   而评测跑批器（`tools/intent_eval_snapshot.py`）早已按 gold/silver/synth **三集分报**。
+#   状态字段与评测口径必须同构，否则"待办数"和"评测集"各说一套、都不可信。
+#: 状态 → 评测档位（与 `tools/intent_eval_snapshot.py::SETS` 一一对应）
+STATUS_TIER = {"confirmed": "gold", "silver": "silver", "synth": "synth"}
+
+
+def tier_of(source: str = "", created_by: str = "") -> str:
+    """按**标签来源**决定一条新样本落在哪一档。纯函数、无副作用，便于门禁直接断言。
+
+    判定顺序**不可交换**：`aug` 先判。评测跑批器的 `silver` 集显式排除 `aug`
+    （`COALESCE(source,'')<>'aug'`）；若先判 `dual_label`，那 183 条「aug + 双视图一致」
+    会同时落进 silver 与 synth 两集 ⇒ 同一批题在两条指标里各算一次，分数互相污染。
+    """
+    if (source or "").strip() == "aug":
+        return "synth"
+    if (created_by or "").strip() == "dual_label_v1":
+        return "silver"
+    return "suggested"
+
+
+#: 「需要补建议」的候选集：**判据是"有没有标签"**，不是"状态是不是 new"。
+#: 抽成模块常量（而不是写在方法体里）的唯一理由：门禁可以用**同一条 SQL** 做行为级断言
+#: （造一行 suggested+空 intent，断言它被选中、silver/synth 不被选中），
+#: 不必把 SQL 抄第二份 —— 抄一份就等于埋一处漂移。
+PENDING_SUGGEST_SQL = (
+    "SELECT id, text FROM intent_samples "
+    "WHERE status='new' OR (status='suggested' AND COALESCE(intent,'')='') "
+    "ORDER BY seen_count DESC, id LIMIT ?")
 
 
 class IntentSampleRepo:
@@ -28,26 +68,28 @@ class IntentSampleRepo:
 
     # ── 意图候选集（B5-2：动态派生）────────────────────────────────────
     def _dynamic_intents(self) -> list:
-        """标注/筛选下拉的候选意图 = **平台能力 ∪ 已在用的历史值**。
+        """标注/筛选下拉的候选意图 = **意图字典 ∪ 平台能力 ∪ 已在用的历史值**。
 
-        为什么不能是常量（实测证据）：
-          · `VALID_INTENTS` 硬编码 9 个，而 `agents.status='active'` 实有 **19 个**
-            ⇒ `MBSE建模总体负责人` / `architecture_skeleton` / `view_expansion` /
-              `requirement_structuring` / `model_validation_repair` / `trace_verification` /
-              `change_safety_gate` / `model_release` / `methodology_resolver` / `多方案生成`
-              这 10 个**真实存在、可被路由到的意图，页面上一个都选不到**。
-          · 一旦有人标注这些意图，下拉里没有该项 ⇒ 无法复核/改判，评测集也会被卡住。
-          · 而**写入侧本来就不校验 intent** ⇒ 常量既不安全、也不必要。
+        ★ 2026-11-07（米爸第 17 轮）：**首选 `intent_taxonomy`（意图字典）**。
+          此前只有 agents 派生 ⇒ 用户反馈"只能单选、无法新增和编辑"：
+          因为意图不是独立实体，想加一个"还没对应 Agent 的意图"根本无处可存。
+          现在字典是主来源（可增可改可停用），agents 与历史值作补齐，常量作兜底。
 
-        三源合并（任一即可，避免单一来源漏）：
-          ① `agents.status='active'` 的 name —— 平台当前真实能力（动态：新建 Agent 立刻出现）
-          ② `intent_samples.intent` 的历史 DISTINCT 值 —— **存量样本一个都不能丢**
-             （常量不认识的旧标注若被从下拉里抹掉，等于「数据还在但改不了」）
-          ③ `VALID_INTENTS` 常量兜底 —— 数据库不可用时页面仍能渲染
-        ⚠️ 查询失败**静默降级**到常量，不抛：这是列表接口的附属信息，
-           拿不到不该让整个页面 500。
+        四源合并（任一即可，避免单一来源漏）：
+          ① `intent_taxonomy`（active/deprecated 都出，deprecated 供历史标注复核）
+          ② `agents.status='active'` 的 name —— 字典还没播种到的新 Agent
+          ③ `intent_samples.intent` 的 DISTINCT 值 —— **存量样本一个都不能丢**
+          ④ `VALID_INTENTS` 常量兜底 —— 数据库不可用时页面仍能渲染
+        ⚠️ 查询失败**静默降级**到常量，不抛：这是列表接口的附属信息。
         """
         out = set(VALID_INTENTS)
+        try:
+            for r in self.conn.execute(
+                    "SELECT name FROM intent_taxonomy WHERE status IN ('active','deprecated')"):
+                if r[0]:
+                    out.add(r[0])
+        except Exception:
+            pass
         try:
             for r in self.conn.execute(
                     "SELECT name FROM agents WHERE status='active'"):
@@ -59,22 +101,29 @@ class IntentSampleRepo:
                 if r[0]:
                     out.add(r[0])
         except Exception:
-            return list(VALID_INTENTS)
+            return sorted(out)
         return sorted(out)
 
     def _intent_labels(self) -> dict:
-        """意图 → 中文显示名（取 `agents.display_name`）。
+        """意图 → 中文显示名。**首选意图字典**（用户可编辑），再回落 agents.display_name。
 
-        B5-2：动态加进来的意图（自定义 Agent 名，如 `多方案生成`、`architecture_skeleton`）
-        在前端静态字典里**没有中文名** ⇒ 下拉里只能显示英文/拼音。
-        ⇒ 后端一并给出标签，前端合并；前端有同名字段则**以后端为准**
-        （Agent 的 display_name 是用户自己起的，更贴近他的叫法）。
+        B5-2：动态加进来的意图在没有中文标签时前端只能显示英文名 ⇒ 后端一并给出。
+        2026-11-07：字典的 label 是权威（用户可改），agents 只是它的初始来源。
         """
         out = {}
         try:
             for r in self.conn.execute(
+                    "SELECT name, label FROM intent_taxonomy "
+                    "WHERE label IS NOT NULL AND TRIM(label)<>''"):
+                if r[0]:
+                    out[r[0]] = str(r[1]).strip()
+        except Exception:
+            pass
+        try:
+            for r in self.conn.execute(
                     "SELECT name, display_name FROM agents WHERE status='active'"):
-                if r[0] and r[1] and str(r[1]).strip():
+                # 字典没给中文名的才用 Agent 显示名
+                if r[0] and r[1] and str(r[1]).strip() and r[0] not in out:
                     out[r[0]] = str(r[1]).strip()
         except Exception:
             pass
@@ -100,10 +149,18 @@ class IntentSampleRepo:
         total = self.conn.execute(f"SELECT COUNT(*) FROM intent_samples {w}", args).fetchone()[0]
         rows = self.conn.execute(
             f"SELECT * FROM intent_samples {w} ORDER BY "
-            # 待标注的排前面（高频优先：seen_count 高说明是真正常用的说法），再按新近
-            "CASE status WHEN 'new' THEN 0 WHEN 'suggested' THEN 1 ELSE 2 END, "
+            # 待标注的排前面（高频优先：seen_count 高说明是真正常用的说法），再按新近；
+            # 定档但非金标（silver/synth）排在人工待办之后、已决（confirmed/rejected）之前。
+            "CASE status WHEN 'new' THEN 0 WHEN 'suggested' THEN 1 "
+            "WHEN 'silver' THEN 2 WHEN 'synth' THEN 3 ELSE 4 END, "
             "seen_count DESC, id DESC LIMIT ? OFFSET ?", args + [limit, offset]).fetchall()
         items = [dict(r) for r in rows]
+        # ★ 2026-11-07：附上**真实使用次数**（messages 表 role=user，排除测试会话）。
+        #   原因见 usage_audit()：seen_count 曾因回填被刷高（71% 条目虚高），
+        #   页面若只显示 seen_count 会误导标注优先级。两列并排，用户一眼看出差异。
+        real = self.real_usage_counts()
+        for it in items:
+            it["real"] = int(real.get(it.get("text") or "", 0))
         return {"items": items, "total": total, "limit": limit, "offset": offset,
                 "stats": self.stats(),
                 # B5-2：动态候选集（不再硬编码 9 个）+ 中文标签
@@ -112,13 +169,21 @@ class IntentSampleRepo:
 
     def stats(self) -> dict:
         g = lambda sql: {r[0]: r[1] for r in self.conn.execute(sql).fetchall()}
+        by_status = g("SELECT status, COUNT(*) FROM intent_samples GROUP BY status")
+        # 人工待办的**唯一定义**：既没定成金标、也没定档为银标/合成、也没被驳回的行。
+        # 页面禁止自己再写一遍 `new+suggested` —— 口径写两处必然漂移（本轮就是因为
+        # 一处把 silver/synth 混进 suggested，才让"485 条待审"这个数字虚高 3.8 倍）。
+        pending = sum(v for k, v in by_status.items() if k in ("new", "suggested"))
         return {
-            "by_status": g("SELECT status, COUNT(*) FROM intent_samples GROUP BY status"),
+            "by_status": by_status,
             "by_intent": g("SELECT intent, COUNT(*) FROM intent_samples "
                            "WHERE status='confirmed' GROUP BY intent"),
             "by_source": g("SELECT source, COUNT(*) FROM intent_samples GROUP BY source"),
             "confirmed": self.conn.execute(
                 "SELECT COUNT(*) FROM intent_samples WHERE status='confirmed'").fetchone()[0],
+            # 评测三档（与 tools/intent_eval_snapshot.py::SETS 同构）
+            "by_tier": {tier: by_status.get(st, 0) for st, tier in STATUS_TIER.items()},
+            "pending_human": pending,
         }
 
     def confirmed_cases(self) -> list:
@@ -129,11 +194,22 @@ class IntentSampleRepo:
 
     # ── 写入 ──
     def upsert(self, text: str, intent="", status="new", source="manual",
-               hit_intent="", hit_route="", hit_conf=0.0, note="", created_by="") -> dict:
+               hit_intent="", hit_route="", hit_conf=0.0, note="", created_by="",
+               bump_seen: bool = True) -> dict:
         """按 text 幂等写入：已存在则 seen_count+1 并（仅在传入非空时）更新字段。
 
         为什么按 text 去重：样本池的价值在"**不同**说法的覆盖度"，同一句话重复进来只会虚高样本量；
         seen_count 保留频次（页面据此把高频真实说法排前面，标注性价比最高）。
+
+        ★ 2026-11-07（米爸第 17 轮）：**`bump_seen` 必须区分"真实使用"与"回填导入"**。
+          实测缺陷：`text='请检索标准库并生成视图'` 的 `messages` 真实出现次数是 **0**
+          （仅在 2 个测试会话里各 1 次），但 `intent_samples.seen_count=61` ——
+          因为 `import_source` 每导入一次就对已存在的行 +1，反复导入把频次刷高了 60 次。
+          全池统计：**390/547 条（71%）看到达次数高于真实出现次数**，seen 总和 1098
+          而 messages 真实 user 消息只有 473。
+          ⇒ 用 seen_count 当"真实使用频次"排序是错的（上一轮审核清单就排错了）。
+          修法：`import_source`（回填）传 `bump_seen=False`，只有真实请求路径
+          （`collect()` / `record_override()`）才 +1。
         """
         text = (text or "").strip()
         if not text:
@@ -142,7 +218,10 @@ class IntentSampleRepo:
             return {"ok": False, "reason": "bad_status"}
         cur = self.conn.execute("SELECT id, status FROM intent_samples WHERE text=?", (text,)).fetchone()
         if cur:
-            sets, args = ["seen_count=seen_count+1", "updated_at=CURRENT_TIMESTAMP"], []
+            sets = ["updated_at=CURRENT_TIMESTAMP"]
+            if bump_seen:
+                sets.insert(0, "seen_count=seen_count+1")
+            args = []
             # 已确认的行**不被自动采集覆盖**（人标过优先级最高）；其余允许补建议值
             if cur["status"] != "confirmed":
                 if intent:
@@ -193,14 +272,20 @@ class IntentSampleRepo:
         return {"ok": True}
 
     def suggest_batch(self, limit: int = 40) -> dict:
-        """对 status='new' 的前 N 条跑**一次真实意图识别**，写入建议标签（status→suggested）。
+        """对**还没有建议标签**的前 N 条跑一次真实意图识别，写入建议标签（→ suggested）。
 
         刻意做成"小批量、可重复触发"：一次跑全池会卡住请求（每条都要 embedding，冷启更慢），
         而人工确认本来就该分批进行。返回明细供页面逐条展示"系统建议 vs 人工待确认"。
+
+        ★ 2026-11-07（第 19 轮）：**补上「suggested 但 intent 为空」的死区**。
+          原查询只取 `status='new'`，而实测有 **118 条**处于「已是 suggested、却没有标签」
+          （回填时带着 history hint 进了 suggested，但 hint 为空 ⇒ 既不会被补建议，
+          也无法被人工确认 —— `update()` 要求 confirmed 必须有标签）。这批行**卡死在中间态**：
+          页面上有、点"确认"报 `confirm_requires_intent`、点"补建议"扫不到。
+          修法：判据从"看状态"改为"看**有没有标签**"（无标签即需要建议），
+          与 tier 拆分后新增的 silver/synth 天然互斥（它们必有标签）。
         """
-        rows = self.conn.execute(
-            "SELECT id, text FROM intent_samples WHERE status='new' ORDER BY seen_count DESC, id LIMIT ?",
-            (limit,)).fetchall()
+        rows = self.conn.execute(PENDING_SUGGEST_SQL, (limit,)).fetchall()
         if not rows:
             return {"ok": True, "updated": 0, "items": []}
         from agent.pipeline import AgentPipeline
@@ -272,11 +357,61 @@ class IntentSampleRepo:
                 continue
             h = hints.get(text.lower()) or hints.get(text) or ("", "", 0)
             st = "suggested" if (has_intent_hint and h[0]) else "new"
+            # ★ bump_seen=False：回填是"发现了一条新说法"，不是"用户又说了一次"。
+            #   详见 upsert 文档里 2026-11-07 的实测说明（seen_count 曾被刷到 61 而真实为 0）。
             res = self.upsert(text, intent="", status=st, source="prod_import" if source != "messages" else "prod",
-                              hit_intent=h[0], hit_route=h[1], hit_conf=h[2])
+                              hit_intent=h[0], hit_route=h[1], hit_conf=h[2],
+                              bump_seen=False)
             n_new += (not res.get("updated")); n_upd += bool(res.get("updated"))
         return {"ok": True, "added": n_new, "updated": n_upd, "source": source,
                 "scanned": len(rows), "hint_hit": sum(1 for r in rows if hints.get((r["t"] or "").strip()))}
+
+    def real_usage_counts(self, exclude_test_convs: bool = True) -> dict:
+        """★ 2026-11-07：返回 `{text: 真实出现次数}` —— 从 `messages` 表 `role='user'` 统计。
+
+        为什么必须另算（而不是用 `intent_samples.seen_count`）：
+          实测 390/547 条（71%）的 seen_count 高于真实出现次数（最极端的一条 61 vs 0），
+          因为回填导入曾无脑 +1。用 seen_count 当"真实高频"排序会把
+          测试脚本刷出来的句子排到最前，标注性价比全错。
+
+        `exclude_test_convs=True` 时排除标题含 verify/测试/probe/验证 的会话 ——
+          这些是验证脚本建的一次性会话（实测「请检索标准库并生成视图」的 2 次全在这里）。
+          只影响**统计口径**，不删数据（保留可回溯）。
+        """
+        sql = ("SELECT m.content AS t, COUNT(*) AS n FROM messages m "
+               "LEFT JOIN conversations cv ON cv.id = m.conversation_id "
+               "WHERE m.role='user' AND m.content IS NOT NULL AND TRIM(m.content)<>''")
+        if exclude_test_convs:
+            sql += (" AND COALESCE(cv.title,'') NOT LIKE '%verify%' "
+                    " AND COALESCE(cv.title,'') NOT LIKE '%测试%' "
+                    " AND COALESCE(cv.title,'') NOT LIKE '%probe%' "
+                    " AND COALESCE(cv.title,'') NOT LIKE '%验证%'")
+        sql += " GROUP BY m.content"
+        try:
+            return {r[0]: int(r[1] or 0) for r in self.conn.execute(sql).fetchall()}
+        except Exception:
+            return {}
+
+    def usage_audit(self) -> dict:
+        """体检：`seen_count` 与真实出现次数的偏离程度（供门禁/页面显示"数据可信度"）。"""
+        real = self.real_usage_counts()
+        rows = self.conn.execute(
+            "SELECT id, text, seen_count, status FROM intent_samples").fetchall()
+        inflated, total_seen, total_real = [], 0, 0
+        for r in rows:
+            sc = int(r["seen_count"] or 0)
+            rc = int(real.get(r["text"], 0))
+            total_seen += sc
+            total_real += rc
+            if sc > rc:
+                inflated.append({"id": r["id"], "text": (r["text"] or "")[:60],
+                                 "seen": sc, "real": rc, "delta": sc - rc,
+                                 "status": r["status"]})
+        inflated.sort(key=lambda x: -x["delta"])
+        return {"samples": len(rows), "inflated": len(inflated),
+                "inflated_ratio": round(len(inflated) / max(len(rows), 1), 3),
+                "seen_sum": total_seen, "real_sum": total_real,
+                "top_inflated": inflated[:20]}
 
     def export(self) -> dict:
         """导出评测集（JSON）：既含 confirmed（可直接评测），也含待标注工作量统计。"""

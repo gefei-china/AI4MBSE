@@ -294,6 +294,12 @@ class StreamMixin:
         """
         from llm import llm_client
         from task_queue import TaskQueue
+        # ★ 2026-11-10（可中断）：中断探针的两个纯函数。
+        #   刻意只导入**函数**而不是模块别名：`models.py` 那条 G0 静态哨兵会把
+        #   `try: import X as _y / except: _y = None` 判成"模块别名被遮蔽"
+        #   （那是 ws 变 UnboundLocalError 的经典形态），导入函数则无此歧义。
+        from agent.orch_interrupt import (stop_requested as _int_stop,
+                                          latest_instruction as _int_ins)
         from agent import AgentPipeline as _AP
         from database import db_conn, get_db
         import time as _t
@@ -307,6 +313,12 @@ class StreamMixin:
         _run_sid = 0
         _plan_sid = 0
         reflection_meta = None   # P0-1（T3）：反思闭环评审轨迹（降级分支默认 None）
+        # ★ 2026-11-10（可中断）：必须在**函数顶部**初始化。
+        #   收尾段（聚合状态降级、终态选择、交付正文标注）无条件读它，
+        #   而"计划为空 ⇒ 单 Agent 直行"那条分支根本不进编排主循环 ——
+        #   只在循环前赋值就会在降级路径上抛 NameError（本仓已因同类问题
+        #   `_gate_gaps` 崩过一整轮，见下方 2026-11-04 的注释）。
+        _interrupt_hit = False
         goal = user_input or "执行该团队任务并汇总结果"
         # Task 10：汇总消费结构化摘要——编排三态（full/partial/failed），降级/单 Agent 直行恒 full
         _agg_status = "full"
@@ -376,7 +388,7 @@ class StreamMixin:
             #   ⚠️ 与团队模式那处 prompt 逐字一致，避免两套措辞再漂（本仓已有先例）。
             "⚠️ agent 字段**必须从上面「可用 Agent 池」里原样复制**（区分大小写，不要翻译成中文，"
             "不要使用你记忆里的旧名字）。池中没有合适的就**留空字符串**（系统会自动选），"
-            "**严禁自创或拼写近似的名字** —— 无法解析的名字会让该子任务直接失败。\n"
+            "**严禁自创或拼写近似的名字** —— 无法解析的名字会让整个计划被拒。\n"
             "task_type 可选 agent（走 Agent 完整管线）或 react（多步思考-工具求解）或 llm（纯生成）。\n"
             f"{skill_pool_txt}"
             f"要求：任务数 1~{self._ORCH_MAX_TASKS} 个；每个任务只交付一个明确成果；"
@@ -413,15 +425,34 @@ class StreamMixin:
                 "④ 内容整合输出：所有子任务完成后，汇总校验成员交付物，输出结构完整、结论清晰的最终答复。\n"
                 + (f"你的团队定位：{_lead_sp}\n" if _lead_sp else "") +
                 "现在开始：只输出 JSON 计划，格式如下：\n"
+                # ★ 2026-11-09（P0-1 字段对齐）：团队模式模板补 `expected_output` / `tools` / `skills`。
+                #   背景（实测）：团队模式 run 990209~990216 连续 8 个 run 的
+                #   `agent_tasks.expected_output` **全为 0%**，而同期普通编排 run 990207/990208
+                #   是 100% —— 差异**只**来自这里少列了 3 个字段：`create_plan` 直接读顶层
+                #   `expected_output` 落库，prompt 不产出 ⇒ 库里必空 ⇒ 子任务无验收依据。
+                #   这是第三次同族漂移（`stream.py:352` 注释已记录前两次），
+                #   本处与主路径（本文件 363-384）、非流式（`workflows/planner.py:485-495`）
+                #   必须**字段集合恒等**；判据见 `tools/verify/verify_plan_prompt_parity.py`。
                 '{"tasks": [{"key": "t1", "title": "子任务描述", "agent": "Agent 名",'
                 ' "deps": ["前置任务key列表，无则[]"], "task_type": "agent",'
                 ' "context": "该任务必需的上下文/输入引用(精简事实，可空)",'
-                ' "config": {"required": true}}]}\n'
+                ' "expected_output": "该子任务的完成标准（可验证的交付物描述，50字内）",'
+                ' "config": {"required": true},'
+                ' "tools": ["允许的工具白名单(可空，空=继承该 Agent 默认绑定)"],'
+                ' "skills": ["指定技能(可空)"]}]}\n'
                 f"可用 Agent 池：\n" + "\n".join(pool_lines) + "\n"
                 + ((f"团队成员名册（agent 字段必须**逐字取自**下列 name）：\n{_team_roster}\n")
                    if _team_roster else "") +
                 "task_type 可选 agent / react / llm。\n"
-                f"要求：任务数 1~{self._ORCH_MAX_TASKS} 个；每个任务只交付一个明确成果；不要输出其他文字。\n"
+                "⚠️ agent 字段**必须从上面「可用 Agent 池」里原样复制**（区分大小写，不要翻译成中文，"
+                "不要使用你记忆里的旧名字）。池中没有合适的就**留空字符串**（系统会自动选），"
+                "**严禁自创或拼写近似的名字** —— 无法解析的名字会让整个计划被拒。\n"
+                f"要求：任务数 1~{self._ORCH_MAX_TASKS} 个；每个任务只交付一个明确成果；"
+                "有依赖关系的用 deps 表达；context 只写该任务必需的事实与输入引用（上下文隔离，避免膨胀）；"
+                "**每个任务都要写 expected_output**（下游据此把完成标准注入子任务，缺失即失去验收依据）；"
+                "config.required 标注该任务产出是否为达成目标所必需（true=必需，false=可选/增强，"
+                "required 全完成即可提前收敛收尾）；"
+                "不要输出其他文字。\n"
                 f"目标：{goal}"
             )
         # P0-4（2026-09-24）：multi_intent 从「仅展示」升级为「驱动计划」——
@@ -1077,6 +1108,10 @@ class StreamMixin:
                 skill_name2 = cfg.get("skill") or None
                 evs, sub_res, sub_has_token = [], "", False
                 _sub_err = ""   # ★ 2026-11-04：error 事件的真实死因（原为永久空串）
+                # ★ 2026-11-13：本子任务是否**因等人而中断**（confirm / clarify / ""）。
+                #   与 `_sub_err` 分开：那是"出错"，这是"等人"——两者都算未完成，
+                #   但归因完全不同（修法不同：一个改代码/重试，一个去点确认单）。
+                _sub_pending, _sub_pending_note = "", ""
                 tok_used = 0
                 _t0 = _t.time()
 
@@ -1191,7 +1226,32 @@ class StreamMixin:
                                 _evq.put(e2)
                             elif _et == "done":
                                 ddata = ev.get("data") or {}
-                                if not sub_res:
+                                # ★★ 2026-11-13（conv 990727 / run 990225 归因）：
+                                #   done 帧的 `content` **有两种语义**，此前被混为一谈：
+                                #     ① 真正的子任务交付正文；
+                                #     ② HIL 确认闸 / 澄清闸的**中断提示文案**
+                                #        （"写操作已进入人工确认队列" / "AI 执行中需要你确认"）。
+                                #   原实现 `if not sub_res: sub_res = ddata.get("content")`
+                                #   无差别兜底 ⇒ ②被当成正文 ⇒ `ok=True`、`status=done`
+                                #   ⇒ 下游 t2/t3 看到"有产出"，实际一个字都没有
+                                #   ⇒ 汇总只能写"t1、t2 尚未体现实质性完成结果"，
+                                #   用户感知为「生成用例视图失败」。
+                                #   修法：先认中断标志，**中断不取 content 当正文**。
+                                _pend_kind = ""
+                                if ddata.get("hil_confirm"):
+                                    _pend_kind = "confirm"
+                                elif ddata.get("clarify_asked"):
+                                    _pend_kind = "clarify"
+                                if _pend_kind:
+                                    _sub_pending = _pend_kind
+                                    _pcid = int(ddata.get("confirmation_id") or 0)
+                                    if _pend_kind == "confirm":
+                                        _sub_pending_note = (
+                                            "等待人工确认（确认单 #%d），本子任务未产生交付物" % _pcid
+                                            if _pcid else "等待人工确认，本子任务未产生交付物")
+                                    else:
+                                        _sub_pending_note = "等待用户澄清回答，本子任务未产生交付物"
+                                elif not sub_res:
                                     sub_res = ddata.get("content") or ""
                                 _m = ddata.get("meta") or ddata.get("llm") or {}
                                 if isinstance(_m, dict):
@@ -1211,6 +1271,14 @@ class StreamMixin:
                                 _sub_err = str(ev.get("message") or "子任务流异常终止")
                                 evs.append(dict(ev))
                         ok = bool(sub_res.strip()) or sub_has_token
+                        # ★ 2026-11-13：**中断必须如实标记**，不能让下游把"在等人"当"已完成"。
+                        #   · 没有任何真实产出 ⇒ ok=False（否则汇总会基于空气泡写结论）；
+                        #   · 已有部分 token 正文 ⇒ 保留 ok=True（部分产出仍可用于汇总），
+                        #     但 error 字段仍写明"待确认"，避免被当成完整交付。
+                        if _sub_pending:
+                            if not str(sub_res or "").strip():
+                                ok = False
+                            _sub_err = _sub_err or ("pending_%s: %s" % (_sub_pending, _sub_pending_note))
                         if not tok_used:
                             tok_used = max(len(str(sub_res)) // 2, 0)   # 估算兜底：len(输出文本)//2
                         # Task 9：摘要协议收发——结果 dict→validate；纯文本（旧格式）→normalize_text 兼容解析
@@ -1335,6 +1403,35 @@ class StreamMixin:
                                 pass
                             # 协议状态 → 子任务成功标志：failed→fail（现状 tk_ok 判定保留兼容）
                             if _summary_proto and _summary_proto.get("status") == "failed":
+                                ok = False
+                            # ★★ 2026-11-13（B 项）：因等人而中断 ⇒ 摘要协议必须**如实降级**。
+                            #   为什么必须动协议而不是只改 ok：`summary_json` 是下游**唯一**的
+                            #   协议真源（物化 → 汇总 → 评审三处都只认它）。若不在这里标注，
+                            #   下游拿到的是一份"看起来正常"的摘要（status=full、missing=[]）
+                            #   ⇒ 汇总报告只能写"t1、t2 尚未体现实质性完成结果"这种含糊结论，
+                            #   用户看不出"是在等你自己点确认"。
+                            #   ⇒ 强制 status=failed（无可交付物）+ missing[] 写清真实原因，
+                            #     并记 `meta.pending_kind` 供前端/审计区分「等人」与「出错」。
+                            if _sub_pending:
+                                if not isinstance(_summary_proto, dict):
+                                    # 归一化失败也不能丢信息：造一份最小可判协议
+                                    _summary_proto = {"schema_version": 1, "status": "failed",
+                                                      "summary": "", "artifacts": [],
+                                                      "evidence": [], "risks": [], "claims": [],
+                                                      "missing": [], "confidence": 0.0,
+                                                      "meta": {"protocol_source": "missing"}}
+                                _summary_proto["status"] = "failed"
+                                _miss = _summary_proto.get("missing")
+                                if not isinstance(_miss, list):
+                                    _miss = []
+                                if _sub_pending_note and _sub_pending_note not in _miss:
+                                    _miss.append(_sub_pending_note)
+                                _summary_proto["missing"] = _miss[:20]
+                                _m3 = _summary_proto.get("meta")
+                                if not isinstance(_m3, dict):
+                                    _m3 = {}
+                                _m3["pending_kind"] = _sub_pending
+                                _summary_proto["meta"] = _m3
                                 ok = False
                         except Exception:
                             _summary_proto = None
@@ -1658,8 +1755,53 @@ class StreamMixin:
                 _orch_batch_budget = 0
             _orch_batch_deadline = (_t.time() + _orch_batch_budget) if _orch_batch_budget > 0 else 0.0
             _deadline_hit = False
+            # ★ 2026-11-10（可中断）：探针状态 + 一次性事件标志。
+            #   `_int_probe` 缓存上次查询结果（节流 2 s，见循环内注释）；
+            #   `_interrupt_hit` 供收尾段区分"被用户停下"与"正常完成"——
+            #   否则用户中断后仍会收到一条"（任务已全部完成）"的假结论。
+            _int_probe = None
+            _int_probe_at = 0.0
+            _interrupt_hit = False
             while TaskQueue.pending_count(conn, run_id) > 0 and guard < 200:
                 guard += 1
+                # ★★ 2026-11-10（可中断策略）：**派发边界**检查"用户是否已要求停下"。
+                #   为什么在派发之前而不是在任务里：停止必须发生在"还没派出去的活"上，
+                #   已派出的那些由 worker 的协作式探针（`is_cancel_requested`）在
+                #   产出热路径上自行收敛；两者合起来才是"最多多等一轮"。
+                #   判据来自 DB（checkpoint.phase ∈ interrupted/cancelled），不是进程内
+                #   Event —— 中断可能来自另一个请求线程/另一个 worker，进程内标志会漏。
+                #   节流：主循环每 50 ms 转一圈，每圈都查会把单写者 DB 打满。
+                try:
+                    if _int_probe is None or (_t.time() - _int_probe_at) >= 2.0:
+                        # ★ 传 None ⇒ 探针自己开**独立连接**（主连接可能持有未提交写事务）
+                        _int_probe = _int_stop(None, run_id)
+                        _int_probe_at = _t.time()
+                except Exception:
+                    _int_probe = False
+                if _int_probe:
+                    _interrupt_hit = True
+                    _n_cancel = 0
+                    try:
+                        for _tki in TaskQueue.tasks(conn, run_id):
+                            if _tki["status"] in ("planned", "ready", "blocked", "running"):
+                                if TaskQueue.cancel(conn, _tki["id"], "用户中断"):
+                                    _n_cancel += 1
+                    except Exception:
+                        pass
+                    _ins_txt = ""
+                    try:
+                        _ins_txt = _int_ins(conn, run_id) or ""
+                    except Exception:
+                        _ins_txt = ""
+                    yield {"type": "interrupt", "kind": "interrupt",
+                           "run_id": int(run_id or 0), "cancelled": _n_cancel,
+                           "instruction": _ins_txt,
+                           "resume_hint": "已完成 %d 个子任务，可按新指令继续编排"
+                                          % len(done_items)}
+                    yield {"type": "progress", "kind": "progress",
+                           "delta": "（已中断）已停止派发剩余子任务%s，正在收尾…"
+                                    % (("，补充指令已记录" if _ins_txt else ""))}
+                    break
                 # ★★ 2026-10-30（P0 缺口②·编排路径）：**整轮墙钟到点 ⇒ 停止派发新任务**。
                 #   为什么必须在这里单独判一次（ReAct 循环里的检查覆盖不到编排）：
                 #   编排走的是 `run_planner_plan` + 本 while，**不进** ReAct 主循环
@@ -2665,13 +2807,26 @@ class StreamMixin:
                             # ⚠️ 这里**不再** `for ev in evs: yield ev`（那些事件已由 ① 实时吐出；
                             #    再吐一遍会重复渲染）。`evs` 仍随返回值带出，仅供调试/兼容。
                             if tk_ok:
-                                TaskQueue.complete(conn, tk["id"], sub_res or "（子任务已产出流式内容）",
-                                                   {"summary": sub_res[:300], "score": len(sub_res)},
-                                                   latency_ms=_t_lat)
+                                # ★ 2026-11-10（可中断）：中断期间**不把半截产出记成 done**。
+                                #   机制：worker 的协作式探针在收到 cancelled 后会 break，
+                                #   于是带着"前段已生成内容"正常返回（tk_ok=True）。
+                                #   若照旧调 complete ⇒ DB 里变 done ⇒ 下次 resume 判 reuse
+                                #   ⇒ **半截内容被当成完整交付物**，用户永远拿不到补齐的那版。
+                                #   故：内容仍进 done_items（供汇总/正文展示），但任务行保持
+                                #   cancelled（resume 会重排队），条目状态标 partial。
+                                _tk_cancelled = False
+                                try:
+                                    _tk_cancelled = bool(_interrupt_hit)
+                                except Exception:
+                                    _tk_cancelled = False
+                                if not _tk_cancelled:
+                                    TaskQueue.complete(conn, tk["id"], sub_res or "（子任务已产出流式内容）",
+                                                       {"summary": sub_res[:300], "score": len(sub_res)},
+                                                       latency_ms=_t_lat)
                                 # Task 9：上游快照携带协议摘要（partial 以 summary.status 标记；Task 10 汇总消费）
                                 done_items.append({"task_key": tkey, "title": ttitle,
                                                    "agent_id": tk.get("agent_id"), "result": sub_res,
-                                                   "status": "done",
+                                                   "status": ("partial" if _tk_cancelled else "done"),
                                                    "summary": _summary,
                                                    "result_offload_id": _off_id or 0,
                                                    "proto_status": (_summary or {}).get("status")})
@@ -2887,6 +3042,16 @@ class StreamMixin:
             # + 构造汇总输入：优先用协议 summary（summary 文本 + artifacts 标题 + evidence）组织每节；
             #   无 summary 的子任务（旧数据）回退原 result 文本（兼容）。失败不阻断汇总。
             _agg_status, _missing_keys, _sum_items = "full", [], list(done_items)
+            # ★ 2026-11-10（可中断）：中断会让 `pending_count` 立刻归零（任务全 cancelled），
+            #   主循环于是**在顶部检查之前就退出** ⇒ `_interrupt_hit` 会一直是 False，
+            #   用户随即收到一条"已完成"的假结论。故这里补一次终态判定：
+            #   只要 checkpoint 停在 interrupted/cancelled，本轮就必须按"被停下"收尾。
+            if not _interrupt_hit:
+                try:
+                    if _int_stop(None, run_id):
+                        _interrupt_hit = True
+                except Exception:
+                    pass
             try:
                 from services import subtask_protocol as _sp
                 _summaries = []
@@ -3057,6 +3222,17 @@ class StreamMixin:
                     if (_tk.get("status") not in ("done", "skipped")
                             and _tk.get("key") not in _missing_keys):
                         _missing_keys.append(_tk.get("key"))
+            # ★ 2026-11-10（可中断）：被用户中断的批次**一律降为 partial**（只降不升）。
+            #   为什么必须在这里动：中断把任务置 cancelled ⇒ 上面的 `_st_all` 里
+            #   出现 cancelled 但既不是 failed 也不是 partial，`_hard` 仍算 full ⇒
+            #   卡片会显示"✅ 完整"，而实际有一半子任务没跑 —— 与"失败被记成成功"同族。
+            if _interrupt_hit:
+                if len(done_items) > 0:
+                    _agg_status = "partial" if _agg_status == "full" else _agg_status
+                else:
+                    _agg_status = "failed"
+                if "用户中断" not in _missing_keys:
+                    _missing_keys.append("用户中断")
             # ★ Task #43：summary span —— 覆盖「三态聚合构造 + LLM 汇总 + 预算标注」。
             #   这是单次 LLM 调用里输入最大的一段（_summarize_plan 吃全部交付物），
             #   慢/贵主要都在这里，没有 span 就只能从事件流秒表反推。
@@ -3098,6 +3274,25 @@ class StreamMixin:
             # Task 7：预算受限 → 汇总内容标注 partial（前端可识别「部分子任务未执行」）
             if budget_hit:
                 orch_content += "\n\n（因预算限制部分子任务未执行）"
+            # ★ 2026-11-10（可中断）：中断必须写进**交付正文**，不能只靠 SSE 事件。
+            #   用户回头在会话历史里看到的只有消息正文；若正文写"编排执行失败"或
+            #   干脆没有说明，事后没人知道"这是我自己停的、还能接着跑"。
+            if _interrupt_hit:
+                _ins_line = ""
+                try:
+                    _ins_line = (_int_ins(conn, run_id) or "").strip()
+                except Exception:
+                    _ins_line = ""
+                orch_content = (orch_content or "").strip()
+                orch_content += ("\n\n---\n**本次编排已被中断**（用户主动停止）。"
+                                 "已完成的 %d 个子任务结果已保留；未完成的 %d 个子任务已停止，"
+                                 "不会继续消耗额度。%s"
+                                 "可调用「继续编排」接着跑（未完成任务会被重新排队）%s。"
+                                 % (len(done_items),
+                                    len([t for t in (orch_tasks or [])
+                                         if str(t.get("status") or "") not in ("done", "skipped")]),
+                                    ("中断时记录的补充指令：%s。" % _ins_line) if _ins_line else "",
+                                    "，补充指令会注入到被重排任务的上下文" if _ins_line else ""))
             # ★ P4：提前收敛 ⇒ 汇总内容显式标注（"主动战略放弃"≠"没做完"——
             #   与 partial 的区分是 early_stop 的设计核心：用户要知道剩下的
             #   任务是**没必要做**，不是**没做成**）。
@@ -3616,11 +3811,11 @@ class StreamMixin:
                     orch_content = "（编排质量门禁：" + "；".join(_gate_gaps) + "）\n\n" + orch_content
                     yield {"type": "progress", "kind": "progress",
                            "delta": "（自动编排）编排质量门禁：" + "；".join(_gate_gaps)}
-        # P0-1：编排成功后沉淀为可复用工作流（draft，前端可另存/画布编辑/发布）
+        # ★ 2026-11-05：画布工作流已移除 ⇒ 编排结果不再"沉淀为可复用工作流"
+        #   （`_save_planner_flow` 写的是 agent_flows，属画布流程定义）。
+        #   字段 `saved_flow_id` / `saved_flow_name` 仍保留在输出里且恒为 None：
+        #   保持卡片数据结构形状不变，避免既有消费者因缺键报错。
         saved_flow_id = None
-        if done_items:
-            saved_flow_id = self._save_planner_flow(goal, plan, intent)
-
         # ★ 2026-11-02（米爸「最终正文只承载最后确定的代码」）：流式推送前做一次
         #   中间版本代码收敛。为什么必须在这里（而不是只在 _summarize_plan 出口）：
         #   ① reflection 修订会**整体重写** orch_content（L3305），可能把各子任务的
@@ -3701,6 +3896,13 @@ class StreamMixin:
         try:
             from agent.orch_checkpoint import finish as _ck_fin
             _final_phase = "failed" if (not degraded and _agg_status in ("partial", "failed")) else "done"
+            # ★ 2026-11-10（可中断）：被用户中断的批次**不能**落成 done/failed。
+            #   两者都是 TERMINAL_PHASES ⇒ `prepare_resume` 直接以 `phase_terminal` 拒绝恢复
+            #   ⇒ "中断后可以接着跑"这句话就是假的（实测：phase 被写成 failed 后
+            #   `resumable=False / reason=phase_terminal:failed`，任务全 cancelled 但没人能救）。
+            #   正确终态是 `interrupted`：它不是终态，resume 会把 cancelled 任务重排队。
+            if _interrupt_hit and not degraded:
+                _final_phase = "interrupted"
             _ck_fin(conn, run_id, _final_phase)
         except Exception:
             pass
@@ -3845,157 +4047,10 @@ class StreamMixin:
                           "graph_count": 0, "vector_count": 0, "attachment_used": False},
         }}
 
-    def _stream_orchestrated(self, orch: dict, user_input: str, conversation_id, intent: str,
-                             agent_def, hil_level: str, kb_tags: list, attachments: list,
-                             slots: dict, user, run_id: int = 0) -> iter:
-        # ⚠️ `run_id` 是**本方法的显式参数**（默认 0），不是外层闭包的变量 ——
-        #   本方法与 `_stream_orchestrated_flow` 是**平级方法**，看不到对方的局部变量。
-        #   （2026-10-13 真实建模验证抓到：最初直接在函数体里写 `run_id`，
-        #    走"命中已发布沉淀流程"这条复用路径时崩，报 `name 'run_id' is not defined`，
-        #    **14 个离线门禁全绿也没抓到** —— 它们只查"源码里有没有这个字符串"，
-        #    不查它在该函数作用域内能不能解析。**静态字符串判据对作用域错误天生无能。**）
-        #
-        # ⚠️⚠️ **复用流程（`reused`）本来就不传**：那条路径用的是**预发布流程模板**，
-        #   本次没有 create_plan、没有 agent_tasks 行 ⇒ 客观上不存在批次号，
-        #   此时 `orch_run_id` 恒为 0。**这是事实，不是 bug** ——
-        #   但绝不能为了"让它有值"而引用一个不存在的变量（那正是原缺陷）。
-        #   真要让它有批次号，得在复用路径上补 create_plan，属独立议题。
-        """P0-1 编排路径流式产出：子任务过程（agent 事件）→ 汇总 tokens → 落库 → done。
-
-        与主路径落库段保持一致（card 含 orchestrated/plan），前端按 stage/agent/token 现有渲染直接可视化。
-        """
-        # 2026-09-23：此处原有写死的「知识库检索 done/retrieved=False」阶段事件。它无条件出现、
-        # 与真实检索无关（编排模式下子任务的 stage 事件不外传，见子任务事件转发只收
-        # token/reasoning/tool/done），会让用户看到一个从未真正执行过的「知识库检索·未引用」环节。
-        # 现不再预发该阶段：检索真实性由各子任务按其 Agent 的 kb_required 决定。
-        yield {"type": "stage", "name": _gen_stage_name(intent, agent_def), "status": "run"}
-        orch_tasks = ((orch.get("data") or {}).get("tasks")) or []
-        # ★ B5-6（A-1）：复用路径**也要产出 subtasks 轨迹**。
-        #   根因：`_stream_orchestrated`（复用）与 `_stream_orchestrated_flow`（真实执行）
-        #   各写一份 card_data，而**只有后者带 `exec.subtasks`**
-        #   ⇒ 复用路径落库的消息 `subtasks=[]`
-        #   ⇒ 前端 `06-cards.js: if(subs.length)` 判空 → **整块不渲染**
-        #   ⇒ 用户看到「有计划编导、有一堆子智能体状态，但没有任何子任务卡片」，
-        #   且**刷新后实时 timeline 全丢**（那只是 DOM，从未落库）。
-        #   实测（真库 conv 9360）：msg3983（真实执行）subtasks 3 条 /
-        #   msg3985（复用）**0 条**，而 run535 实际跑5 个子任务、产出 3.6 万字符。
-        #   ⇒ 数据在 `agent_tasks` 表里躺着，界面一条都看不到。
-        #   本路径不逐个执行子任务，故 status 统一取 `orch_tasks` 自带值（缺省 done），
-        #   **不伪造** latency/token —— 模板复用的口径本就`template_reuse`（见 capability_scope）。
-        _subtasks = []
-        for _i, _tk in enumerate(orch_tasks):
-            _st = str(_tk.get("status") or "done")
-            _subtasks.append({
-                "key": _tk.get("key") or ("t%d" % (_i + 1)),
-                "title": _tk.get("title") or _tk.get("key") or ("t%d" % (_i + 1)),
-                "agent": _tk.get("agent") or "",
-                # ★ 复用路径没有真实执行耗时/ token，**显式留空而不是填 0** ——
-                #   填 0 会被前端 `(s.latency_ms/1000).toFixed(1)` 渲染成 "⏱ 0.0s"，
-                #   看起来像"瞬间完成"，是**假数据**；留空则前端整段不显示（正确）。
-                "latency_ms": _tk.get("latency_ms") or None,
-                "token_count": _tk.get("token_count") or None,
-                "deps": _tk.get("deps") or [],
-                "status": "done" if _st == "done" else ("run" if _st == "running" else _st),
-                "summary": _tk.get("summary") or "",
-                "error": _tk.get("error") or "",
-                # ★ F-3：复用路径（模板声明）**没有真实执行** ⇒ output 恒为 None。
-                #   前端据此不渲染结果块，而不是渲染空块或编造内容
-                #   （与 latency_ms/token_count 留空的理由同源：不许造假数据）。
-                "output": _tk.get("output") or None,
-                # 标记来源，便于前端与后续排查区分"真跑过"与"模板声明"
-                "from_template": True,
-            })
-        for tk in orch_tasks:
-            tkey = tk.get("key") or "t"
-            ttitle = tk.get("title") or tkey
-            yield {"type": "agent", "status": "run", "name": tkey, "display_name": ttitle,
-                   "intent": intent, "hil_level": hil_level}
-            yield {"type": "agent", "status": "done", "name": tkey, "display_name": ttitle,
-                   "intent": intent, "hil_level": hil_level}
-        orch_content = orch.get("content") or ""
-        _n_bad = sum(1 for _ot in orch_tasks if str(_ot.get("status") or "done") != "done")
-        _d = ("（自动编排）复杂任务已分解为 %d 个子任务执行完成%s，汇总最终结论…"
-              % (len(orch_tasks), ("（其中 %d 个未成功）" % _n_bad) if _n_bad else ""))
-        yield {"type": "progress", "kind": "progress", "delta": _d}
-        # P0-3（2026-09-17）：无节流切片 → 类人节奏产出（本路径不做事后补块，保持原行为）
-        for _chunk in iter_stream_chunks(orch_content):
-            yield {"type": "token", "delta": _chunk}
-        yield {"type": "stage", "name": _gen_stage_name(intent, agent_def), "status": "done"}
-        # SP-R/视图联动：编排汇总内容含 SysML → 投影视图（需求图/BDD 等会话内预览）
-        sysml_views = self._gen_sysml_views(orch_content, intent, user_input)
-        llm_info = {"provider": (orch.get("llm") or {}).get("provider", "自动编排"), "model": "-",
-                    "used_mock": bool((orch.get("llm") or {}).get("used_mock", False)),
-                    "latency_ms": orch.get("latency_ms", 0)}
-        yield {"type": "stage", "name": "写入会话", "status": "run"}
-        card_data = json.dumps({
-            "intent": intent, "agent": agent_def.name, "hil_level": hil_level,
-            "kb_tags": kb_tags, "skill_hits": self._last_skill_hits, "slots": slots,
-            "orchestrated": True, "degraded": bool(orch.get("degraded")),
-            "plan": [{"key": t.get("key"), "title": t.get("title"), "agent": t.get("agent"),
-                      "status": t.get("status")} for t in orch_tasks],
-            "sysml_views": sysml_views,
-            "source": "none", "confidence": 0, "graph_count": 0, "vector_count": 0,
-            "used_mock": llm_info["used_mock"], "provider": llm_info["provider"],
-            # ★ 2026-10-14（#19 之外的通用性项）：**复用路径的能力盲区显式化**。
-            #   这条路径只播报 `agent run/done` 占位事件、**不执行子任务** ⇒
-            #   挂在子任务上的结构化能力（claims 结论分档 / 结论冲突检测 /
-            #   交付物结构校验）**在这里完全不会发生**，而用户看不出区别。
-            #   ⇒ 落一条明确标记，前端可据此提示「本次为流程模板复用，
-            #     未执行子任务，故未做结论分档/冲突检测/交付物结构校验」。
-            #   ⚠️ 这**不是**缺陷标记（复用是刻意的产品语义），是**口径说明**：
-            #     避免用户把"没检出冲突"误解成"检查过且无冲突"。
-            "capability_scope": {
-                "mode": "template_reuse",
-                "subtasks_executed": False,
-                "structure_checks_applied": False,
-                "note": "本次命中已发布流程模板，未执行子任务；"
-                        "结论分档/冲突检测/交付物结构校验均未应用",
-            },
-            "exec": {"reasoning": f"自动编排：复杂任务分解为 {len(orch_tasks)} 个子任务由多 Agent 协作执行",
-                     "agent": agent_def.name, "tools": [],
-                     # ★ B5-6：与真实执行路径（:1409）字段集对齐 ——
-                     #   此前此处的 exec 只有 3 个键，缺 subtasks ⇒ 前端整块不渲染。
-                     "subtasks": _subtasks},
-        }, ensure_ascii=False)
-        with db_conn() as conn:
-            # 2026-09-29：user 消息已在 execute_stream 入口落库，此处只插 assistant（防重复）
-            cursor = conn.execute(
-                "INSERT INTO messages (conversation_id, role, content, msg_type, card_data) VALUES (?,?,?,?,?)",
-                (conversation_id, "assistant", orch_content, "text", card_data)
-            )
-            msg_id = cursor.lastrowid
-            _archive_artifacts(conn, conversation_id, msg_id, card_data, orch_content, intent)
-            conn.execute(
-                "UPDATE conversations SET updated_at=CURRENT_TIMESTAMP, intent=? WHERE id=?",
-                # ★ 2026-10-29：同上，入库前规范化
-                (self._intent_for_storage(intent, locals().get("_detected", "")),
-                 conversation_id)
-            )
-            # Audit log
-# P0-b（2026-10-03 审计差距评估）：审计写入统一走 core.audit.audit() ——
-#   此前此处直插 audit_logs 只有 5 列，绕过溯源上下文（IP/UA/request_id）与哈希链，
-#   且归属写死「王工」（不可信）。改由统一入口写入，与其余 200+ 条审计同一口径。
-            audit(audit_user(user), "llm_chat",
-                  f"会话#{conversation_id} · 自动编排（{len(orch_tasks)}子任务）· 意图:{intent}", conn=conn)
-            # 话题打标：落库后立即打标（含刚插入的当前轮消息）
-            try:
-                self._tag_topics(conn, conversation_id)
-            except Exception:
-                pass
-        yield {"type": "stage", "name": "写入会话", "status": "done"}
-        # V2.5：主 Agent（团队负责人）收尾事件——修前缺失致前端「子智能体：团队」停留"执行中"
-        yield {"type": "agent", "status": "done", "name": agent_def.name,
-               "display_name": agent_def.name, "intent": intent, "hil_level": hil_level}
-        yield {"type": "done", "data": {
-            "message_id": msg_id, "intent": intent, "agent": agent_def.name, "hil_level": hil_level,
-            "kb_tags": kb_tags, "skill_hits": self._last_skill_hits, "slots": slots,
-            "orch_run_id": int(run_id or 0),   # B2-11：同上
-            "content": orch_content, "report": None, "card": json.loads(card_data),
-            "sysml_views": sysml_views, "llm": llm_info, "orchestrated": True,
-            "plan": orch_tasks, "degraded": bool(orch.get("degraded")),
-            "retrieval": {"source": "none", "route": "none", "confidence": 0,
-                          "graph_count": 0, "vector_count": 0, "attachment_used": False},
-        }}
+    # ★ 2026-11-05：`_stream_orchestrated` 已移除。
+    #   它只服务「画布流程复用」路径（用预先算好的 orch 结果直接流式输出），
+    #   该路径随画布工作流一并删除 ⇒ 本方法**无任何调用点**（全仓已复核）。
+    #   主链路编排走 `_stream_orchestrated_flow`（真实执行），未受影响。
 
     def _persist_partial_stream(self, conversation_id, content, reason="error",
                                 dry_run=False, force=False, detail="", exec_card=None):
@@ -4213,7 +4268,8 @@ class StreamMixin:
                        attachments=None, forced_intent=None, skill_name=None, user=None, dry_run=False,
                        team=None, scope_id=None, scope_ids=None, scope=None, resume_run_id: int = 0,
                        resume_of_user_msg_id: int = 0, resume_append: str = "", _tracer=None,
-                       deadline_ts: float = 0.0, session_conv_id: int = 0, overrides=None):
+                       deadline_ts: float = 0.0, session_conv_id: int = 0, overrides=None,
+                       ui_intent_override: str = ""):
         """流式执行（V2.3.2 优化：AI 输出流式 + 执行过程可观测）。生成器逐段产出 SSE 事件：
 
         {"type":"stage","name":..., "status":"run|done"}   右侧智能体执行状态
@@ -4504,6 +4560,14 @@ class StreamMixin:
                 if _bound:
                     team_intent = _bound
                     forced_intent = forced_intent or _bound
+                    # ★ 2026-11-06（方案②）：**回读绑定这条分支也必须记下主 Agent**。
+                    #   旧实现只在「请求显式带 team」的分支设置 `_team_main_agent`（上面 4352 行），
+                    #   而续答 / 刷新页面 / 前端没传 team 时走的是本分支 ⇒ 成员定向后
+                    #   `_build_tools_def` 只取成员自己的绑定，主 Agent 的 MCP 能力全部丢失
+                    #   （实测 knowledge_qa 只有 4 个本地工具、0 个 MCP）。
+                    #   继承机制本身已在 tools.py:240 实现，这里只是把"用户选过的主 Agent"
+                    #   在**所有**入口都如实登记，不再因入口不同而产生能力差异。
+                    self._team_main_agent = _bound
                     # ★ 2026-10-28（用户反馈③「我只是输入一段V2代码让AI校验，
                     #   他自动读取了智源的工程数据」）：用户看到的"自动用智源"，
                     #   真因是**本会话绑定的主 Agent 覆盖了意图**，而这条说明
@@ -4534,6 +4598,45 @@ class StreamMixin:
                 _detected = self.router.detect(user_input, prev_intent=dst["intent"] or None,
                                                history=_hist)
             intent = forced_intent or _detected
+            # ★ 2026-11-07（米爸第 15 轮 P0-2）：**用户改选 → 样本池回流**。
+            #   位置必须在 `_detected` 算出之后 —— 只有这里拿得到"系统原判"，
+            #   且 `ui_intent_override` 是 HTTP 入口透传的**显式标记**，
+            #   不会把编排内部 `forced_intent` 误当成用户纠错。
+            #   写 suggested 不写 confirmed（人工审核才生效），异常静默不拖慢请求。
+            if ui_intent_override:
+                try:
+                    from services.intent_override_feedback import record_override as _rec_ov
+                    _im = self.router.get_last_meta() or {}
+                    _rec_ov(user_input, ui_intent_override, detected=_detected or "",
+                            route=str(_im.get("route") or ""),
+                            conf=float(_im.get("confidence") or 0))
+                except Exception:
+                    pass
+            # ★★ 2026-11-06：**短续句不得落到「通用问答Agent」**（无工具、无上下文）。
+            #   事故（conv 990485，14:54）：用户发「继续」，被判 intent=chat / route=inherit，
+            #   执行主体变成「通用问答Agent」⇒ 生成阶段 0 字正文 ⇒ 收口只能写一句
+            #   "连接中断或服务端异常"（用户据此误判成服务重启）。
+            #   语义：用户已选定主 Agent，「继续」是**接着上一轮干**，不是闲聊 ——
+            #   按主 Agent 执行既保住工具能力，也保住上下文。
+            #   回退开关：intent.continue_uses_main_agent=False。
+            if intent == "chat" and team_intent and conversation_id:
+                try:
+                    from core.config import get as _cfg_cont
+                    _cont_ok = bool(_cfg_cont("intent", "continue_uses_main_agent", True))
+                except Exception:
+                    _cont_ok = True
+                try:
+                    _is_cont = self.router._is_short_continuation(user_input)
+                except Exception:
+                    _is_cont = False
+                if _cont_ok and _is_cont:
+                    intent = forced_intent = team_intent
+                    self._team_routed_to = ""
+                    _cont_note = (f"（执行主体）「{user_input.strip()[:12]}」是对上一轮的续写，"
+                                  f"已按主 Agent「{team_intent}」接着执行（不反问、不降级为闲聊）")
+                    exec_notices.append({"kind": "progress", "text": _cont_note})
+                    self._exec_subject_note = _cont_note
+                    yield {"type": "progress", "delta": _cont_note, "kind": "progress"}
             # P0-4（2026-09-19）：显式定向（团队/指定 Agent）覆盖语义识别结果时**不静默**。
             # 取舍：显式选择优先（用户选了团队就该按团队走），但差异必须可见——否则
             # 「识别到 A、实际跑 B」用户永远发现不了（会话 351 卡片的 confidence=0 即此形态：
@@ -4588,15 +4691,52 @@ class StreamMixin:
                 #   「`elif _act ==` 出现在 team_forced 之前」的字面判据继续成立——断言按字面
                 #   锚 `elif _act ==`，写成 `elif (_act == ...` 会让它认不出这一支而误判）。
                 _multi_stages = len(((_multi_intent or {}).get("sequence") or []))
+                # ★★ 2026-11-06：「会话已有进行中的工作」的统一判据（两处降级点共用）。
+                #   为什么需要：团队名册里有一个兜底的 `chat` 成员（通用问答Agent，tools=0），
+                #   团队路由对「继续/追问/机制问题」很容易把本轮**定向给这个成员**
+                #   （实测 conv 990480/990500：`direct → target='chat'`），
+                #   于是执行主体从「智源对接agent」掉成一个**没有工具、也不带平台上下文**的 Agent，
+                #   用户看到的却是"我明明说了要取智源数据，怎么总匹配到 chat"。
+                #   判据：① 本轮之前发生过对话（_hist 非空）；或 ② 会话上一轮意图不是 chat
+                #   （全新会话只打了声招呼的情况仍走通用问答，不为寒暄拉起整套工具）。
+                _has_ctx = bool(_hist) or bool((dst or {}).get("intent") not in (None, "", "chat"))
                 if _act == "chat":
-                    # 短噪声/问候：走通用直答，不编排、不定向团队成员
-                    intent = "chat"
-                    forced_intent = None
-                    team_direct = True
-                    # ★ 2026-10-29：记下「本轮执行主体是团队路由改写的」——
-                    #   否则 exec_subject.source 只能靠"team 非空"判成 manual，
-                    #   变成"用户手动选了 chat/成员"的错误归因（实测 conv 9754）。
-                    self._team_routed_to = "chat"
+                    # ★★ 2026-11-06（conv 990480 实测）：**会话已有上下文时不许降级**。
+                    #   事故链：用户选定主 Agent「智源对接agent」（绑 zhiyuan-dev-mcp，71 个工具），
+                    #   连续三轮「继续之前的工作 / 找到了正确的mcp了嘛 / 任务是怎么分发的…」
+                    #   被团队路由判 `_act='chat'` ⇒ `intent='chat'` ⇒ `registry.get('chat')`
+                    #   ⇒ 执行主体「通用问答Agent」（tools=0、无平台能力）
+                    #   ⇒ 它只能反复答"我从未成功调用过任何智源工具"，用户看到的是
+                    #   「我明明说了要获取智源的数据，怎么总匹配到 chat」。
+                    #   关键结构缺陷：**这段在 4405 的"续写不降级"之后执行**，
+                    #   于是那处升级被这里**静默覆盖**（续写修复对团队型主 Agent 等于没生效）。
+                    #   ⇒ 规则：chat 只描述**说话行为**，不是"换个没工具的 Agent 来答"。
+                    #     有会话上下文（发生过对话）时，执行主体仍用主 Agent，
+                    #     但 `team_direct=True`（直行、不编排）—— 避免为一句追问拉起四阶段。
+                    _has_ctx = bool(_hist) or bool((dst or {}).get("intent") not in (None, "", "chat"))
+                    _no_demote = bool(team_intent) and _has_ctx
+                    if _no_demote:
+                        intent = team_intent
+                        forced_intent = None
+                        team_direct = True
+                        self._team_routed_to = ""
+                        _keep_note = (f"（执行主体）本轮识别为闲聊类，但会话已有进行中的工作，"
+                                      f"仍按主 Agent「{team_intent}」执行（保住了它绑定的平台能力；"
+                                      f"不降级为无工具的通用问答）")
+                        exec_notices.append({"kind": "progress", "text": _keep_note})
+                        self._exec_subject_note = _keep_note
+                        yield {"type": "progress", "delta": _keep_note, "kind": "progress"}
+                    else:
+                        # 短噪声/问候：走通用直答，不编排、不定向团队成员
+                        intent = "chat"
+                        forced_intent = None
+                        team_direct = True
+                        # ★ 2026-10-29：记下「本轮执行主体是团队路由改写的」——
+                        #   否则 exec_subject.source 只能靠"team 非空"判成 manual，
+                        #   变成"用户手动选了 chat/成员"的错误归因（实测 conv 9754）。
+                        #   ⚠️ 必须留在 **else 内**：上面「不降级」分支执行主体是主 Agent，
+                        #   标成 chat 会把归因写反（本轮改缩进时差点踩）。
+                        self._team_routed_to = "chat"
                 elif _act == "direct" and (team_decision or {}).get("target") and _multi_stages >= 2:
                     # ★★ 2026-10-29（用户问「是否支持多意图」实测发现的断链）：
                     #   多阶段输入在**团队模式下会被 direct 截断**——只执行一个成员，其余阶段全丢。
@@ -4619,6 +4759,25 @@ class StreamMixin:
                     exec_notices.append({"kind": "progress", "text": _subj_note})
                     yield {"type": "progress", "delta": _subj_note, "kind": "progress"}
                     self._exec_subject_note = _subj_note
+                elif (_act == "direct" and (team_decision or {}).get("target") == "chat"
+                      and _has_ctx and team_intent):
+                    # ★★ 2026-11-06：**定向到兜底 `chat` 成员时不许换执行主体**。
+                    #   实测（conv 990500，主 Agent=智源对接agent）：
+                    #     「继续之前的工作」→ `direct · target='chat'`
+                    #     ⇒ intent='chat' ⇒ registry.get('chat') ⇒「通用问答Agent」(tools=0)
+                    #     ⇒ 既读不到工程、也不带上下文，只能回"我没找到 MCP"。
+                    #   这与「用户已选定主 Agent」直接冲突：chat 是**闲聊兜底成员**，
+                    #   不是"换个人来答"的理由。有会话上下文时由主 Agent 直行（不编排）。
+                    intent = team_intent
+                    forced_intent = None
+                    team_direct = True
+                    self._team_routed_to = ""
+                    _keep_note2 = (f"（执行主体）团队路由本想定向给兜底成员「chat」，"
+                                   f"但会话已有进行中的工作，仍按主 Agent「{team_intent}」执行"
+                                   f"（保住它绑定的平台能力，不降级为无工具的通用问答）")
+                    exec_notices.append({"kind": "progress", "text": _keep_note2})
+                    self._exec_subject_note = _keep_note2
+                    yield {"type": "progress", "delta": _keep_note2, "kind": "progress"}
                 elif _act == "direct" and (team_decision or {}).get("target"):
                     # 定向到团队内最相近/命中的成员直行（仍不编排）
                     intent = team_decision["target"]
@@ -4765,6 +4924,19 @@ class StreamMixin:
             _kb_query_tags = [t for t in kb_tags if t not in ("工程数据", "知识库")]
             kb_hint = f" + {' + '.join('#' + t for t in _kb_query_tags)}" if _kb_query_tags else ""
             req_scope, scope_att, effective_kb_scope = self._resolve_req_scope(scope_ids, scope_id, scope, agent_def)
+            # ★ 2026-11-14（胶水 ④⑤，与 execute.py 同口径）：需求校验意图加载标准档案，
+            #   并把本轮 kb_scope 挂到实例供 graph_retrieve 工具路径透传（胶水 ①）。
+            #   两条路径必须一致，否则「试跑正常、对话里标准白名单失效」。
+            _s_req_profile = {}
+            try:
+                from services import requirement_checks as _src
+                with db_conn() as _spc:
+                    _s_req_profile = _src.load_profile(_spc)
+                if _s_req_profile and _src.is_check_intent(intent):
+                    effective_kb_scope = _src.merge_scope(effective_kb_scope, _s_req_profile)
+                self._effective_kb_scope = effective_kb_scope
+            except Exception:
+                self._effective_kb_scope = effective_kb_scope or {}
             # SP-R：报告类型预识别（模型分析/变更影响/预评审/自定义大纲）
             report_type = None
             if intent == "report_generation":
@@ -4830,12 +5002,22 @@ class StreamMixin:
             yield {"type": "stage", "name": "意图识别", "status": "done", "intent": intent,
                    "agent": agent_def.name, "hil_level": hil_level,
                    "route": _intent_meta["route"], "confidence": _intent_meta["confidence"],
+                   # ★ 2026-11-07（第 16 轮 shadow 转正）：**展示用的校准置信度**。
+                   #   前端"把握 X%"改读此字段。理由：`rule_scored` 写死 0.95 而
+                   #   真库回放真实准确率只有 70% ⇒ 界面等于在对用户撒谎。
+                   #   只**新增**字段、不动原 `confidence`（判定链仍用原值）⇒ 零回归。
+                   "calibrated_confidence": _intent_meta.get(
+                       "calibrated_confidence", _intent_meta["confidence"]),
                    "brief": _brief,
                    "exec_subject": _exec_subject}
             # P0-1 置信度三级决策：中置信（弱语义/继承/LLM<0.85）→ 澄清提示（不阻塞执行，供前端改选重发）
             # V2.7：指定智能体时同样给出提示（识别结果与执行 Agent 不一致时如实说明）
             if _intent_meta["needs_clarification"]:
                 yield {"type": "clarify", "intent": intent, "confidence": _intent_meta["confidence"],
+                       # 同理：澄清条上"把握不大（X%）"也应用校准值，否则「rule_scored
+                       # 0.95 却说把握不大」自相矛盾。
+                       "calibrated_confidence": _intent_meta.get(
+                           "calibrated_confidence", _intent_meta["confidence"]),
                        "route": _intent_meta["route"], "message": str(user_input),
                        "detected": _detected if forced_intent and _detected != intent else None,
                        "brief": _brief,
@@ -4931,23 +5113,8 @@ class StreamMixin:
             if not forced_intent and not team_direct and self._needs_orchestration(user_input, intent,
                                                               has_attachments=bool(attachments),
                                                               multi=_multi_intent):
-                # P0-1 复用：已发布 planner_auto 沉淀流程语义命中 → 直接执行（省重新规划）
-                reused = self._try_reuse_planner_flow(user_input, intent)
-                if reused and not dry_run:
-                    self._save_conversation_dst(conversation_id, intent, slots)
-                    yield {"type": "progress", "kind": "progress",
-                           "delta": f"（自动编排）命中已发布沉淀流程「{reused.get('flow_name') or ''}」，按流程模板执行子任务…"}
-                    reused["data"] = {"tasks": reused.get("plan") or []}
-                    # ⚠️ **不传 run_id**：复用流程走的是「已发布流程模板」，
-                    #   `reused` 是**预先算好的** orch（`_try_reuse_planner_flow` 返回），
-                    #   本次**没有** create_plan、没有 agent_tasks 行 ⇒ 压根不存在批次号。
-                    #   `execute_stream` 里也没有 `run_id` 局部变量（真 run_id 是
-                    #   `_stream_orchestrated_flow` 的局部变量）—— 在这里传 `run_id=`
-                    #   会把 NameError 从被调方挪到调用方，**等于没修**。
-                    yield from _yield_collect(self._stream_orchestrated(
-                        reused, user_input, conversation_id, intent, agent_def, hil_level,
-                        kb_tags, attachments, slots, user), _orch_acc)
-                    return
+                # ★ 2026-11-05：画布流程复用分支已移除（`_try_reuse_planner_flow` 随画布删除），
+                #   此处直接走原 LLM 规划路径 —— 与"复用未命中"时的行为完全一致。
                 try:
                     # P0-2 DST：编排流式前落会话意图状态（子管道不写主会话状态）
                     if not dry_run:
@@ -5034,7 +5201,6 @@ class StreamMixin:
             att_parsed_info = {"parsed": att_parsed, "skipped": att_skipped[:5]}
             if att_vision.get("images"):
                 att_parsed_info["vision"] = att_vision   # 留痕：图片到底进没进模型、为什么
-            matched_flows = self._match_flows(user_input + (" " + att_text[:500] if att_text else ""))
 
             # ── 阶段 2：知识检索（#标签 + 附件前 600 字符并入）──
             # 按需检索：#标签主动引用 / Agent kb_required 配置 二选一才检索
@@ -5047,6 +5213,14 @@ class StreamMixin:
             #   用户仍会看到一个「知识库检索·未引用」的幽灵环节——
             #   这正是米爸反馈"为啥每次都有查询知识库的过程"的直接来源。
             #   口径：**没真检索就不要出现这个环节**（不是隐藏结果，而是根本不宣称做了）。
+            # ★ 2026-11-15：**引用登记簿**（【来源n】与前端 citations 的唯一真源）。
+            #   在**检索之前**建（每请求一本）：初始检索注入的片段与工具检索（ReAct 轮里）
+            #   命中的片段登记到同一本账 ⇒ 编号全局唯一 ⇒ 模型写的 [n] 必然点得动。
+            #   ⚠️ 必须在请求入口建、**不能每轮重建** —— 否则编号会在轮间漂移，
+            #      而上一轮的工具结果文本仍在 messages 里（历史编号会与新编号打架）。
+            #   ⚠️ 放在 `if should_retrieve:` **之前**：不检索的轮次工具检索仍可能命中，
+            #      登记簿必须已经存在（否则工具路径会自建一本，编号与注入对不上）。
+            self._citation_registry = []
             if should_retrieve:
                 yield {"type": "stage", "name": "知识库检索", "status": "run"}
                 retrieve_query = user_input + kb_hint
@@ -5060,7 +5234,12 @@ class StreamMixin:
                 effective_kb_scope = dict(effective_kb_scope or {})
                 effective_kb_scope.update(self._memory_recall_scope(intent, user))
                 retrieval = self.rag.retrieve(retrieve_query, branch, attachment_text=(retrieval_att + ('\n\n' + scope_att if scope_att else '')) or None,
-                                              kb_scope=effective_kb_scope)
+                                              kb_scope=effective_kb_scope,
+                                              # ★ 2026-11-08：原话单独送检索侧（仅用于落 trace）。
+                                              #   与 execute.py 同一口径，两处必须同时改 ——
+                                              #   只改一处会让"一半样本有原话、一半没有"，
+                                              #   而这种缺失在表里长得像"历史行"。
+                                              query_raw=user_input)
             else:
                 retrieval = {"source": "none", "route": "none", "route_reason": "kb_optional",
                              "confidence": 0, "entities": [], "relations": [], "vector_docs": [],
@@ -5356,6 +5535,19 @@ class StreamMixin:
             # 否则「生产走 stream、自检走 execute」会给出虚假的安全结论。
             self._tool_user = user
             tools_def = self._build_tools_def(intent, user_input, user)
+            # ★★ 2026-11-06：**绑定了但离线的 MCP 必须显式告知**（conv 990480 事故）。
+            #   现象：智源 Bearer 失效（401）⇒ status=offline ⇒ 71 个工具不注入
+            #   ⇒ 模型连续三轮自述"我从未成功调用过任何智源工具 / 没找到 MCP"
+            #   ⇒ 用户以为是路由问题，实际是**凭据过期**，而界面上没人说这件事。
+            #   这里把"为什么没有工具"变成系统事实（progress 通道 + exec_notices 落库）。
+            try:
+                _off_body = self._bound_mcp_offline_note(intent, team_intent)
+                _off_note = ("（能力不可用）" + _off_body) if _off_body else ""
+                if _off_note:
+                    exec_notices.append({"kind": "progress", "text": _off_note})
+                    yield {"type": "progress", "delta": _off_note, "kind": "progress"}
+            except Exception:
+                pass
             # ★ 2026-10-17（米爸「harness 持续工作」）：自主续跑（auto-continue）就绪。
             #   为什么需要外层循环：模型「想停」和「该停」是两件事——没有完成度评估器时，
             #   多步任务模型常在第一步后就收尾等用户吩咐（米爸原话：「每执行一轮都会结束，
@@ -5368,6 +5560,12 @@ class StreamMixin:
             _auto_continues = 0
             _ac_cfg = self._auto_continue_cfg()
             _ac_seen_steps = []
+            # ★ 2026-11-15：**上一轮正文**（正文级空转闸用）。
+            #   为什么要它：模型每轮换句话说同一个 next_step ⇒ `is_spinning`（逐字判据）
+            #   抓不到 ⇒ 连跑 3 轮、每轮重写整份答案（真机 msg 6585：29,774 字 = 3 份）。
+            #   判据本身在 auto_continue.is_content_repeating（**只写一份**），
+            #   这里只负责把两轮正文喂进去。
+            _ac_prev_content = ""
             # ★ 2026-10-28：澄清延后计数（见评估点"待办未做完时先别问人"）。
             #   `_clarify_defer_n` 上限 2 次、`_clarify_defer_rem` 记上次剩余项数
             #   （要求确实在减少才允许继续延后，否则照常转卡）。
@@ -6260,7 +6458,7 @@ class StreamMixin:
                         _li = {}
                     _ret = retrieval if isinstance(retrieval, dict) else {}
                     try:
-                        _cit = _citations_payload(_ret.get("chunk_hits"))
+                        _cit = citations_for_card(self, _ret)
                     except Exception:
                         _cit = []
                     return {
@@ -6778,7 +6976,9 @@ class StreamMixin:
                         budget_left=_lg.budget_left(),
                         budget_ratio=_lg.budget_ratio(),
                         degrade_ratio=_degrade_ratio,
-                        hard_stop_ratio=_hard_stop_ratio)
+                        hard_stop_ratio=_hard_stop_ratio,
+                        # ★ 2026-11-15 正文级空转闸（判据在 auto_continue 一份）
+                        content_prev=_ac_prev_content, content_cur=llm_content)
                     # ★ P1-1（2026-10-28）降级收尾：把「待续清单」**写进答复**。
                     #   为什么必须写：budget 闸本来就会停，但停得"无声" ⇒
                     #   用户看到的是"突然断了"（实测 11/89 次）。
@@ -6809,6 +7009,9 @@ class StreamMixin:
                     if _cont:
                         _auto_continues += 1
                         _ac_seen_steps.append(str(_verdict.get("next_step") or ""))
+                        # ★ 2026-11-15：记下本轮正文，供**下一轮**的空转闸比对
+                        #   （判据在 auto_continue.is_content_repeating）。
+                        _ac_prev_content = llm_content or ""
                         # 续跑 = 崭新的一轮 ReAct：本轮答复 + 续跑指令并进 messages。
                         # ⚠️ assistant 消息必须带 content（部分 provider 拒绝空 content）。
                         messages.append({"role": "assistant", "content": llm_content})
@@ -6968,7 +7171,7 @@ class StreamMixin:
                     "vector_count": retrieval["vector_count"],
                     "used_mock": llm_info["used_mock"],
                     "provider": llm_info["provider"],
-                    "citations": _citations_payload(retrieval.get("chunk_hits")),  # 问答可解释性：[n] 引用来源
+                    "citations": citations_for_card(self, retrieval),  # 问答可解释性：[n] 引用来源
                     # V2.4 会话内执行过程持久化（前端历史消息按序还原思考/子智能体/工具调用）
                     "exec": {
                         # 2026-10-27（截断清单 P2-D1）：4000 → 8000。exec.reasoning 是历史消息
@@ -7056,6 +7259,39 @@ class StreamMixin:
             # P0-2 DST：回写会话级意图状态（非 dry_run 验证运行）
             if not dry_run:
                 self._save_conversation_dst(conversation_id, intent, slots)
+            # ★★ P0-3/P0-4（2026-11-10，需求优化）：**需求分析产出的后置处理**。
+            #   为什么放在这里：正文已定稿、消息已落库、done 尚未发出 ——
+            #   是"对最终产出做结构化沉淀"的唯一准确时点。
+            #   为什么以前没做：真库实测 `requirement_items` 0 行，而覆盖度工具算的是
+            #   2026-09-21 手工补齐的 26 条实体 ⇒ 需求分析的产出与追溯链**完全脱钩**，
+            #   跑完不留资产、跨会话不可复用，质量闸也不在主链路上。
+            #   纪律：这是**增值**不是前提 ⇒ 异常一律不外抛（模块内部已全包），
+            #   但结果必须可见（SSE 一条 progress + done 的 data 字段 + run 观测），不静默。
+            _req_pp = None
+            if not dry_run and conversation_id and (llm_content or "").strip():
+                try:
+                    from requirement_postprocess import process_for_run as _req_proc
+                    _req_pp = _req_proc(
+                        conn, llm_content,
+                        run_id=int(getattr(self, "_tool_run_ctx", 0) or 0),
+                        intent=intent, conversation_id=int(conversation_id or 0),
+                        project=str(getattr(self, "_req_project", "") or ""))
+                except Exception as _e_pp:      # noqa: BLE001
+                    _req_pp = {"ok": False, "skipped": False,
+                               "reason": "%s: %s" % (type(_e_pp).__name__, str(_e_pp)[:120])}
+                if isinstance(_req_pp, dict) and not _req_pp.get("skipped"):
+                    if _req_pp.get("ok"):
+                        yield {"type": "progress", "kind": "progress",
+                               "delta": ("（需求沉淀）已条目化并入库：%d 条需求 / %d 条待澄清，"
+                                         "验收标准覆盖 %d/%d（%.0f%%）"
+                                         % (_req_pp.get("items", 0), _req_pp.get("gaps", 0),
+                                            _req_pp.get("ac_filled", 0), _req_pp.get("items", 0),
+                                            100.0 * float(_req_pp.get("ac_rate") or 0)))}
+                    else:
+                        # 失败必须说出来 —— 否则"没落库"与"落库了"在用户侧看起来一模一样
+                        yield {"type": "progress", "kind": "progress",
+                               "delta": "（需求沉淀）未能入库：%s"
+                                        % str(_req_pp.get("reason") or "")[:160]}
             # P1-②（2026-10-07）本轮收口：丢弃未消费的 follow-up。
             # ★ 为什么必须清：队列跨请求存在。若本轮正常结束但还剩着（例如用户在
             #   done 之后、连接关闭之前又投了一条），**下一轮会莫名多出一段补充**，
@@ -7093,11 +7329,22 @@ class StreamMixin:
                     #   **全文注入**（_load_attachment_text → att_text，不走 hit 通道）
                     #   ⇒ 实测附件内容被模型逐字引用（📎标注）时该字段仍 False，误导排查。
                     "attachment_used": bool(retrieval.get("attachment_hits")) or (att_parsed_info.get("parsed", 0) > 0),
-                    "citations": _citations_payload(retrieval.get("chunk_hits")),  # 问答可解释性：[n] 引用来源
+                    "citations": citations_for_card(self, retrieval),  # 问答可解释性：[n] 引用来源
                 },
                 "attachments_info": {**att_parsed_info, "consumed": len(retrieval.get("attachment_hits") or [])},
-                "matched_flows": matched_flows,
+                "matched_flows": [],   # 画布流程已移除，字段保留为空（前端不消费）
                 "quality_report": quality_report,
+                # P0-3/P0-4（2026-11-10）：需求分析产出的后置处理结果。
+                #   None = 本轮不适用（非需求意图 / 开关关闭 / 正文过短）。
+                "requirement_postprocess": (
+                    {"ok": bool(_req_pp.get("ok")),
+                     "items": int(_req_pp.get("items") or 0),
+                     "gaps": int(_req_pp.get("gaps") or 0),
+                     "ac_rate": float(_req_pp.get("ac_rate") or 0.0),
+                     "inserted": int(_req_pp.get("inserted") or 0),
+                     "project_id": _req_pp.get("project_id") or "",
+                     "reason": str(_req_pp.get("reason") or "")[:160]}
+                    if isinstance(_req_pp, dict) and not _req_pp.get("skipped") else None),
                 # ★ 2026-10-17（米爸「harness 持续工作」）：本轮请求内自主续跑次数
                 #   （0 = 一轮收口；>0 = 评估器放行了 N 次续跑，前端/排查可追溯）。
                 "auto_continues": _auto_continues,

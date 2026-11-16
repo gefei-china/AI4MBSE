@@ -256,9 +256,76 @@ function orchDetailToggle(chipEl){
   const ch = chipEl.querySelector('.chev');
   if(ch) ch.style.transform = open ? 'rotate(90deg)' : '';
 }
+/* ── 写操作待人工确认卡（HIL）────────────────────────────────────────────────
+ * ★ 2026-11-13 新增。
+ *
+ * 【为什么必须有这个函数（真机实证 conv 990727）】
+ *   此前**没有任何前端代码消费 `card_data.confirm`**：
+ *     · 实时路径：`hil_confirm` 事件只进「执行过程时间线」（默认折叠在"详情"里）
+ *       ⇒ 用户只看到 done 帧那句**不可点击**的文本「写操作已进入人工确认队列」；
+ *     · 刷新路径：`msg_type='hil_confirm'` 的消息在 `renderRichCard` 里**没有分支**
+ *       ⇒ 退化成普通文本气泡，**「批准/拒绝」按钮彻底消失**。
+ *   两处叠加 ⇒ 用户**根本无法确认**，确认单一直挂在 `hil_confirmations` 表里（当时 19 条 pending）。
+ *
+ * 【数据来源】（两处都已完整，不需要后端改）
+ *   · 历史：消息 `card_data.confirm`（id/tool/preview/arguments/timeout_at/… 全在）
+ *   · 实时：`hil_confirm` SSE 事件（同名字段）
+ *
+ * 【可逆性独立判定】kind 来自后端双源分类，**不采信模型自述**。
+ */
+function hilConfirmCardHtml(c){
+  c = c || {};
+  const cid = parseInt(c.id || 0, 10);
+  if(!cid) return '';
+  // ★ id 前缀可配：时间线卡（hil）与消息流卡（hilmsg）会**同时存在**于同一页，
+  //   用同一套 id ⇒ HTML id 重复 ⇒ `getElementById` 只命中第一个（时间线那张），
+  //   处置时禁用按钮会漏掉消息流那张 ⇒ 用户能重复点。故用不同前缀隔开。
+  const _p = c.idPrefix || 'hil';
+  const irreversible = (c.kind === 'destructive');
+  const border = irreversible ? '#F09595' : '#EF9F27';
+  const bg    = irreversible ? '#FCEBEB' : '#FAEEDA';
+  const title = irreversible ? '#A32D2D' : '#854F0B';
+  const kindTxt = irreversible
+    ? '<strong style="color:var(--red,#C0392B);">不可逆</strong>（删除/覆盖/导入类，出错无法回滚）'
+    : '<strong style="color:var(--orange,#B96A00);">可逆写</strong>（创建/修改类，通常可撤销）';
+  const bn = parseInt(c.batch_count || 1, 10);
+  const batchTxt = bn > 1
+    ? `<div style="margin-top:4px;"><b>本批共 ${bn} 项</b>（同类动作已合并，一次批准覆盖整批）</div>` : '';
+  const args = c.arguments
+    ? (typeof c.arguments === 'string' ? c.arguments : JSON.stringify(c.arguments, null, 1)) : '';
+  const prev = c.preview || '';
+  const tool = c.tool || '';
+  return `<div class="hil-card" data-cid="${cid}" style="border:1px solid ${border};background:${bg};border-radius:10px;padding:10px 12px;margin-top:8px;">`
+    + `<div style="font-size:13.5px;font-weight:500;color:${title};">⏸ 写操作待你确认</div>`
+    + `<div style="font-size:12.5px;line-height:1.7;margin-top:6px;">`
+    +   `<div><b>动作：</b>${esc(tool)}</div>`
+    +   (prev ? `<div><b>影响面：</b>${esc(prev)}</div>` : '')
+    +   `<div><b>性质：</b>${kindTxt}</div>`
+    +   (c.reason ? `<div><b>依据：</b>${esc(String(c.reason).slice(0,90))}</div>` : '')
+    +   batchTxt
+    +   `<div style="color:var(--mut);margin-top:6px;">批准后才会真正执行；<b>在此之前不会产生任何副作用</b>。拒绝则该动作不生效。</div>`
+    +   (args ? `<details style="margin-top:6px;"><summary style="cursor:pointer;color:var(--mut);font-size:12.5px;">查看原始参数</summary>`
+    +        `<div style="max-height:120px;overflow:auto;white-space:pre-wrap;background:var(--bg,#f6f7f9);border:1px solid var(--line);border-radius:6px;padding:6px 8px;margin-top:4px;font-size:12px;">${esc(args)}</div></details>` : '')
+    +   `<div style="margin-top:8px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;">`
+    +     `<button class="btn sm ${irreversible ? '' : 'grn'}" id="${_p}-ok-${cid}" onclick="hilInlineDecide(${cid}, true)">✓ 批准并执行</button>`
+    +     `<button class="btn sm ghost" id="${_p}-no-${cid}" onclick="hilInlineDecide(${cid}, false)">✕ 拒绝</button>`
+    +     `<span style="font-size:12px;color:var(--mut);">确认单 #${cid}${c.timeout_at ? ' · 超时 ' + esc(String(c.timeout_at).slice(5,16)) : ''}</span>`
+    +   `</div></div></div>`;
+}
+
 /* ── 富卡片渲染（FR-HIL-1/2 中间结果逐条确认 · FR-CIA · FR-VR/VC 可视化） ── */
 function renderRichCard(type, cd, content) {
   if(!cd) return '';
+  // ★ 2026-11-13：写操作待人工确认卡（msg_type='hil_confirm'）。
+  //   此前**没有**这个分支 ⇒ 刷新后确认卡退化成普通文本气泡、按钮全丢（真机 conv 990727）。
+  //   数据已由后端完整落在 `card_data.confirm`（id/tool/preview/arguments/timeout_at…），前端只是没消费。
+  // ★ 2026-11-13（门禁 verify_hil_ask_card 抓出）：**必须显式传 idPrefix='hilmsg'**。
+  //   历史行的 `card_data.confirm` 来自后端，不含 idPrefix ⇒ 此前落到默认 'hil'，
+  //   与时间线卡（procAddHilConfirm 里硬编码 'hil-'）**id 完全相同** ⇒ 同一页两张卡、
+  //   `getElementById` 只命中第一张 ⇒ 处置时禁用按钮会漏掉另一张（用户可重复点）。
+  //   实时插入（hilAppendMsgCard）本来就传 'hilmsg'，这里对齐后两处前缀一致。
+  if(type==='hil_confirm' && cd.confirm) return hilConfirmCardHtml(Object.assign({}, cd.confirm, {idPrefix:'hilmsg'}));
+
   // ⚠️ 2026-11-03（平台化改造）：此处**不再**有"多方案对比卡"分支。
   //   多方案对比改由**平台工具** `alternatives_score` 的调用结果驱动 ——
   //   在工具事件流（11-pipeline.js）与历史回放（本文件 procBlocksHtml）里，

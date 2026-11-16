@@ -262,13 +262,26 @@ def run_mutations(base_report):
     ok &= _expect("6 零样本 ⇒ 判红（没测到≠质量差）", lambda r: r["summary"].update(
         {"n_answers": 0}), FAIL)
     # ── M7~M10：LLM 语义层（G7）判据自证 ────────────────────────
-    ok &= _expect("7 忠实率塌陷", lambda r: r["llm_judge"].update(
-        {"faithful_rate": 0.1}), FAIL)
+    # ★ 2026-11-16：变异必须先把「评判已正常跑过」这个**基线**造出来再变异单点。
+    #   原写法只设 faithful_rate=0.1，而报告里 enabled=False ⇒ G7 走 SKIP 分支，
+    #   永远变不成 FAIL ⇒ 变异断言恒红（门禁自身的假红）。
+    def _mut_judge_baseline(r, **over):
+        j = r.setdefault("llm_judge", {})
+        j.update({"enabled": True, "n_judged": 20, "n_failed": 0,
+                  "faithful_rate": 0.95,
+                  "control": {"ran": True, "ok": True, "note": ""}})
+        j.update(over)
+    ok &= _expect("7 忠实率塌陷", lambda r: _mut_judge_baseline(
+        r, faithful_rate=0.1), FAIL)
     ok &= _expect("8 评判样本不足 ⇒ SKIP（服务不可用不是质量差）",
                   lambda r: r["llm_judge"].update({"n_judged": 3}), SKIP)
+    # ★ 2026-11-16：同上 —— 先造「评判跑过且忠实率正常」的基线，只变异自证一项。
+    #   原写法既会 KeyError 崩溃（未启用时无 control 键），又因 enabled=False
+    #   而走 SKIP，双重失效 ⇒ 这条变异从未真正生效过。
     ok &= _expect("9 judge 自证失败 ⇒ 判红（judge 坏了分数不可信）",
-                  lambda r: r["llm_judge"]["control"].update(
-                      {"ok": False, "neg_ok": False, "note": "变异"}), FAIL)
+                  lambda r: _mut_judge_baseline(
+                      r, control={"ran": True, "ok": False, "neg_ok": False,
+                                  "note": "变异：自证失败"}), FAIL)
     ok &= _expect("10 语义层未启用 ⇒ SKIP", lambda r: r.update(
         {"llm_judge": {"enabled": False}}), SKIP)
     return ok

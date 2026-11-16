@@ -746,9 +746,9 @@ MUTATIONS = [
     # ── P4 类变异（第 6 元组 = 目标文件名，缺省为 entity_resolver.py）──
     # M9：还原 `_bigrams` 的拉丁字符 bigram（去掉补字符循环）⇒ 拉丁名 fuzzy 回到恒 0
     ("M9",
-     "    for tok in en:\n        if len(tok) > 2 and _LATIN_ONLY.match(tok):\n"
+     "    for tok in en:\n        if len(tok) > 2 and not _ZH_CHAR.search(tok):\n"
      "            for i in range(len(tok) - 1):\n                bigrams.add(tok[i:i + 2])\n",
-     "    for tok in []:\n        if len(tok) > 2 and _LATIN_ONLY.match(tok):\n"
+     "    for tok in []:\n        if len(tok) > 2 and not _ZH_CHAR.search(tok):\n"
      "            for i in range(len(tok) - 1):\n                bigrams.add(tok[i:i + 2])\n",
      "E41", "section7b", "text_normalize.py"),
     # M10：去掉「短名非前缀 ⇒ related」⇒ EV热管理⊃热管理 会被升级成 dup_suspect
@@ -761,8 +761,10 @@ MUTATIONS = [
      "    return abs(len(str(a)) - len(str(b))) <= 2\n",
      "    return True\n",
      "E48", "section7b", "staging_fuse.py"),
-    # M12：把拉丁规则放宽到「所有 token」⇒ 中文 token 也被拆字符，中文 fuzzy 回归
-    ("M12", "        if len(tok) > 2 and _LATIN_ONLY.match(tok):",
+    # M12：把「不含中文」守卫去掉 ⇒ 中文 token 也被拆字符，中文 fuzzy 回归
+    #      （2026-11-08：守卫由「是纯拉丁」改为「不含中文」，锚点随之更新；
+    #       变异出来的正是 fcaeba2 之后、本轮修复之前那段代码）
+    ("M12", "        if len(tok) > 2 and not _ZH_CHAR.search(tok):",
      "        if len(tok) > 2:",
      "E43", "section7b", "text_normalize.py"),
     # M13：让同语言词条也进跨语言索引 ⇒ 层级关系被当成同一实体的别名（P4 判定被破坏）

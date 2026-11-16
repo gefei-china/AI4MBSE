@@ -37,9 +37,20 @@ def active_rows(conn):
         v = conn.execute(
             "SELECT id FROM ontology_versions WHERE active=1 ORDER BY id DESC LIMIT 1").fetchone()
         if v:
+            # ⚠️ 列清单按**实际表结构探测**，不硬枚举：
+            #   2026-11-15 加 tlo_anchor 时，硬枚举让手写 DDL 夹具崩掉
+            #   （`no such column: tlo_anchor`）。探测写法下：
+            #   · 真库有该列 → 正常返回；
+            #   · 夹具/老库没有 → 少该键，下游用 `"tlo_anchor" in r.keys()` 守卫，
+            #     并把"该维度未检查"登记进 degraded（不静默当成"全部合规"）。
+            _scols = [x[1] for x in conn.execute(
+                "PRAGMA table_info(ontology_version_snapshots)")]
+            _sel = ("type_id AS id, name, type_kind, parent_id, properties, constraints, "
+                    "description, icon, color, iri")
+            if "tlo_anchor" in _scols:
+                _sel += ", tlo_anchor"
             rows = conn.execute(
-                "SELECT type_id AS id, name, type_kind, parent_id, properties, constraints, "
-                "description, icon, color, iri FROM ontology_version_snapshots WHERE version_id=?",
+                "SELECT " + _sel + " FROM ontology_version_snapshots WHERE version_id=?",
                 (v["id"],)).fetchall()
             if rows:                      # active 版本有快照 → 消费快照
                 return rows
@@ -111,14 +122,21 @@ class OntologyValidator:
                 rows = active_rows(self.conn)
             for r in rows:
                 d = dict(r)
-                try:
-                    d["constraints"] = json.loads(d.get("constraints") or "{}")
-                except Exception:
-                    d["constraints"] = {}
-                try:
-                    d["properties"] = json.loads(d.get("properties") or "{}")
-                except Exception:
-                    d["properties"] = {}
+                # ★ 2026-11-15：**已解析的结构体不能再 json.loads**。
+                #   DB 取出的行是 JSON 字符串，但调用方注入的内存行（`rows=` 参数、
+                #   门禁夹具、影响面模拟）常常已经是 dict。此前一律 json.loads ⇒
+                #   `TypeError` 被下面的 except 吞掉 ⇒ `constraints` 静默变成 `{}`
+                #   ⇒ **所有约束凭空消失**，校验"全绿"（本笔实测踩到：影响面恒为 0，
+                #   把 required 硬挂到有 2 个缺属性实例的根类上竟也报 0 违规）。
+                #   这是"兜底把错误变成不可见"的典型：宁可让类型显式分流，不要靠 except。
+                for _k in ("constraints", "properties"):
+                    _v = d.get(_k)
+                    if isinstance(_v, (dict, list)):
+                        continue
+                    try:
+                        d[_k] = json.loads(_v or "{}")
+                    except Exception:
+                        d[_k] = {}
                 self._types[d["name"]] = d
         return self._types
 
@@ -199,8 +217,108 @@ class OntologyValidator:
                 out.setdefault(k, v)
         return out
 
-    def validate_node(self, entity_type: str, props: dict) -> list:
-        """校验节点实例化：类型合法（含子类）+ 必填/唯一/取值白名单（含继承）。返回错误列表（空=通过）。"""
+    def bound_attributes(self, entity_type: str) -> dict:
+        """实体类型可用的数据属性 —— **单一真源**（schema_text 与 shacl_export 共用）。
+
+        ## 为什么必须合并两侧（2026-11-15 实测）
+
+        本工程的属性是「全局数据属性 + 绑定到实体」的 OWL/Protégé 模型：
+          · 属性侧 `constraints.domain_classes` = 该属性适用于哪些实体类型；
+          · 实体侧 `properties` = 历史/局部内联定义。
+        真库实测：**28 个实体的 properties 全为空**，绑定 100% 在属性侧。
+
+        而此前的 `schema_text()` 与 `shacl_export()` **都只读实体侧**
+        ⇒ 后果一（更严重）：注入 Agent system_prompt 的本体摘要里
+          **28 个实体全部显示"属性:无"、11 个属性名一个都不出现**
+          ⇒ AI 建模时根本不知道这些实体能填什么属性，只能自由发挥或干脆不填；
+        ⇒ 后果二：SHACL 里 `sh:datatype` 全库出现 0 次（xsd 强校验是死代码）。
+
+        ## 合并口径（与 required/unique/白名单的局部覆盖同构）
+
+          · 并集：两侧同名属性只算一次；
+          · **类型/单位/量纲**取属性侧（它是全局定义）；
+          · **required / unique / allowed_values** 取实体侧局部覆盖（本类的额外约束）。
+          · 属性侧的 `domain_classes` 命中**自身或任一祖先**即可（子类继承父类的适用范围）。
+
+        :returns: ``{属性名: {"type": "xsd:int"|"", "required": bool, "unique": bool,
+                              "allowed_values": list, "unit": str,
+                              "quantity_kind": str, "declared_by": "entity"|"attribute"}}``
+        """
+        atk = self._load_types()
+        cons = self._merged_constraints(entity_type)   # 含祖先的 required/unique/白名单
+        cls_chain = set(self.classify(entity_type))    # 自身 + 祖先
+
+        out = {}
+
+        # ① 实体侧内联定义（历史通路，保留；实测多为空）
+        for k, v in self.merged_properties(entity_type).items():
+            ptype = v.get("type") if isinstance(v, dict) else None
+            out[k] = {"type": typevocab.xsd_of(ptype) if ptype else "",
+                      "declared_by": "entity"}
+
+        # ② 属性侧绑定（真库唯一的实际通路）
+        for nm, t in atk.items():
+            if t["type_kind"] != "attribute":
+                continue
+            ac = t.get("constraints") or {}
+            dcs = ac.get("domain_classes")
+            if dcs is None:
+                dcs = ac.get("domain")
+            if isinstance(dcs, str):
+                dcs = [dcs]
+            if not any(str(x).strip() in cls_chain for x in (dcs or []) if str(x).strip()):
+                continue
+            slot = out.setdefault(nm, {})
+            # 属性侧是全局定义 ⇒ 类型/单位优先
+            if ac.get("xsd_type"):
+                slot["type"] = typevocab.xsd_of(ac.get("xsd_type"))
+            if ac.get("unit"):
+                slot["unit"] = str(ac.get("unit"))
+            if ac.get("quantity_kind"):
+                slot["quantity_kind"] = str(ac.get("quantity_kind"))
+            av = ac.get("allowed_values")
+            if isinstance(av, list) and av:
+                slot["allowed_values"] = list(av)
+            slot["declared_by"] = slot.get("declared_by") or "attribute"
+            slot.setdefault("type", "")
+
+        # ③ 实体侧局部约束覆盖（本类对某属性的额外要求）
+        for k, slot in out.items():
+            if k in (cons.get("required") or []):
+                slot["required"] = True
+            if k in (cons.get("unique") or []):
+                slot["unique"] = True
+            av_local = (cons.get("allowed_values") or {}).get(k)
+            if isinstance(av_local, list) and av_local:
+                slot["allowed_values"] = list(av_local)   # 局部覆盖全局
+        return out
+
+    def validate_node(self, entity_type: str, props: dict, branch: str = "",
+                      exclude_id: str = "") -> list:
+        """校验节点实例化：类型合法（含子类）+ 必填/唯一/取值白名单（含继承）。返回错误列表（空=通过）。
+
+        :param branch: **唯一性的判定范围**（2026-11-15 新增，见下）。
+        :param exclude_id: **唯一性比对时排除自身**（2026-11-15 新增，编辑路径必须传）。
+
+        ## 为什么唯一性必须带分支（真缺陷，非洁癖）
+
+        本工程 `entities` 的主键是复合键 `(id, branch)`：同一个逻辑实例在
+        dev / release / personal 三个分支**各存一份**（实测 24 个需求 × 3 分支，
+        同分支内 req_id 24/24 不重复，跨分支合计仍是 24 个唯一值）。
+
+        而原实现的唯一性查询是**全库比对**（`WHERE entity_type=? AND properties LIKE ?`，
+        无 branch 过滤）⇒ 每一条正常的跨分支副本都被判成"违反唯一约束"
+        ⇒ **任何 unique 约束在本工程都必然误报**，这解释了为什么真库
+        `constraints.unique` 全域为空（0/28）—— 不是业务没填，是填了就报错。
+
+        ## 两种口径的适用面（显式声明，避免"同一语义两套写法"）
+
+        · **传 branch（写入路径）**：编辑/新建已落分支的实例 —— 分支内判重，正确语义。
+          `routers/knowledge_parts/graph.py`（PUT 保存）、`GraphStore.create_node`。
+        · **不传 branch（导入/候选路径）**：数据尚未落分支（`v2g_candidates` 是待审候选、
+          sysml 导入在分配分支之前）—— 只能按全局判重，且**更严**：可防"同一需求
+          被重复导入到另一个分支"。调用方不传即为该语义，不是"忘了传"。
+        """
         types = self._load_types()
         errs = []
         if entity_type not in types:
@@ -223,12 +341,23 @@ class OntologyValidator:
         for k in cons.get("unique", []):
             v = props.get(k)
             if v is not None:
-                dup = self.conn.execute(
-                    "SELECT id FROM entities WHERE entity_type=? AND properties LIKE ? AND status!='deprecated' LIMIT 1",
-                    (entity_type, f'%"{k}": "{v}"%'),
-                ).fetchone()
+                # 判定范围：传 branch ⇒ 分支内判重；不传 ⇒ 全局判重（见 docstring）
+                _sql = ("SELECT id FROM entities WHERE entity_type=? AND properties LIKE ?"
+                        " AND status!='deprecated'")
+                _args = [entity_type, f'%"{k}": "{v}"%']
+                if branch:
+                    _sql += " AND branch=?"
+                    _args.append(branch)
+                # ★ 必须排除自身：编辑已有实例时（PUT 保存）它自己就在库里，
+                #   不排除 ⇒ 每次保存都判"违反唯一约束" ⇒ 一旦启用 unique，
+                #   该类型的实例就**再也改不动**（与"编辑入口被 400 堵死"同型）。
+                if exclude_id:
+                    _sql += " AND id != ?"
+                    _args.append(exclude_id)
+                dup = self.conn.execute(_sql + " LIMIT 1", tuple(_args)).fetchone()
                 if dup:
-                    errs.append(f"[{entity_type}] 属性 {k}={v} 违反唯一约束")
+                    _scope = f"（分支 {branch} 内）" if branch else "（全库）"
+                    errs.append(f"[{entity_type}] 属性 {k}={v} 违反唯一约束{_scope}")
         for k, allowed in (cons.get("allowed_values") or {}).items():
             v = props.get(k)
             if v is not None and v not in allowed:
@@ -335,12 +464,35 @@ class OntologyValidator:
         rels = [t for t in types.values() if t["type_kind"] == "relation"]
         lines = ["【领域本体约束】知识图谱实例化必须遵循以下类型与规则："]
         if ents:
-            # P0-1：含父类型（子类继承父类属性）与继承属性合并
+            def _attrs_of(name):
+                """属性摘要：`名:类型[单位]`，让 LLM 知道该填什么格式。
+
+                ★ 2026-11-15 修（真机实测的重大缺陷）：这里此前用
+                  `self.merged_properties()`（只读**实体侧** properties），而真库
+                  28 个实体的 properties 全为空 ⇒ 注入 system_prompt 的摘要里
+                  **28 个实体全部是"属性:无"、11 个属性名一个都不出现**
+                  ⇒ AI 建模时不知道这些实体能填什么属性，只能自由发挥。
+                  改走 `bound_attributes()`（实体侧 ∪ 属性侧绑定，单一真源）。
+                """
+                ba = self.bound_attributes(name)
+                if not ba:
+                    return "无"
+                parts = []
+                for k, m in ba.items():
+                    _t = str(m.get("type") or "").replace("xsd:", "")
+                    _u = m.get("unit") or ""
+                    s1 = k + (":" + _t if _t else "") + ("[" + _u + "]" if _u else "")
+                    if m.get("required"):
+                        s1 += "*"      # * = 必填
+                    parts.append(s1)
+                return ",".join(parts)
+
             lines.append("实体类型: " + ", ".join(
                 f"{t['name']}"
                 f"{'(' + '继承:' + '/'.join(self.ancestors(t['name'])) + ')' if self.parents_of(t['name']) else ''}"
-                f"(属性:{','.join(self.merged_properties(t['name']).keys()) or '无'})"
+                f"(属性:{_attrs_of(t['name'])})"
                 for t in ents))
+            lines.append("（属性格式：名:数据类型[单位]，带 * 者为必填）")
         if rels:
             lines.append("关系类型: " + ", ".join(t["name"] for t in rels))
         return "\n".join(lines)
@@ -386,27 +538,54 @@ class OntologyValidator:
         ents = [t for t in types.values() if t["type_kind"] in ("entity", "class")]
         rels = [t for t in types.values() if t["type_kind"] == "relation"]
 
+        # ── P0-1（2026-11-15）：属性绑定**双轨**归一 ─────────────────────────
+        # 本工程的属性是「全局数据属性 + 绑定到实体」的 OWL/Protégé 模型：
+        #   · 属性类型行的 `constraints.domain_classes` = 该属性适⽤于哪些实体类型；
+        #   · 实体行的 `properties` = （历史/局部）内联属性定义。
+        # 实测（2026-11-15 真库）：**28 个实体的 properties 全部为空**，
+        # 绑定关系 100% 存在于 attribute.domain_classes 一侧。
+        # 而 shacl_export 此前只读 `merged_properties()`（→ 实体 properties），
+        # ⇒ **结构性地看不到任何属性** ⇒ 全库 `sh:datatype` 出现 0 次
+        #   ⇒ 实例编辑器的 xsd 强校验、枚举白名单在真实数据上全是死代码。
+        # 修法：两侧**并集**消费（不删任何一侧，避免"修一个新问题、断一条旧通路"），
+        #   并以「属性侧的声明优先」——它是全局定义，实体侧只是历史局部覆盖。
         for t in ents:
             name = t["name"]
-            merged_props = self.merged_properties(name)   # P0-1：含父类继承
             cons = self._merged_constraints(name)         # P0-1：含父类继承
+            # ★ 2026-11-15：属性来源收敛到 `bound_attributes()` **单一真源**
+            #   （entity 侧 properties ∪ attribute 侧 domain_classes）。
+            #   此前这里有两份循环（一份读实体侧、一份读属性侧），
+            #   而 `schema_text()` 又只读实体侧 ⇒ 同一语义两处各写一份，必然漂移
+            #   （实测：SHACL 有 56 条 datatype，而注入提示词的本体摘要里却是
+            #    28 个"属性:无"、11 个属性名一个不出现）。
             props = []
-            for k, v in merged_props.items():
-                ptype = (v.get("type") if isinstance(v, dict) else "string") or "string"
+            for k, meta in self.bound_attributes(name).items():
                 block = f"[ sh:path {_prop(k)}"
-                _xsd_dt = typevocab.xsd_of(ptype)
+                # ⚠️ 未声明类型就不发 sh:datatype：`typevocab.xsd_of(None)` 会宽松
+                #   兜底成 xsd:string，而 SHACL 里它是**强断言** ⇒ 把"没声明"伪装成
+                #   "声明为字符串"，数值属性会被误判违规。
+                _xsd_dt = meta.get("type") or ""
                 if _xsd_dt:
                     block += f" ; sh:datatype {_xsd_dt}"
-                av = cons.get("allowed_values", {}).get(k)
-                if isinstance(av, list) and av:
-                    block += " ; sh:in (" + " ".join(f'"{a}"' for a in av) + ")"
-                if k in cons.get("required", []):
+                _av = meta.get("allowed_values")
+                if isinstance(_av, list) and _av:
+                    block += " ; sh:in (" + " ".join(f'"{a}"' for a in _av) + ")"
+                if meta.get("required"):
                     block += " ; sh:minCount 1"
-                if k in cons.get("unique", []):
-                    block += " ; sh:maxCount 1"   # P1-1：sh:unique 非标准词，唯一性归 maxCount 语义
+                if meta.get("unique"):
+                    block += " ; sh:maxCount 1"   # sh:unique 非标准词，唯一性归 maxCount 语义
                 # R4：函数型特性（cardinality=1 或 characteristics 含 functional）→ 基数上限
                 if cons.get("cardinality") == "1" or "functional" in (cons.get("characteristics") or []):
                     block += " ; sh:maxCount 1"
+                # 单位/量纲：SHACL 无标准谓词承载，用 sh:description 作**注解**留痕
+                # （不发明自定义谓词去骗校验器；需要真校验单位时得上 SHACL-SPARQL）
+                _u = str(meta.get("unit") or "").strip()
+                _q = str(meta.get("quantity_kind") or "").strip()
+                if _u or _q:
+                    _note = "量纲单位：" + (_u or "（无量纲）")
+                    if _q:
+                        _note += f"；量纲类别：{_q}"
+                    block += f' ; sh:description "{_note}"'
                 props.append(block + " ]")
             # 出边关系（本类型作为 domain 的关系 → sh:class 约束 range）
             # P1-2 修复（2026-09-06）：同一 path 的多个目标类必须合并为一个 sh:or
@@ -553,7 +732,8 @@ class GraphStore:
         版本化语义：同 id 允许在**不同分支**分别创建版本行（支撑 dev fork），
         仅拦截「同 id 同分支」重复创建。
         """
-        errs = self.validator.validate_node(entity_type, props)
+        # 2026-11-15：传 branch ⇒ 唯一性按分支判定（同一实例在三分支各存一份）
+        errs = self.validator.validate_node(entity_type, props, branch)
         if errs:
             return False, errs
         from repositories.knowledge_repo import KnowledgeRepo

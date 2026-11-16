@@ -62,6 +62,196 @@ def _citations_payload(hits) -> list:
             "score": round(float(h.get("score") or 0), 3),
             "confidence_level": h.get("confidence_level", ""),
             "content": (h.get("content") or "")[:800],
+            # ★ 2026-11-15：补 `anchor` —— 否则**两条路径条目不同构**：
+            #   登记簿路径有 anchor，本回退路径没有 ⇒ 前端读 `x.anchor` 跳转时
+            #   走回退就跳不动（真机历史消息 6597/6585/6583 的 anchor 全是 None）。
+            #   锚点算法仍然只有 `source_anchor` 一份（不另抄）。
+            "anchor": source_anchor(h),
+        })
+    return out
+
+
+#: 条款/章节号的**形状**（只管形状，不含任何领域词/文档名）：
+#: 形如 `5.2.7` / `4.1.22` / `9.5.9`（点分数字，允许后面跟标题文字）。
+#: 可用配置 `context_audit.citation_clause_regex` 覆盖（不同标准编号习惯不同）。
+_CLAUSE_SHAPE = re.compile(r"^\s*(\d+(?:\.\d+){1,4})(?![\d.])")
+
+
+def _clause_re():
+    try:
+        from core import config as _cfg
+        pat = str(_cfg.get("context_audit", "citation_clause_regex", "") or "").strip()
+        if pat:
+            return re.compile(pat)
+    except Exception:
+        pass
+    return _CLAUSE_SHAPE
+
+
+def source_anchor(c: dict) -> str:
+    """给一条命中片段一个**真实**的引用锚点（【来源n】标签与编号对照表共用）。
+
+    ★ 2026-11-14（米爸报「引用的片段 输出正文没有展示引用标识」）真根因：
+      原实现 `_sec = c["section_range"] or c["chunk_index"]` 后拼成 `§{_sec}`。
+      但 `section_range` **只在近邻合并时才有值，且是 chunk 区间**（见
+      `agent/retrieval_diversity.py:135`），其余一律回落成 `§406` ——
+      **把 chunk 序号伪装成条款号**。实测 5 条 citations 的 `section_range` 全为 None。
+      于是 prompt 里给模型的是「来源3 = §627」，而它真正想引的是正文里的 §5.2.5：
+      两套编号之间**没有任何映射**，模型无法低成本对应 ⇒ 干脆只写条款号、不写 [n]
+      （实测 12 条最近回答里有 9 条正文 `[n]` 数为 0，而 `§x.y` 出现 41~63 次）。
+
+    现在的优先级（**只说真话，不冒充**）：
+      ① 片段自带 `section` 且形如条款号 ⇒ `§5.2.7`（可带标题，便于模型认出来）
+      ② 有 `section_range`（近邻合并区间）⇒ `片段#12-14`
+      ③ 都没有 ⇒ `片段#406`（明确写"片段"，不写"§"）
+
+    ★ 2026-11-15：从 `agent/pipeline_parts/context.py` **上移到本模块** ——
+      引用登记簿（`_register_citations`）也要用它算锚点，而登记簿在本模块；
+      留在 context.py 会变成"工具路径拿不到锚点 ⇒ 两处锚点不一致"。
+    """
+    sec = str(c.get("section") or "").strip()
+    if sec:
+        m = _clause_re().match(sec)
+        if m:
+            head = m.group(1)
+            tail = sec[m.end():].strip(" -–—:：·|")
+            return "§%s%s" % (head, (" " + _short(tail, 24)) if tail else "")
+    rng = str(c.get("section_range") or "").strip()
+    if rng:
+        return "片段#%s" % rng
+    idx = c.get("chunk_index", 0)
+    return "片段#%s" % idx
+
+
+def _short(s: str, cap: int) -> str:
+    """按**词边界**截断（不要在词中间切，否则 `ISO 29148-2011 Require` 这种半截词
+    反而让模型认不出是哪份文档 —— 对照表存在的意义就是让它一眼对上号）。
+
+    ★ 2026-11-15：从 `agent/pipeline_parts/context.py` **上移**到本模块。
+      上移原因：引用登记簿（在本模块）算锚点时也要截断尾巴，
+      两处各写一份截断函数必然漂移（本次就发现两份的边界条件不一样）。
+      **以原 context.py 那份为准**（`sp >= cap*0.55` 才按词切 + 去尾部标点）。
+    """
+    s = re.sub(r"\s+", " ", str(s or "").strip())
+    if len(s) <= cap:
+        return s
+    cut = s[:cap]
+    sp = cut.rfind(" ")
+    if sp >= cap * 0.55:          # 太靠前就不按词切了，否则只剩一两个词
+        cut = cut[:sp]
+    return cut.rstrip(" -–—,，。:：|") + "…"
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# 引用登记簿（2026-11-15）——【来源n】与前端 citations 的**唯一真源**
+# ══════════════════════════════════════════════════════════════════════════# ★ 为什么要它（真机 conv 999999033 / msg 6603 实证）：
+#   Skill 的硬门槛要求"必须先调用 graph_retrieve 检索条款原文" ⇒ **主路径就是工具检索**。
+#   但：
+#     · 提示词注入的【来源n】来自**初始检索**（`retrieval.chunk_hits`）；
+#     · 工具检索的命中**只留在工具局部变量里**，从不回写 retrieval；
+#     · 而 `citations`（前端可点条目）也只从**初始检索**取。
+#   ⇒ 走工具路径时 citations 必为空；而工具输出文本自带**另一套**【来源 1】~【来源 4】，
+#     模型照着那套写 [1]~[5] ⇒ **正文里的编号全部越界、点不动**
+#     （真机：citations=0，5 个 [n] 全部越界；模型还照着工具里的编号写了 §4.1.6/§4.2.2）。
+#   ⇒ 必须有一本**全局登记簿**：初始检索与工具检索登记到同一处，
+#     编号全局唯一且单调递增，两边都用它 ⇒ 模型写 [n] 必然能点。
+#
+# 登记簿条目结构（纯 dict，JSON 可序列化，便于落库/调试）：
+#   {"n": 编号(1基), "chunk": 原始 hit, "doc": 文档名, "anchor": 锚点}
+
+
+def _citation_key(h: dict) -> str:
+    """命中片段的**去重键**（同一片段在初始检索与工具检索里可能各出现一次）。"""
+    did = str(h.get("document_id") or "").strip()
+    if not did:
+        did = str(h.get("source_doc") or "").strip()
+    return "%s|%s" % (did, str(h.get("chunk_index") or ""))
+
+
+def _register_citations(registry: list, hits, *, limit: int = 0,
+                        max_total: int = 0) -> list:
+    """把命中片段登记进登记簿，返回**逐条对应 hits** 的条目列表。
+
+    :param registry: 登记簿（list，就地追加）—— 必须在**一次用户请求内**保持同一个对象。
+    :param hits: 命中片段列表。
+    :param limit: 本次最多登记几条（0 = 不限）。
+    :param max_total: 登记簿总条数上限（0 = 不限）。达上限后新片段**不分配编号**
+        （但**仍然返回**，只是 ``numbered=False``）—— 调用方照样把内容给模型看，
+        只是不给它可引用编号。宁可少一个可点条目，也不制造"正文写了 [n] 但点不动"的死编号。
+    :returns: 与 ``hits`` **等长**的列表，每项：
+        ``{"n": 编号或 None, "numbered": bool, "chunk": hit, "doc": 文档名, "anchor": 锚点}``
+
+    ★ 已登记过的片段**复用原编号**（不占新号）——
+      否则同一份文档被初始检索和工具检索各命中一次时会占两个号，
+      编号空间被无谓撑大，且"同一个 [n] 指向两条内容"会让模型对不上。
+    ★ 返回等长是关键：调用方要**逐条**把内容展示给模型（有的带编号、有的不带）。
+    """
+    out = []
+    if registry is None:
+        return out
+    _seen = {}
+    for _e in registry:
+        try:
+            _seen[_e.get("key")] = _e
+        except Exception:
+            continue
+    for h in (hits or []):
+        if not isinstance(h, dict):
+            continue
+        if limit and len(out) >= limit:
+            break
+        _k = _citation_key(h)
+        if _k in _seen:
+            # ★ 2026-11-15：返回**登记簿里的同一个对象**（不是副本）——
+            #   原实现 `dict(_seen[_k])` 返回副本 ⇒ 调用方写的 `_e["anchor"]=...`
+            #   写回不到登记簿 ⇒ `_citations_payload_from_registry` 读出来的 anchor
+            #   **永远为空**（真机 msg 6612 实测：8 条 citations 的 anchor 全是 ""）。
+            #   教训：返回副本 ⇒ 调用方的写回全部丢失（"验证对象也会错"同族）。
+            _e = _seen[_k]
+            _e["numbered"] = True
+            out.append(_e)
+            continue
+        if max_total and len(registry) >= max_total:
+            out.append({"n": None, "numbered": False, "key": _k, "chunk": h,
+                        "doc": h.get("source_doc", ""),
+                        # 锚点照算：未分配编号的补充材料也该能跳转到位置，
+                        #   只是不能被正文引用而已。
+                        "anchor": source_anchor(h)})
+            continue      # 达上限：不分配编号
+        _n = len(registry) + 1
+        _entry = {"n": _n, "numbered": True, "key": _k, "chunk": h,
+                  "doc": h.get("source_doc", ""),
+                  # ★ 锚点在**登记时**就算好（单一真源）：
+                  #   以前靠调用方回写 `_e["anchor"]`，返回副本 ⇒ 写回丢失 ⇒ 全空。
+                  #   现在登记簿自带锚点，调用方不再各算一份。
+                  "anchor": source_anchor(h)}
+        registry.append(_entry)
+        _seen[_k] = _entry
+        out.append(_entry)
+    return out
+
+
+def _citations_payload_from_registry(registry: list) -> list:
+    """从登记簿生成前端引用数据（与【来源n】1 基对齐）。
+
+    ⚠️ 与 `_citations_payload` 的差别：后者按 `rag.inject_k` 截断**初始检索**的
+    chunk_hits；本函数返回登记簿的**全部**已分配编号条目（初始检索 + 工具检索）。
+    登记簿为空 ⇒ 返回 []（调用方回退旧逻辑）。
+    """
+    out = []
+    for e in (registry or []):
+        h = e.get("chunk") or {}
+        if not isinstance(h, dict):
+            continue
+        out.append({
+            "document_id": h.get("document_id"),
+            "source_doc": h.get("source_doc", ""),
+            "chunk_index": h.get("chunk_index"),
+            "section": h.get("section", ""),
+            "score": round(float(h.get("score") or 0), 3),
+            "confidence_level": h.get("confidence_level", ""),
+            "content": (h.get("content") or "")[:800],
+            "anchor": e.get("anchor") or "",
         })
     return out
 
@@ -128,7 +318,12 @@ def _archive_sysml_version(conn, conversation_id: int, message_id: int,
     返回新版本 id；失败返回 None（不阻断归档主流程）。
     """
     try:
-        if not sysml_views or not (sysml_views.get("views") or {}):
+        sysml_views = sysml_views or {}
+        # ★ 2026-11-09（会话 990541）：原守卫要求必须有结构化视图，导致「直接吐代码」的
+        #   交付轮不入版本链 —— 实测真正 pass 的那轮没建档，库里的 current 反而是坏的。
+        #   现放宽为：有视图 **或** 有 sysml 代码文本，都建档（调用点已按 lang 收紧了代码来源）。
+        _has_views = bool(sysml_views.get("views") or {})
+        if not _has_views and not (code_text or "").strip():
             return None
         # 幂等：同消息已建档跳过
         dup = conn.execute(
@@ -137,19 +332,66 @@ def _archive_sysml_version(conn, conversation_id: int, message_id: int,
         if dup:
             return None
         # 会话版本计数 + 上一版本（修订链）
-        row = conn.execute(
-            "SELECT COUNT(*) AS n, MAX(id) AS last_id FROM sysml_versions WHERE conversation_id=?",
-            (conversation_id,)).fetchone()
+        #
+        # ★★ 2026-11-13（真机 conv 990727 实证）：**版本链必须按「产物主体」分组**。
+        #   原实现按**会话**计数：`WHERE conversation_id=?` ⇒ label = v0.{会话版本数+1}。
+        #   后果（实测该会话）：
+        #     v0.1 = `package '串联混动汽车运行需求'`（需求视图）
+        #     v0.2 = `package '串联混动汽车用例'`（用例视图）— parent_id 竟指向 v0.1
+        #   ⇒ 两个完全不同的产物被串成一条修订链，用户在"演进路线"里看到
+        #     「用例视图是需求视图的 v0.2」，版本号与内容完全对不上。
+        #   修法：subject = `derive_subject(code_text)`（package 名 → 主定义名 → 实例名），
+        #     同 subject 才 +1 与串联 parent；不同 subject 各自从 v0.1 起。
+        #   subject 为空（无代码、只有结构化视图）时退回按会话计数，
+        #   保持旧行为（这类轮次本来只有一张视图，串链风险低）。
+        subject = ""
+        try:
+            if (code_text or "").strip():
+                from core.artifact_naming import derive_subject as _dsub
+                subject = str(_dsub(code_text, "") or "")[:80]
+        except Exception:
+            subject = ""
+        if subject:
+            row = conn.execute(
+                "SELECT COUNT(*) AS n, MAX(id) AS last_id FROM sysml_versions "
+                "WHERE conversation_id=? AND subject=?",
+                (conversation_id, subject)).fetchone()
+        else:
+            row = conn.execute(
+                "SELECT COUNT(*) AS n, MAX(id) AS last_id FROM sysml_versions WHERE conversation_id=?",
+                (conversation_id,)).fetchone()
         n = row["n"] if row else 0
         last_id = row["last_id"] if row else None
         label = f"v0.{n + 1}"
         # 元素摘要（结构化视图 nodes/edges 汇总）
+        #
+        # ★ 2026-11-09 修正（会话 990541 实测）：原实现直接 append，**不去重**。
+        #   同一个元素会出现在多个视图（BDD/IBD/活动图各画一次），于是 entities 记的是
+        #   「跨视图出现次数」而不是「元素个数」。实测该会话 v0.3 报 entities=12，
+        #   实际唯一名只有 4 个（CommunicationSatellite / Transponder / satellite / transponder），
+        #   重复率 67%。这个虚高数字会直接注入下一轮上下文，等于给模型一个错的事实。
+        #   去重保序：既修正计数，也保住"先出现的先列"这个可读性。
+        def _uniq_keep(seq):
+            _seen, _out = set(), []
+            for _x in seq:
+                # 过滤不可解码的乱码节点（U+FFFD）：实测 conv 9586/9779/9629 的 nodes 里
+                # 有整片 '��������' —— 那是历史 GBK/UTF-8 误解码留下的。放进契约与告警里
+                # 只会制造噪音（用户看到一串方块，完全无法判断该补什么）。
+                if not _x or "\ufffd" in _x:
+                    continue
+                if _x not in _seen:
+                    _seen.add(_x)
+                    _out.append(_x)
+            return _out
+
         nodes, edges = [], []
         for vname, vdata in (sysml_views.get("views") or {}).items():
             for nd in (vdata.get("nodes") or []):
                 nodes.append(nd.get("name") or nd.get("id") or "")
             for ed in (vdata.get("edges") or []):
                 edges.append(f"{ed.get('source') or ''}--{ed.get('type') or ''}--{ed.get('target') or ''}")
+        nodes = _uniq_keep(nodes)
+        edges = _uniq_keep(edges)
         summary = {
             "entities": len(nodes), "relations": len(edges),
             "nodes": nodes[:200], "edges": edges[:200], "intent": sysml_views.get("intent", ""),
@@ -165,31 +407,106 @@ def _archive_sysml_version(conn, conversation_id: int, message_id: int,
         _chk = sysml_views.get("check")
         if isinstance(_chk, dict) and _chk:
             summary["check"] = _chk
-        # 相对上版差异（简化：新增节点名；上版不存在则全部为新增）
-        diff = {"added_nodes": nodes[:200]}
+        # 相对上版差异 + 累积契约
+        #
+        # ★ 2026-11-09 修正（会话 990541 / 全库实测）：原实现**只算 added_nodes**，
+        #   没有任何 removed 维度。后果是「修订时把上一版的东西丢了」这件事在数据层
+        #   **结构上不可见** —— 全库 131 个版本里含 removed* 字段的只有 1 个（缺 99.2%），
+        #   而按 element_summary 逐对复算：37 个可比对父子版本中有 32 对（86.5%）发生元素丢失，
+        #   最大一对从 67 个元素掉到 33 个（conv 514 v0.4→v0.5）。
+        #   只记"新增"的 diff 永远报喜不报忧，这是"前面犯的错后面还在犯"的数据层根因。
+        #
+        # ★ 为什么还要 contract（累积契约）：逐版比对会漏掉**累积蚕食** ——
+        #   v1 {A,B} → v2 丢 A（removed=[A]）→ v3 只改别处（removed=[]），
+        #   到 v3 时「当前 vs 上一版」完全正常，但 A 已经消失两轮了。
+        #   contract = 本版本链**历史上出现过的元素并集**，只有对契约比才能算"累计还差几个"。
+        #   只记录、不阻断（shadow 语义）：先观察真实噪声，再决定是否升级为拦截闸。
+        _old = {}
         if last_id:
             try:
-                old = json.loads(conn.execute(
+                _old = json.loads(conn.execute(
                     "SELECT element_summary FROM sysml_versions WHERE id=?", (last_id,)).fetchone()["element_summary"] or "{}")
-                old_nodes = set(old.get("nodes") or [])
-                diff["added_nodes"] = [x for x in nodes if x and x not in old_nodes][:200]
             except Exception:
-                pass
-        # 旧版本状态收敛：draft/current → superseded（只收敛最后一个 current/draft，避免误标 committed）
-        cur = conn.execute("SELECT id, status FROM sysml_versions WHERE conversation_id=? AND status IN ('draft','current') "
-                           "ORDER BY id DESC LIMIT 1", (conversation_id,)).fetchone()
+                _old = {}
+            if not isinstance(_old, dict):
+                _old = {}
+
+        diff = {"added_nodes": nodes[:200], "removed_nodes": [],
+                "added_edges": [], "removed_edges": [], "kept_nodes": len(nodes)}
+        if _old:
+            # 旧数据（2026-11-09 之前）的 nodes 未去重，这里统一按集合比，避免重复项被误判为新增
+            _old_nodes_raw = [x for x in (_old.get("nodes") or []) if x]
+            _old_nodes_order = _uniq_keep(_old_nodes_raw)
+            _old_nodes = set(_old_nodes_raw)
+            _cur_nodes = set(nodes)
+            diff["added_nodes"] = [x for x in nodes if x not in _old_nodes][:200]
+            # removed 保持上一版的出现顺序，便于模型对回它自己写过的东西
+            diff["removed_nodes"] = [x for x in _old_nodes_order if x not in _cur_nodes][:200]
+            diff["kept_nodes"] = len(_cur_nodes & _old_nodes)
+            _old_edges_raw = [x for x in (_old.get("edges") or []) if x]
+            _old_edges = set(_old_edges_raw)
+            _cur_edges = set(edges)
+            diff["added_edges"] = [x for x in edges if x not in _old_edges][:200]
+            diff["removed_edges"] = [x for x in _uniq_keep(_old_edges_raw) if x not in _cur_edges][:200]
+
+        # 累积契约：**滚动窗口**内出现过的元素并集。
+        # 为什么不用「全历史并集」：实测 conv 514 有 9 个版本、跨越多天多个主题，
+        # 全历史并集 223 个元素、末版只剩 50 个 ⇒ 报"缺 173 个"，其中绝大多数是
+        # **改名/重构**留下的旧名，不是真的丢。契约窗口限定为最近 N 版，
+        # 关注"近期写过、现在没有"（这才是米爸说的"前面有的后面丢了"）。
+        _CONTRACT_WINDOW = 5
+        _recent = []
+        try:
+            _rows = conn.execute(
+                "SELECT element_summary FROM sysml_versions WHERE conversation_id=? "
+                "ORDER BY id DESC LIMIT ?", (conversation_id, _CONTRACT_WINDOW)).fetchall()
+            for _r in _rows:
+                _raw = _r[0] if not hasattr(_r, "keys") else _r["element_summary"]
+                try:
+                    _e = json.loads(_raw or "{}")
+                except Exception:
+                    _e = {}
+                if isinstance(_e, dict):
+                    _recent.extend([x for x in (_e.get("nodes") or []) if x])
+        except Exception:
+            _recent = [x for x in (_old.get("nodes") or []) if x]
+        _contract = _uniq_keep(_recent + nodes)
+        _cur_set = set(nodes)
+        _lost = [x for x in _contract if x not in _cur_set]
+        summary["contract"] = _contract[:200]
+        summary["coverage"] = {
+            "contract_size": len(_contract),
+            "covered": len(_cur_set & set(_contract)),
+            "lost_n": len(_lost),
+            "lost": _lost[:200],
+            "window": _CONTRACT_WINDOW,
+        }
+        # 旧版本状态收敛：draft/current → superseded
+        #   ★ 2026-11-13：**只在同一 subject 内收敛**。原实现是「整个会话最后一条
+        #   current/draft」无差别 supersede ⇒ 一旦按 subject 分组计数，
+        #   生成"用例视图 v0.1"会把并存的"需求视图 v0.1"也标成 superseded
+        #   ⇒ 两个独立产物互相把对方作废（版本状态失真，切版本时找不到 current）。
+        if subject:
+            cur = conn.execute(
+                "SELECT id, status FROM sysml_versions "
+                "WHERE conversation_id=? AND subject=? AND status IN ('draft','current') "
+                "ORDER BY id DESC LIMIT 1", (conversation_id, subject)).fetchone()
+        else:
+            cur = conn.execute(
+                "SELECT id, status FROM sysml_versions WHERE conversation_id=? AND status IN ('draft','current') "
+                "ORDER BY id DESC LIMIT 1", (conversation_id,)).fetchone()
         if cur:
             conn.execute("UPDATE sysml_versions SET status='superseded' WHERE id=?", (cur["id"],))
         # P1-1（2026-09-28）：project_id **写入时定格**会话所属工程（空=无工程会话，合法）。
         # 此后会话改归属，历史版本仍留在它产生时所属的工程下（写回智源的目标工程不漂移）。
         cur2 = conn.execute(
-            "INSERT INTO sysml_versions (artifact_id, conversation_id, message_id, project_id, version_label, content, diff, element_summary, parent_id, status, created_by, code_text) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+            "INSERT INTO sysml_versions (artifact_id, conversation_id, message_id, project_id, version_label, content, diff, element_summary, parent_id, status, created_by, code_text, subject) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (0, conversation_id, message_id,
              _conversation_project_id(conn, conversation_id), label,
              json.dumps(sysml_views, ensure_ascii=False), json.dumps(diff, ensure_ascii=False),
              json.dumps(summary, ensure_ascii=False), last_id, "current", created_by,
-             code_text or ""))
+             code_text or "", subject))
         # 不在此 commit：由调用方（db_conn 上下文）统一提交，保证与消息落库同事务
         return cur2.lastrowid
     except Exception:
@@ -374,6 +691,81 @@ def strip_leaked_tool_markup(text: str) -> tuple:
     return s[:cut].rstrip(), len(marks)
 
 
+def _conversation_goal_text(conn, conversation_id) -> str:
+    """取"生成时的诉求与目标"：优先会话标题（本就是诉求的精炼），退回首条用户消息。
+
+    不调 LLM：命名一旦依赖模型输出，同一段代码在不同时刻可能得到不同名字，
+    与"多版本保持一致"直接冲突。
+    """
+    try:
+        row = conn.execute("SELECT title FROM conversations WHERE id=?",
+                           (conversation_id,)).fetchone()
+        if row:
+            t = (row[0] if not hasattr(row, "keys") else row["title"]) or ""
+            if str(t).strip():
+                return str(t).strip()
+    except Exception:
+        pass
+    try:
+        row = conn.execute(
+            "SELECT content FROM messages WHERE conversation_id=? AND role='user' "
+            "ORDER BY id LIMIT 1", (conversation_id,)).fetchone()
+        if row:
+            c = (row[0] if not hasattr(row, "keys") else row["content"]) or ""
+            return str(c).strip().split("\n")[0][:80]
+    except Exception:
+        pass
+    return ""
+
+
+def _resolve_code_artifact_title(conn, conversation_id, code_text: str,
+                                 version_label: str = "", lang: str = "sysml") -> tuple:
+    """产物标题 + 文件名（**会话内锁定**，多版本只变版本后缀）。
+
+    为什么锁定（米爸 2026-11-09「多版本要保持一致性」）：
+      若每版都按当版代码重新取名，重构一次 package 名就会让列表从
+      「LinkBudget」跳成「PowerBudget」，用户在演进链里反而找不到同一个模型。
+      故：**首版定名，后续复用**，锁定值写 `artifacts.meta["name_base"]`。
+
+    返回 (title, filename, meta_extra)。
+    """
+    from core.artifact_naming import compose_title, derive_subject, filename_for
+
+    goal = _conversation_goal_text(conn, conversation_id)
+    # ★★ 2026-11-13（真机 conv 990727 实证）：锁定必须**按产物主体匹配**，
+    #   不能"取会话第一条 code 产物"就复用。
+    #   原实现 `ORDER BY id LIMIT 1` 取最早那条的 name_base ⇒ 后续**任何**新产物
+    #   都继承第一个产物的名字：实测该会话的用例视图（`package '串联混动汽车用例'`）
+    #   被命名为「串联混动汽车运行需求 · 需求视图 … · v0.2」，用户根本认不出这是用例视图。
+    #   修法：先算出本轮的 subject，**只在 subject 相同的历史产物里**找锁定名；
+    #   找不到 ⇒ 这是新产物，用自己的 subject 重新定名（各自独立成链）。
+    _subject_now = derive_subject(code_text, goal)
+    locked_base, locked_subject = "", ""
+    try:
+        for (m,) in conn.execute(
+                "SELECT meta FROM artifacts WHERE conversation_id=? AND kind='code' "
+                "ORDER BY id LIMIT 200", (conversation_id,)):
+            try:
+                j = json.loads(m or "{}")
+            except Exception:
+                j = {}
+            if not (isinstance(j, dict) and j.get("name_base")):
+                continue
+            # 同主体才复用（大小写/空白差异不算不同产物）
+            if str(j.get("name_key") or "").strip() == str(_subject_now or "").strip():
+                locked_base = str(j.get("name_base") or "")
+                locked_subject = str(j.get("name_key") or "")
+                break
+    except Exception:
+        pass
+
+    subject = locked_subject or _subject_now
+    base = locked_base or compose_title(subject, goal, "")
+    title = f"{base} · {version_label}" if version_label else base
+    return title, filename_for(subject, version_label, lang), {
+        "name_key": subject, "name_base": base}
+
+
 def _archive_artifacts(conn, conversation_id: int, message_id: int,
                        card_data, content: str, intent: str, created_by: str = "未登录",
                        tool_docs=None) -> None:
@@ -402,7 +794,21 @@ def _archive_artifacts(conn, conversation_id: int, message_id: int,
         _vid = None  # P0-7：本消息 SysML 版本 id（代码文件产物关联版本）
         _code = ""   # P0-7：本消息提取的 SysML 代码文本
         sv = cd.get("sysml_views") or {}
-        if sv.get("views"):
+        # ★ 2026-11-09（会话 990541）：版本建档原先被 `if sv.get("views")` 挡住 ——
+        #   只要本轮没有结构化视图（模型直接吐代码，或视图解析失败），**就不建版本**。
+        #   实测该会话 02:36 那轮真正通过校验（verdict=pass）的发文没有落库，
+        #   于是库里 current 仍停在 02:33 那个 17 条语法错的版本上 —— **库里的"当前版本"
+        #   与实际交付给用户的代码不一致**，后续任何"取上一版做基线"都会取到错的那份。
+        #   修法：有结构化视图 **或** 有 sysml/kerml 标记的代码块，都算一次交付，都建档。
+        #   收紧点：只认 lang ∈ {sysml,kerml,sysmlv2,kerml2} 的代码块，
+        #   避免把 python/js 之类普通代码回答也写进 SysML 版本链（那会污染版本链）。
+        _blocks = _extract_code_blocks(content)
+        _code = "\n\n".join(b["code"] for b in _blocks
+                            if b.get("lang", "").lower() in ("sysml", "kerml", "sysmlv2", "kerml2"))
+        if not _code and _blocks and sv.get("views"):
+            # 旧行为兜底：有结构化视图但代码块没打语言标记时取第一块
+            _code = _blocks[0]["code"]
+        if sv.get("views") or _code:
             for vname, vdata in (sv.get("views") or {}).items():
                 title = f"SysML 视图：{vdata.get('view', {}).get('name', vname)}"
                 if not repo.exists(conversation_id, message_id, "sysml", title):
@@ -411,10 +817,7 @@ def _archive_artifacts(conn, conversation_id: int, message_id: int,
                         {"sysml_views": {"views": {vname: vdata}}}, source="conversation",
                         created_by=created_by)
             # AI 建模 SysML 版本建档（幂等；失败不阻断归档）
-            _blocks = _extract_code_blocks(content)
-            _code = "\n\n".join(b["code"] for b in _blocks if b.get("lang","").lower() in ("sysml","kerml","sysmlv2","kerml2"))
-            if not _code and _blocks:
-                _code = _blocks[0]["code"]
+            # _blocks/_code 已在条件判定处统一算好（见上），此处不再重复提取
             _vid = _archive_sysml_version(conn, conversation_id, message_id, sv, created_by, _code)
             if _vid:
                 for ar in conn.execute(
@@ -469,11 +872,16 @@ def _archive_artifacts(conn, conversation_id: int, message_id: int,
                     _vlabel = _vr["version_label"]
             except Exception:
                 pass
-            _vt = f"代码文件 {_vlabel}（SysML）"
+            # ★ 2026-11-09（米爸）：原来固定叫「代码文件 vN（SysML）」——
+            #   用户原话"都不知道具体这个代码是什么"。改为按 package/主定义名 + 会话诉求取名，
+            #   且**会话内锁定**（后续版本只变版本后缀），见 _resolve_code_artifact_title。
+            _vt, _vf, _vm = _resolve_code_artifact_title(
+                conn, conversation_id, _code, _vlabel, "sysml")
             if _code and not repo.exists(conversation_id, message_id, "code", _vt):
                 repo.create_artifact(
                     conversation_id, message_id, "code", _vt, "code", _code,
-                    {"lang": "sysml", "version_id": _vid, "version_label": _vlabel},
+                    {"lang": "sysml", "version_id": _vid, "version_label": _vlabel, **_vm},
+                    filename=_vf,
                     source="conversation", created_by=created_by)
         else:
             # 幂等修复（2026-09-01）：重复归档时 sysml 版本幂等返回 None → _vid 分支漂移。
@@ -488,11 +896,19 @@ def _archive_artifacts(conn, conversation_id: int, message_id: int,
                 for i, blk in enumerate(
                         [b for b in _extract_code_blocks(content)
                          if str(b.get("lang", "")).lower() in ("sysml", "kerml", "sysmlv2", "kerml2")], 1):
-                    title = f"代码块 {i}（{blk['lang']}）"
+                    # 2026-11-09：不再用「代码块 N（lang）」这个零信息量名字。
+                    # 同一消息里多个代码块主体名相撞时，才补序号区分（否则幂等判定会把第二块当重复）。
+                    _bt, _bf, _bm = _resolve_code_artifact_title(
+                        conn, conversation_id, blk["code"], "", blk["lang"])
+                    title = _bt
+                    if repo.exists(conversation_id, message_id, "code", title):
+                        title = f"{_bt}（{i}）"
                     if not repo.exists(conversation_id, message_id, "code", title):
                         repo.create_artifact(
                             conversation_id, message_id, "code", title, "code", blk["code"],
-                            {"lang": blk["lang"]}, source="conversation", created_by=created_by)
+                            {"lang": blk["lang"], **_bm},
+                            filename=_bf,
+                            source="conversation", created_by=created_by)
 
         # ★ 2026-10-17（米爸反馈2）：**删除「长 markdown → document 产物」自动登记**。
         #   原第 4 节：正文 ≥200 字且非 sysml/报告 ⇒ 自动建一份 document 产物——
@@ -512,12 +928,18 @@ def _archive_artifacts(conn, conversation_id: int, message_id: int,
                 continue
             if _dt[:400] in (content or ""):
                 continue    # 正文已带同文（代码块路径已覆盖），避免双登记
-            _t5 = str((_doc or {}).get("title") or "").strip() \
-                or f"SysML 源码（工具取回 #{_i}）"
+            # 2026-11-09：工具侧若没给 title，不再落「SysML 源码（工具取回 #1）」这个占位名，
+            # 改为按代码主体取名（与正文代码块同一套规则，保证同一模型在不同来源下同名）。
+            _t5 = str((_doc or {}).get("title") or "").strip()
+            _f5, _m5 = "", {}
+            if not _t5:
+                _t5, _f5, _m5 = _resolve_code_artifact_title(
+                    conn, conversation_id, _dt, "", "sysml")
             if not repo.exists(conversation_id, message_id, "code", _t5):
                 repo.create_artifact(
                     conversation_id, message_id, "code", _t5, "code", _dt,
-                    {"lang": "sysml", "source": "tool_result"},
+                    {"lang": "sysml", "source": "tool_result", **_m5},
+                    filename=_f5,
                     source="conversation", created_by=created_by)
     except Exception:
         # 归档失败不阻断主流程（对齐既有降级原则）

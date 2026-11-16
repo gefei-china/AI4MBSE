@@ -54,6 +54,12 @@ class OntologyTypeIn(BaseModel):
     status: Optional[str] = None
     replaced_by: Optional[str] = ""     # 弃用后的替代类型名
     deprecated_note: Optional[str] = "" # 弃用原因/说明
+    # P0-1 / D1=A（2026-11-15）：上层本体（BFO 轻量子集）锚点。
+    # 取值见 core/ontology_tlo.py 的 TLO_LOCALS（Object/Process/Quality/
+    # InformationContentEntity/...）；空串=不锚定（可沿 parent 继承）。
+    # ⚠️ 后端会经 ontology_tlo.normalize() 归一（容忍 bfo:Object / BFO_0000030 等写法），
+    #    未识别**直接拒绝**而不是静默兜底成根 —— 静默兜底会把录入错误变成"锚住了"。
+    tlo_anchor: Optional[str] = None
 
 
 class V2GExtractIn(BaseModel):

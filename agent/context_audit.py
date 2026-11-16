@@ -111,6 +111,16 @@ def record_blocks(blocks: dict, phase: str = "system", extra: dict | None = None
         ctx = trace_context() or {}
         trace_id = str(ctx.get("trace_id") or "")
         conv_id = int(ctx.get("conversation_id") or 0)
+        # ★ 2026-11-10（run 维度下沉）：块级归因必须带批次坐标。
+        #   下沉前 `context_audit` 只有 trace_id + conversation_id ⇒ 一个会话跑过多轮编排时
+        #   **无法回答"这一批 40 个块属于哪个 run、哪个子任务"**；而 `task_queue.run_id` /
+        #   `tool_call_logs.run_id` / `orch_run_spans.run_id` 早已齐备，唯独判据面缺这一列。
+        #   键名与 `core/audit._TRACE_KEYS` 对齐（run_id / sub_task_key），不另造口径。
+        try:
+            run_id = int(ctx.get("run_id") or 0)
+        except (TypeError, ValueError):
+            run_id = 0
+        sub_task_key = str(ctx.get("sub_task_key") or "")
 
         rows = []
         total = 0
@@ -130,10 +140,13 @@ def record_blocks(blocks: dict, phase: str = "system", extra: dict | None = None
             return 0
 
         with _BUF_LOCK:
-            key = (trace_id, conv_id, phase)
+            # ⚠️ 键里必须含 run_id：同一 trace 下若先后跑了两批编排（恢复/重跑都会复用 trace），
+            #    只按 (trace, conv, phase) 聚合会把两批的块**相加**，产出"这批花了 8k"的假数。
+            key = (trace_id, conv_id, run_id, phase)
             cur = _BUF.get(key)
             if cur is None:
-                cur = {"blocks": {}, "extra": {}, "total": 0, "chars": 0}
+                cur = {"blocks": {}, "extra": {}, "total": 0, "chars": 0,
+                       "sub_task_key": sub_task_key}
                 _BUF[key] = cur
             for name, layer, tk, ch in rows:
                 b = cur["blocks"].get(name)
@@ -151,6 +164,7 @@ def record_blocks(blocks: dict, phase: str = "system", extra: dict | None = None
                     pass
             _LAST.clear()
             _LAST.update({"trace_id": trace_id, "conversation_id": conv_id,
+                          "run_id": run_id, "sub_task_key": sub_task_key,
                           "phase": phase, "total_tokens": total,
                           "blocks": {n: {"tokens": t, "layer": l}
                                      for n, (l, t, _c) in
@@ -186,30 +200,61 @@ def flush(force: bool = False) -> int:
         try:
             cur = conn.cursor()
             n = 0
-            for (trace_id, conv_id, phase), data in items:
+            # ★ 2026-11-10：老库（迁移未跑）没有 run_id/sub_task_key 列时必须**降级写旧列**。
+            #   若直接写新列，`no such column` 会让整批归因**一条不落**，
+            #   而本函数整体被 `except: return 0` 吞掉 ⇒ 观测静默归零（本仓反复踩的形态）。
+            #   判据用 PRAGMA 实测列，不按版本猜。
+            _cols = set()
+            try:
+                _cols = {r[1] for r in cur.execute(
+                    "PRAGMA table_info(context_audit_summary)").fetchall()}
+            except Exception:
+                _cols = set()
+            _new = ("run_id" in _cols) and ("sub_task_key" in _cols)
+            for (trace_id, conv_id, run_id, phase), data in items:
                 blocks = data.get("blocks") or {}
                 # 纯指标归因（blocks 空、extra 非空）也要写 summary 行
                 if not blocks and not (data.get("extra") or {}):
                     continue
                 for name, v in blocks.items():
-                    cur.execute(
-                        "INSERT INTO context_audit "
-                        "(trace_id, conversation_id, block_name, layer, tokens, chars, phase) "
-                        "VALUES (?,?,?,?,?,?,?)",
-                        (trace_id, conv_id, name, v.get("layer", "dynamic"),
-                         int(v.get("tokens") or 0), int(v.get("chars") or 0), phase),
-                    )
+                    if _new:
+                        cur.execute(
+                            "INSERT INTO context_audit "
+                            "(trace_id, conversation_id, run_id, block_name, layer, tokens, chars, phase) "
+                            "VALUES (?,?,?,?,?,?,?,?)",
+                            (trace_id, conv_id, int(run_id or 0), name, v.get("layer", "dynamic"),
+                             int(v.get("tokens") or 0), int(v.get("chars") or 0), phase),
+                        )
+                    else:
+                        cur.execute(
+                            "INSERT INTO context_audit "
+                            "(trace_id, conversation_id, block_name, layer, tokens, chars, phase) "
+                            "VALUES (?,?,?,?,?,?,?)",
+                            (trace_id, conv_id, name, v.get("layer", "dynamic"),
+                             int(v.get("tokens") or 0), int(v.get("chars") or 0), phase),
+                        )
                     n += 1
                 # 聚合行**始终写**（即便 metrics 为空）—— summary 表是"一次装配一行"的
                 # 事实表，缺行会让"按 trace 查这轮总量"出现空洞。
-                cur.execute(
-                    "INSERT INTO context_audit_summary "
-                    "(trace_id, conversation_id, phase, total_tokens, total_chars, "
-                    " block_count, metrics) VALUES (?,?,?,?,?,?,?)",
-                    (trace_id, conv_id, phase, int(data.get("total") or 0),
-                     int(data.get("chars") or 0), len(blocks),
-                     json.dumps(data.get("extra") or {}, ensure_ascii=False)),
-                )
+                if _new:
+                    cur.execute(
+                        "INSERT INTO context_audit_summary "
+                        "(trace_id, conversation_id, run_id, phase, total_tokens, total_chars, "
+                        " block_count, metrics, sub_task_key) VALUES (?,?,?,?,?,?,?,?,?)",
+                        (trace_id, conv_id, int(run_id or 0), phase, int(data.get("total") or 0),
+                         int(data.get("chars") or 0), len(blocks),
+                         json.dumps(data.get("extra") or {}, ensure_ascii=False),
+                         str(data.get("sub_task_key") or "")),
+                    )
+                else:
+                    cur.execute(
+                        "INSERT INTO context_audit_summary "
+                        "(trace_id, conversation_id, phase, total_tokens, total_chars, "
+                        " block_count, metrics) VALUES (?,?,?,?,?,?,?)",
+                        (trace_id, conv_id, phase, int(data.get("total") or 0),
+                         int(data.get("chars") or 0), len(blocks),
+                         json.dumps(data.get("extra") or {}, ensure_ascii=False)),
+                    )
             conn.commit()
             return n
         finally:

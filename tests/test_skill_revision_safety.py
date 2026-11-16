@@ -104,11 +104,21 @@ def test_register_skills_does_not_touch_ai_improve_draft(skills_conn, monkeypatc
     register_skills.main()          # ★ 不吞异常
 
     # ① 自证：内置行确实被更新过（证明 main 真的执行到了写入逻辑）
+    #
+    # ⚠️ 2026-11-07 修正：原断言盯 `content`，但 2026-11-07 起默认**保留正文**
+    #   （正文与 triggers 由 DB 为准，防止"重启把人工修改抹掉"；要下发新正文须
+    #   `register_skills.py --force-content`）。判据若仍盯 content，就会把
+    #   "按设计保留" 判成"main 没执行"—— 这正是本测试注释里警告的**假红**。
+    #   ⇒ 自证改盯**默认模式确实会更新**的字段（description/category/builtin/scope），
+    #     反空转的目的不变：main 没跑到写入，这些字段不会变。
     builtin_after = dict(skills_conn.execute(
-        "SELECT content, status, source FROM skills WHERE id=?", (builtin_id,)).fetchone())
-    assert builtin_after["content"] != "内置旧正文", (
+        "SELECT content, description, category, status, source, builtin, scope "
+        "FROM skills WHERE id=?", (builtin_id,)).fetchone())
+    assert builtin_after["category"], (
         "内置行未被更新 —— main() 没执行到写入逻辑，本用例是空转")
     assert builtin_after["status"] == "published"
+    assert builtin_after["content"] == "内置旧正文", (
+        "默认模式不该覆盖正文（正文以 DB 为准；要下发须 --force-content）")
 
     # ② 核心断言：草稿必须原样保留
     after = dict(skills_conn.execute(

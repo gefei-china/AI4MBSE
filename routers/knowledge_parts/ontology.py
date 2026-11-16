@@ -4,6 +4,161 @@
 由 tools/split_router_knowledge.py 从 routers/knowledge.py 机械切分而成；⚠️ 切分脚本**已一次性执行完毕、不可重跑**（重跑会以薄入口为输入、覆盖本目录）—— 此后本文件按普通源码维护。"""
 from routers.knowledge_parts.shared import *
 
+# ⚠️ `import *` 只导出 shared.__all__ 里列出的名字 —— `ontology_tlo` 曾漏列，
+#   导致真机访问 /api/knowledge/ontology/tlo 时 **NameError: ontology_tlo**（500）。
+#   这里显式导入，不依赖星号导出的名单（名单是给分片工具用的，不是给运行时用的）。
+from core import ontology_tlo
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# P0-1 / D1=A（2026-11-15）：上层本体（TLO / BFO 轻量子集）锚点
+# ══════════════════════════════════════════════════════════════════════════
+
+def _normalize_alt_labels(body):
+    """P1-1（2026-11-15）：归一 `constraints.alt_labels` / `constraints.lang`。
+
+    存储口径（唯一真源）：`constraints.alt_labels` = 字符串列表；
+    `constraints.lang` = BCP-47 语言标签（默认 zh）。
+
+    三条纪律：
+      ① **接受并归一多种输入**：字符串（逗号/顿号/分号分隔）、列表都收 ——
+         前端 chips 与手工导入给的形态不同，不归一就会变成两套数据。
+      ② **去空、去重、保序**：空串会让导出发 `skos:altLabel ""`（无意义三元组）。
+      ③ **与主名冲突的不删但去重**：别名等于主名属于冗余（SKOS 语义上 prefLabel
+         已覆盖），直接剔除，避免导出重复声明。
+    """
+    import re as _re
+    cons = body.constraints if isinstance(body.constraints, dict) else {}
+    raw = cons.get("alt_labels")
+    if raw is None:
+        return
+    if isinstance(raw, str):
+        raw = _re.split(r"[,，、;；]", raw)
+    if not isinstance(raw, (list, tuple)):
+        return
+    main = str(body.name or "").strip()
+    out, seen = [], set()
+    for x in raw:
+        v = str(x or "").strip()
+        if not v or v in seen or v == main:
+            continue
+        seen.add(v)
+        out.append(v)
+    if out:
+        cons["alt_labels"] = out
+    else:
+        cons.pop("alt_labels", None)
+    # 语言标签：仅做基本形状校验（BCP-47 子集：字母开头，允许 - 分隔），不认识的清空
+    lang = str(cons.get("lang") or "").strip()
+    if lang:
+        if not _re.match(r"^[A-Za-z]{2,3}(-[A-Za-z0-9]{2,8})*$", lang):
+            cons.pop("lang", None)
+        else:
+            cons["lang"] = lang
+    else:
+        cons.pop("lang", None)
+
+
+def _resolve_tlo_anchor(conn, body, tid, before=None):
+    """归一 + 校验 TLO 锚点，返回可写入的 local name（'' = 不锚定）。
+
+    :returns: str（合法锚点或 ''） / JSONResponse（400 错误）
+
+    三条纪律（都是本仓踩过的坑的对应防护）：
+      ① **未识别就拒绝，不兜底**：ontology_tlo.normalize 不认识的写法一律 400。
+         「静默兜底成 Entity」会让录入错误伪装成"锚住了"（本仓"兜底把错误变成
+         不可见"的前车）。
+      ② **只有 entity 能用锚点**：attribute 的范畴由 type_kind 决定（=Quality，
+         可测量特征）；relation 是对象的属性而非独立范畴。给它们存锚点无意义，
+         反而会让"锚点覆盖率"这个数字虚高。
+      ③ **改锚点要防"改一处错一片"**：若本类型的某个**祖先**已锚定 A、本次改成 B，
+         则所有继承该锚点的子孙会静默换范畴。检测到就 400，要求显式确认
+         （先改祖先或给子孙显式设锚点）。
+    """
+    raw = getattr(body, "tlo_anchor", None)
+    if body.type_kind != "entity":
+        # 非实体类型不接受锚点（静默丢弃会让前端以为存上了 —— 故显式提示）
+        if raw not in (None, ""):
+            return JSONResponse(
+                {"error": "上层本体锚点仅适用于实体类型（属性类型天然是 Quality，"
+                          "关系类型不是独立范畴）"}, 400)
+        return ""
+    if raw is None:
+        # 前端未传该字段（如老客户端）⇒ 保持原值不变（不改语义，也不清空）
+        return (before["tlo_anchor"] if before is not None and "tlo_anchor" in before.keys()
+                else "") or ""
+    s = str(raw).strip()
+    if not s:
+        return ""
+    anchor = ontology_tlo.normalize(s)
+    if not anchor:
+        return JSONResponse(
+            {"error": f"未识别的上层本体锚点: {s}（可选: "
+                      f"{'/'.join(sorted(ontology_tlo.TLO_LOCALS))}）"}, 400)
+    # ③ 祖先已锚定且不同 ⇒ 拦截（改一处错一片）
+    if before is not None:
+        from repositories.knowledge_repo import KnowledgeRepo
+        _by_id = {str(r["id"]): r for r in KnowledgeRepo(conn).ontology_anchor_rows()}
+        _p = before["parent_id"]
+        _hop = 0
+        while _p and _hop < 30:
+            _row = _by_id.get(str(_p))
+            if _row is None:
+                break
+            _pa = ontology_tlo.normalize(
+                _row["tlo_anchor"] if "tlo_anchor" in _row.keys() else "")
+            if _pa:
+                if _pa != anchor:
+                    return JSONResponse(
+                        {"error": f"祖先类型的锚点是「{_pa}」，与本次设置的「{anchor}」冲突 —— "
+                                  f"所有继承该锚点的子孙会一并换范畴。请先修改祖先锚点，"
+                                  f"或给子孙逐个显式设置锚点"}, 400)
+                break
+            _p = _row["parent_id"]
+            _hop += 1
+    return anchor
+
+
+@router.get("/api/knowledge/ontology/tlo")
+def ontology_tlo_options(conn=Depends(db_session), user=Depends(current_user)):
+    """上层本体（BFO 轻量子集）锚点词表 + 当前覆盖情况（前端下拉与覆盖率卡片消费）。
+
+    返回 {classes:[{local,label,iri,parent,note,mbse_hint}], root, coverage:{...}}。
+    coverage 用于让「锚点覆盖率」这个数字**有口径**（真库实测，不是文档自述）。
+    """
+    rows = KnowledgeRepo(conn).ontology_anchor_plan_rows(type_kind="entity")
+    by_id = {str(r["id"]): r for r in rows}
+    anchored, unanchored = [], []
+    for r in rows:
+        a, src = ontology_tlo.effective_anchor(r, by_id)
+        if a:
+            anchored.append({"name": r["name"], "anchor": a, "source": src})
+        else:
+            unanchored.append(r["name"])
+    return {
+        "classes": ontology_tlo.options_for_ui(),
+        "root": ontology_tlo.TLO_ROOT,
+        "ns": ontology_tlo.BFO_NS,
+        "coverage": {
+            "entity_total": len(rows),
+            "anchored": len(anchored),
+            "unanchored": len(unanchored),
+            "ratio": round(len(anchored) / len(rows), 4) if rows else 0.0,
+            "unanchored_names": sorted(unanchored),
+        },
+    }
+
+
+@router.get("/api/knowledge/ontology/tlo/suggest")
+def ontology_tlo_suggest(name: str = "", kind: str = "entity", description: str = "",
+                         user=Depends(current_user)):
+    """锚点**建议**（只给建议，绝不自动写入）。
+
+    为什么单独一个端点而不是在保存时自动填：锚点是结构判定，错了会污染整条继承链
+    （下游 disjointWith、SHACL 形状全跟着错）。建议必须经人确认。
+    """
+    return ontology_tlo.suggest_anchor(name, kind, description)
+
 
 @router.get("/api/knowledge/ontology/check")
 def ontology_check(conn=Depends(db_session), user=Depends(current_user)):
@@ -77,13 +232,19 @@ def ontology_add_type(body: OntologyTypeIn, conn=Depends(db_session),
         dup_iri = conn.execute("SELECT id FROM ontology_types WHERE iri=?", (iri,)).fetchone()
         if dup_iri:
             return JSONResponse({"error": f"IRI 已存在: {iri}"}, 400)
+    # P0-1 / D1=A（2026-11-15）：TLO 锚点归一 + 校验（新增时无所属祖先可继承，
+    # 但仍走同一函数以保证口径一致：非 entity 带锚点 ⇒ 400，未识别写法 ⇒ 400）
+    _tlo_new = _resolve_tlo_anchor(conn, body, None, None)
+    if isinstance(_tlo_new, JSONResponse):
+        return _tlo_new
+    _normalize_alt_labels(body)
     conn.execute(
-        "INSERT INTO ontology_types (name, type_kind, parent_id, properties, constraints, description, icon, color, iri, profile_source, profile_ref, created_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+        "INSERT INTO ontology_types (name, type_kind, parent_id, properties, constraints, description, icon, color, iri, profile_source, profile_ref, created_by, tlo_anchor) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (body.name, body.type_kind, body.parent_id or None,
          json.dumps(body.properties, ensure_ascii=False),
          json.dumps(body.constraints, ensure_ascii=False),
          body.description, body.icon or "", body.color or "#185FA5", iri,
-         body.profile_source or "", body.profile_ref or "", _actor(user)))
+         body.profile_source or "", body.profile_ref or "", _actor(user), _tlo_new))
     tid = conn.execute("SELECT id FROM ontology_types WHERE name=?", (body.name,)).fetchone()["id"]
     conn.commit()
     # FR-KG-4 补 G7：变更留痕（before 空，after 为插入后完整行）
@@ -192,16 +353,25 @@ def ontology_update_type(tid: int, body: OntologyTypeIn, conn=Depends(db_session
     if body.status is not None and body.status not in _ONT_STATUS:
         return JSONResponse({"error": f"非法 status: {body.status}（支持: {'/'.join(_ONT_STATUS)}）"}, 400)
     new_status = body.status or before["status"] or "released"
+    # P0-1 / D1=A（2026-11-15）：TLO 锚点归一 + 校验 + **继承冲突防护**
+    #   · 归一：容忍 bfo:Object / BFO_0000030 / 中文标签；未识别直接 400（不静默兜底）
+    #   · 只允许 entity 设锚点（relation/attribute 的范畴由 kind 决定：attribute=Quality）
+    #   · 冲突防护：若本类型的**祖先**已锚定 A，而本次改成 B，则所有继承该锚点的子孙
+    #     会静默换范畴 —— 这是"改一处、错一片"，必须显式拦截并让人确认。
+    _tlo_new = _resolve_tlo_anchor(conn, body, tid, before)
+    if isinstance(_tlo_new, JSONResponse):
+        return _tlo_new
+    _normalize_alt_labels(body)
     conn.execute(
         "UPDATE ontology_types SET name=?, type_kind=?, parent_id=?, properties=?, constraints=?, description=?, icon=?, color=?, iri=?, "
-        "profile_source=?, profile_ref=?, updated_at=?, updated_by=?, status=?, replaced_by=?, deprecated_note=? WHERE id=?",
+        "profile_source=?, profile_ref=?, updated_at=?, updated_by=?, status=?, replaced_by=?, deprecated_note=?, tlo_anchor=? WHERE id=?",
         (body.name, body.type_kind, body.parent_id or None,
          json.dumps(body.properties, ensure_ascii=False),
          json.dumps(body.constraints, ensure_ascii=False),
          body.description, body.icon or "", body.color or "#185FA5", new_iri,
         body.profile_source or "", body.profile_ref or "",
         datetime.now().strftime("%Y-%m-%d %H:%M:%S"), _actor(user),
-        new_status, body.replaced_by or "", body.deprecated_note or "", tid))
+        new_status, body.replaced_by or "", body.deprecated_note or "", _tlo_new, tid))
     # 2026-09-14 L1 内联迁移（见 docs/本体变更实例影响分析与自动迁移方案.md）：
     # 改名属无歧义破坏性变更 → 实例/关系/属性键在同一事务内按旧名批量替换（幂等 SQL），
     # 与本体修改原子提交，杜绝"改名后实例悬空"。迁移数随变更留痕与响应返回。

@@ -425,6 +425,20 @@ DEFAULT_CONFIG = {
         #   实测（confirmed 48 条）：**修正 4 条真实误判 / 误伤 0 条**。
         #   False = 回到改造前行为（零回归回退位）。
         "speech_act": True,
+        # ★ 2026-11-09（B 类根因排查）：以下 5 个键**代码早就在读、注释早就承诺可回退，
+        #   但 DEFAULT_CONFIG / CONFIG_SCHEMA 里一处都没有** ⇒ save_override 抛「未知配置项」、
+        #   影子层抛「未知配置分组/项」、ENV_MAP 无映射，**三处全拒绝**。
+        #   后果不是"开关默认值不合适"，而是"想用数据回答该不该开都做不到"——
+        #   路由基线长期无法定论，一半卡在这里。补登记为可配真源（默认值与代码内默认一致，
+        #   故本次补登记**不改变任何线上行为**）。
+        "explain_preempt_short": False,     # 短句(≤16字)是否也走 explain 前置（False=交给 LLM 主裁判）
+        "continue_inherit": True,           # 短续问是否继承上一轮意图
+        "generic_clarify": True,            # 仅命中泛词时是否出澄清候选
+        "multi_intent_clarify": True,       # 多意图(≥2 段)时是否出澄清
+        "platform_read_route": True,        # 平台读取类请求是否前置到读路由
+        "speech_act_de": True,              # 名词化判据是否容忍「动词+的+后缀」（False=严格紧邻）
+        "inherit_silent": True,             # 承接上文的短句是否免澄清（False=回到旧行为）
+        "explain_short_interrogative": True,  # 短句含明确疑问式时是否仍走 explain 前置
         # ★ 2026-10-29（多意图实测）：L1 阶段连词（先…再…/然后/最后）是否允许**同意图多阶段**。
         #   背景：「先生成结构视图，再生成参数视图」是两个不同视图、同一 intent(design)，
         #   按意图去重 ⇒ 切成 0 段。放开后可切 2 段。
@@ -463,6 +477,23 @@ DEFAULT_CONFIG = {
         # 弱采纳下限：0.50~0.75 的非 chat 猜测 ⇒ 不静默执行，转**澄清卡**
         # （"确定不了就别硬选"既有机制）；低于 0.50 或 unsure ⇒ 回退旧路（继承/chat）。
         "llm_first_weak_conf": 0.50,
+        # ★ 2026-11-07（米爸第 15 轮 P1）：按能力族分档采纳阈值，默认关=零回归。
+        #   读类(knowledge)放宽、平台数据操作(platform)收紧；族归属单一事实源。
+        #   仅在 verify_threshold_tiers.py 用真库 confirmed 样本证明净正后才可打开。
+        "threshold_tiers": False,
+        # ★ 2026-11-07（第 16 轮）：纯寒暄前置判定。修实测缺陷：
+        #   「你好」→knowledge_qa/llm_conflict、「你好！」→llm_first 0.90 且不澄清。
+        #   判据极窄（整句仅由寒暄词构成且≤10字、无任务词），回退位置 False。
+        "smalltalk_route": True,
+        # ★ 2026-11-07（米爸第 14 轮拍板「默认打开」）：能力簇路由。
+        #   开：LLM 兜底层候选从「22 个 Agent 名」换成「7 个互斥能力族」，
+        #       支持一次识别多个簇，族内成员由 LLM 点名 / 代码确定性分工，
+        #       对外仍回具体 Agent 名。实测 token -16.4%、准确率不降。
+        #   关：回到改造前（few-shot + 阶段粒度规则 + 22 选 1）。一键回退位。
+        #   ⚠️ 打开前的实测代价（verify_cluster_cost_eval.py）：仅输出族 id 会把
+        #      8 个流水线阶段意图准确率 62.5%→37.5%（细粒度被抹平）。
+        #      故 v2 增加「族内成员直选 + 归属白名单校验」，修完才敢默认开。
+        "cluster_route": True,
         # 2026-10-17（米爸反馈"澄清卡每次都是固定 4 项"）：意图确认卡的候选选项数上限。
         # 候选主序 = 本次输入的语义意图级排名（动态），不足才按 Agent 注册序兜底填满。
         # 10 = 一屏滚动内可览尽；前端选项区限高滚动，卡片不会被撑长。
@@ -686,6 +717,11 @@ DEFAULT_CONFIG = {
         "retrieval_merge_neighbor": True,  # 检索注入：同文档近邻 chunk（|Δindex|≤2）合并为一条
         "memory_single_source": True, # 记忆注入：以 rag.memory_hits 为唯一真源，消除双路重复
         "memory_max_chars": 200,      # 记忆注入正文截断（两条路径统一口径）
+        # P1-1（2026-11-11）：Claude Code 式「顶层目录、底层仓库」。
+        # 有记忆注入时附带 ≤3 行导航索引（主题 + 编号 + 校验状态），不放正文；
+        # 无记忆命中时整块不产生，故对空库/寒暄场景零行为变化。
+        "memory_index_enabled": True,
+        "memory_index_rows": 3,       # 导航行数上限（硬上限 5，见 build_index）
         # ★ 2026-10-29：记忆中的「用户叫X」身份声明剥离。
         #   实测：长期记忆存有「用户叫米巴…」（tier=core，无条件常驻注入），
         #   而登录账号是 gefei ⇒ 模型优先用记忆里的自报名称呼用户（输出"你好，米巴！"）。
@@ -723,6 +759,9 @@ DEFAULT_CONFIG = {
     },
     "memory": {
         "forget_enabled": True,      # 遗忘引擎开关
+        # P2（2026-11-11）：对强模型给目标、不给死规则（CL-Bench 硬限制使增益 -0.234）。
+        # True = 记忆沉淀用目标式宽指引；False = 回滚到旧的「以下一律 worth=false」清单。
+        "salience_soft_guidance": True,
         "forget_threshold": 0.2,     # 遗忘激活度阈值（仅 forget_by_activation=true 时生效，见下）
         "consolidate_threshold": 0.85,  # 合并引擎：记忆内容相似度阈值（bigram 余弦）
         "maintain_every": 50,        # 每 N 次沉淀触发一次维护（遗忘+合并）
@@ -778,6 +817,20 @@ DEFAULT_CONFIG = {
         #      ⇒ 无可靠依据时不配，避免引入未标定偏差。
         #   若要配，形如 "llm_agent=1.0,reflow=0.95,rule_agent=0.85"（**须先有标定依据**）。
         "source_credibility": "",
+        # ── 存量行（scope_type=''）可见性策略（2026-11-05 落地）──
+        # 背景实测（真库 agent_memory 269 行）：作用域四槽（project/user/agent/global）是
+        #   **OR 并列 + 软重排**，真正跨项目外溢的是 `(scope_type='' AND agent_id=?)` 这一条兜底。
+        #   实测「记忆稀疏的工程」top-4 里 11/48≈23% 是跨工程条目；切 hidden 后归零，
+        #   召回 48→45（代价 6%）。详见 docs/记忆作用域隔离-实证评估与改造方案-20261105.md。
+        # ★ 默认 **visible** = 与改动前逐字一致（零行为漂移，门禁 G1 用基线 SHA 锁死）。
+        #   切换成 hidden 属"线上召回变窄"，必须由人显式改，不能默认生效。
+        # ★ 未知取值在 memory_service._legacy_policy 里回落 visible（fail-safe：
+        #   配置拼错时宁可保持旧行为，也不静默清空召回——召回变少不会报错，监控看不出来）。
+        "legacy_policy": "visible",   # visible | windowed | hidden
+        # windowed 档的切点（ISO 'YYYY-MM-DD HH:MM:SS'）。仅 legacy_policy=windowed 时生效；
+        # 留空 ⇒ windowed 等价 hidden。⚠️ 现有数据上本档**无区分度**（无 agent 同时拥有
+        # 早于与晚于切点的活跃存量行），启用前必须重新标定切点。
+        "legacy_cut_ts": "",
     },
     # ── 实体归一消歧（P1-1，2026-10-11）──
     # ⚠️ 此前 entity_resolver.py 把 0.92 / 0.62 写成函数体内的**裸字面量**，既不可配也**无法关闭自动合并**；
@@ -920,7 +973,7 @@ DEFAULT_CONFIG = {
         #     与 L0 卡里「有硬错就调 autofix」都**没有前提**：
         #     模型压根看不到这个工具 ⇒ 实测 autofix 调用 **0 次**。
         #   ⇒ 修复的**第一前提**是"它得在清单里"，这才是根因。
-        "core_keep_extra": "sysml_v2_validate,sysml_v2_autofix,zhiyuan_sysmlv2_gen,zhiyuan_sysmlv2_check,zhiyuan_sysmlv2_import",
+        "core_keep_extra": "sysml_v2_validate,sysml_v2_autofix,zhiyuan_sysmlv2_gen,zhiyuan_sysmlv2_check,zhiyuan_sysmlv2_import,code_exec",
         # ★ 2026-10-13：把 `tools.input_schema` 真值注入 function-calling payload（开关，可回退）。
         # 背景（对标取证）：`_build_tools_def` 的 SQL **已经 SELECT 了 t.input_schema**，
         # 但 candidates 是 4 元组、没有 schema 位，`:94` 直接丢弃；随后 `:280/:290` **两个分支**
@@ -1115,6 +1168,12 @@ DEFAULT_CONFIG = {
         #   风险控制：每条 content 注入前已截断（约 300 字），多 2 条 ≈ +400 token。
         "inject_k": 5,               # 最终注入 prompt 的片段条数（消费侧 chunk_hits[:inject_k]）
         "fallback_top_k": 5,         # 混合检索异常时 search_chunks 兜底条数
+        # ★ 2026-11-16 跨语言补召回（中英术语桥接）：中文查询 → 英文术语独立跑第二路
+        #   → RRF 与主路融合。解决「中文问 port/连接器 却命中不到英文规范」的术语鸿沟。
+        #   实测依据：纯中文查询命中英文文档 recall@1=0.50 / recall@5=0.917；
+        #   而混合语言查询反而更差 ⇒ 只生成独立第二路，不改写原查询。
+        "bilingual_expansion": True,
+        "bilingual_min_terms": 2,    # 至少命中几个中文术语才生成第二路（宁少不错）
         # ★ 2026-11-01（P0-a）检索结果去重：同一份文件被导入两次时，
         #   两份副本会**各占 per_doc_max 的槽位**（配额按 source_doc 字符串计数，
         #   而副本的 source_doc 形态不同 → 被当成两个独立文档）。
@@ -1303,6 +1362,30 @@ DEFAULT_CONFIG = {
         "tool_idempotency_scope": "subtask",  # 作用域：subtask=只在编排子任务内生效（默认）/ off=全关
         "tool_idempotency_ttl_s": 86400,    # 幂等记录保留时长（秒，默认 24h）
     },
+    "requirements": {
+        # ── 2026-11-10：需求分析产出的后置处理（P0-3/P0-4）──
+        # 背景（真库实测）：需求分析跑完**不留资产** —— `requirement_items` 0 行，
+        #   而覆盖度工具算的是 2026-09-21 手工补齐的 26 条实体 ⇒ 产出与追溯链脱钩。
+        #   质量门禁也不在主链路上：不可验证条目从不被自动标记。
+        # 做法：需求类意图产出正文后，自动做「确定性条目化 → 可验证性闸 → 落库」。
+        #   幂等（按 fingerprint 去重）⇒ 反复跑只 update 不堆行；关掉即退回改动前。
+        "auto_commit": True,
+        # 允许自动落库的意图白名单（逗号分隔）。需求结构化自己会调工具，重复跑白花切句。
+        "auto_commit_intents": "requirement_analysis",
+    },
+    "upload": {
+        # ── 2026-11-10：上传去重（同名/同内容在上传时就提示）──
+        # 背景（真库实测）：同名文档被两次导入（doc 851/852，各 270 chunk），
+        #   重复片段挤占检索注入槽位、且让 vec_cache 与库对不上（差 540 行）。
+        #   当时库里只有 filename + file_size 可比 ⇒ "同名误传"与"同名新版"无法区分。
+        # 两类重复的默认处置**刻意不同**（见 knowledge_pipeline/dedup.py 文件头）：
+        #   · 同 sha256  ⇒ skip：重复入库零价值，直接复用已有文档（不产生重复 chunk）
+        #   · 同名异 sha ⇒ warn：照常入库但回包提示（否则"升级同名文档"就做不到了）
+        # 三态取值 skip|warn|block；总开关关 ⇒ 逐字节回退到改动前（不做任何查询）。
+        "dup_check_enabled": True,
+        "dup_content_policy": "skip",   # 字节完全相同：skip（复用）/ warn / block
+        "dup_name_policy": "warn",      # 同名不同内容：warn（提示）/ skip / block
+    },
     # ── P0-2 持久执行：编排检查点与断点续跑（2026-10-03）────────────────────────
     # 默认**不做自动重投**：进程起来后自动恢复所有中断批次看似美好，实则危险 ——
     #   ① 中断前执行过的写类子任务可能已落一半副作用，自动重跑 = 重复数据；
@@ -1376,6 +1459,15 @@ DEFAULT_CONFIG = {
         "zhiyuan_poll_interval_s": 600,   # 轮询间隔（秒）
         "zhiyuan_poll_projects": [],      # 要监听的智源 projectId 列表（**空=不扫**，避免全库）
         "zhiyuan_poll_mcp_server": "zhiyuan-dev-mcp",   # mcp_servers 表里的名字
+    },
+    # ── 2026-11-06 P1：自进化周期触发器（默认 observe，引擎在跑但零副作用）──
+    #   背景：引擎（badcase / online_eval / config_proposal）全部实现完毕，
+    #   但真库最后一次进化作业停在 10-29，用户 10-30 的 2 次点踩 7 天零下游。
+    #   断点不是「没实现」而是「没接线」。tick 就是那根线。
+    "evolution": {
+        "tick_enabled": True,          # 引擎常驻（默认开）
+        "tick_mode": "observe",        # observe=只统计；execute=自动到 HIL 门口
+        "tick_interval_s": 300,
     },
     # ── P1-1（2026-10-03 整改）：入口限流（对标 Dify 配额 / Anthropic X-RateLimit-* 契约）──
     # 评估 §6 P1-1 实测：全仓 0 处限流；`budget_tokens` 曾超支 35%，后又被置 0 ⇒ 完全无闸。
@@ -1611,17 +1703,6 @@ DEFAULT_CONFIG = {
         "dead_end_repeat": 2,           # 同一变体判回归几次记死路
         "max_variants": 200,            # 单次扫描入册上限（防长尾注水）
     },
-    # ── P2-4（2026-10-19 自进化调研路线图 P2 第四项）：画布拓扑台账与体检 ────
-    # 口径裁决：路线图原文「多画布流拓扑实验」，但真库 agent_flows 62 条
-    #   vs flow_runs 仅 11 条（且 9 条是同日同构画布的秒级重复），在 11 条
-    #   运行记录上比较两种拓扑得到的是噪声；且红线 #6 明写「不碰架构拓扑」。
-    #   故本期落**台账 + 体检**：只读画布、只记缺陷、只报同构，绝不写拓扑。
-    "flow_topology": {
-        "enabled": True,                # 总开关（False 时 scan/overview 返 enabled=False）
-        "min_denominator": 2,           # 运行证据分母下限：不足即 unknown（没跑过≠跑零次）
-        "linear_degenerate_min": 4,     # 达到几个节点才算「纯链无并行」可疑
-        "max_canvases": 2000,           # 单次扫描画布上限（防长尾注水）
-    },
     # ── 自进化周报（价值感知层）：只读汇总，不新增判据、不发明数字 ──────────
     # 定位：把archive / curriculum / sandbox / HIL / 安全信号 / 拓扑六个域的
     #   既有台账汇成**一页可行动摘要**，回答"这周系统替我做了什么、我该做什么"。
@@ -1668,6 +1749,17 @@ DEFAULT_CONFIG = {
         "probe_time_budget_sec": 1800,  # run 级时间预算（秒，M4 用）：对齐 reap_stuck_runs 30min 孤儿阈值；≤0=M4 不判
         "llm_actions": "replace",       # LLM 版动作白名单（逗号分隔）：replace|skip|insert；默认锁 replace（P3 行为）
     },
+    # ★ 2026-11-09：运行时请求重建不变量（core/request_invariant.py）。
+    #   此前该段「有读取、无登记」：_mode() 读 get("request_invariant","mode")，
+    #   但 DEFAULT_CONFIG / CONFIG_SCHEMA / ENV_MAP 三处都没有这个分组 ⇒
+    #   save_override 抛「未知配置项」、影子层抛「未知配置分组」，三态开关
+    #   实际恒等于 shadow，声称的 enforce 无法到达。补齐单一真源。
+    "request_invariant": {
+        "mode": "shadow",               # off=短路 / shadow=只记录 / enforce=漂移即抛错；默认不改
+        "audit_enabled": True,          # 是否把判定事件 append 到结构化台账
+        "audit_path": "logs/request_invariant.jsonl",
+        "audit_max_bytes": 8 * 1024 * 1024,   # 单文件上限，超过轮转保留一代
+    },
 }
 
 # ── 环境变量 → 配置路径映射（部署覆盖通道，最高优先级）──
@@ -1683,6 +1775,7 @@ ENV_MAP = {
     "ZHIYUAN_API_TOKEN": ("zhiyuan", "token"),
     "MBSE_EMBED_BIGRAM_DIM": ("embedding", "bigram_dim"),
     "MBSE_INTENT_CACHE_ENABLED": ("intent", "cache_enabled"),  # P1-31：默认 False（实测收益≈0）
+    "MBSE_REQUEST_INVARIANT_MODE": ("request_invariant", "mode"),  # 部署级三态覆盖
 }
 
 # 布尔型配置项（ENV 值为 "1"/"true"/"yes" 视为 True）
@@ -1829,6 +1922,17 @@ CONFIG_SCHEMA = {
         "keyword_generic":        {"type": "bool", "desc": "泛词是否参与打分（False = 泛词既不加分也不触发共现，A/B 用）"},
         "explain_preempt":         {"type": "bool", "desc": "说明类前置短路是否前置（True=改造前：命中即判知识问答；False=降级为末尾兜底，先由 LLM 主裁判裁决）"},
         "speech_act":              {"type": "bool", "desc": "言语行为层（问 vs 做）：名词化形态判知识问答、自指元问题判闲聊（False=回到改造前行为）"},
+        # 2026-11-09：以下 5 键原为「幽灵开关」—— 代码读、注释承诺可回退，配置层未登记，
+        # 三处入口全拒绝。补登记后 intent 组所有 `_cfg_get` 读取键均在真源内（见门禁
+        # `verify_config_switches.py` 的断言）。默认值与代码内默认一致 ⇒ 零行为变更。
+        "explain_preempt_short":   {"type": "bool", "desc": "短句(≤16字)是否也走说明类前置（False=交给 LLM 主裁判；实测置 True 修好 3 条错例、0 回退）"},
+        "continue_inherit":        {"type": "bool", "desc": "短续问是否继承上一轮意图（False=不猜，交给 LLM）"},
+        "generic_clarify":         {"type": "bool", "desc": "仅命中泛词时是否出澄清候选（False=回到静默兜底）"},
+        "multi_intent_clarify":    {"type": "bool", "desc": "多意图(≥2 段)时是否出澄清候选（False=不澄清直接选一个）"},
+        "platform_read_route":     {"type": "bool", "desc": "平台读取类请求是否前置到读路由（False=逐字节回退）"},
+        "speech_act_de":           {"type": "bool", "desc": "名词化判据是否容忍「动词+的+后缀」（True=修好「分析的用途」类；False=严格紧邻、逐字节回退）"},
+        "inherit_silent":          {"type": "bool", "desc": "承接上文的短句是否免于澄清（True=不打断；False=逐字节回到旧行为）"},
+        "explain_short_interrogative": {"type": "bool", "desc": "短句(≤16字)含明确疑问式(什么是/介绍/用途/原理…)时是否仍走说明类前置（False=与短句一起交给 LLM）"},
         "multi_same_intent_stage": {"type": "bool", "desc": "L1 阶段连词（先…再…/最后）是否允许同意图多阶段｜默认 False（按意图去重）：实测开启后 accuracy 0.944→0.889、precision 1.000→0.875，且把「需求分析→方案设计→生成 sysml 代码」由 2 段拆成 3 段 ⇒ 净负。开启则「结构视图→参数视图」可切 2 段"},
         "sample_collect":         {"type": "bool", "desc": "真实请求是否把用户输入采集进意图样本池"},
         "cache_enabled":          {"type": "bool", "desc": "意图级缓存（精确文本 + 索引指纹双匹配）"},
@@ -1848,6 +1952,9 @@ CONFIG_SCHEMA = {
         "llm_first":              {"type": "bool", "desc": "LLM 主裁判：规则无信号时 LLM 为主识别（配 few-shot 与 unsure 出口）。规则强信号快路径不受影响"},
         "llm_first_min_conf":     {"type": "float", "desc": "LLM 主裁判直接采纳门槛（默认 0.75 保守起点，待 confirmed 池标定）"},
         "llm_first_weak_conf":    {"type": "float", "desc": "LLM 主裁判弱采纳下限：0.50~门槛的猜测转澄清卡不静默执行"},
+        "threshold_tiers":       {"type": "bool", "desc": "按能力族分档采纳阈值（默认 False=零回归）：knowledge 放宽 0.68/0.45，platform 收紧 0.85/0.62；打开前先跑 verify_threshold_tiers.py 真库 A/B"},
+        "smalltalk_route":       {"type": "bool", "desc": "纯寒暄前置判定（整句仅寒暄词且≤10字、无任务词→chat 0.9）；修「你好」被判知识问答的缺陷。False=回退"},
+        "cluster_route":          {"type": "bool", "desc": "能力簇路由（默认 False=零回归）：开启后 LLM 兜底从 22 个 Agent 选 1 改为 7 个互斥能力族选 1 + 族内确定性分工，实测 token -16.4%、延迟 -6%、准确率不降"},
     },
     "database": {
         "path":           {"type": "str", "desc": "SQLite 数据文件路径（需重启生效）"},
@@ -1991,7 +2098,8 @@ CONFIG_SCHEMA = {
         #   灰度建议：先在测试会话开启，观察 stage 事件与 todo 表，再全量。
         "todo_enabled": {"type": "bool", "default": False, "desc": "★ 计划外化总开关（默认关）：开启后模型可调 todo_write 建待办清单，完成判定改为『所有待办已通过验收』；关闭则无待办、走原有评估器路径（逐字节兼容）"},
         "todo_require_verify": {"type": "bool", "default": True, "desc": "★ 待办置 completed 是否强制要有验收回执（默认开，2026-10-28）：依据官方『Only mark as passing after careful testing』；关闭则允许无回执置完成（削弱约束力，仅供排障）"},
-        "harness_enabled": {"type": "bool", "default": False, "desc": "★ harness 级强制闸总开关（默认关）：对齐官方 Stop hook —— 存在未完成待办且验收未过时**不允许结束本轮**，把失败输出回灌让 AI 继续；关闭则只做判定不强制"},
+        "harness_enabled": {"type": "bool", "default": False, "desc": "★ harness 级强制闸总开关（默认关）：对齐官方 Stop hook —— 存在未完成待办且验收未过时**不允许结束本轮**，把失败输出回灌让 AI 继续；关闭则只做判定不强制。⚠️ 2026-11-09 起建议改用 harness_mode（三态）；两者并存时 harness_mode 优先"},
+        "harness_mode": {"type": "str", "default": "", "desc": "★ harness 闸三态（2026-11-09，优先于 harness_enabled）：off=不介入 ｜ shadow=**只判定、不执行任何工具**，把『若开闸会怎样』写 harness_decisions 供观察 ｜ enforce=真执行只读验收并拦住收尾。空字符串=按旧 harness_enabled 推导（true→enforce/false→off）。★ 为什么必须 shadow 能零执行：旧实现 shadow 语义下仍会 _exec_tool_call，而 verify 里混着写类与 ask_user ⇒ 观察期本身会重复写库/主动弹问（conv 990463 已发生『未知工具: JSON』空转）"},
         "harness_max_blocks": {"type": "int", "default": 8, "desc": "★ harness 强制闸连续阻断上限（默认 8，对齐官方）：达到上限后强制放行并如实说明『未完成，卡在 X』——上限是必需的（FM-1.5 该停不停 12.4% > 过早终止 6.20%，双向都要管）；0=不阻断"},
         # ── 团队内定向的能力继承（2026-10-29，conv 9754 实测）──
         # 事实：主 Agent「智源对接agent」绑 71 个智源 MCP 工具；团队路由按意图把请求
@@ -2116,6 +2224,8 @@ CONFIG_SCHEMA = {
         "retrieval_merge_neighbor": {"type": "bool", "desc": "检索注入：同文档近邻 chunk 是否合并"},
         "memory_single_source":  {"type": "bool", "desc": "记忆注入：是否以 rag.memory_hits 为唯一真源"},
         "memory_max_chars":      {"type": "int",  "desc": "记忆注入正文截断字符数"},
+        "memory_index_enabled":  {"type": "bool", "desc": "P1-1：有记忆注入时是否附带轻量导航索引（主题+编号+校验状态）"},
+        "memory_index_rows":     {"type": "int",  "desc": "P1-1：记忆导航索引行数上限"},
         "memory_identity_strip": {"type": "bool", "desc": "有登录身份时，是否剥离记忆中的「用户叫X」身份声明子句（称呼以账号为准）"},
         "jit_fallback_top_n":    {"type": "int",  "desc": "JIT 语义预筛空回退时的 top-N（0=退回全量）"},
         "mcp_meta_enabled":      {"type": "bool", "desc": "MCP 工具是否使用真实描述+参数契约（tool_meta）"},
@@ -2126,6 +2236,7 @@ CONFIG_SCHEMA = {
     },
     "memory": {
         "forget_enabled":       {"type": "bool", "desc": "遗忘引擎开关"},
+        "salience_soft_guidance": {"type": "bool", "desc": "P2：记忆沉淀用目标式宽指引（False=回滚到旧的硬清单式规则）"},
         "forget_threshold":     {"type": "float", "desc": "遗忘激活度阈值（仅 forget_by_activation=true 时生效）"},
         "consolidate_threshold": {"type": "float", "desc": "合并引擎相似度阈值（bigram 余弦）"},
         "maintain_every":       {"type": "int", "desc": "每 N 次沉淀触发一次维护"},
@@ -2142,6 +2253,8 @@ CONFIG_SCHEMA = {
         "recall_skip_intents": {"type": "str", "desc": "永不召回记忆的 intent 列表（逗号分隔，默认空）"},
         "deposit_skip_intents": {"type": "str", "desc": "永不沉淀记忆的 intent 列表（逗号分隔，默认空）"},
         "source_credibility": {"type": "str", "desc": "融合排序五维之『可信度』：按来源给定权重（真实取值仅 llm_agent/reflow/rule_agent）。默认空=全部中性 1.0；无标定依据前不建议配"},
+        "legacy_policy": {"type": "str", "desc": "存量行（scope_type=''）可见性：visible=同 agent 全部可见（默认，零漂移）/ windowed=仅 created_at>=legacy_cut_ts 可见 / hidden=严格按作用域隔离。未知值回落 visible"},
+        "legacy_cut_ts": {"type": "str", "desc": "windowed 档切点（ISO 时间串）。仅 legacy_policy=windowed 生效；空=等价 hidden。现有数据上该档无区分度，启用前须重新标定"},
     },
     "entity_merge": {
         "auto_threshold": {"type": "float", "desc": "实体消歧自动合并分阈值（≥ 该分自动合并；>1.0 等价关闭。DB settings 的 auto_threshold 优先）"},
@@ -2200,6 +2313,7 @@ CONFIG_SCHEMA = {
         "lexical_signs_extra": {"type": "str", "desc": "追加词法特征正则片段（现场补规则，不改代码）"},
         "syntax_signs_extra":  {"type": "str", "desc": "追加语法特征正则片段"},
         "deliver_pick":        {"type": "str", "desc": "编排交付物取码策略：longest=只取最长的一份（默认，保证可校验单模型）/ all=全部拼接（旧行为）"},
+        "view_package_nesting": {"type": "bool", "desc": "★ 2026-11-09：视图把「包包含」提升为父子层级（渲染层据此画包框并自动包裹子节点）。关=回到改动前（全部平铺、只有组合连线）。实测开启前全库 332 个视图的节点 parent 字段全为空，BDD/PKG 只能画成扁平方块"},
     },
     "tool_jit": {
         "core_keep_extra": {"type": "str", "desc": "JIT 工具预筛保底集合的追加项（逗号分隔工具名）。★ 2026-10-10 实测：修复类工具必须列进来，否则会被语义预筛裁掉（实测 view_expansion 清单 6 个里原本没有 sysml_v2_autofix，导致 autofix 一次都没被调用）"},
@@ -2246,6 +2360,8 @@ CONFIG_SCHEMA = {
         "top_k":                 {"type": "int",   "desc": "RRF 融合后保留的候选池（送 LLM 重排）"},
         "inject_k":              {"type": "int",   "desc": "最终注入 prompt 的片段条数"},
         "fallback_top_k":        {"type": "int",   "desc": "混合检索异常时 search_chunks 兜底条数"},
+        "bilingual_expansion":   {"type": "bool",  "desc": "跨语言补召回：中文查询用领域术语表生成英文第二路，与主路 RRF 融合（解决中文术语问英文规范的鸿沟；置 false 回到单路）"},
+        "bilingual_min_terms":   {"type": "int",   "desc": "至少命中几个中文术语才生成英文第二路（宁少不错，避免单词噪声查询）"},
         "dedupe_exact":          {"type": "bool",  "desc": "检索结果去重：正文逐字相同且 document_id 不同 ⇒ 判为重复副本丢弃（防同一份文件两份副本各占配额槽）"},
         "dedupe_min_chars":      {"type": "int",   "desc": "去重最小正文长度，短于此不参与（避免误合并套话短片段）"},
         "zero_hit_retry":        {"type": "bool",  "desc": "零召回关键词重试：命中为空时用实词关键词重查一次（bigram 降级态救长问句）"},
@@ -2443,15 +2559,6 @@ CONFIG_SCHEMA = {
         "dead_end_repeat": {"type": "int",  "desc": "同一变体判回归几次记死路（1 次可能是噪声，反复才是模式）"},
         "max_variants":    {"type": "int",  "desc": "单次扫描入册上限（防长尾注水）"},
     },
-    # ── P2-4（2026-10-19 自进化调研路线图 P2 第四项）：画布拓扑台账与体检 ────
-    # 铁律：只读 agent_flows、只记录缺陷、只报同构，**绝不写生效拓扑**
-    # （红线 #6「不碰架构拓扑」；体检镜不是手，同 P2-3 档案库纪律）。
-    "flow_topology": {
-        "enabled":              {"type": "bool", "desc": "画布拓扑体检总开关（False 时 scan/overview 返 enabled=False）"},
-        "min_denominator":      {"type": "int",  "desc": "运行证据分母下限：有运行证据的画布不足此数 ⇒ failed_runs 记 unknown"},
-        "linear_degenerate_min":{"type": "int",  "desc": "达到几个节点才算「纯链无并行」可疑"},
-        "max_canvases":         {"type": "int",  "desc": "单次扫描画布上限（防长尾注水）"},
-    },
     # ── 自进化周报（价值感知层）────────────────────────────────────────────
     # 铁律：只读汇总层。窗口内的环比只在本期与上期**都有数据**时才出delta，
     #   上期无台账 ⇒ unknown，绝不回落 0（空窗口不是 0 分）。
@@ -2491,6 +2598,15 @@ CONFIG_SCHEMA = {
     #     会报「未知配置项」）。这与 runtime 段是同一类缺陷（DEFAULT 有、SCHEMA 无），
     #   只是这次落在**停滞自愈总开关**上 —— 一个改不了的开关等于没有开关。
     # ⇒ 本段整体登记（键不多、语义清楚），使「默认开 + 三道成本闸」可被现场调。
+    "upload": {
+        "dup_check_enabled":  {"type": "bool", "desc": "上传去重总开关（关 = 不做任何重复查询，逐字节回退到旧行为）"},
+        "dup_content_policy": {"type": "str",  "desc": "内容完全相同（sha256 一致）时的处置：skip=复用已有文档不入库 / warn=照常入库并提示 / block=拒绝（可用 force=1 覆盖）"},
+        "dup_name_policy":    {"type": "str",  "desc": "同名但内容不同时的处置：warn=照常入库并提示（默认，允许同名更版）/ skip=不入库 / block=拒绝"},
+    },
+    "requirements": {
+        "auto_commit":          {"type": "bool", "desc": "需求类意图产出后自动条目化并落库（关 = 退回改动前行为：需求分析不留资产）"},
+        "auto_commit_intents":  {"type": "str",  "desc": "允许自动落库的意图（逗号分隔，默认 requirement_analysis）"},
+    },
     "orchestration": {
         "resume_stale_s":             {"type": "int",  "desc": "编排失活阈值（秒）：心跳超过该值才算死掉（单批实测上限 1155s，取 1.5 倍）"},
         "resume_max_attempts":        {"type": "int",  "desc": "单批次最多恢复几次（超过不再自愈，防「恢复→再崩」死循环）"},
@@ -2635,6 +2751,11 @@ def save_override(updates: dict) -> dict:
 #   原有的 58 个键被一次抹掉（schema 键数从 455 掉到 426，且界面会显示"未知配置项"）。
 #   正确姿势：`setdefault(段, {}).update(本段新增项)` —— 只加不改。
 _EXTRA_SCHEMA = {
+    "evolution": {
+        "tick_enabled":    {"type": "bool", "desc": "自进化周期触发器总开关；关=引擎完全不跑"},
+        "tick_mode":       {"type": "str",  "desc": "observe=只统计不动作；execute=自动到 HIL 门口（仍不自动生效）"},
+        "tick_interval_s": {"type": "int",  "desc": "tick 扫描间隔（秒）"},
+    },
     "auth": {
         "mode":                    {"type": "str",  "desc": "登录模式：local=本地账号 / sso=单点登录"},
         "sso_base":                {"type": "str",  "desc": "SSO 服务基地址（mode=sso 时生效）"},
@@ -2690,9 +2811,35 @@ _EXTRA_SCHEMA = {
         "provider":                {"type": "str",  "desc": "联网搜索提供方（空=不启用）"},
         "api_key":                 {"type": "secret", "desc": "搜索服务密钥（脱敏显示；提交掩码值不会覆盖真值）"},
     },
+    # ★ 2026-11-09：与 DEFAULT_CONFIG.request_invariant 同源登记，缺这一段 ⇒
+    #   save_override / 影子层 / 界面都改不了三态开关（实测三处均拒绝）。
+    "request_invariant": {
+        "mode":            {"type": "str",  "desc": "运行时请求重建不变量：off / shadow / enforce（默认 shadow）"},
+        "audit_enabled":   {"type": "bool", "desc": "判定事件是否写入结构化台账（JSONL append-only）"},
+        "audit_path":      {"type": "str",  "desc": "台账路径（相对工程根）；logs/ 已被 gitignore"},
+        "audit_max_bytes": {"type": "int",  "desc": "台账单文件上限（字节），超过轮转保留 .1 一代"},
+    },
 }
 for _sec, _items in _EXTRA_SCHEMA.items():
     CONFIG_SCHEMA.setdefault(_sec, {}).update(_items)
+
+# ── P0-4（2026-11-15）：配置审计标记（只加 meta，不改任何生效值）──────────────
+# 以前只能靠人肉核对两类键：SCHEMA 有 DEFAULT 无（get() 返回 None，只能靠 override）、
+# 业务侧零消费点（改了不影响业务行为，但可能在 tools/eval 或前端 JS 被消费）。
+# 现在显式打 audit_flags，供 GET /api/system/config/schema 与后续 UI 消费。
+# ⚠️ 只加 meta 键：不改 type/desc/default、不改 get() 行为、不删任何键。
+# 清单真源 = core/config_audit.py；防漂移 = tools/verify/verify_p0_config_audit.py。
+try:
+    from . import config_audit as _ca
+    for _sec, _items in CONFIG_SCHEMA.items():
+        for _key, _meta in _items.items():
+            _f = _ca.flags(_sec, _key)
+            if _f:
+                _meta["audit_flags"] = _f
+except Exception:
+    # 少数验证脚本用 importlib 独立加载 config.py（无包上下文），相对导入会失败。
+    # 此时标注可缺席，但绝不能让配置模块崩掉或改变取值；正常 import 路径由门禁守。
+    pass
 
 
 def schema() -> dict:

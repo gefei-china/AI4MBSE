@@ -149,22 +149,40 @@ class AgentRegistry:
                 "行为准则：只指出可验证的问题、不空泛批评；每条问题给出具体改法（如把「快速」改为「≤500ms」）；"
                 "区分规范违反与设计建议。")),
         "design": AgentDefinition(
-            name="方案设计Agent",
-            description="基于需求与互联数据生成多方案架构设计",
+            name="工程建模方案设计Agent",
+            # 2026-11-12：本 Agent 是唯一 `is_code_stage=1` 的模型设计/产码阶段 Agent，
+            # 具备「各种视图模型方案生成」的本职能力（多方案/变体是本职，绑定保留）。
+            # 提示词核心是把工作流讲清：需求解析 → 选对应视图 skill → 按 skill 规范产码 → 强制自校验。
+            description=(
+                "模型设计智能体：依据用户需求描述，匹配并遵循对应视图生成技能（sysml_view_generation_*），"
+                "生成各类视图（需求/结构/用例/活动/IBD/时序/状态机/参数）的 SysML v2 代码并自校验；"
+                "具备多方案/变体设计与对比能力。用户说「生成需求视图/结构图/活动图/时序图…」"
+                "「写建模代码」「出方案/多方案对比」时用我。"),
             tools=["graph_retrieve", "entity_create"],
             hil_level="L1", kb_required=True,
             system_prompt=(
-                "你是网络总体MBSE设计助手，担任系统架构设计专家。\n"
-                "职责：基于需求清单与知识库互联数据生成多方案系统架构设计，从性能、成本、风险、可扩展性"
-                "等维度权衡比较，给出推荐方案与理由。\n"
-                "行为准则：每个方案说明适用范围与代价；方案要素明确映射到对应需求；"
-                "输出应包含系统组成、接口关系、关键设计权衡；不堆砌空泛架构名词，每个设计决策给出依据。\n"
-                "视图输出（按需）：当用户要求生成建模代码/视图时，在回答末尾用 ```sysml 代码块输出对应的 "
-                "SysML v2 建模代码（```sysml 包裹：part def/requirement def 类型定义 + part/requirement 使用实例 + "
-                "satisfy（需求被部件满足）/connector（部件连接）关系），供系统自动投影视图并入库版本管理；"
-                "纯问答/分析场景不必输出代码，按用户实际诉求决定。\n"
-                "建模独立性：SysML v2 代码的元素（包/部件/端口/连接）按用户需求与领域最佳实践完整生成；"
-                "知识库检索实体仅作参考对齐，不构成元素数量上限——检索为空或命中少时不得缩减模型，按工程完整性补齐。")),
+                "你是网络总体MBSE设计助手，担任模型设计与 SysML v2 视图代码生成专家。\n"
+                "核心职责：依据用户的需求描述，产出对应视图的 SysML v2 建模代码；同时具备多方案/变体设计能力，"
+                "可按需给出多个候选方案并对比选型。\n"
+                "工作流（按序执行，不可跳步）：\n"
+                "1) 需求解析：从用户描述中识别目标系统/子系统、目标视图类型（需求/结构/用例/活动/IBD/时序/状态机/参数），"
+                "以及需要定量化的属性与约束。\n"
+                "2) 技能匹配：确定视图类型后，**必须选择并遵循对应的视图生成技能**——"
+                "sysml_view_generation_requirement（需求视图）/ structure（结构视图/BDD）/ usecase（用例视图）/ "
+                "activity（活动视图）/ ibd（交互视图）/ sequence（顺序视图）/ state（状态视图）/ parameter（参数视图）；"
+                "视图展开的统一顺序与规范见 sysml_view_generation_guide，需求条目化见 sysml_requirement_structuring_guide。"
+                "**先读该视图技能的规范与检查清单，再按技能指导动手写代码**，不得脱离 skill 凭印象生成。\n"
+                "★ 写代码前**必须先调用 `graph_retrieve`（1–2 次）检索：① 本视图规范与 SysML v2 语法/标准库约束；"
+                "② 领域知识（场景术语/参数/接口/工况），作为生成依据；未检索不得产码**（命中不足按技能规范补齐，不得因此缩减模型）。\n"
+                "3) 代码生成：严格按所选技能的建模规范生成该视图的 SysML v2 代码（正确的元素类型、关系、命名与投影要求），"
+                "在回答末尾用 ```sysml 代码块输出完整代码，供系统自动投影视图并入库版本管理。\n"
+                "4) 自校验：生成后**必须**调用 sysml_v2_validate 校验，按诊断修复并复核（最多 3 轮）；"
+                "不得伪造通过，无法通过时如实报告错误位置与原因。\n"
+                "多方案能力：当用户需要方案权衡/变体比较时，可产出多个有实质差异的候选方案，"
+                "调用 alternatives_score 按维度打分对比（分数以工具返回为准，不自报综合分），可参考「多方案设计与对比」技能。\n"
+                "建模独立性：SysML v2 代码的元素（包/部件/端口/连接/需求）按用户需求与领域最佳实践完整生成；"
+                "知识库检索实体仅作参考对齐，不构成元素数量上限——检索为空或命中少时不得缩减模型，按工程完整性补齐。\n"
+                "不臆造：需求未给出的数值/条件按 TBD 或显式假设标注，不编造；无法验证处如实说明。")),
         "impact": AgentDefinition(
             name="变更影响Agent",
             description="分析变更源对模型的影响范围（BFS 遍历产出影响图）",
@@ -289,6 +307,10 @@ class AgentRegistry:
                 model_hint="",
                 agent_role=a.get("agent_role") or "sub",
                 intent_name=name,
+                # ★ 2026-11-14：DB 的 output_schema 此前只进 `_db_meta`（元数据），
+                #   不进 AgentDefinition ⇒ 提示词装配侧拿不到 ⇒ 模型「见 output_schema」
+                #   却看不到 schema。此处置入定义对象，由 prompt 侧注入契约块。
+                output_schema=_parse_json_obj(a.get("output_schema")),
             )
             self._db_meta[name] = {
                 "display_name": a.get("display_name") or name,
@@ -298,11 +320,18 @@ class AgentRegistry:
                 "model_provider_id": a.get("model_provider_id"),  # 优化2：Agent 指定 LLM provider（无则全局默认）
                 # ★ P1-b（2026-10-10）Agent 级模型参数（**此前有列无消费点 = 死配置**）
                 #   `agents.model_params` 列一直存在（schema.py:830注释写的是
-                #   `{"temperature":0.2}`），前端也在存，但**全仓没有任何地方读它** ——
+                #   `{"temperature":0.2}`），但**全仓没有任何地方读它** ——
                 #   与 `model_provider_id` 不同，后者至少有 `get_provider_id()` 这条消费链。
                 #   ⇒ 「在 Agent 表单里配思考档位」此前是**配了不生效**。
                 #   这里装进元数据，供 `get_model_params()` 消费（与 provider 级合并，Agent 优先）。
                 #   ⚠️ 解析失败一律回落 {} —— 绝不因一个坏JSON 让整个 Agent 注册失败。
+                # ★ 2026-11-13：Agent 级 **temperature 也真正生效了**
+                #   （`llm/providers/openai_compat.py` 的 payload 组装改为按
+                #    本轮覆盖 > 调用点 > Agent/provider 级 model_params > provider 列 裁决）。
+                #   此前 mp 在 payload **之后**才解析 ⇒ Agent/Provider 级 temperature
+                #   **根本没有参与机会**（"配了不生效"的残根，本次一并拔掉）。
+                #   ⚠️ 现状：前端**尚无** Agent 级 model_params 编辑控件，
+                #      该列目前只能经 API/DB 写入 ⇒ 想按 Agent 差异化温度需先补 UI。
                 "model_params": _parse_json_obj(a.get("model_params")),
                 "bound_tools": bound,     # P1: 绑定工具元数据（skill/mcp/tool 全量）
                 # Task 4：能力元数据（供 discover 动态筛选 / 版本协议校验 / Task 5/6 编排池与智能分派）
@@ -367,9 +396,14 @@ class AgentRegistry:
     def get_model_params(self, intent: str) -> dict:
         """P1-b（2026-10-10）：返回 Agent 级 `model_params`（默认 {} = 不覆盖）。
 
-        ★ **这个方法补的是一条"死配置"**：`agents.model_params` 列一直存在、
-          前端表单也在存，但**全仓无任何消费点** ⇒ 在 Agent 页面配 `thinking_mode`
+        ★ **这个方法补的是一条"死配置"**：`agents.model_params` 列一直存在，
+          但**全仓无任何消费点** ⇒ 在 Agent 页面配 `thinking_mode`
           / `temperature` 之类**配了不生效**（实测三套 thinking 判据都绕过了它）。
+
+          ★ 2026-11-13 更新：Agent 级 **temperature 也已被消费**
+          （`openai_compat.py` 的 payload 组装改为
+           本轮覆盖 > 调用点 > Agent/provider 级 model_params > provider 列）。
+          此前 mp 在 payload 之后才解析 ⇒ 根本无机会参与。
 
         语义：**Agent 级覆盖 provider 级**（`thinking_mode` 等同名键以Agent 为准），
         未配的键沿用 provider 级 —— 两级都在 `openai_compat.chat()` 里合并。

@@ -78,12 +78,24 @@ class IntentRouter:
             if not self._has_tech_term(low, conn):
                 return ("chat", "自指元问题（你/你的 + 能力类谓词 + 无技术术语）")
             # 有技术术语（如「介绍一下 SysML v2 的作用」）⇒ 是问概念，不是问系统自己 ⇒ 继续往下
-        # ② 名词化形态：动作词与抽象后缀**相邻** ⇒ 动作被名词化 ⇒ 是"问条件/问原理"不是"要执行"
+        # ② 名词化形态：动作词与抽象后缀相邻 ⇒ 动作被名词化 ⇒ 是"问条件/问原理"不是"要执行"
+        #   ★ 2026-11-09（B 类根因排查）：原判据要求 `v + s` **严格紧邻**，于是只捕获
+        #     「生成**条件**」，却漏掉中文名词化最常见形态「动词 + **的** + 名词」
+        #     （「分析**的**用途」「需求分析**的**流程」）。实测「变更影响分析的用途」
+        #     因该缺口落到 impact@0.95（期望 knowledge_qa）。
+        #     修法：允许中间一个「的 / 之」（通用语法形态，不枚举业务词）。
+        #     A/B（confirmed 48，同代码各跑 2 轮以剔除 LLM 抖动）：
+        #       原判据 41~43/48；允许「的」后 42~44/48，**确定性修好 1 条、回退 0 条**。
+        #     开关 `intent.speech_act_de`（默认 True = 修好后的行为；置 False 即逐字节回退）。
         if not any(k in low for k in self._IMPERATIVE_MARKERS):
-            for v in self._SPEECH_ACT_VERBS:
-                for s in self._SPEECH_ACT_SUFFIXES:
-                    if v + s in low:
-                        return ("knowledge_qa", "名词化形态「%s%s」" % (v, s))
+            _allow_de = bool(self._cfg_get("speech_act_de", True))
+            _sep = "的?" if _allow_de else ""
+            _rx = re.compile("(%s)%s(%s)" % (
+                "|".join(self._SPEECH_ACT_VERBS), _sep,
+                "|".join(self._SPEECH_ACT_SUFFIXES)))
+            _m = _rx.search(low)
+            if _m:
+                return ("knowledge_qa", "名词化形态「%s」" % _m.group(0))
         return (None, "")
 
     def _has_tech_term(self, t: str, conn=None) -> bool:
@@ -95,6 +107,15 @@ class IntentRouter:
             return bool(GlossaryMatcher(conn).resolve(t).get("hits"))
         except Exception:
             return False
+
+    # ★ 2026-11-09：**明确疑问式**词表 —— 单独一组，只用于「短句是否豁免 explain 跳过」。
+    #   与 `_EXPLAIN_SIGNALS` 的区别：后者含「方法论 / 规范 / 流程 / 概念 / 定义」这类
+    #   **名词性**弱信号（它们既可能出现在提问里，也可能出现在命令里），故短句不据它豁免；
+    #   本组只收**句法上是提问**的形态，误伤面窄。
+    _EXPLICIT_INTERROGATIVES = (
+        "什么是", "是什么", "啥是", "什么意思", "含义", "介绍", "说明", "解释",
+        "用途", "作用", "原理", "区别", "差异", "如何理解", "怎么理解", "为什么",
+    )
 
     _EXPLAIN_SIGNALS = (
         "介绍", "说明", "是什么", "什么是", "啥是", "区别", "差异", "原理", "概述",
@@ -123,6 +144,22 @@ class IntentRouter:
         #   ⚠️ 不改「流程」本身：它是真 explain 正例（「介绍一下需求分析的流程」）的信号，
         #     误路由的根因是缺动作信号，不是流程词多余。
         "梳理", "条目", "清单",
+    )
+
+    #: ★ 2026-11-07：**变更影响语境**判据（只用于豁免 explain 前置短路）。
+    #: 真机实测：「改了发动机的接口**定义**，会影响哪些部件？」被 `定义` 命中说明信号
+    #: ⇒ 短路 explain@0.8 ⇒ 判 knowledge_qa，而正确答案是 impact。
+    #: 「定义」本身不能删（「什么是X的定义」是真 explain 正例），只能靠**组合语境**区分：
+    #:   有明确变更动作 + 有影响问法 ⇒ 这是"要影响分析"，不是"要概念解释"。
+    #: ⚠️ 两组成员都必须**足够具体**，否则会误伤 explain 正例
+    #:   （如「介绍一下变更影响分析的流程」只含"变更"这一名词，无动作词 ⇒ 仍走 explain）。
+    _CHANGE_ACT = (
+        "改了", "改一下", "修改了", "修改一下", "变更了", "变了", "删了", "删除了",
+        "新增了", "增加了", "加了", "移除了", "重命名了", "挪了", "替换了",
+        "如果把", "要是改", "假如改", "换掉",
+    )
+    _IMPACT_WORD = (
+        "影响", "波及", "牵连", "会不会影响", "会影响到", "需要同步改", "要一起改",
     )
 
     # ★★ 2026-10-29（实测误判，conv 9751 前后的平台操作类请求集体跑偏）：
@@ -177,9 +214,30 @@ class IntentRouter:
 
         ★ 2026-10-29：额外要求**不是平台操作**。否则「查工程「…方法论…」的 projectId」
           会因为工程名里的「方法论」被判成"问概念"，整句短路成知识问答（实测误判）。
+
+        ★★ 2026-11-07（真机会话实测）：**"名词化的技术词"不得触发 explain 短路**。
+          实测原话「改了发动机的接口**定义**，会影响哪些部件？给我影响范围」
+          → `定义` 命中 `_EXPLAIN_SIGNALS`、无动作信号 → 短路 `explain@0.8`
+          → 判 knowledge_qa（知识问答 Agent），而正确主体是 impact（变更影响 Agent）
+          ⇒ 用户看到的是"我问影响范围，它给我讲什么是接口定义"。
+
+          根因不是"定义"这个词多余（「什么是X的定义」是真 explain 正例），
+          而是**子串判据分不清词性**：`接口定义`/`数据定义`/`视图定义` 里的"定义"是名词，
+          「定义一下X」才是动词。中文没有形态变化，子串匹配天然做不到。
+
+          判据补丁（只在**变更语境**下收紧，不动其它 explain 正例）：
+            含「变更动作词」+「影响/波及词」⇒ **不是** explain。
+          依据：问"改了X会影响什么"是**要一份影响分析**，不是要概念解释。
+          ⚠️ 范围刻意窄：只排除 `_CHANGE_ACT` × `_IMPACT_WORD` 同时出现的情形，
+             所以「介绍一下变更影响分析的流程」仍走 explain（无变更动作词）。
         """
         if self._is_platform_operation(t):
             return False        # 操作平台 ≠ 问概念（豁免前置短路）
+        # ★ 变更影响语境豁免：问"改了X会影响什么" ≠ 问概念
+        _tt = re.sub(r"\s+", "", t)
+        if any(k in _tt for k in self._CHANGE_ACT) and \
+                any(k in _tt for k in self._IMPACT_WORD):
+            return False
         return (any(k in t for k in self._EXPLAIN_SIGNALS)
                 and not any(k in t for k in self._ACTION_SIGNALS))
 
@@ -382,7 +440,8 @@ class IntentRouter:
         # P0-1 置信度三级决策：最近一次 detect 的路由元数据（route/confidence/是否需澄清）
         self._last_meta = {"intent": "", "route": "", "confidence": 0.0,
                            "needs_clarification": False, "sem_alt": None, "used_history": False,
-                           "confirmed": False}
+                           "confirmed": False, "clusters": [], "multi_cluster": False}
+        self._last_cluster_hits = []
         self._last_sem_score = 0.0  # 最近一次语义匹配 top_score（供弱置信澄清判定）
         # P0-1（2026-09-30）：语义层的"弃权意见"——**意图级** top1（达阈但未过采纳门槛）。
         # 供 LLM 兜底段做互证（融合矩阵缺的那一格），详见 detect_semantic / detect 内注释。
@@ -468,6 +527,34 @@ class IntentRouter:
                     c.close()
             for r in rows:
                 self._fewshot.setdefault(str(r["intent"]), []).append(str(r["text"])[:80])
+            # ★ 2026-11-07（米爸第 17 轮）：并入**意图字典**里用户维护的示例说法
+            #   （`intent_taxonomy.examples`）。这是"每意图样本不足"的第二个来源：
+            #   confirmed 池只有 48 条（2.29 条/意图），而字典里的示例说法是人工写的、
+            #   质量更高、可随时编辑，正好补上 few-shot 的缺口。
+            #   顺序：confirmed 真实说法在前（更贴近生产分布），字典示例在后。
+            #   ⚠️ 去重：同一句不重复出现在提示词里（否则浪费 token 且强化偏差）。
+            try:
+                from core.intent_taxonomy import fewshot_map as _fs_map
+                _c2 = conn
+                _own = False
+                if _c2 is None:
+                    from database import get_db as _gdb
+                    _c2 = _gdb()
+                    _own = True
+                try:
+                    for _k, _ex in (_fs_map(_c2) or {}).items():
+                        bucket = self._fewshot.setdefault(_k, [])
+                        for _s in _ex[:4]:
+                            if _s and _s not in bucket:
+                                bucket.append(str(_s)[:80])
+                finally:
+                    if _own:
+                        try:
+                            _c2.close()
+                        except Exception:
+                            pass
+            except Exception:
+                pass        # 字典不可读 ⇒ 只用 confirmed（不阻断路由）
             # 只留已知意图（DB Agent 关键词意图集），防候选外意图混进提示词
             known = set(self._db_intents or {}) | {"knowledge_qa", "design", "impact",
                                                    "review", "report_generation",
@@ -663,6 +750,108 @@ class IntentRouter:
             return ""
         return " ".join(_out[-self._HISTORY_MAX_ITEMS:])[:self._HISTORY_TOTAL_MAX]
 
+    def _is_known_intent(self, name: str) -> bool:
+        """★ 2026-11-06：`prev_intent` 是否是可路由意图名。
+
+        为什么不能直接写 `prev_intent in self._db_intents`：
+          `_db_intents` 由 agents 表 intent_keywords 灌入，**未加载/为空时**该判断恒 False
+          ⇒ 续写分支会被静默跳过（实测：「继续」prev=design 仍落到 LLM 判 chat）。
+          这正是本仓反复吃的"看起来生效、实则恒假"的形态 —— 判据必须自带兜底集合。
+        """
+        n = str(name or "").strip()
+        if not n:
+            return False
+        if n in (self._db_intents or {}):
+            return True
+        return n in {"knowledge_qa", "design", "impact", "review", "requirement_analysis",
+                     "report_generation", "chat", "requirement_quality", "system_mgmt",
+                     "methodology_resolver", "requirement_structuring", "architecture_skeleton",
+                     "view_expansion", "model_validation_repair", "trace_verification",
+                     "change_safety_gate", "model_release"}
+
+    #: 纯寒暄词表（**整句**只由这些构成才算，不做子串匹配）
+    _SMALLTALK_TOKENS = (
+        "你好", "您好", "你们好", "大家好", "hi", "hello", "hey",
+        "谢谢", "多谢", "感谢", "谢谢你", "谢谢您", "辛苦了", "辛苦",
+        "在吗", "在么", "在不在", "收到", "明白了", "了解了", "知道了",
+        "早上好", "上午好", "下午好", "晚上好", "晚安",
+        "好的", "好", "嗯", "嗯嗯", "哦", "ok", "okay", "thanks", "thankyou",
+        "再见", "拜拜", "bye",
+    )
+
+    def _is_pure_smalltalk(self, t: str) -> bool:
+        """★ 2026-11-07（第 16 轮）：判断「这一句是否**只是寒暄**，没有任何任务」。
+
+        为什么必须存在（实测缺陷，不是设计偏好）：
+          `llm_conflict` 路由真实准确率只有 25%（1/4），其中 3 条错例里有 2 条是
+          「你好」「谢谢」被判成 `knowledge_qa` —— 最基础的寒暄被答成知识问答。
+          更糟的是「你好！」走 `llm_first` **0.90 且不澄清**，用户得不到纠正机会。
+        根因：寒暄句没有任何领域词，规则/语义层无信号 ⇒ 全靠 LLM 猜，
+              而 LLM 面对"MBSE 平台"角色设定时倾向判成 knowledge_qa。
+
+        判据（刻意**极窄**，宁可漏判也不误伤）：
+          1. 归一化后长度 ≤ 10（长句必然带信息）
+          2. 去掉标点/空白/语气词后，**整句被寒暄词完整覆盖**（贪心最长匹配，不留残余）
+          3. 不含任何疑问/任务信号（"怎么/为什么/帮我/生成/？"等）
+        ⇒「你好，帮我看看这个模型」不会被劫持（有残余 + 有任务词）。
+        """
+        s = (t or "").strip().lower()
+        if not s or len(s) > 10:
+            return False
+        # 带任务/疑问信号的，一律不判寒暄（防劫持真实请求）
+        if any(k in s for k in ("怎么", "如何", "为什么", "帮我", "请", "生成", "设计",
+                                "校验", "分析", "写", "查", "？", "?", "介绍")):
+            return False
+        # 去掉标点与空白，只留有效字符
+        core = re.sub(r"[\s,，。.！!~～、;；:：\"'“”‘’()（）\[\]【】-]+", "", s)
+        if not core or len(core) > 10:
+            return False
+        toks = sorted(self._SMALLTALK_TOKENS, key=len, reverse=True)
+        i, n = 0, len(core)
+        while i < n:
+            for tk in toks:
+                if core.startswith(tk, i):
+                    i += len(tk)
+                    break
+            else:
+                return False        # 有无法归入寒暄的残余 ⇒ 不是纯寒暄
+        return True
+
+    def _is_short_continuation(self, t: str) -> bool:
+        """★ 2026-11-06：判断「是不是在对上一轮说『继续/接着/出个样板』」。
+
+        事故（conv 990485，用户原话「我只是写错了字，没事别问题点」）：
+        用户打了一句很短的续写指令（甚至打错一个字），系统因为
+        「短 + 无强信号」判 `inherit`/`weak` ⇒ **弹澄清条问用户"你到底想干什么"**。
+        用户的诉求很直接：**承接上文时不该反问**，该接着干。
+
+        判据刻意**窄**（只在真的像续写时成立）：
+          · 长度 ≤ 16（太长的句子必然自带语义，交给正常链路）
+          · 命中续写词，或"动词 + 极短宾语"形态（如「出P1样板」「生成视图」）
+          · **不含**否定/纠正词（"不是"/"错了"/"改成"这类是在改需求，不是续写）
+        """
+        s = (t or "").strip()
+        if not s or len(s) > 16:
+            return False
+        if any(x in s for x in ("不是", "错了", "不对", "改成", "换成", "重新", "算了")):
+            return False
+        # ⚠️ 不要在这里写 `\b`：中文字符在 Python 3 里也算 word 字符，
+        #   「接着往下」的「接」与「往」之间**没有** word boundary ⇒ 加了 \b 恒不匹配
+        #   （实测抓出：本规则第一版带 \b，「接着往下」直接假绿变假红）。
+        if re.match(r"^(继续|接着|往下|下一步|再继续|再来|开始|走起|继续吧|好的?|可以|行了?|嗯+|ok|go)", s):
+            return True
+        # 「出P1样板 / 生成视图 / 做一下 / 给我看看」这类：短动词开头 + 无问号
+        if "?" not in s and "？" not in s and re.match(
+                r"^(出|做|生成|输出|显示|给我|帮我把?|来个|补|加上|改|完善|优化|整理)", s):
+            return True
+        # ★ 2026-11-06：**容一个错字**（用户原话「我只是写错了字」）。
+        #   实测「显出P1样板」是「先出P1样板」的错字，首字被敲错就整句判不出续写
+        #   ⇒ 落 llm_weak(chat 0.25) ⇒ 降级成闲聊。判据：首字单个汉字 + 其后紧接续写动词。
+        if len(s) <= 16 and re.match(r"^[\u4e00-\u9fa5]$", s[:1]) and re.match(
+                r"^(出|做|生成|输出|显示|给我|补|加上|改|完善|优化|整理)", s[1:] or ""):
+            return True
+        return False
+
     def detect(self, text, conn=None, prev_intent=None, history=None):
         """BR-2 增强：Glossary 术语归一化优先（P0-1），置信度分级（P1-1），
         意图级缓存（P0-3），会话级意图继承（P0-2），历史联合召回（P0-5）。
@@ -678,6 +867,18 @@ class IntentRouter:
         ⚠️ **只喂 LLM 一路** —— 规则层与语义层一律用原文，理由与实测见 `_sanitize_history`。
         """
         t = text.lower()
+        # ★ 2026-11-07：**确定性多簇信号**（纯旁路、零 LLM、零路由行为变更）。
+        #   位置必须在任何 return 之前：实测复合句会被规则层抢先（route=fused），
+        #   若把多簇只挂在 LLM 兜底里，这类请求永远拿不到 clusters。
+        #   数据源 = 本对象已有的 _db_intents（agents.intent_keywords 灌入），
+        #   新建 Agent 自动生效，无需手工维护簇词表。
+        self._last_cluster_hits = []
+        if bool(self._cfg_get("cluster_route", False)):
+            try:
+                from core.capability_clusters import score_clusters as _score_c
+                self._last_cluster_hits = _score_c(text, self._db_intents)
+            except Exception:
+                self._last_cluster_hits = []
         # ★ B5-7（B-2）：先跑一次多意图切分，把段数留给 `_done` 判澄清用。
         #   为什么必须在这里（`stream.py` 里 `detect_multi` 是在 `detect` **之后**才调的，
         #   顺序是 detect(:1762) → detect_multi(:1778) → 读 needs_clarification(:1926)）：
@@ -695,6 +896,59 @@ class IntentRouter:
         if self._rules is None or self._rules_epoch != IntentRouter._RULES_EPOCH:
             self.load_rules(conn=conn)
         fp = self._index_fingerprint()
+        # ★★ 2026-11-06（米爸方案① · 修意图路由）：**平台读取类请求前置路由**。
+        #   事故：让 AI「通过 MCP 读取智源工程/包的 V2 代码」被判 knowledge_qa →
+        #   定向到「知识问答Agent」（agent_tools 无 MCP 绑定）⇒ 工具清单里根本没有
+        #   query_projects / export_sysml_v2 ⇒ 全程只能用本地知识库空转（conv 990480 实证）。
+        #   判据刻意用**组合信号**：平台数据源 + 取数动作 + 代码/模型数据，且排除
+        #   纯校验 / 概念问 / 规范说明，避免把「校验这段V2代码是否符合规范」抢成 design。
+        #   位置必须在 speech_act / explain 短路之前（否则「分析/介绍」类词先短路）；
+        #   fp 已算出才能调 _done。开关 intent.platform_read_route=False 可逐字节回退。
+        if bool(self._cfg_get("platform_read_route", True)):
+            _pr_src = ("智源", "zhiyuan", "工程", "包树", "数据树", "分支", "版本",
+                       "projectid", "dataid", "mcp")
+            _pr_act = ("获取", "读取", "拉取", "导出", "取回", "查询", "下载", "拿到",
+                       "取出", "调出", "回读")
+            _pr_code = ("v2代码", "sysml", "源码", "模型数据", "原始代码")
+            _pr_excl = ("校验", "检查语法", "是否符合", "是什么", "解释", "介绍", "定义", "规范说明")
+            # ★ 2026-11-06：**去空白后再匹配**。
+            #   实测漏判（conv 990498，我自己的验证）：「我准备通过 MCP 读取工程 AI验证1104 的
+            #   V2 代码」——用户把「V2」和「代码」中间打了空格，`"v2代码" in t` 直接为假
+            #   ⇒ 落 rule/knowledge_qa@0.95 ⇒ 定向给知识问答Agent（读不到工程）。
+            #   中文输入法/中英混排时插空格极常见，判据必须对此鲁棒。
+            _t_ns = re.sub(r"\s+", "", t)
+            if (not any(x in _t_ns for x in _pr_excl)
+                    and any(x in _t_ns for x in _pr_src)
+                    and any(x in _t_ns for x in _pr_act)
+                    and any(x in _t_ns for x in _pr_code)):
+                return self._done("design", "platform_read", 0.95, text, fp)
+        # ★★ 2026-11-06：**短续句直接承接上文，不弹澄清**（米爸：「我只是写错了字，没事别问题点」）。
+        #   位置：在 speech_act / explain / 规则层之前 —— 这些层看到「继续」「出P1样板」这类
+        #   短句时没有任何可用信号，只会落到 inherit(0.55) 或 weak，然后**弹澄清条**。
+        #   而续写语义**只在上下文里成立**，让用户再解释一遍纯属打断。
+        #   行为：有实质前置意图 ⇒ 直接承继（route='continue'，置信 0.82，不澄清）；
+        #         前置是 chat/空 ⇒ 不猜，交给下面的 LLM 主裁判（见 llm_first_short 段）。
+        #   回退开关：intent.continue_inherit=False。
+        if bool(self._cfg_get("continue_inherit", True)) and self._is_short_continuation(t):
+            _pi = str(prev_intent or "").strip()
+            if _pi and _pi != "chat" and self._is_known_intent(_pi):
+                return self._done(_pi, "continue", 0.82, text, fp,
+                                  cacheable=False, used_history=True)
+        # ★★ 2026-11-07（米爸第 16 轮 · 修 llm_conflict 25% 根因）：
+        #   **纯寒暄前置判定** —— 必须在 explain / 规则层 / LLM 全部之前。
+        #   实测缺陷（真库 confirmed 回放 + 直接探测）：
+        #     「你好」  → knowledge_qa / llm_conflict / 0.60 / 需澄清（应为 chat）
+        #     「谢谢」  → knowledge_qa / llm_conflict / 0.60（应为 chat）
+        #     「你好！」→ knowledge_qa / llm_first / **0.90 / 不澄清**（最糟：高置信答错）
+        #   ⇒ LLM 把纯寒暄判成知识问答，且 llm_conflict 分支反而"帮助"它压过语义层。
+        #   修法：纯规则白名单（零延迟、可单测、不依赖模型）。
+        #   位置：`continue_inherit` **之后** —— 有上下文的「好的」仍按续句承继，
+        #         只有真正孤立、且整句仅由寒暄词构成的输入才落 chat。
+        #   严格性：必须**整句归一化后只由寒暄词构成**且 ≤10 字，
+        #          「你好，帮我看看这个模型」这类带任务的绝不被劫持（见门禁 G2）。
+        #   回退位：intent.smalltalk_route=False。
+        if bool(self._cfg_get("smalltalk_route", True)) and self._is_pure_smalltalk(t):
+            return self._done("chat", "smalltalk", 0.9, text, fp, cacheable=True)
         # 2026-09-25 说明类优先（**必须在缓存之前**）：修「MBSE建模方法论介绍」→ design 这类误路由。
         # 位置理由：该输入早已被误判写入意图缓存，若放在规则层之后会被旧缓存挡住、新逻辑永不生效。
         # 强度：conf 0.8 且 route='explain' → _done 里不触发澄清（needs_clarify 仅针对 weak/inherit/llm<0.85）。
@@ -732,7 +986,28 @@ class IntentRouter:
                 return self._done("chat", "speech_act", 0.60, text, fp, verdict="chat_real")
             if _sa_intent == "knowledge_qa":
                 return self._done("knowledge_qa", "speech_act", 0.85, text, fp)
-        if self._is_explain_ask(t) and bool(self._cfg_get("explain_preempt", True)):
+        # ★ 2026-11-06（米爸：「如果还是无法解决，优先直接让 LLM 来进行意图识别」）：
+        #   短句（≤16 字）**不再**被 explain 前置短路定死，交给 LLM 主裁判。
+        #   理由：这一层是误判率最高的确定性层（可判集 30% 误判），而短句恰恰是
+        #   最没有规则信号的形态（「什么是热管理」「介绍下这个」）—— 让子串规则抢先，
+        #   等于用最弱的证据做最硬的判断。长句仍保留原短路（省一次 LLM 调用）。
+        #   回退开关：intent.explain_preempt_short=True（置 True 即恢复旧行为）。
+        _short_no_preempt = (len(t) <= 16) and (not bool(
+            self._cfg_get("explain_preempt_short", False)))
+        # ★ 2026-11-09（B 类根因）：短句跳过 explain 的理由是「短句最没有规则信号」，
+        #   但**明确疑问式本身就是最强的规则信号**（什么是 / 介绍 / 用途 / 原理 / 区别）。
+        #   一刀切跳过，等于把唯一的强信号也丢掉 —— 实测「什么是MBSE建模方法论」
+        #   因短句跳过 explain，被 DB 关键词「建模方法论」判成 methodology_resolver@0.95。
+        #   收窄修法：短句若含**明确疑问式**，仍走 explain 前置；其余短句维持"交给 LLM 主裁判"
+        #   （尊重 2026-11-06「短句优先让 LLM 判」的既有取向，不做全局翻转）。
+        #   结构保证（confirmed 48 条实测）：短句 37 条中仅 9 条含明确疑问式 ⇒ 受影响的
+        #   只可能是这 9 条（7 条期望 knowledge_qa、3 条自指问题已被更早的 speech_act 拦成 chat），
+        #   其余 28 条短句**构造上零变化**。
+        #   开关 `intent.explain_short_interrogative`（默认 True；置 False 即逐字节回退）。
+        _interrog_exempt = bool(self._cfg_get("explain_short_interrogative", True)) \
+            and any(w in t for w in self._EXPLICIT_INTERROGATIVES)
+        if self._is_explain_ask(t) and bool(self._cfg_get("explain_preempt", True)) \
+                and (not _short_no_preempt or _interrog_exempt):
             return self._done("knowledge_qa", "explain", 0.80, text, fp)
         # P0-3：意图级缓存（L1 命中直接返回，省重复规则/语义/LLM 全链路）
         # P1-31（2026-10-02）：**默认停用**，开关在 `_cache_get`/`_cache_set` 内部集中把关
@@ -913,6 +1188,15 @@ class IntentRouter:
                     and self._cfg_get("llm_first", True)):
                 _tmin = float(self._cfg_get("llm_first_min_conf", 0.75))
                 _tweak = float(self._cfg_get("llm_first_weak_conf", 0.50))
+                # ★ 2026-11-07（米爸第 15 轮 P1）：按能力族分档阈值，**默认关 = 零回归**。
+                #   读类（knowledge）放宽、平台数据操作（platform）收紧；
+                #   族归属来自 core.capability_clusters 单一事实源，不手工维护白名单。
+                if bool(self._cfg_get("threshold_tiers", False)):
+                    try:
+                        from core.intent_thresholds import thresholds_for as _thr
+                        _tmin, _tweak = _thr(llm_intent, _tmin, _tweak, enabled=True)
+                    except Exception:
+                        pass
                 if float(llm_conf) >= _tmin:
                     _altf = getattr(self, "_last_sem_alt", None)
                     if (_altf and _altf.get("intent") and _altf["intent"] != llm_intent
@@ -1028,6 +1312,12 @@ class IntentRouter:
                                   confirmed=(llm_intent == prev_intent))
             return self._done(llm_intent, "llm", llm_conf, text, fp)
         # P0-2：会话级意图保持——无任何信号命中时继承上轮意图（追问/续写不被误判 chat）
+        # ★ 2026-11-06：短续句即使上文是 chat，也**不许再弹澄清**（用户明确要求"别问"）。
+        #   仍标 route='continue_weak' 以便观测，但不触发 needs_clarification。
+        if self._is_short_continuation(t):
+            if prev_intent and self._is_known_intent(prev_intent):
+                return self._done(prev_intent, "inherit", 0.55, text, fp)
+            return self._done("chat", "continue_weak", 0.50, text, fp, verdict="unsure")
         if prev_intent and prev_intent in self._db_intents:
             return self._done(prev_intent, "inherit", 0.55, text, fp)
         # ★ 2026-10-29（意图审计）：explain **兜底**（`intent.explain_preempt=False` 时才走到这里）。
@@ -1040,6 +1330,11 @@ class IntentRouter:
         #     不会被采纳执行，只用于区分"闲聊"与"判不出"并标 verdict=chat_real）。
         if (not bool(self._cfg_get("explain_preempt", True))) and self._is_explain_ask(t):
             return self._done("knowledge_qa", "explain", 0.80, text, fp)
+        # ★ 2026-11-06：短句的 explain 前置被推迟到 LLM 之后（见上方 `_short_no_preempt`）。
+        #   这里必须补回落 —— 否则「什么是热管理」这类定义问句会在 LLM 判不出时掉进 chat 桶
+        #   （实测），反而比原来的 knowledge_qa 更差：聊天 Agent 没有知识库检索。
+        if _short_no_preempt and self._is_explain_ask(t):
+            return self._done("knowledge_qa", "explain_late", 0.75, text, fp)
         return self._done("chat", "chat", 0.0, text, fp, verdict="unsure")
 
     # ══════════════════════════════════════════════════════════════════════
@@ -1242,11 +1537,18 @@ class IntentRouter:
         except Exception:
             _nseg = 0
         _multi = bool(self._cfg_get("multi_intent_clarify", True)) and _nseg >= 2
+        # ★ 2026-11-06：`inherit` / `continue` / `continue_weak` **不再进澄清白名单**。
+        #   理由（用户实测反馈）：「我只是写错了字，没事别问题点」—— 承接上文的短句本来
+        #   就没有新信息，拿它去问"你到底要什么"只会打断；真正含糊的是**新任务表述**，
+        #   那走 semantic_weak / conflict 分支，澄清照旧生效。
+        #   回退开关：intent.inherit_silent=False（逐字节回到旧行为）。
+        _inherit_silent = bool(self._cfg_get("inherit_silent", True))
+        _clarify_routes = ("semantic_weak", "fused_conflict", "llm_conflict",
+                           "llm_history", "rule_llm_vetoed", "llm_first_weak")
+        if not _inherit_silent:
+            _clarify_routes = _clarify_routes + ("inherit",)
         needs_clarify = (not _silent_ok) and (
-            route in ("semantic_weak", "inherit", "fused_conflict", "llm_conflict",
-                      "llm_history", "rule_llm_vetoed",
-                      # llm_first（2026-10-23）：弱采纳不硬选 → 澄清卡
-                      "llm_first_weak")
+            route in _clarify_routes
             or (route == "llm" and confidence < 0.85)
             # ★ B5-7 新增：泛词牵出的意图 / 多意图输入 ⇒ 也要让用户确认
             or _gen_only or _multi)
@@ -1265,6 +1567,23 @@ class IntentRouter:
                            "llm_review": (_rc or {}).get("llm_review"),
                            "rule_candidate": (_rc or {}).get("rule_candidate"),
                            "rule_review_reason": (_rc or {}).get("reason", "")}
+        # ★ 2026-11-07（米爸第 15 轮 P0-1）：**shadow 置信度校准**。
+        #   只写 meta.calibrated_confidence，绝不改 `confidence` 本身 ⇒
+        #   needs_clarification / llm_first 互证 / 缓存指纹等既有行为逐字节不变。
+        #   目的是先用真实流量证明「按 route 校准后 ECE 更低」，再决定要不要切换判定口径。
+        try:
+            from core.route_calibration import calibrate as _calib
+            self._last_meta["calibrated_confidence"] = _calib(route, confidence)
+            self._last_meta["calibration_route"] = route
+        except Exception:
+            self._last_meta["calibrated_confidence"] = confidence
+            self._last_meta["calibration_route"] = route
+        # ★ 2026-11-07：多簇命中（纯旁路观测）。`detect()` 的主返回恒为单值，
+        #   这里只把「本轮还匹配到哪些族」写进 meta，供编排层决定 team/direct
+        #   与前端展示，不参与任何路由判定 ⇒ 零回归。无命中给空数组，不写 None。
+        _hits = getattr(self, "_last_cluster_hits", None) or []
+        self._last_meta["clusters"] = list(_hits)
+        self._last_meta["multi_cluster"] = len(_hits) >= 2
         # P0 观测（2026-10-23）：verdict 拆开 chat 的双语义 —— chat_real（LLM 有依据判闲聊）
         # vs unsure（没判出来落兜底）。显式传入优先；缺省按意图非 chat 即 ok。
         self._last_meta["verdict"] = verdict or ("ok" if intent != "chat" else "unsure")
@@ -1323,7 +1642,27 @@ class IntentRouter:
         try:
             from llm import llm_client
             known = set(self._db_intents.keys()) - {"chat"}
-            known_list = "、".join(sorted(known))
+            # ★ 2026-11-07（米爸第 2/4 问）：**能力簇路由**，默认开（第 14 轮拍板）。
+            #   打开后 LLM 兜底层从「22 个 Agent 里选 1 个」变成「7 个互斥能力族里选，
+            #   + 可选族内成员 + 支持多簇」。对外契约不变：返回的仍是**具体 Agent 名**，
+            #   因此 `_done` / 意图缓存 / 落库 / 编排 / 澄清卡全部不用改。
+            #   实测（verify_intent_placement_ab.py，15 条 gold × 4 组，同一 LLM/温度）：
+            #     独立分类器 22→8 族：准确率 100%→100%，token 635→531（-16.4%）。
+            #   ★ 2026-11-07 v2（修实测代价）：`verify_cluster_cost_eval.py` 发现只输出族 id
+            #     会把 8 个流水线阶段意图准确率从 62.5% 压到 37.5%（细粒度被抹平）。
+            #     ⇒ 允许 LLM 同时给族内成员名（白名单校验），并支持一次识别多个簇。
+            #     多簇只写进 meta 供编排消费，**主返回恒为单值**。
+            _cluster = bool(self._cfg_get("cluster_route", False))
+            if _cluster:
+                from core.capability_clusters import (clusters_for_llm_detailed as _c4llm,
+                                                     ROUTE_CLUSTERS as _rc,
+                                                     resolve_cluster as _resolve_c,
+                                                     parse_cluster_output as _parse_c,
+                                                     resolve_clusters as _resolve_multi)
+                known_list = "\n" + _c4llm()
+            else:
+                known_list = "、".join(sorted(known))
+                _rc, _resolve_c, _parse_c, _resolve_multi = (), None, None, None
             # 2026-10-27（截断清单 P2-C6）：500/300 → 1000/600。原「当前问题 300 + 上文 300」
             #   信息量过低，指代（"那个工程""按上面的方案"）根本无从解析 ⇒ 判意图靠猜。
             _user = str(text)[:1000]
@@ -1368,21 +1707,53 @@ class IntentRouter:
                 "选粗类（design / requirement_analysis / review）；只有明确说出"
                 "该阶段要做的事（如\"生成结构树→架构骨架\"\"追溯矩阵→追溯核验\"）"
                 "才选阶段意图。")
+            if _cluster:
+                # 簇模式下 few-shot 与阶段粒度规则都是**按具体 Agent 名**写的，
+                # 会把模型诱导回「输出某个 Agent 名」，从而架空族级分类 ⇒ 两段都不注入。
+                # v2：改为输出 `clusters` 数组（支持一次识别多个能力族），每项可带
+                #     `agent`（族内成员白名单）。第 1 项是主意图，其余进 meta。
+                _fs_note = ""
+                _gran_note = (
+                    "\n输出格式（只输出一个 JSON 对象，不要其他文字）："
+                    '{"clusters":[{"id":"族id","agent":"族内成员名或留空",'
+                    '"confidence":0.0~1.0}], "confidence":0.0~1.0}'
+                    "\n规则：① 一句话涉及多类能力时可给多个簇，按主次排序，最多 3 个；"
+                    "② 只有明确点名某个阶段动作时才填 agent，且必须原样取自该族「族内可选成员」清单；"
+                    "不确定就留空，由平台代码按输入形态分派；"
+                    "③ 全部不匹配时用 id=chat；不确定给低 confidence。")
+            else:
+                _fs_note = (("\n各意图的真实用户说法示例（供语义对照，不要只做逐字匹配）：\n" + fs_txt)
+                            if fs_txt else "")
+                _gran_note = (
+                    _stage_note
+                    + "\n判断要点：与某个意图的示例语义相合才选它；所有意图都不匹配时才用 chat；"
+                      "不确定时给低 confidence，宁可低分也不要硬猜。")
             resp = llm_client.chat(
                 [{"role": "system", "content": (
                     f"你是 MBSE 助手意图分类器。根据用户输入判断其意图，只输出一个 JSON 对象，"
                     f'格式：{{"intent": "意图名", "confidence": 0到1之间的小数}}，不要任何其他文字。'
                     f"可选意图：{known_list}。"
-                    + (("\n各意图的真实用户说法示例（供语义对照，不要只做逐字匹配）：\n" + fs_txt)
-                       if fs_txt else "")
-                    + _stage_note
-                    + "\n判断要点：与某个意图的示例语义相合才选它；所有意图都不匹配时才用 chat；"
-                      "不确定时给低 confidence，宁可低分也不要硬猜。")},
+                    + _fs_note + _gran_note)},
                  {"role": "user", "content": _user}],
                 _intent="intent_detect",
             )
             msg = (resp.get("choices") or [{}])[0].get("message", {})
             content = msg.get("content") or ""
+            # ★ 2026-11-07 v2：簇模式先尝试多簇解析；失败/非簇模式回落旧正则。
+            #   ⚠️ **不要在这里清空 `_last_cluster_hits`** —— detect() 入口已写入
+            #   确定性多簇信号；若 LLM 没解析出多簇，应保留确定性结果（否则
+            #   规则层抢先的复合句会丢掉多簇信息，实测 B2/B4/B5 假红）。
+            if _cluster and _parse_c:
+                _pv = _parse_c(content, known)
+                if _pv.get("clusters"):
+                    _rv = _resolve_multi(_pv, text, known)
+                    if _rv.get("clusters"):
+                        self._last_cluster_hits = _rv["clusters"]
+                    _pa = _rv.get("primary_agent") or ""
+                    if _pa in known:
+                        return (_pa, float(_pv.get("confidence") or 0.0))
+                    if _pv.get("primary") == "chat":
+                        return ("chat", min(float(_pv.get("confidence") or 0.5), 0.9))
             m = re.search(r'\{\s*"intent"\s*:\s*"([\w_]+)"\s*,\s*"confidence"\s*:\s*([0-9.]+)', content)
             if not m:
                 m = re.search(r'\{\s*"intent"\s*:\s*"([\w_]+)"', content)  # 兼容旧格式（无 confidence）
@@ -1393,6 +1764,11 @@ class IntentRouter:
                 intent, conf = m.group(1), float(m.group(2))
             if intent in known:
                 return (intent, conf)
+            # 簇模式：模型回的是族 id（如 "requirement"）⇒ 按输入形态确定性落到族内 Agent
+            if _cluster and _resolve_c and intent in _rc:
+                _member = _resolve_c(intent, text)
+                if _member and _member in known:
+                    return (_member, conf)
             if intent == "unsure":
                 # llm_first 的 unsure 一等出口：模型明确"都不匹配"⇒ 原样上交，
                 # 上层按低置信弱路径走（继承/澄清），绝不硬选一个意图。

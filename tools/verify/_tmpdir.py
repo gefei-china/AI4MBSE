@@ -31,7 +31,7 @@ SWEEP_PREFIXES = (
     "wb_p07_", "wb_p14_", "wb_mtctx_", "wb_gate_",
     "verify_", "docf_orphan_", "rf_drift_", "memtier_",
     "cancel_", "dedup_probe_", "eval_gate_", "verify_attr_d6_",
-    "verify_ck_mut_", "verify_idem_mut_",
+    "verify_ck_mut_", "verify_idem_mut_", "wb_eval_",
 )
 
 _TRACKED: set[str] = set()

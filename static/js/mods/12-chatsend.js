@@ -295,9 +295,16 @@ async function sendChat() {
   //   ★ 会话口径必须用**流式现场归属**的 `el.dataset.convId`，与上一行
   //     commitPartialStream 完全一致 —— 流式中切到别的会话再发消息时，
   //     `currentConvId` 已变，用它会把补充投进错误会话。
-  if(_streaming){
-    const _el = document.getElementById('stream-ai');
-    const _fc = (_el && _el.dataset && _el.dataset.convId) || currentConvId;
+  // ★★ 2026-11-06（多会话并发串扰）：`_streaming` 是**全局布尔**，别的会话在跑时它同样是 true。
+  //   旧实现只要 true 就把本会话的新消息投进「流式现场所属会话」的 followup 队列
+  //   ⇒ 同时开多个会话时，新会话发的消息变成别的会话的「已作为补充指令提交（待处理 N 条）」，
+  //     且下面无条件 `_streamAbort.abort()` 会掐断别的会话正在跑的流。
+  //   判据必须是**流归属 == 当前会话**，而不是「全局有没有流」。
+  const _el = document.getElementById('stream-ai');
+  const _liveCid = (_el && _el.dataset && _el.dataset.convId) ? String(_el.dataset.convId) : '';
+  const _sameConv = !!_liveCid && _liveCid === String(currentConvId);
+  if(_streaming && _sameConv){
+    const _fc = currentConvId;
     // ★ G-3：follow-up 分支**同样不得吞附件** —— 原实现只发 {message}，附件静默消失，
     //   且上屏渲染不带 attachments ⇒ 用户看到自己发了文件、AI 却"没收到"。
     //   改法：带附件时**不走 followup**（follow-up 接口只吃纯文本补充指令），
@@ -331,9 +338,9 @@ async function sendChat() {
     await commitPartialStream(_el);
     if(_streamAbort) _streamAbort.abort();
   }
-  // 走到这里只有两种情况：① 非流式（上一轮已结束，abort 是无害的空操作）
-  //   ② follow-up 投递失败走回退（上面已 abort）—— 保持原有的无条件 abort 语义。
-  if(_streamAbort) _streamAbort.abort();
+  // 走到这里：① 本会话无流 ② follow-up 投递失败走回退 ③ **别的会话在跑**（本会话按新消息正常发）。
+  // 情况③ 绝不能 abort —— 那会掐断别的会话正在跑的流（2026-11-06 多会话实测症状）。
+  if(_streamAbort && (!_streaming || _sameConv)) _streamAbort.abort();
   // 2026-10-16 Q2 重构：流式执行状态（_streaming / showStopBtn / _streamAbort）改由 pumpStream() 接管，
   // sendChat / pickIntent / 澄清续答三者共用同一段流式逻辑，避免"复用即新起一轮"。
   const atts = pendingAttachments.slice();  // V2.3 富输入：附件随消息发送
@@ -390,7 +397,53 @@ async function sendChat() {
 //     后端把 append 追加进触发澄清的那条 user 消息，不新起 user 轮次。
 //   ★ 2026-10-16 Q2：抽出此函数是为让"澄清改选 / 澄清续答"能在同一输出框内重跑，
 //     不再新起用户气泡 + 新 AI 气泡（米爸 Q2：确认后应在原输出流续接后续环节）。
+// ★ 2026-11-06：**进程身份判定** —— 回答"这轮中断到底是不是服务重启"。
+//   背景（conv 990485 14:54）：用户看到"连接中断或服务端异常"就以为是重启，
+//   而那份日志里进程从 14:30 起只有一次启动、零 shutdown，真因是路由降级。
+//   判据：开流前取 boot_id，中断时再取一次 —— 变了才是重启（进程内 UUID 每次启动唯一，
+//   不依赖时间对齐，也不受时钟漂移影响）；没变就**一定不是**重启。
+let _bootCache = { id: '', ts: 0 };
+async function _getBootId(){
+  const now = Date.now();
+  if(_bootCache.id && now - _bootCache.ts < 20000) return _bootCache.id;
+  try{
+    const r = await fetch('/api/system/boot', {headers: streamHeaders(), cache:'no-store'});
+    const d = await r.json();
+    _bootCache = { id: d.boot_id || '', ts: now, pid: d.pid, started: d.started_at };
+    return _bootCache.id;
+  }catch(e){ return ''; }
+}
+async function _annotateAbnormalEnd(aiBox, bootAtStart){
+  let cur = null;
+  try{
+    const r = await fetch('/api/system/boot', {headers: streamHeaders(), cache:'no-store'});
+    cur = await r.json();
+  }catch(e){ return; }
+  if(!cur || !cur.boot_id) return;
+  const _cs = document.getElementById('chat-status');
+  if(bootAtStart && cur.boot_id !== bootAtStart){
+    _bootCache = { id: cur.boot_id, ts: Date.now(), pid: cur.pid, started: cur.started_at };
+    const note = document.createElement('div');
+    note.className = 'boot-restart-note';
+    note.style.cssText = 'margin-top:8px;padding:6px 10px;border-left:3px solid #e8590c;'
+      + 'background:rgba(232,89,12,.10);color:#b23c00;font-size:13px;line-height:1.6;';
+    note.textContent = '⚠ 服务在本次生成期间重启过（新进程 PID ' + (cur.pid || '?')
+      + '，启动于 ' + (cur.started_at || '?') + '），本轮流式中断。'
+      + '已生成内容已保留在下方，请直接重发这条消息。';
+    const bodyEl = aiBox && aiBox.querySelector('.body');
+    if(bodyEl) bodyEl.appendChild(note);
+    if(_cs) _cs.textContent = '服务重启导致中断';
+  }else{
+    // 没重启 ⇒ 明确排除"服务重启"这条猜测，避免用户按错方向排查
+    if(_cs) _cs.textContent = '本轮未产出正文（服务未重启，原因见本条说明）';
+  }
+}
+
 async function pumpStream(aiBox, msg, atts, resumeOf){
+  // ★ 2026-11-06：开流前记进程身份 + 清终态标记（handleSSE 收到 done/error 会置位）
+  window._sseTerminal = 0;
+  let _bootAtStart = '';
+  try{ _bootAtStart = await _getBootId(); }catch(e){}
   const myAbort = new AbortController();
   _streamAbort = myAbort;
   _streaming = true; _stoppedManually = false;
@@ -457,6 +510,9 @@ async function pumpStream(aiBox, msg, atts, resumeOf){
     showStopBtn(false);
     _streaming = false;
     if(_streamAbort === myAbort) _streamAbort = null;
+    // ★ 2026-11-06：流读完了但**从未收到 done/error** ⇒ 服务端没正常收口。
+    //   这种情况旧实现什么都不说（用户以为"跑完了"），现在按进程身份给出准确原因。
+    if(!window._sseTerminal){ try{ await _annotateAbnormalEnd(aiBox, _bootAtStart); }catch(e){} }
   } catch(e) {
     // ★ 2026-10-16 Q2：本流正被「澄清改选 / 澄清续答」主动中止以复用此盒接管 ——
     //   不要改 _streaming/showStopBtn（会被错置成"已停"），也别进 _finalizeStoppedRender 替换盒子。
@@ -473,6 +529,8 @@ async function pumpStream(aiBox, msg, atts, resumeOf){
       finalizeStopped(aiBox);
       return;
     }
+    // ★ 2026-11-06：网络类失败（Failed to fetch / 流被掐断）同样要判定是否重启
+    if(!window._sseTerminal){ try{ await _annotateAbnormalEnd(aiBox, _bootAtStart); }catch(_e2){} }
     const bodyEl = aiBox.querySelector('.body');
     const _typ = bodyEl ? bodyEl.querySelector('.typing') : null; if(_typ) _typ.remove();
     if(bodyEl) bodyEl.classList.remove('streaming');
@@ -505,8 +563,40 @@ function stopStream(){
   if(!_streaming) return;
   _stoppedManually = true;
   uxTrack('interrupt');   // §11 埋点：主动中断率分子（15–25% 健康区间）
+  // ── 2026-11-10（可中断策略）：先**告诉服务端**再断连接 ──
+  // 旧行为只 abort 浏览器这侧的流：服务端生成器被 GeneratorExit 掐断，
+  //   而编排的子任务行留在 running/ready，只能等 30 分钟的孤儿回收把它们标成 interrupted
+  //   ⇒ 用户看到"停了"，其实后台还在烧钱跑，且"继续编排"要等半小时才出现。
+  // 现在先打一次中断：服务端把任务协作式置停 + checkpoint 标 interrupted（**保留续跑资格**），
+  //   断连接只是把 UI 收口。两者顺序不能反 —— 先断就连发请求的机会都没有了。
+  try {
+    const _cid = currentConvId;
+    if(_cid) {
+      // ★ 2026-11-10（浏览器实测修正）：中断请求是**异步**的，而 abort 紧接着就把
+      //   SSE 断了 ⇒ 服务端的 `interrupt` 事件永远送不到页面（"能力在、入口被自己掐断"）。
+      //   ⇒ 提示文案不依赖那个事件，改用**中断接口的回包**（服务端已落库的真相）：
+      //     · ok 且停了 N 个 ⇒ "已停止 N 个未完成子任务，已完成部分保留，可继续编排"
+      //     · no_active_run   ⇒ "当前没有在跑的编排批次"（点早了/已停完）
+      //   先给一条即时反馈，再等回包补一条准确的 —— 不能让用户等。
+      fetch(`/api/conversations/${_cid}/interrupt`, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({reason: '用户点击停止', kind: 'interrupt'})
+      })
+      .then(r => r.json())
+      .then(j => {
+        if(j && j.ok){
+          const _n = Number(j.cancelled_tasks || 0);
+          toast(`已停止：${_n} 个未完成子任务已收下，已完成部分保留，可点「继续编排」接着跑`);
+        } else if(j && j.reason === 'no_active_run'){
+          toast('已停止生成（该会话当前没有在跑的编排批次）');
+        }
+      })
+      .catch(()=>{});      // 中断请求失败不阻断本地收口（最坏退回旧行为）
+    }
+  } catch(e) { /* 同上：不阻断 */ }
   if(_streamAbort) _streamAbort.abort();
-  toast('已请求停止生成');
+  toast('已请求停止生成（已完成部分会保留，可点「继续编排」接着跑）');
 }
 function finalizeStopped(aiBox){
   if(!aiBox) aiBox = document.getElementById('stream-ai');

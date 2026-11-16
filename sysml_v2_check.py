@@ -112,7 +112,7 @@ _MSG_CAP = 200                # 单条诊断消息截断长度
 #      来自 **parser**：token 合法但语法位置不对 → **语法**。
 # 代价：`$` 这类真·非法字符会归到语法路（它的文案走 parser 通道）。可接受 ——
 #   门禁上词法与语法**同门槛**（都计入 `n_hard`），路别只影响给 LLM 的标签精度，不影响拦不拦。
-_LEX_DEFAULT = r"no viable alternative at character|token recognition error|mismatched character"
+_LEX_DEFAULT = r""
 _SYN_DEFAULT = r"no viable alternative|mismatched input|extraneous input|missing "
 
 # 诊断行格式（§2.4）：`[ERROR] stdin:<行>:<列>: <消息>`；文件名字段被工具硬编码为 stdin

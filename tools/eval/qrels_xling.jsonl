@@ -1,0 +1,12 @@
+{"query": "内核对语言中特征重定义的语义约束是什么", "expect_doc_ids": [798], "topic": "KerML 重定义", "note": "纯中文，零英文术语"}
+{"query": "内核对分类器与类型的区别是怎么规定的", "expect_doc_ids": [798], "topic": "KerML 分类器", "note": "纯中文"}
+{"query": "内核的语义库都包含哪些内容", "expect_doc_ids": [798], "topic": "KerML 语义库", "note": "纯中文"}
+{"query": "内核里命名空间的成员怎么组织", "expect_doc_ids": [798], "topic": "KerML 命名空间", "note": "纯中文"}
+{"query": "内核的特化与子集化有什么不同", "expect_doc_ids": [798], "topic": "KerML 特化/子集化", "note": "纯中文"}
+{"query": "零件定义是一种条目定义吗", "expect_doc_ids": [799], "topic": "SysML 部件定义", "note": "纯中文"}
+{"query": "视图使用怎么导入要展示的元素", "expect_doc_ids": [799], "topic": "SysML expose", "note": "纯中文"}
+{"query": "端口和连接器在交互视图里怎么用", "expect_doc_ids": [799], "topic": "SysML 端口/连接器", "note": "纯中文；基线未命中"}
+{"query": "状态机的迁移可以带守护条件吗", "expect_doc_ids": [799], "topic": "SysML 状态机", "note": "纯中文"}
+{"query": "需求可验证性有哪几种验证方法", "expect_doc_ids": [793], "topic": "INCOSE 可验证性", "note": "纯中文"}
+{"query": "需求应当只表达一个单一思想，这条规则怎么说的", "expect_doc_ids": [793], "topic": "INCOSE 单一思想", "note": "纯中文"}
+{"query": "需求应当无歧义，标准是怎么要求的", "expect_doc_ids": [846], "topic": "ISO29148 无歧义", "note": "纯中文；基线 rank13"}

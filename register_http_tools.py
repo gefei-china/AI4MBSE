@@ -170,13 +170,29 @@ def _ensure_columns(conn: sqlite3.Connection) -> None:
 
 
 def _upsert_tool(conn: sqlite3.Connection, t: dict) -> None:
+    # ★★ 2026-11-06：**人工覆写保护**。
+    #   原实现无条件 `side_effect=excluded.side_effect` ⇒ 本脚本跑一次就把
+    #   `agent/mcp_tool_sync.py` 里人工裁决过的档位（side_effect_source='manual'）冲掉，
+    #   于是"最小权限"配置会在下一次注册时静默失效（且没有任何提示）。
+    #   现在：manual 行只刷新 description/schema，side_effect 与 risk_level 保持原值。
+    #   ⚠️ 需要 tools 表已有 side_effect_source 列（database/migrations/columns.py 的
+    #     `_add("tools", "side_effect_source", ...)`）；老库没有该列时用 COALESCE 兜底成 'auto'。
+    _has_src = "side_effect_source" in {
+        r[1] for r in conn.execute("PRAGMA table_info(tools)").fetchall()}
+    if not _has_src:
+        conn.execute("ALTER TABLE tools ADD COLUMN side_effect_source TEXT DEFAULT 'auto'")
+        conn.execute("ALTER TABLE tools ADD COLUMN rule_version INTEGER DEFAULT 0")
     conn.execute(
-        "INSERT INTO tools (name, source, description, status, input_schema, version, side_effect, risk_level, kind, config) "
-        "VALUES (?,?,?,?,?,?,?,?,?,?) "
+        "INSERT INTO tools (name, source, description, status, input_schema, version, side_effect, risk_level, kind, config, side_effect_source) "
+        "VALUES (?,?,?,?,?,?,?,?,?,?,'auto') "
         "ON CONFLICT(name) DO UPDATE SET "
         "source=excluded.source, description=excluded.description, status='active', "
-        "input_schema=excluded.input_schema, version=excluded.version, side_effect=excluded.side_effect, "
-        "risk_level=excluded.risk_level, kind=excluded.kind, config=excluded.config",
+        "input_schema=excluded.input_schema, version=excluded.version, "
+        "side_effect=CASE WHEN COALESCE(tools.side_effect_source,'auto')='manual' "
+        "  THEN tools.side_effect ELSE excluded.side_effect END, "
+        "risk_level=CASE WHEN COALESCE(tools.side_effect_source,'auto')='manual' "
+        "  THEN tools.risk_level ELSE excluded.risk_level END, "
+        "kind=excluded.kind, config=excluded.config",
         (t["name"], t["source"], t["description"], "active",
          json.dumps(t["input_schema"], ensure_ascii=False), t["version"],
          t["side_effect"], t["risk_level"], "http", json.dumps(t["config"], ensure_ascii=False)),

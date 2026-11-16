@@ -235,9 +235,12 @@ def run_mutations():
     #   （证明判据比对的是"是否一致"，而不是"数字是否够大/够小"）
     #   注意：注释里要**去掉符号名**（否则会走形态 A 直接放行，测不到数字分支）
     try:
+        # 锚点用**正则**匹配 `BASELINE_DIRECT_SQL = <任意数字>`，不写死具体数字：
+        # 基线会随存量特性重测而变（323→354 已发生两次），写死字面量会让
+        # "正常重测基线"把变异变成空操作 ⇒ M3 假红 ⇒ 人会误判成产品坏了。
         with io.open(layer, "w", encoding="utf-8", newline="") as f:
-            f.write(orig_layer.replace("BASELINE_DIRECT_SQL = 323",
-                                       "BASELINE_DIRECT_SQL = 777"))
+            f.write(re.sub(r"BASELINE_DIRECT_SQL\s*=\s*\d+",
+                           "BASELINE_DIRECT_SQL = 777", orig_layer, count=1))
         _CI_OVERRIDE = re.sub(
             r"BASELINE_DIRECT_SQL", "基线 777", orig_ci)
         _CI_OVERRIDE = _CI_OVERRIDE.replace(

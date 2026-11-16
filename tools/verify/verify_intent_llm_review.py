@@ -411,9 +411,35 @@ def c5_check(conn):
     diffs = []
     for t, b, a in zip(PROBES, before, after):
         if b != a:
-            diffs.append("%s：前%s 后%s" % (t[:14], b, a))
-    check("C5 ★开关关闭时 %d 条探针与改造前**逐条一致**" % len(PROBES),
-          not diffs, "%d 条不同：%s" % (len(diffs), diffs[:2]))
+            diffs.append((t, b, a))
+
+    # ★ 2026-11-09：把「**有意**的行为变更」显式记账，而不是放宽判据。
+    #   本轮修了确定性缺口：短句(≤16字)含**明确疑问式**时仍走说明类前置
+    #   （此前一刀切跳过，导致「什么是X」被 DB 关键词抢走）。
+    #   ⇒ 「用一句话介绍热管理系统」(11 字) 的 route 由 explain_late 变 explain、
+    #      confidence 0.75→0.80，**intent 不变（都是 knowledge_qa）**。
+    #   判据仍然严格：只允许这张表里列出的差异；任何**新的**差异依旧判红。
+    _INTENDED = {
+        "用一句话介绍热管理系统": (
+            ("knowledge_qa", "explain_late", 0.75),
+            ("knowledge_qa", "explain", 0.80),
+            "2026-11-09 短句疑问式豁免：route 提前、置信升高，intent 不变",
+        ),
+    }
+    unintended, intent_changed = [], []
+    for t, b, a in diffs:
+        exp = _INTENDED.get(t)
+        if not exp or tuple(b) != exp[0] or tuple(a) != exp[1]:
+            unintended.append("%s：前%s 后%s" % (t[:14], b, a))
+            continue
+        if b[0] != a[0]:
+            intent_changed.append("%s：%s→%s" % (t[:14], b[0], a[0]))
+
+    check("C5 ★开关关闭时 %d 条探针与改造前逐条一致（有意变更已记账）"
+          % len(PROBES), not unintended,
+          "%d 条未记账差异：%s" % (len(unintended), unintended[:2]))
+    check("C5a 有意变更不得改变 intent（只允许 route/conf 提前）",
+          not intent_changed, intent_changed[:2])
     # 防空转：探针必须真的分出了多种结果（否则"全等"是因为全落同一桶）
     n_distinct = len(set(before))
     check("C5b 探针有区分度（改造前 ≥3 种不同结果，否则 C5 是恒真）",

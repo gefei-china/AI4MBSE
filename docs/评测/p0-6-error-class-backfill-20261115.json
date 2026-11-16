@@ -1,0 +1,936 @@
+{
+  "schema": "p0/error-class-backfill@1",
+  "applied_at_utc": "2026-11-15 16:28:41",
+  "method": "offline_replay",
+  "source": "agent_tasks.error（当时真实写入的文本） + status",
+  "single_source": "services/failure_class.classify_terminal",
+  "backup": "backups/mbse.db.bak-before-p0-6-error-class-20261115_162839.db",
+  "scope": "全库单时点 2026-11-15；仅 status IN ('failed','cancelled') 且 error_class 为空的行",
+  "counts": {
+    "terminal_tasks": 129,
+    "empty_before": 93,
+    "empty_after": 0,
+    "nonempty_rate_before": 0.2791,
+    "nonempty_rate_after": 1.0
+  },
+  "before": {
+    "dist": {
+      "(空)": 93,
+      "internal": 7,
+      "interrupted": 29
+    },
+    "snapshot": {
+      "objects": 182,
+      "agent_tasks": 498,
+      "eval_reports": 26,
+      "skills": 36,
+      "agents": 34,
+      "config_history": 0
+    }
+  },
+  "after": {
+    "dist": {
+      "internal": 4,
+      "interrupted": 117,
+      "timeout": 8
+    },
+    "snapshot": {
+      "objects": 182,
+      "agent_tasks": 498,
+      "eval_reports": 26,
+      "skills": 36,
+      "agents": 34,
+      "config_history": 0
+    }
+  },
+  "derived_dist": {
+    "interrupted": 85,
+    "timeout": 8
+  },
+  "checks": [
+    "A1 终态数 129",
+    "A2 空归因 93",
+    "A3 error 为空 0 条（否则中止、绝不编造）",
+    "A4 cancelled 全部 interrupted",
+    "A5 failed 派生与 classify() 独立重放一致",
+    "A6 派生值全部落在 ERROR_CLASSES 8 类内",
+    "A7 写库前后其它表行数逐项一致",
+    "A8 写后空归因 = 0"
+  ],
+  "rows": [
+    {
+      "id": 241,
+      "status": "failed",
+      "error": "编排中断：超过 30 分钟无任何进展，判定为孤儿运行（进程重启或执行线程丢失），已保留上下文可重跑",
+      "old": "",
+      "derived": "interrupted",
+      "basis": "classify('编排中断：超过 30 分钟无任何进展，判定为孤儿运行（进程重启或执行线程丢失），已保留上下文可重跑', ok=False) ⇒ interrupted"
+    },
+    {
+      "id": 242,
+      "status": "failed",
+      "error": "编排中断：超过 30 分钟无任何进展，判定为孤儿运行（进程重启或执行线程丢失），已保留上下文可重跑",
+      "old": "",
+      "derived": "interrupted",
+      "basis": "classify('编排中断：超过 30 分钟无任何进展，判定为孤儿运行（进程重启或执行线程丢失），已保留上下文可重跑', ok=False) ⇒ interrupted"
+    },
+    {
+      "id": 250,
+      "status": "failed",
+      "error": "timeout",
+      "old": "",
+      "derived": "timeout",
+      "basis": "classify('timeout', ok=False) ⇒ timeout"
+    },
+    {
+      "id": 251,
+      "status": "failed",
+      "error": "编排中断：超过 30 分钟无任何进展，判定为孤儿运行（进程重启或执行线程丢失），已保留上下文可重跑",
+      "old": "",
+      "derived": "interrupted",
+      "basis": "classify('编排中断：超过 30 分钟无任何进展，判定为孤儿运行（进程重启或执行线程丢失），已保留上下文可重跑', ok=False) ⇒ interrupted"
+    },
+    {
+      "id": 252,
+      "status": "failed",
+      "error": "编排中断：超过 30 分钟无任何进展，判定为孤儿运行（进程重启或执行线程丢失），已保留上下文可重跑",
+      "old": "",
+      "derived": "interrupted",
+      "basis": "classify('编排中断：超过 30 分钟无任何进展，判定为孤儿运行（进程重启或执行线程丢失），已保留上下文可重跑', ok=False) ⇒ interrupted"
+    },
+    {
+      "id": 290,
+      "status": "failed",
+      "error": "timeout",
+      "old": "",
+      "derived": "timeout",
+      "basis": "classify('timeout', ok=False) ⇒ timeout"
+    },
+    {
+      "id": 291,
+      "status": "failed",
+      "error": "编排中断：超过 30 分钟无任何进展，判定为孤儿运行（进程重启或执行线程丢失），已保留上下文可重跑",
+      "old": "",
+      "derived": "interrupted",
+      "basis": "classify('编排中断：超过 30 分钟无任何进展，判定为孤儿运行（进程重启或执行线程丢失），已保留上下文可重跑', ok=False) ⇒ interrupted"
+    },
+    {
+      "id": 294,
+      "status": "failed",
+      "error": "timeout",
+      "old": "",
+      "derived": "timeout",
+      "basis": "classify('timeout', ok=False) ⇒ timeout"
+    },
+    {
+      "id": 295,
+      "status": "failed",
+      "error": "编排中断：超过 30 分钟无任何进展，判定为孤儿运行（进程重启或执行线程丢失），已保留上下文可重跑",
+      "old": "",
+      "derived": "interrupted",
+      "basis": "classify('编排中断：超过 30 分钟无任何进展，判定为孤儿运行（进程重启或执行线程丢失），已保留上下文可重跑', ok=False) ⇒ interrupted"
+    },
+    {
+      "id": 296,
+      "status": "failed",
+      "error": "编排中断：超过 30 分钟无任何进展，判定为孤儿运行（进程重启或执行线程丢失），已保留上下文可重跑",
+      "old": "",
+      "derived": "interrupted",
+      "basis": "classify('编排中断：超过 30 分钟无任何进展，判定为孤儿运行（进程重启或执行线程丢失），已保留上下文可重跑', ok=False) ⇒ interrupted"
+    },
+    {
+      "id": 331,
+      "status": "failed",
+      "error": "timeout",
+      "old": "",
+      "derived": "timeout",
+      "basis": "classify('timeout', ok=False) ⇒ timeout"
+    },
+    {
+      "id": 334,
+      "status": "failed",
+      "error": "编排中断：超过 30 分钟无任何进展，判定为孤儿运行（进程重启或执行线程丢失），已保留上下文可重跑",
+      "old": "",
+      "derived": "interrupted",
+      "basis": "classify('编排中断：超过 30 分钟无任何进展，判定为孤儿运行（进程重启或执行线程丢失），已保留上下文可重跑', ok=False) ⇒ interrupted"
+    },
+    {
+      "id": 335,
+      "status": "failed",
+      "error": "编排中断：超过 30 分钟无任何进展，判定为孤儿运行（进程重启或执行线程丢失），已保留上下文可重跑",
+      "old": "",
+      "derived": "interrupted",
+      "basis": "classify('编排中断：超过 30 分钟无任何进展，判定为孤儿运行（进程重启或执行线程丢失），已保留上下文可重跑', ok=False) ⇒ interrupted"
+    },
+    {
+      "id": 336,
+      "status": "failed",
+      "error": "编排中断：超过 30 分钟无任何进展，判定为孤儿运行（进程重启或执行线程丢失），已保留上下文可重跑",
+      "old": "",
+      "derived": "interrupted",
+      "basis": "classify('编排中断：超过 30 分钟无任何进展，判定为孤儿运行（进程重启或执行线程丢失），已保留上下文可重跑', ok=False) ⇒ interrupted"
+    },
+    {
+      "id": 337,
+      "status": "failed",
+      "error": "编排中断：超过 30 分钟无任何进展，判定为孤儿运行（进程重启或执行线程丢失），已保留上下文可重跑",
+      "old": "",
+      "derived": "interrupted",
+      "basis": "classify('编排中断：超过 30 分钟无任何进展，判定为孤儿运行（进程重启或执行线程丢失），已保留上下文可重跑', ok=False) ⇒ interrupted"
+    },
+    {
+      "id": 340,
+      "status": "failed",
+      "error": "编排中断：超过 30 分钟无任何进展，判定为孤儿运行（进程重启或执行线程丢失），已保留上下文可重跑",
+      "old": "",
+      "derived": "interrupted",
+      "basis": "classify('编排中断：超过 30 分钟无任何进展，判定为孤儿运行（进程重启或执行线程丢失），已保留上下文可重跑', ok=False) ⇒ interrupted"
+    },
+    {
+      "id": 341,
+      "status": "failed",
+      "error": "编排中断：超过 30 分钟无任何进展，判定为孤儿运行（进程重启或执行线程丢失），已保留上下文可重跑",
+      "old": "",
+      "derived": "interrupted",
+      "basis": "classify('编排中断：超过 30 分钟无任何进展，判定为孤儿运行（进程重启或执行线程丢失），已保留上下文可重跑', ok=False) ⇒ interrupted"
+    },
+    {
+      "id": 342,
+      "status": "failed",
+      "error": "编排中断：超过 30 分钟无任何进展，判定为孤儿运行（进程重启或执行线程丢失），已保留上下文可重跑",
+      "old": "",
+      "derived": "interrupted",
+      "basis": "classify('编排中断：超过 30 分钟无任何进展，判定为孤儿运行（进程重启或执行线程丢失），已保留上下文可重跑', ok=False) ⇒ interrupted"
+    },
+    {
+      "id": 344,
+      "status": "failed",
+      "error": "编排中断：超过 30 分钟无任何进展，判定为孤儿运行（进程重启或执行线程丢失），已保留上下文可重跑",
+      "old": "",
+      "derived": "interrupted",
+      "basis": "classify('编排中断：超过 30 分钟无任何进展，判定为孤儿运行（进程重启或执行线程丢失），已保留上下文可重跑', ok=False) ⇒ interrupted"
+    },
+    {
+      "id": 345,
+      "status": "failed",
+      "error": "编排中断：超过 30 分钟无任何进展，判定为孤儿运行（进程重启或执行线程丢失），已保留上下文可重跑",
+      "old": "",
+      "derived": "interrupted",
+      "basis": "classify('编排中断：超过 30 分钟无任何进展，判定为孤儿运行（进程重启或执行线程丢失），已保留上下文可重跑', ok=False) ⇒ interrupted"
+    },
+    {
+      "id": 346,
+      "status": "failed",
+      "error": "编排中断：超过 30 分钟无任何进展，判定为孤儿运行（进程重启或执行线程丢失），已保留上下文可重跑",
+      "old": "",
+      "derived": "interrupted",
+      "basis": "classify('编排中断：超过 30 分钟无任何进展，判定为孤儿运行（进程重启或执行线程丢失），已保留上下文可重跑', ok=False) ⇒ interrupted"
+    },
+    {
+      "id": 347,
+      "status": "failed",
+      "error": "编排中断：超过 30 分钟无任何进展，判定为孤儿运行（进程重启或执行线程丢失），已保留上下文可重跑",
+      "old": "",
+      "derived": "interrupted",
+      "basis": "classify('编排中断：超过 30 分钟无任何进展，判定为孤儿运行（进程重启或执行线程丢失），已保留上下文可重跑', ok=False) ⇒ interrupted"
+    },
+    {
+      "id": 349,
+      "status": "failed",
+      "error": "编排中断：超过 30 分钟无任何进展，判定为孤儿运行（进程重启或执行线程丢失），已保留上下文可重跑",
+      "old": "",
+      "derived": "interrupted",
+      "basis": "classify('编排中断：超过 30 分钟无任何进展，判定为孤儿运行（进程重启或执行线程丢失），已保留上下文可重跑', ok=False) ⇒ interrupted"
+    },
+    {
+      "id": 350,
+      "status": "failed",
+      "error": "编排中断：超过 30 分钟无任何进展，判定为孤儿运行（进程重启或执行线程丢失），已保留上下文可重跑",
+      "old": "",
+      "derived": "interrupted",
+      "basis": "classify('编排中断：超过 30 分钟无任何进展，判定为孤儿运行（进程重启或执行线程丢失），已保留上下文可重跑', ok=False) ⇒ interrupted"
+    },
+    {
+      "id": 351,
+      "status": "failed",
+      "error": "编排中断：超过 30 分钟无任何进展，判定为孤儿运行（进程重启或执行线程丢失），已保留上下文可重跑",
+      "old": "",
+      "derived": "interrupted",
+      "basis": "classify('编排中断：超过 30 分钟无任何进展，判定为孤儿运行（进程重启或执行线程丢失），已保留上下文可重跑', ok=False) ⇒ interrupted"
+    },
+    {
+      "id": 352,
+      "status": "failed",
+      "error": "编排中断：超过 30 分钟无任何进展，判定为孤儿运行（进程重启或执行线程丢失），已保留上下文可重跑",
+      "old": "",
+      "derived": "interrupted",
+      "basis": "classify('编排中断：超过 30 分钟无任何进展，判定为孤儿运行（进程重启或执行线程丢失），已保留上下文可重跑', ok=False) ⇒ interrupted"
+    },
+    {
+      "id": 356,
+      "status": "failed",
+      "error": "timeout",
+      "old": "",
+      "derived": "timeout",
+      "basis": "classify('timeout', ok=False) ⇒ timeout"
+    },
+    {
+      "id": 361,
+      "status": "failed",
+      "error": "编排中断：超过 30 分钟无任何进展，判定为孤儿运行（进程重启或执行线程丢失），已保留上下文可重跑",
+      "old": "",
+      "derived": "interrupted",
+      "basis": "classify('编排中断：超过 30 分钟无任何进展，判定为孤儿运行（进程重启或执行线程丢失），已保留上下文可重跑', ok=False) ⇒ interrupted"
+    },
+    {
+      "id": 362,
+      "status": "failed",
+      "error": "编排中断：超过 30 分钟无任何进展，判定为孤儿运行（进程重启或执行线程丢失），已保留上下文可重跑",
+      "old": "",
+      "derived": "interrupted",
+      "basis": "classify('编排中断：超过 30 分钟无任何进展，判定为孤儿运行（进程重启或执行线程丢失），已保留上下文可重跑', ok=False) ⇒ interrupted"
+    },
+    {
+      "id": 364,
+      "status": "failed",
+      "error": "编排中断：超过 30 分钟无任何进展，判定为孤儿运行（进程重启或执行线程丢失），已保留上下文可重跑",
+      "old": "",
+      "derived": "interrupted",
+      "basis": "classify('编排中断：超过 30 分钟无任何进展，判定为孤儿运行（进程重启或执行线程丢失），已保留上下文可重跑', ok=False) ⇒ interrupted"
+    },
+    {
+      "id": 365,
+      "status": "failed",
+      "error": "编排中断：超过 30 分钟无任何进展，判定为孤儿运行（进程重启或执行线程丢失），已保留上下文可重跑",
+      "old": "",
+      "derived": "interrupted",
+      "basis": "classify('编排中断：超过 30 分钟无任何进展，判定为孤儿运行（进程重启或执行线程丢失），已保留上下文可重跑', ok=False) ⇒ interrupted"
+    },
+    {
+      "id": 373,
+      "status": "failed",
+      "error": "编排中断：超过 30 分钟无任何进展，判定为孤儿运行（进程重启或执行线程丢失），已保留上下文可重跑",
+      "old": "",
+      "derived": "interrupted",
+      "basis": "classify('编排中断：超过 30 分钟无任何进展，判定为孤儿运行（进程重启或执行线程丢失），已保留上下文可重跑', ok=False) ⇒ interrupted"
+    },
+    {
+      "id": 394,
+      "status": "failed",
+      "error": "编排中断：超过 30 分钟无任何进展，判定为孤儿运行（进程重启或执行线程丢失），已保留上下文可重跑",
+      "old": "",
+      "derived": "interrupted",
+      "basis": "classify('编排中断：超过 30 分钟无任何进展，判定为孤儿运行（进程重启或执行线程丢失），已保留上下文可重跑', ok=False) ⇒ interrupted"
+    },
+    {
+      "id": 395,
+      "status": "failed",
+      "error": "编排中断：超过 30 分钟无任何进展，判定为孤儿运行（进程重启或执行线程丢失），已保留上下文可重跑",
+      "old": "",
+      "derived": "interrupted",
+      "basis": "classify('编排中断：超过 30 分钟无任何进展，判定为孤儿运行（进程重启或执行线程丢失），已保留上下文可重跑', ok=False) ⇒ interrupted"
+    },
+    {
+      "id": 396,
+      "status": "failed",
+      "error": "编排中断：超过 30 分钟无任何进展，判定为孤儿运行（进程重启或执行线程丢失），已保留上下文可重跑",
+      "old": "",
+      "derived": "interrupted",
+      "basis": "classify('编排中断：超过 30 分钟无任何进展，判定为孤儿运行（进程重启或执行线程丢失），已保留上下文可重跑', ok=False) ⇒ interrupted"
+    },
+    {
+      "id": 397,
+      "status": "failed",
+      "error": "编排中断：超过 30 分钟无任何进展，判定为孤儿运行（进程重启或执行线程丢失），已保留上下文可重跑",
+      "old": "",
+      "derived": "interrupted",
+      "basis": "classify('编排中断：超过 30 分钟无任何进展，判定为孤儿运行（进程重启或执行线程丢失），已保留上下文可重跑', ok=False) ⇒ interrupted"
+    },
+    {
+      "id": 398,
+      "status": "failed",
+      "error": "编排中断：超过 30 分钟无任何进展，判定为孤儿运行（进程重启或执行线程丢失），已保留上下文可重跑",
+      "old": "",
+      "derived": "interrupted",
+      "basis": "classify('编排中断：超过 30 分钟无任何进展，判定为孤儿运行（进程重启或执行线程丢失），已保留上下文可重跑', ok=False) ⇒ interrupted"
+    },
+    {
+      "id": 400,
+      "status": "failed",
+      "error": "timeout",
+      "old": "",
+      "derived": "timeout",
+      "basis": "classify('timeout', ok=False) ⇒ timeout"
+    },
+    {
+      "id": 401,
+      "status": "failed",
+      "error": "编排中断：超过 30 分钟无任何进展，判定为孤儿运行（进程重启或执行线程丢失），已保留上下文可重跑",
+      "old": "",
+      "derived": "interrupted",
+      "basis": "classify('编排中断：超过 30 分钟无任何进展，判定为孤儿运行（进程重启或执行线程丢失），已保留上下文可重跑', ok=False) ⇒ interrupted"
+    },
+    {
+      "id": 402,
+      "status": "failed",
+      "error": "编排中断：超过 30 分钟无任何进展，判定为孤儿运行（进程重启或执行线程丢失），已保留上下文可重跑",
+      "old": "",
+      "derived": "interrupted",
+      "basis": "classify('编排中断：超过 30 分钟无任何进展，判定为孤儿运行（进程重启或执行线程丢失），已保留上下文可重跑', ok=False) ⇒ interrupted"
+    },
+    {
+      "id": 403,
+      "status": "failed",
+      "error": "编排中断：超过 30 分钟无任何进展，判定为孤儿运行（进程重启或执行线程丢失），已保留上下文可重跑",
+      "old": "",
+      "derived": "interrupted",
+      "basis": "classify('编排中断：超过 30 分钟无任何进展，判定为孤儿运行（进程重启或执行线程丢失），已保留上下文可重跑', ok=False) ⇒ interrupted"
+    },
+    {
+      "id": 416,
+      "status": "failed",
+      "error": "编排中断：超过 30 分钟无任何进展，判定为孤儿运行（进程重启或执行线程丢失），已保留上下文可重跑",
+      "old": "",
+      "derived": "interrupted",
+      "basis": "classify('编排中断：超过 30 分钟无任何进展，判定为孤儿运行（进程重启或执行线程丢失），已保留上下文可重跑', ok=False) ⇒ interrupted"
+    },
+    {
+      "id": 417,
+      "status": "failed",
+      "error": "timeout",
+      "old": "",
+      "derived": "timeout",
+      "basis": "classify('timeout', ok=False) ⇒ timeout"
+    },
+    {
+      "id": 418,
+      "status": "failed",
+      "error": "编排中断：超过 30 分钟无任何进展，判定为孤儿运行（进程重启或执行线程丢失），已保留上下文可重跑",
+      "old": "",
+      "derived": "interrupted",
+      "basis": "classify('编排中断：超过 30 分钟无任何进展，判定为孤儿运行（进程重启或执行线程丢失），已保留上下文可重跑', ok=False) ⇒ interrupted"
+    },
+    {
+      "id": 419,
+      "status": "failed",
+      "error": "编排中断：超过 30 分钟无任何进展，判定为孤儿运行（进程重启或执行线程丢失），已保留上下文可重跑",
+      "old": "",
+      "derived": "interrupted",
+      "basis": "classify('编排中断：超过 30 分钟无任何进展，判定为孤儿运行（进程重启或执行线程丢失），已保留上下文可重跑', ok=False) ⇒ interrupted"
+    },
+    {
+      "id": 420,
+      "status": "failed",
+      "error": "编排中断：超过 30 分钟无任何进展，判定为孤儿运行（进程重启或执行线程丢失），已保留上下文可重跑",
+      "old": "",
+      "derived": "interrupted",
+      "basis": "classify('编排中断：超过 30 分钟无任何进展，判定为孤儿运行（进程重启或执行线程丢失），已保留上下文可重跑', ok=False) ⇒ interrupted"
+    },
+    {
+      "id": 421,
+      "status": "failed",
+      "error": "编排中断：超过 30 分钟无任何进展，判定为孤儿运行（进程重启或执行线程丢失），已保留上下文可重跑",
+      "old": "",
+      "derived": "interrupted",
+      "basis": "classify('编排中断：超过 30 分钟无任何进展，判定为孤儿运行（进程重启或执行线程丢失），已保留上下文可重跑', ok=False) ⇒ interrupted"
+    },
+    {
+      "id": 422,
+      "status": "failed",
+      "error": "编排中断：超过 30 分钟无任何进展，判定为孤儿运行（进程重启或执行线程丢失），已保留上下文可重跑",
+      "old": "",
+      "derived": "interrupted",
+      "basis": "classify('编排中断：超过 30 分钟无任何进展，判定为孤儿运行（进程重启或执行线程丢失），已保留上下文可重跑', ok=False) ⇒ interrupted"
+    },
+    {
+      "id": 472,
+      "status": "failed",
+      "error": "timeout（240s 无产出）",
+      "old": "",
+      "derived": "timeout",
+      "basis": "classify('timeout（240s 无产出）', ok=False) ⇒ timeout"
+    },
+    {
+      "id": 473,
+      "status": "failed",
+      "error": "编排中断：超过 30 分钟无任何进展，判定为孤儿运行（进程重启或执行线程丢失），已保留上下文可重跑",
+      "old": "",
+      "derived": "interrupted",
+      "basis": "classify('编排中断：超过 30 分钟无任何进展，判定为孤儿运行（进程重启或执行线程丢失），已保留上下文可重跑', ok=False) ⇒ interrupted"
+    },
+    {
+      "id": 474,
+      "status": "failed",
+      "error": "编排中断：超过 30 分钟无任何进展，判定为孤儿运行（进程重启或执行线程丢失），已保留上下文可重跑",
+      "old": "",
+      "derived": "interrupted",
+      "basis": "classify('编排中断：超过 30 分钟无任何进展，判定为孤儿运行（进程重启或执行线程丢失），已保留上下文可重跑', ok=False) ⇒ interrupted"
+    },
+    {
+      "id": 475,
+      "status": "failed",
+      "error": "编排中断：超过 30 分钟无任何进展，判定为孤儿运行（进程重启或执行线程丢失），已保留上下文可重跑",
+      "old": "",
+      "derived": "interrupted",
+      "basis": "classify('编排中断：超过 30 分钟无任何进展，判定为孤儿运行（进程重启或执行线程丢失），已保留上下文可重跑', ok=False) ⇒ interrupted"
+    },
+    {
+      "id": 482,
+      "status": "failed",
+      "error": "编排中断：超过 30 分钟无任何进展，判定为孤儿运行（进程重启或执行线程丢失），已保留上下文可重跑",
+      "old": "",
+      "derived": "interrupted",
+      "basis": "classify('编排中断：超过 30 分钟无任何进展，判定为孤儿运行（进程重启或执行线程丢失），已保留上下文可重跑', ok=False) ⇒ interrupted"
+    },
+    {
+      "id": 483,
+      "status": "failed",
+      "error": "编排中断：超过 30 分钟无任何进展，判定为孤儿运行（进程重启或执行线程丢失），已保留上下文可重跑",
+      "old": "",
+      "derived": "interrupted",
+      "basis": "classify('编排中断：超过 30 分钟无任何进展，判定为孤儿运行（进程重启或执行线程丢失），已保留上下文可重跑', ok=False) ⇒ interrupted"
+    },
+    {
+      "id": 503,
+      "status": "failed",
+      "error": "编排中断：超过 30 分钟无任何进展，判定为孤儿运行（进程重启或执行线程丢失），已保留上下文可重跑",
+      "old": "",
+      "derived": "interrupted",
+      "basis": "classify('编排中断：超过 30 分钟无任何进展，判定为孤儿运行（进程重启或执行线程丢失），已保留上下文可重跑', ok=False) ⇒ interrupted"
+    },
+    {
+      "id": 504,
+      "status": "failed",
+      "error": "编排中断：超过 30 分钟无任何进展，判定为孤儿运行（进程重启或执行线程丢失），已保留上下文可重跑",
+      "old": "",
+      "derived": "interrupted",
+      "basis": "classify('编排中断：超过 30 分钟无任何进展，判定为孤儿运行（进程重启或执行线程丢失），已保留上下文可重跑', ok=False) ⇒ interrupted"
+    },
+    {
+      "id": 505,
+      "status": "failed",
+      "error": "编排中断：超过 30 分钟无任何进展，判定为孤儿运行（进程重启或执行线程丢失），已保留上下文可重跑",
+      "old": "",
+      "derived": "interrupted",
+      "basis": "classify('编排中断：超过 30 分钟无任何进展，判定为孤儿运行（进程重启或执行线程丢失），已保留上下文可重跑', ok=False) ⇒ interrupted"
+    },
+    {
+      "id": 511,
+      "status": "failed",
+      "error": "编排中断：超过 30 分钟无任何进展，判定为孤儿运行（进程重启或执行线程丢失），已保留上下文可重跑",
+      "old": "",
+      "derived": "interrupted",
+      "basis": "classify('编排中断：超过 30 分钟无任何进展，判定为孤儿运行（进程重启或执行线程丢失），已保留上下文可重跑', ok=False) ⇒ interrupted"
+    },
+    {
+      "id": 538,
+      "status": "failed",
+      "error": "编排中断：超过 30 分钟无任何进展，判定为孤儿运行（进程重启或执行线程丢失），已保留上下文可重跑",
+      "old": "",
+      "derived": "interrupted",
+      "basis": "classify('编排中断：超过 30 分钟无任何进展，判定为孤儿运行（进程重启或执行线程丢失），已保留上下文可重跑', ok=False) ⇒ interrupted"
+    },
+    {
+      "id": 540,
+      "status": "failed",
+      "error": "编排中断：超过 30 分钟无任何进展，判定为孤儿运行（进程重启或执行线程丢失），已保留上下文可重跑",
+      "old": "",
+      "derived": "interrupted",
+      "basis": "classify('编排中断：超过 30 分钟无任何进展，判定为孤儿运行（进程重启或执行线程丢失），已保留上下文可重跑', ok=False) ⇒ interrupted"
+    },
+    {
+      "id": 541,
+      "status": "failed",
+      "error": "编排中断：超过 30 分钟无任何进展，判定为孤儿运行（进程重启或执行线程丢失），已保留上下文可重跑",
+      "old": "",
+      "derived": "interrupted",
+      "basis": "classify('编排中断：超过 30 分钟无任何进展，判定为孤儿运行（进程重启或执行线程丢失），已保留上下文可重跑', ok=False) ⇒ interrupted"
+    },
+    {
+      "id": 542,
+      "status": "failed",
+      "error": "编排中断：超过 30 分钟无任何进展，判定为孤儿运行（进程重启或执行线程丢失），已保留上下文可重跑",
+      "old": "",
+      "derived": "interrupted",
+      "basis": "classify('编排中断：超过 30 分钟无任何进展，判定为孤儿运行（进程重启或执行线程丢失），已保留上下文可重跑', ok=False) ⇒ interrupted"
+    },
+    {
+      "id": 544,
+      "status": "failed",
+      "error": "编排中断：超过 30 分钟无任何进展，判定为孤儿运行（进程重启或执行线程丢失），已保留上下文可重跑",
+      "old": "",
+      "derived": "interrupted",
+      "basis": "classify('编排中断：超过 30 分钟无任何进展，判定为孤儿运行（进程重启或执行线程丢失），已保留上下文可重跑', ok=False) ⇒ interrupted"
+    },
+    {
+      "id": 597,
+      "status": "cancelled",
+      "error": "用户中止：实测发现工具死循环",
+      "old": "",
+      "derived": "interrupted",
+      "basis": "status=cancelled ⇒ interrupted（只由状态决定，不读文本）"
+    },
+    {
+      "id": 598,
+      "status": "cancelled",
+      "error": "用户中止：实测发现工具死循环",
+      "old": "",
+      "derived": "interrupted",
+      "basis": "status=cancelled ⇒ interrupted（只由状态决定，不读文本）"
+    },
+    {
+      "id": 636,
+      "status": "cancelled",
+      "error": "目标已达成提前收敛（主动放弃非必需任务）",
+      "old": "",
+      "derived": "interrupted",
+      "basis": "status=cancelled ⇒ interrupted（只由状态决定，不读文本）"
+    },
+    {
+      "id": 704,
+      "status": "cancelled",
+      "error": "目标已达成提前收敛（主动放弃非必需任务）",
+      "old": "",
+      "derived": "interrupted",
+      "basis": "status=cancelled ⇒ interrupted（只由状态决定，不读文本）"
+    },
+    {
+      "id": 1079,
+      "status": "cancelled",
+      "error": "目标已达成提前收敛（主动放弃非必需任务）",
+      "old": "",
+      "derived": "interrupted",
+      "basis": "status=cancelled ⇒ interrupted（只由状态决定，不读文本）"
+    },
+    {
+      "id": 1911,
+      "status": "cancelled",
+      "error": "用户中断：验证：方向不对，停下来",
+      "old": "",
+      "derived": "interrupted",
+      "basis": "status=cancelled ⇒ interrupted（只由状态决定，不读文本）"
+    },
+    {
+      "id": 1912,
+      "status": "cancelled",
+      "error": "用户中断：验证：方向不对，停下来",
+      "old": "",
+      "derived": "interrupted",
+      "basis": "status=cancelled ⇒ interrupted（只由状态决定，不读文本）"
+    },
+    {
+      "id": 1913,
+      "status": "cancelled",
+      "error": "用户中断：验证：方向不对，停下来",
+      "old": "",
+      "derived": "interrupted",
+      "basis": "status=cancelled ⇒ interrupted（只由状态决定，不读文本）"
+    },
+    {
+      "id": 1914,
+      "status": "cancelled",
+      "error": "用户中断：验证：方向不对，停下来",
+      "old": "",
+      "derived": "interrupted",
+      "basis": "status=cancelled ⇒ interrupted（只由状态决定，不读文本）"
+    },
+    {
+      "id": 1947,
+      "status": "cancelled",
+      "error": "用户中断：验证：方向不对，停下来",
+      "old": "",
+      "derived": "interrupted",
+      "basis": "status=cancelled ⇒ interrupted（只由状态决定，不读文本）"
+    },
+    {
+      "id": 1948,
+      "status": "cancelled",
+      "error": "用户中断：验证：方向不对，停下来",
+      "old": "",
+      "derived": "interrupted",
+      "basis": "status=cancelled ⇒ interrupted（只由状态决定，不读文本）"
+    },
+    {
+      "id": 1950,
+      "status": "cancelled",
+      "error": "用户中断：用户点击停止",
+      "old": "",
+      "derived": "interrupted",
+      "basis": "status=cancelled ⇒ interrupted（只由状态决定，不读文本）"
+    },
+    {
+      "id": 1951,
+      "status": "cancelled",
+      "error": "用户中断：用户点击停止",
+      "old": "",
+      "derived": "interrupted",
+      "basis": "status=cancelled ⇒ interrupted（只由状态决定，不读文本）"
+    },
+    {
+      "id": 1952,
+      "status": "cancelled",
+      "error": "用户中断：用户点击停止",
+      "old": "",
+      "derived": "interrupted",
+      "basis": "status=cancelled ⇒ interrupted（只由状态决定，不读文本）"
+    },
+    {
+      "id": 1955,
+      "status": "cancelled",
+      "error": "用户中断：用户点击停止",
+      "old": "",
+      "derived": "interrupted",
+      "basis": "status=cancelled ⇒ interrupted（只由状态决定，不读文本）"
+    },
+    {
+      "id": 1956,
+      "status": "cancelled",
+      "error": "用户中断：用户点击停止",
+      "old": "",
+      "derived": "interrupted",
+      "basis": "status=cancelled ⇒ interrupted（只由状态决定，不读文本）"
+    },
+    {
+      "id": 1957,
+      "status": "cancelled",
+      "error": "用户中断：用户点击停止",
+      "old": "",
+      "derived": "interrupted",
+      "basis": "status=cancelled ⇒ interrupted（只由状态决定，不读文本）"
+    },
+    {
+      "id": 1959,
+      "status": "cancelled",
+      "error": "验证收尾",
+      "old": "",
+      "derived": "interrupted",
+      "basis": "status=cancelled ⇒ interrupted（只由状态决定，不读文本）"
+    },
+    {
+      "id": 1960,
+      "status": "cancelled",
+      "error": "验证收尾",
+      "old": "",
+      "derived": "interrupted",
+      "basis": "status=cancelled ⇒ interrupted（只由状态决定，不读文本）"
+    },
+    {
+      "id": 1961,
+      "status": "cancelled",
+      "error": "验证收尾",
+      "old": "",
+      "derived": "interrupted",
+      "basis": "status=cancelled ⇒ interrupted（只由状态决定，不读文本）"
+    },
+    {
+      "id": 1962,
+      "status": "cancelled",
+      "error": "验证收尾",
+      "old": "",
+      "derived": "interrupted",
+      "basis": "status=cancelled ⇒ interrupted（只由状态决定，不读文本）"
+    },
+    {
+      "id": 1963,
+      "status": "cancelled",
+      "error": "验证收尾",
+      "old": "",
+      "derived": "interrupted",
+      "basis": "status=cancelled ⇒ interrupted（只由状态决定，不读文本）"
+    },
+    {
+      "id": 1965,
+      "status": "cancelled",
+      "error": "验证收尾",
+      "old": "",
+      "derived": "interrupted",
+      "basis": "status=cancelled ⇒ interrupted（只由状态决定，不读文本）"
+    },
+    {
+      "id": 1966,
+      "status": "cancelled",
+      "error": "验证收尾",
+      "old": "",
+      "derived": "interrupted",
+      "basis": "status=cancelled ⇒ interrupted（只由状态决定，不读文本）"
+    },
+    {
+      "id": 1967,
+      "status": "cancelled",
+      "error": "验证收尾",
+      "old": "",
+      "derived": "interrupted",
+      "basis": "status=cancelled ⇒ interrupted（只由状态决定，不读文本）"
+    },
+    {
+      "id": 1968,
+      "status": "cancelled",
+      "error": "验证收尾",
+      "old": "",
+      "derived": "interrupted",
+      "basis": "status=cancelled ⇒ interrupted（只由状态决定，不读文本）"
+    },
+    {
+      "id": 1969,
+      "status": "cancelled",
+      "error": "验证收尾",
+      "old": "",
+      "derived": "interrupted",
+      "basis": "status=cancelled ⇒ interrupted（只由状态决定，不读文本）"
+    },
+    {
+      "id": 1972,
+      "status": "cancelled",
+      "error": "验证收尾：清理被误重投的批次",
+      "old": "",
+      "derived": "interrupted",
+      "basis": "status=cancelled ⇒ interrupted（只由状态决定，不读文本）"
+    },
+    {
+      "id": 1973,
+      "status": "cancelled",
+      "error": "验证收尾：清理被误重投的批次",
+      "old": "",
+      "derived": "interrupted",
+      "basis": "status=cancelled ⇒ interrupted（只由状态决定，不读文本）"
+    },
+    {
+      "id": 2300,
+      "status": "cancelled",
+      "error": "目标已达成提前收敛（主动放弃非必需任务）",
+      "old": "",
+      "derived": "interrupted",
+      "basis": "status=cancelled ⇒ interrupted（只由状态决定，不读文本）"
+    }
+  ],
+  "rollback_sql": [
+    "UPDATE agent_tasks SET error_class='' WHERE id=241;",
+    "UPDATE agent_tasks SET error_class='' WHERE id=242;",
+    "UPDATE agent_tasks SET error_class='' WHERE id=250;",
+    "UPDATE agent_tasks SET error_class='' WHERE id=251;",
+    "UPDATE agent_tasks SET error_class='' WHERE id=252;",
+    "UPDATE agent_tasks SET error_class='' WHERE id=290;",
+    "UPDATE agent_tasks SET error_class='' WHERE id=291;",
+    "UPDATE agent_tasks SET error_class='' WHERE id=294;",
+    "UPDATE agent_tasks SET error_class='' WHERE id=295;",
+    "UPDATE agent_tasks SET error_class='' WHERE id=296;",
+    "UPDATE agent_tasks SET error_class='' WHERE id=331;",
+    "UPDATE agent_tasks SET error_class='' WHERE id=334;",
+    "UPDATE agent_tasks SET error_class='' WHERE id=335;",
+    "UPDATE agent_tasks SET error_class='' WHERE id=336;",
+    "UPDATE agent_tasks SET error_class='' WHERE id=337;",
+    "UPDATE agent_tasks SET error_class='' WHERE id=340;",
+    "UPDATE agent_tasks SET error_class='' WHERE id=341;",
+    "UPDATE agent_tasks SET error_class='' WHERE id=342;",
+    "UPDATE agent_tasks SET error_class='' WHERE id=344;",
+    "UPDATE agent_tasks SET error_class='' WHERE id=345;",
+    "UPDATE agent_tasks SET error_class='' WHERE id=346;",
+    "UPDATE agent_tasks SET error_class='' WHERE id=347;",
+    "UPDATE agent_tasks SET error_class='' WHERE id=349;",
+    "UPDATE agent_tasks SET error_class='' WHERE id=350;",
+    "UPDATE agent_tasks SET error_class='' WHERE id=351;",
+    "UPDATE agent_tasks SET error_class='' WHERE id=352;",
+    "UPDATE agent_tasks SET error_class='' WHERE id=356;",
+    "UPDATE agent_tasks SET error_class='' WHERE id=361;",
+    "UPDATE agent_tasks SET error_class='' WHERE id=362;",
+    "UPDATE agent_tasks SET error_class='' WHERE id=364;",
+    "UPDATE agent_tasks SET error_class='' WHERE id=365;",
+    "UPDATE agent_tasks SET error_class='' WHERE id=373;",
+    "UPDATE agent_tasks SET error_class='' WHERE id=394;",
+    "UPDATE agent_tasks SET error_class='' WHERE id=395;",
+    "UPDATE agent_tasks SET error_class='' WHERE id=396;",
+    "UPDATE agent_tasks SET error_class='' WHERE id=397;",
+    "UPDATE agent_tasks SET error_class='' WHERE id=398;",
+    "UPDATE agent_tasks SET error_class='' WHERE id=400;",
+    "UPDATE agent_tasks SET error_class='' WHERE id=401;",
+    "UPDATE agent_tasks SET error_class='' WHERE id=402;",
+    "UPDATE agent_tasks SET error_class='' WHERE id=403;",
+    "UPDATE agent_tasks SET error_class='' WHERE id=416;",
+    "UPDATE agent_tasks SET error_class='' WHERE id=417;",
+    "UPDATE agent_tasks SET error_class='' WHERE id=418;",
+    "UPDATE agent_tasks SET error_class='' WHERE id=419;",
+    "UPDATE agent_tasks SET error_class='' WHERE id=420;",
+    "UPDATE agent_tasks SET error_class='' WHERE id=421;",
+    "UPDATE agent_tasks SET error_class='' WHERE id=422;",
+    "UPDATE agent_tasks SET error_class='' WHERE id=472;",
+    "UPDATE agent_tasks SET error_class='' WHERE id=473;",
+    "UPDATE agent_tasks SET error_class='' WHERE id=474;",
+    "UPDATE agent_tasks SET error_class='' WHERE id=475;",
+    "UPDATE agent_tasks SET error_class='' WHERE id=482;",
+    "UPDATE agent_tasks SET error_class='' WHERE id=483;",
+    "UPDATE agent_tasks SET error_class='' WHERE id=503;",
+    "UPDATE agent_tasks SET error_class='' WHERE id=504;",
+    "UPDATE agent_tasks SET error_class='' WHERE id=505;",
+    "UPDATE agent_tasks SET error_class='' WHERE id=511;",
+    "UPDATE agent_tasks SET error_class='' WHERE id=538;",
+    "UPDATE agent_tasks SET error_class='' WHERE id=540;",
+    "UPDATE agent_tasks SET error_class='' WHERE id=541;",
+    "UPDATE agent_tasks SET error_class='' WHERE id=542;",
+    "UPDATE agent_tasks SET error_class='' WHERE id=544;",
+    "UPDATE agent_tasks SET error_class='' WHERE id=597;",
+    "UPDATE agent_tasks SET error_class='' WHERE id=598;",
+    "UPDATE agent_tasks SET error_class='' WHERE id=636;",
+    "UPDATE agent_tasks SET error_class='' WHERE id=704;",
+    "UPDATE agent_tasks SET error_class='' WHERE id=1079;",
+    "UPDATE agent_tasks SET error_class='' WHERE id=1911;",
+    "UPDATE agent_tasks SET error_class='' WHERE id=1912;",
+    "UPDATE agent_tasks SET error_class='' WHERE id=1913;",
+    "UPDATE agent_tasks SET error_class='' WHERE id=1914;",
+    "UPDATE agent_tasks SET error_class='' WHERE id=1947;",
+    "UPDATE agent_tasks SET error_class='' WHERE id=1948;",
+    "UPDATE agent_tasks SET error_class='' WHERE id=1950;",
+    "UPDATE agent_tasks SET error_class='' WHERE id=1951;",
+    "UPDATE agent_tasks SET error_class='' WHERE id=1952;",
+    "UPDATE agent_tasks SET error_class='' WHERE id=1955;",
+    "UPDATE agent_tasks SET error_class='' WHERE id=1956;",
+    "UPDATE agent_tasks SET error_class='' WHERE id=1957;",
+    "UPDATE agent_tasks SET error_class='' WHERE id=1959;",
+    "UPDATE agent_tasks SET error_class='' WHERE id=1960;",
+    "UPDATE agent_tasks SET error_class='' WHERE id=1961;",
+    "UPDATE agent_tasks SET error_class='' WHERE id=1962;",
+    "UPDATE agent_tasks SET error_class='' WHERE id=1963;",
+    "UPDATE agent_tasks SET error_class='' WHERE id=1965;",
+    "UPDATE agent_tasks SET error_class='' WHERE id=1966;",
+    "UPDATE agent_tasks SET error_class='' WHERE id=1967;",
+    "UPDATE agent_tasks SET error_class='' WHERE id=1968;",
+    "UPDATE agent_tasks SET error_class='' WHERE id=1969;",
+    "UPDATE agent_tasks SET error_class='' WHERE id=1972;",
+    "UPDATE agent_tasks SET error_class='' WHERE id=1973;",
+    "UPDATE agent_tasks SET error_class='' WHERE id=2300;"
+  ],
+  "caveat": "离线派生归因 ≠ 运行时观测：类别完全由当时已落库的 error 文本与 status 复算得出，留痕可逐条复核、可单步回滚。不新增枚举、不改动 classify() 词表、不影响重试决策；结构性缺口（cancel/cancel_run/用户中断三个出口不写归因）已在本批代码侧修复。",
+  "legacy_cancel_fix": {
+    "applied_at_utc": "2026-11-15 16:32:14",
+    "reason": "cancelled 被历史兜底成 internal；按 classify_terminal 语义归一",
+    "backup_reused": "backups/mbse.db.bak-before-p0-6-error-class-20261115_162839.db",
+    "rows": [
+      {
+        "id": 1910,
+        "error": "用户中断",
+        "old": "internal",
+        "new": "interrupted"
+      },
+      {
+        "id": 1946,
+        "error": "用户中断",
+        "old": "internal",
+        "new": "interrupted"
+      },
+      {
+        "id": 1958,
+        "error": "用户中断",
+        "old": "internal",
+        "new": "interrupted"
+      }
+    ],
+    "rollback_sql": [
+      "UPDATE agent_tasks SET error_class='internal' WHERE id=1910;",
+      "UPDATE agent_tasks SET error_class='internal' WHERE id=1946;",
+      "UPDATE agent_tasks SET error_class='internal' WHERE id=1958;"
+    ],
+    "note": "这 3 条不在 93 行空归因集合内；完整回滚 = 主 rollback_sql(93 条清空) + 本段(3 条还原)"
+  },
+  "notes": [
+    "2026-11-15 补充：3 条历史 cancelled/internal 已归一，真库 after.dist 以本文件为准"
+  ]
+}

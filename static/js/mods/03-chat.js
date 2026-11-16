@@ -837,6 +837,11 @@ async function selectConv(id) {
     _convTabs[currentConvId] = { tabs: _previewTabs.slice(), activeKey: _previewActiveKey };
   }
   currentConvId = id;
+  // ★ 2026-11-06：切换会话必须清掉上一个会话残留的运行态文案（「仍在执行：t1…」）。
+  //   `#chat-status` 是全局元素，旧会话的流/心跳写进去后不会自动消失 ⇒
+  //   新会话明明没在跑，却一直显示别的会话的执行状态。
+  const _csSwitch = document.getElementById('chat-status');
+  if(_csSwitch) _csSwitch.textContent = '';
   _isDraft = false;   // 2026-09-04 v3：选中真实会话，退出草稿态
   // ★ 2026-10-31：切到某会话时**加载它的模型参数设置**（会话维度）。
   //   为什么必须在这里：会话设置存服务端（conversations.llm_overrides），
@@ -861,6 +866,9 @@ async function selectConv(id) {
   // 2026-09-25：打开会话先恢复「待澄清」状态（在渲染消息之前）——历史澄清卡据此决定
   // 是可作答的卡还是只读摘要，输入区上方的提示条也据此显示（刷新后作答路径）。
   if(typeof setPendingClarify === 'function') setPendingClarify(r && r.pending_clarify);
+  // ★ 2026-11-13：同构的另一半 —— 写操作确认单（通用 Ask 层的 kind='confirm'）也要能恢复。
+  //   否则刷新后 dock 提示条只剩澄清一种 ⇒ 用户看不到「有写操作待批准」。
+  if(typeof loadPendingConfirms === 'function') loadPendingConfirms(id);
   const msgs = (r && r.messages) || r || [];
   _convMsgTotal = (r && r.total) || msgs.length;
   _oldestMsgId = msgs.length ? msgs[0].id : null;
@@ -1158,6 +1166,15 @@ async function startResumeRun(runId, bar, includeFailed){
       return;
     }
     if(bar) bar.remove();
+    // ★ 2026-11-10（浏览器实测抓出）：续跑期间**必须**接上「停止」按钮。
+    //   原实现全程没调 showStopBtn(true)，也没置 _streaming/_streamAbort
+    //   ⇒ ① 停止按钮不出现；② 即便出现，stopStream() 首行 `if(!_streaming) return` 也会直接返回。
+    //   后果：**续跑跑起来之后就没法再停**，而续跑恰恰是中位 10 分钟的长任务 ——
+    //   「可中断」在它最该起作用的地方失效。实测证据：点「继续编排」后
+    //   stopBtnVisibleAfterResume=false，而 DB 里 t2 已变 running。
+    _streaming = true;
+    try { _streamAbort = new AbortController(); } catch(e) { _streamAbort = null; }
+    if(typeof showStopBtn === 'function') showStopBtn(true);
     const reader = resp.body.getReader();
     const dec = new TextDecoder('utf-8');
     let buf = '';
@@ -1177,5 +1194,10 @@ async function startResumeRun(runId, bar, includeFailed){
   }catch(e){
     if(typeof toast === 'function') toast('恢复编排时出错：' + (e && e.message || e), 'error');
     if(bar) bar.remove();
+  }finally{
+    // 无论正常结束还是异常，都必须把「停止态」收回来，否则按钮会永久停在停止态
+    _streaming = false;
+    _streamAbort = null;
+    if(typeof showStopBtn === 'function') showStopBtn(false);
   }
 }

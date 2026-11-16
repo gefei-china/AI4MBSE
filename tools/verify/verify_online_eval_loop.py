@@ -68,6 +68,13 @@ CREATE TABLE messages (id INTEGER PRIMARY KEY AUTOINCREMENT,
 CREATE TABLE query_trace (id INTEGER PRIMARY KEY AUTOINCREMENT,
     query TEXT DEFAULT '', intent TEXT DEFAULT '', route TEXT DEFAULT '',
     top_score REAL DEFAULT 0, conversation_id INTEGER DEFAULT 0,
+    -- ★ 2026-11-08：补 score_kind。上一轮把 `_cand_low_conf` 改成按
+    --   `score_kind` 分组后，本夹具没有这一列 ⇒ 那条 SQL 直接抛
+    --   `no such column` ⇒ 被 except 收进 failures ⇒ 低置信一路恒为空
+    --   ⇒ A1a「三 reason 各 ≥1」长期红。
+    --   教训：**改产品代码的取数口径，必须同步搜"谁手工建了这张表的 DDL"**；
+    --   否则门禁不是"发现了回归"，而是"自己坏了却怪产品"。
+    score_kind TEXT DEFAULT '',
     created_at TEXT DEFAULT CURRENT_TIMESTAMP);
 CREATE TABLE intent_samples (id INTEGER PRIMARY KEY AUTOINCREMENT,
     text TEXT NOT NULL UNIQUE, intent TEXT DEFAULT '', status TEXT DEFAULT 'new',
@@ -110,10 +117,12 @@ def _fresh():
 
 def _seed_full(conn):
     """全链路夹具：三 reason 候选齐 + 一条带引用的助手消息。"""
-    conn.execute("INSERT INTO query_trace (id, query, intent, route, top_score, conversation_id) "
-                 "VALUES (11, '需求有哪些？', 'req_qa', 'vector', 0.01, 201)")
-    conn.execute("INSERT INTO query_trace (id, query, intent, route, top_score, conversation_id) "
-                 "VALUES (12, '检索质量怎么看？', 'rag_qa', 'vector', 0.02, 202)")
+    conn.execute("INSERT INTO query_trace (id, query, intent, route, top_score, "
+                 "score_kind, conversation_id) "
+                 "VALUES (11, '需求有哪些？', 'req_qa', 'vector', 0.01, 'chunk_score', 201)")
+    conn.execute("INSERT INTO query_trace (id, query, intent, route, top_score, "
+                 "score_kind, conversation_id) "
+                 "VALUES (12, '检索质量怎么看？', 'rag_qa', 'vector', 0.02, 'chunk_score', 202)")
     conn.execute("INSERT INTO messages (id, conversation_id, role, content, card_data) "
                  "VALUES (2, 201, 'assistant', '共 5 条需求[1]。', '{\"citations\":[{\"content\":\"x\"}]}')")
     conn.execute("INSERT INTO messages (id, conversation_id, role, content, card_data) "

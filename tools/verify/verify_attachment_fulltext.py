@@ -180,7 +180,7 @@ def main() -> int:
     _mut_no_outline = _mut_stream
     _i0 = _mut_no_outline.find("            _att_outline = self._attachment_outline(att_blocks) if att_blocks else \"\"")
     if _i0 >= 0:
-        _i1 = _mut_no_outline.find("matched_flows =", _i0)
+        _i1 = _mut_no_outline.find("# ── 阶段 2：知识检索", _i0)
         if _i1 > _i0:
             _mut_no_outline = _mut_no_outline[:_i0] + \
                 "            pass  # MUT: 去掉提纲层\n            " + _mut_no_outline[_i1:]

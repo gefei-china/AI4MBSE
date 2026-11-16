@@ -125,6 +125,7 @@ def _migrate_ontology_version_tables(conn):
         icon TEXT DEFAULT '',
         color TEXT DEFAULT '#185FA5',
         iri TEXT DEFAULT '',             -- P0-1：实体 IRI（快照固化，导出消费）
+        tlo_anchor TEXT DEFAULT '',      -- P0-1/D1=A（2026-11-15）：上层本体锚点（快照固化）
         UNIQUE(version_id, type_id)
     )""")
     c.execute("CREATE INDEX IF NOT EXISTS idx_snap_ver ON ontology_version_snapshots(version_id)")
@@ -132,6 +133,12 @@ def _migrate_ontology_version_tables(conn):
     _scols = [r[1] for r in c.execute("PRAGMA table_info(ontology_version_snapshots)").fetchall()]
     if "iri" not in _scols:
         c.execute("ALTER TABLE ontology_version_snapshots ADD COLUMN iri TEXT DEFAULT ''")
+    # P0-1/D1=A（2026-11-15）：老库快照表补 tlo_anchor 列（幂等）。
+    # ⚠️ 必须与 active_rows 的 SELECT 列清单**同步**：快照是消费口径的唯一来源，
+    #    列漏了会让「体检读快照、编辑态有锚点」两侧结论不一致
+    #    （本仓 O1-2 之前就有「属性侧无检查」的同类盲区）。
+    if "tlo_anchor" not in _scols:
+        c.execute("ALTER TABLE ontology_version_snapshots ADD COLUMN tlo_anchor TEXT DEFAULT ''")
     conn.commit()
 
 def _dedupe_ontology_types(conn):

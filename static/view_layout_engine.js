@@ -436,14 +436,17 @@ function _elkIbdGraph(nodes, edges) {
   const portOwner = {};
   nodes.forEach(n => ((n.attrs && n.attrs.ports) || []).forEach(p => { portOwner[String(p)] = String(n.id); }));
   const childIds = new Set(nodes.filter(n => n.kind !== 'port').map(n => String(n.id)));
-  const children = nodes.filter(n => n.kind !== 'port').map(n => ({
-    id: String(n.id),
-    width: 150,
-    height: 60,
-    ports: ((n.attrs && n.attrs.ports) || [])
-      .filter(p => portOwner[String(p)] === String(n.id))
-      .map(p => ({ id: String(p), width: 10, height: 10 })),
-  }));
+  const children = nodes.filter(n => n.kind !== 'port').map(n => {
+    const sz = _elkNodeSize(n);
+    return {
+      id: String(n.id),
+      width: sz.width,
+      height: sz.height,
+      ports: ((n.attrs && n.attrs.ports) || [])
+        .filter(p => portOwner[String(p)] === String(n.id))
+        .map(p => ({ id: String(p), width: 10, height: 10 })),
+    };
+  });
   const edgs = [];
   (edges || []).forEach((e, i) => {
     const s = String(e.source), t = String(e.target);
@@ -459,13 +462,42 @@ function _elkIbdGraph(nodes, edges) {
   return { id: 'root', layoutOptions: _elkLayoutOptions(), children, edges: edgs };
 }
 
-/* 平铺图（BDD/PKG/TRACE）：全部节点作为子节点分层 */
+/* 节点尺寸：与 Cytoscape 样式表**逐类对齐**。
+ * 此前一律 150x60，而实际样式里 requirement 是 150x54、constraint 170x48、
+ * actor 62x74 —— 尺寸不一致会让布局器"以为"放得下的两点在屏幕上重叠。 */
+function _elkNodeSize(n) {
+  const k = String((n && n.kind) || 'block');
+  if (k === 'requirement') return { width: 150, height: 54 };
+  if (k === 'constraint') return { width: 170, height: 48 };
+  if (k === 'usecase' || k === 'action' || k === 'state') return { width: 130, height: 46 };
+  if (k === 'package') return { width: 160, height: 52 };
+  if (k === 'actor') return { width: 62, height: 74 };
+  return { width: 150, height: 60 };
+}
+
+/* 平铺图（BDD/PKG/TRACE）：只排**叶子节点**分层。
+ *
+ * ★ 2026-11-09（层级修复）：原实现把全部节点（含包/组合父节点）都当普通节点分层，
+ *   而那些父节点的位置与尺寸在 Cytoscape 里是「由子节点包围盒决定」的 ——
+ *   布局器给出的父坐标既不会被采用，又占掉了一块空洞，包框还会与子节点错位。
+ *   现在：以 parent 字段识别父节点 → 排除出分层 → 相关边一并丢弃
+ *   （父节点的连线在复合视图里本就由子节点承载，丢弃不会丢语义）。
+ */
 function _elkFlatGraph(nodes, edges) {
+  const all = nodes || [];
+  const parentIds = new Set(all.map(n => n.parent).filter(Boolean).map(String));
+  const leaves = all.filter(n => !parentIds.has(String(n.id)));
+  const leafIds = new Set(leaves.map(n => String(n.id)));
+  const childEdges = (edges || []).filter(
+    e => leafIds.has(String(e.source)) && leafIds.has(String(e.target)));
   return {
     id: 'root',
     layoutOptions: _elkLayoutOptions(),
-    children: (nodes || []).map(n => ({ id: String(n.id), width: 150, height: 60 })),
-    edges: (edges || []).map((e, i) => ({
+    children: leaves.map(n => {
+      const sz = _elkNodeSize(n);
+      return { id: String(n.id), width: sz.width, height: sz.height };
+    }),
+    edges: childEdges.map((e, i) => ({
       id: 'e' + i,
       sources: [String(e.source)],
       targets: [String(e.target)],

@@ -188,9 +188,27 @@ def cleanup_expired(days: int = 30) -> int:
 
     ⚠️ SQLite 时间修饰符**不能带空格**：`'-30 days'` ✓ / `'- 30 days'` ✗（返回 NULL，
     2026-09-30 在 MEMORY 登记过同族坑——counts 恒 0 被误读成"没调用"）。
+
+    ★ 2026-11-11：改为**先归档、再删**。此前是裸 `DELETE`，被删的工具结果永久消失；
+    而 `core/memory_dream.py` 的离线对账要靠 L1 流水当证据 —— 删掉即等于把
+    自愈抓手丢进黑洞。现在删除前把整行复制进 `transcript_archive`（`restore()` 可还原），
+    行数、时机、阈值、调用点全部不变。
+    归档失败 ⇒ 该批**不删**（宁可留着膨胀，也不丢证据），并回退到旧的直接删除语义？
+    ——不：直接删除会重演丢证据。故失败时**一行都不删**，把原因打进返回值所在日志。
     """
     from database import db_conn
     with db_conn() as conn:
+        try:
+            from core.memory_retention import archive_then_delete_expired as _arch
+            r = _arch(conn, table="tool_result_offloads", days=int(days))
+            if r.get("ok"):
+                return int(r.get("removed") or 0)
+            # 归档不可用（老库/夹具无该模块）⇒ 保持旧行为，但不静默：打一行日志
+            import logging
+            logging.getLogger(__name__).warning(
+                "offload TTL 归档不可用，回退直接删除：%s", r.get("reason"))
+        except Exception:
+            pass
         cur = conn.execute(
             "DELETE FROM tool_result_offloads WHERE created_at < datetime('now', ?)",
             (f"-{int(days)} days",))

@@ -80,21 +80,7 @@ print("== T5: 主进程存活 ==")
 r = run_code("import sys\nsys.exit(99)", language="python")
 chk("T5 子进程 exit 不崩主进程", isinstance(r, dict), str(r))
 
-# ── T6: workflows._exec_code 沙箱路径 ──
-print("== T6: workflows._exec_code 走沙箱 ==")
-from workflows import FlowExecutor
-ex = FlowExecutor()
-r = ex._exec_code("n2", {"language": "python", "code": "_out['v'] = _in['q'] + '!'",
-                          "inputs": {"q": "{{n1.data.outputs.msg}}"}},
-                   {"n1": {"data": {"outputs": {"msg": "hi"}}}}, {})
-chk("T6 python 节点正常", r.get("status") == "done" and r.get("data", {}).get("outputs", {}).get("v") == "hi!",
-    str(r))
-r = ex._exec_code("n2j", {"language": "js", "code": "_out['v'] = _in['q'].toUpperCase()",
-                           "inputs": {"q": "sandbox"}}, {}, {})
-chk("T6 js 节点正常", r.get("status") == "done" and r.get("data", {}).get("outputs", {}).get("v") == "SANDBOX",
-    str(r))
-r = ex._exec_code("n2b", {"language": "python", "code": "import os", "inputs": {}}, {}, {})
-chk("T6 危险代码节点报错", r.get("status") == "error" and "代码执行失败" in r.get("content", ""), str(r))
-
+# ★ 2026-11-05：T6「workflows._exec_code 走沙箱」已移除 —— `_exec_code` 是画布 code 节点
+#   执行器，随画布工作流一并删除。沙箱本体（sandbox.run_code）的 T1–T5 断言全部保留。
 print(f"\n===== D5 结果: {PASS} 通过 / {FAIL} 失败 =====")
 sys.exit(1 if FAIL else 0)

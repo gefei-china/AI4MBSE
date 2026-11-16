@@ -284,6 +284,58 @@ class PromptMixin:
         secs.append((cur, head, "\n".join(buf)))
         return secs
 
+    def _build_output_contract(self, agent_def) -> str:
+        """结构化输出契约块（来自 `agents.output_schema`，**不是**代码里的字面量）。
+
+        ★ 2026-11-14（为什么必须有）：实测 `requirement_rule_check` / `requirement_conflict_check`
+          等 Agent 的 system_prompt 末尾写着「输出必须是结构化 JSON（见 output_schema）」，
+          但全仓 `output_schema` 只有两处消费：`registry` 存进 `_db_meta`、`studio` 保存接口 ——
+          **提示词装配侧一次都没读过**。模型因此看不到契约，字段名全靠猜：
+            · `covered_categories` 猜成 `checked_categories` ⇒ 「类别是否覆盖齐」恒判未覆盖
+              ⇒ verdict 恒 `insufficient`（真机形态是"怎么检查都是数据不足"）；
+            · `conflicts` / `checks` 猜错 ⇒ `parse_result_json` 拿不到数组 ⇒ 结论丢失。
+          与 2026-10-13 `tools.input_schema`「SQL 早查了、从不注入」属同一类缺陷。
+
+        安全边界：只注入**本 Agent 自己的** schema（DB 配置），不做任何推导或补全；
+        schema 为空 ⇒ 返回 ""（绝大多数 Agent 无此配置，prompt 逐字节不变）。
+
+        ★ 2026-11-15（米爸拍板 A）**从"只输出 JSON"改为"结论摘要 + JSON 块"**：
+          原文案是"最终答复只输出一个 JSON 对象…JSON 之外不要写解释性散文"，
+          于是聊天里看到的是一坨 2 万+ 字符的 ```json 代码块 —— 用户读不到结论，
+          更关键的是**没有论述可以挂引用标识**：实测同一套引用机制，普通问答正文
+          有 7 个 `[n]`，而需求校验 0 个（`§x.y` 却出现 88 次，全在 JSON 字符串里）。
+          ⇒ 改为两段式：`≤6 行结论摘要（带 [n]）` + `一个 ```json 结构化块`。
+          结构化解析不受影响：`services.requirement_checks.parse_result_json`
+          已支持"围栏 + 前后文字"（raw_decode 逐段解码合并，见 §13.7）。
+        """
+        schema = getattr(agent_def, "output_schema", None)
+        if not isinstance(schema, dict) or not schema:
+            return ""
+        import json as _json                          # 局部导入：本模块靠 `import *` 取名字，不依赖再导出
+        try:
+            body = _json.dumps(schema, ensure_ascii=False, indent=2)
+        except Exception:
+            return ""
+        if len(body) > 4000:                      # 防御：异常大 schema 会挤掉语法权威段
+            body = body[:4000] + "\n…（schema 过长已截断）"
+        return (
+            "## 输出契约（OUTPUT CONTRACT · 必须遵守）\n"
+            "最终答复由**两部分**组成，顺序不可颠倒：\n"
+            "\n"
+            "**第一部分：结论摘要（面向用户，≤6 行）**\n"
+            "- 每行一个要点：对象/需求 + 结论 + 依据；先说结论，不要复述需求原文；\n"
+            "- 凡引用标准条款，**必须紧跟该条款所在片段的来源序号**，"
+            "写成 `§5.2.7 [2]` 这种样式（序号见检索块「可引用编号对照」）；\n"
+            "- 这一部分**不写 JSON、不出现字段名**。\n"
+            "\n"
+            "**第二部分：结构化结果（面向系统）**\n"
+            "- 紧跟**一个** ```json 代码块，内含**唯一一个** JSON 对象；"
+            "字段名与层级必须与下列 JSON Schema 逐一对应"
+            "（字段名不得改写、不得省略 required、不得用同义中文键替代）；\n"
+            "- 只允许这一个代码块，其后不要再写任何内容。\n"
+            "```json\n%s\n```\n" % body
+        )
+
     def _build_role_block(self, agent_def, cap: int = 0) -> str:
         """角色化首段（Agent 专属角色块）。
 
@@ -433,6 +485,9 @@ class PromptMixin:
                 "**必须在对应论述末尾标注来源序号**，形如 [1] 或 [1,2]（可一次标多个）。"
                 "可标注的编号范围以「检索到的互联数据」中实际出现的【来源n】为准，"
                 "编号连续从 1 开始；**不得标注不存在的编号**，也不得整段复制来源原文。"
+                # ★ 2026-11-14：条款号与来源序号**成对**出现（实测只写 §、[n] 为 0）。
+                "**凡正文写出条款号（如 §5.2.7），必须紧跟该条款所在片段的来源序号，"
+                "写成 `§5.2.7 [2]`；参考文献尾部列出的编号对照表照抄即可。**"
                 "若本次回答完全没有使用检索数据，则不标注。\n")
 
     def _build_attachment_block(self, att_text: str) -> str:

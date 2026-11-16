@@ -1,0 +1,310 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>视图渲染与产物命名 —— 实测修复与开源选型（2026-11-09）</title>
+<style>
+  :root{
+    --blue:#1F5FA8; --blue-l:#EAF2FB; --line:#D8E2EE; --ink:#1A2230;
+    --gray:#5B6776; --ok:#1F7A4C; --warn:#B25E00; --bad:#B32020; --bg:#FFFFFF;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:#F5F7FA;color:var(--ink);
+    font:15px/1.75 "Microsoft YaHei","PingFang SC",-apple-system,Segoe UI,sans-serif}
+  .page{max-width:1080px;margin:0 auto;padding:36px 40px 64px;background:var(--bg);
+    box-shadow:0 0 0 1px var(--line)}
+  h1{font-size:26px;margin:0 0 6px;color:var(--blue)}
+  h1 small{display:block;font-size:13px;font-weight:400;color:var(--gray);margin-top:8px}
+  h2{font-size:19px;margin:38px 0 12px;padding-left:11px;border-left:4px solid var(--blue);color:var(--blue)}
+  h3{font-size:16px;margin:24px 0 8px;color:var(--ink)}
+  p{margin:9px 0}
+  table{width:100%;border-collapse:collapse;margin:12px 0 6px;font-size:13.5px}
+  th,td{border:1px solid var(--line);padding:7px 10px;text-align:left;vertical-align:top}
+  th{background:var(--blue-l);color:var(--blue);font-weight:600;white-space:nowrap}
+  td.num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+  .ok{color:var(--ok);font-weight:600}
+  .warn{color:var(--warn);font-weight:600}
+  .bad{color:var(--bad);font-weight:600}
+  code{background:#F1F4F8;padding:1px 5px;border-radius:3px;font-size:12.5px;
+    font-family:Consolas,Monaco,monospace}
+  .lead{background:var(--blue-l);border:1px solid var(--line);border-left:4px solid var(--blue);
+    padding:14px 18px;border-radius:4px;margin:16px 0}
+  .lead b{color:var(--blue)}
+  .cards{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin:16px 0}
+  .card{border:1px solid var(--line);border-radius:6px;padding:12px 14px;background:#fff}
+  .card .k{font-size:12px;color:var(--gray)}
+  .card .v{font-size:24px;font-weight:700;color:var(--blue);margin:2px 0;font-variant-numeric:tabular-nums}
+  .card .d{font-size:12px;color:var(--ok)}
+  ul{margin:8px 0 8px 20px;padding:0}
+  li{margin:5px 0}
+  .note{font-size:12.5px;color:var(--gray);margin-top:6px}
+  .tag{display:inline-block;font-size:11.5px;padding:1px 7px;border-radius:10px;
+    background:var(--blue-l);color:var(--blue);border:1px solid var(--line);margin-right:4px}
+  .tag.p0{background:#FDECEC;color:var(--bad);border-color:#F3C9C9}
+  .tag.p1{background:#FFF4E5;color:var(--warn);border-color:#F5DCB8}
+  .tag.p2{background:#EEF6EF;color:var(--ok);border-color:#CFE6D4}
+  hr{border:0;border-top:1px dashed var(--line);margin:30px 0}
+  .svgwrap{border:1px solid var(--line);border-radius:6px;padding:8px;background:#fff;margin:14px 0}
+</style>
+</head>
+<body>
+<div class="page">
+
+<h1>视图渲染与产物命名 —— 实测修复与开源选型
+  <small>仓库 <code>C:/Users/gefei/WorkBuddy/2026-08-04-19-05-52/mbse_system</code> · 2026-11-09 · 全部数字为本次真实跑数</small>
+</h1>
+
+<div class="lead">
+  <b>结论先行</b>：视图难看<b>不是</b>因为布局库不够好 —— 已本地化的 ELK（EPL-2.0）本来就是行业最优解。
+  真实病灶在<b>喂给布局器的数据</b>上：① 中文标识符被 GBK/UTF-8 编码错配毁成 <code>ͨ����ϵͳʱ��ͼ</code>；
+  ② 同一节点在一张图里重复 5 份（45 个节点只有 9 个唯一）；③ 全库 332 个视图的 <code>parent</code> 字段一个都没有，
+  「包包含」永远画成平铺方块。三处修完后，同一批真实视图的<b>连线交叉从 3412 降到 588（−82.8%）</b>，
+  节点互压为 0，包框从 0 个变成 33 个。产物命名与版本一致性、待办机器回执两项也已落地并挂门禁；<b>存量视图快照也已一次性重投影</b>（产物写库 167 条 + 历史消息写库 56 条），历史会话打开即见新层级。
+</div>
+
+<div class="cards">
+  <div class="card"><div class="k">连线交叉（20 个真实视图合计）</div><div class="v">3412 → 588</div><div class="d">−82.8%</div></div>
+  <div class="card"><div class="k">重复节点（conv 9736 BDD）</div><div class="v">45 → 9</div><div class="d">每名 5 份 → 1 份</div></div>
+  <div class="card"><div class="k">中文标签乱码</div><div class="v">0 处</div><div class="d">原 100% 乱码</div></div>
+  <div class="card"><div class="k">带 parent 的视图节点</div><div class="v">0 → 47</div><div class="d">conv 990442 单个视图</div></div>
+</div>
+
+<h2>一、视图「元素」：三个真实缺陷，按影响排序</h2>
+
+<div class="svgwrap">
+<svg viewBox="0 0 980 250" width="100%" xmlns="http://www.w3.org/2000/svg">
+  <rect width="980" height="250" fill="#ffffff"/>
+  <text x="490" y="24" text-anchor="middle" font-size="14" font-weight="700" fill="#1F5FA8">一条链上的四个断点</text>
+
+  <!-- 1 -->
+  <rect x="24" y="52" width="196" height="96" rx="6" fill="#FDECEC" stroke="#B32020" stroke-width="1.4"/>
+  <text x="122" y="76" text-anchor="middle" font-size="13" font-weight="700" fill="#B32020">① 编码错配</text>
+  <text x="122" y="98" text-anchor="middle" font-size="12" fill="#1A2230">JVM 按 GBK 写 stdout</text>
+  <text x="122" y="116" text-anchor="middle" font-size="12" fill="#1A2230">Python 按 UTF-8 解</text>
+  <text x="122" y="136" text-anchor="middle" font-size="12" fill="#B32020">→ 标签全乱码</text>
+
+  <path d="M220 100 L252 100" stroke="#1F5FA8" stroke-width="1.6" marker-end="url(#ar)"/>
+  <defs><marker id="ar" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+    <path d="M0,0 L8,4 L0,8 z" fill="#1F5FA8"/></marker></defs>
+
+  <!-- 2 -->
+  <rect x="252" y="52" width="196" height="96" rx="6" fill="#FFF4E5" stroke="#B25E00" stroke-width="1.4"/>
+  <text x="350" y="76" text-anchor="middle" font-size="13" font-weight="700" fill="#B25E00">② 名称→id 匹配失败</text>
+  <text x="350" y="98" text-anchor="middle" font-size="12" fill="#1A2230">包含边两端对不上</text>
+  <text x="350" y="116" text-anchor="middle" font-size="12" fill="#1A2230">被整条丢弃</text>
+  <text x="350" y="136" text-anchor="middle" font-size="12" fill="#B25E00">→ parent 恒为空</text>
+
+  <path d="M448 100 L480 100" stroke="#1F5FA8" stroke-width="1.6" marker-end="url(#ar)"/>
+
+  <!-- 3 -->
+  <rect x="480" y="52" width="196" height="96" rx="6" fill="#FDECEC" stroke="#B32020" stroke-width="1.4"/>
+  <text x="578" y="76" text-anchor="middle" font-size="13" font-weight="700" fill="#B32020">③ 节点不去重</text>
+  <text x="578" y="98" text-anchor="middle" font-size="12" fill="#1A2230">代码里 5 份重复包裹</text>
+  <text x="578" y="116" text-anchor="middle" font-size="12" fill="#1A2230">原样进视图</text>
+  <text x="578" y="136" text-anchor="middle" font-size="12" fill="#B32020">→ 叠成 5 层方块</text>
+
+  <path d="M676 100 L708 100" stroke="#1F5FA8" stroke-width="1.6" marker-end="url(#ar)"/>
+
+  <!-- 4 -->
+  <rect x="708" y="52" width="248" height="96" rx="6" fill="#FFF4E5" stroke="#B25E00" stroke-width="1.4"/>
+  <text x="832" y="76" text-anchor="middle" font-size="13" font-weight="700" fill="#B25E00">④ 布局器收到错尺寸</text>
+  <text x="832" y="98" text-anchor="middle" font-size="12" fill="#1A2230">一律按 150×60 建图，</text>
+  <text x="832" y="116" text-anchor="middle" font-size="12" fill="#1A2230">实际 requirement 150×54、</text>
+  <text x="832" y="136" text-anchor="middle" font-size="12" fill="#B25E00">actor 62×74 → 以为放得下</text>
+
+  <!-- 底部结论条 -->
+  <rect x="24" y="176" width="932" height="50" rx="6" fill="#EAF2FB" stroke="#1F5FA8" stroke-width="1.2"/>
+  <text x="490" y="198" text-anchor="middle" font-size="13" fill="#1F5FA8" font-weight="700">修法：钉死隧道两端编码 → 名称匹配恢复 → 视图侧按 id 去重 → 布局按 kind 对齐真实尺寸</text>
+  <text x="490" y="217" text-anchor="middle" font-size="12" fill="#1A2230">四步全部在「生成侧」，不依赖任何新库；换渲染库对这四条一条都解决不了</text>
+</svg>
+</div>
+
+<h3>1.1 中文标识符被编码毁掉（最隐蔽，连带毁掉层级）</h3>
+<p>
+最小复现：<code>package '通信子系统时序图' { part def A; }</code> → 导出的节点名是
+<code>ͨ����ϵͳʱ��ͼ</code>。码位核对：原名的 GBK 字节 <code>CD A8</code> 恰好是<b>合法的</b> UTF-8 两字节序列
+（U+0368），所以 <code>decode("utf-8","replace")</code> 连替换符都不产生 —— 乱码<b>静默</b>流进视图标签。
+</p>
+<table>
+  <tr><th>环节</th><th>事实</th></tr>
+  <tr><td>根因</td><td>JVM 在 Windows 按系统代码页（GBK/MS936）写 stdout，Python 侧按 UTF-8 解码。两端编码不一致</td></tr>
+  <tr><td>连带损伤</td><td>视图投影用「名称 → id」映射接包含边。名字一乱，<b>所有包含边对不上被丢弃</b> ⇒ 同一份代码 parent 从 47 掉到 0</td></tr>
+  <tr><td>修法</td><td>① Java 胶水类把 <code>System.out</code> 钉成 UTF-8；② 调用加 <code>-Dfile.encoding/-Dstdout.encoding=UTF-8</code>；③ Python 侧三级解码（utf-8 严格 → 系统代码页严格 → 兜底），<b>严格解不含替换符才采用</b></td></tr>
+  <tr><td>判据</td><td><code>verify_view_hierarchy.py [7]</code>：CJK 包名/元素名解析正确 + 无 U+FFFD（3 条断言）</td></tr>
+</table>
+
+<h3>1.2 同一节点在一张图里出现 5 次</h3>
+<p>
+conv 9736 的 634 行代码里有 <b>5 份一模一样的 <code>package '通信子系统时序图'</code></b>（模型整块重复输出）。
+解析器如实产出 90 个节点，视图投影拿 45 个，<b>唯一 id 只有 9 个</b>。Cytoscape 的 id 必须唯一，
+重复项要么被静默合并、要么把布局撑成 5 层重叠方块。已在 <code>_finalize</code> 入口加 <code>_dedupe_view</code>：
+同 id 节点保留首条并<b>补齐后续项携带的字段</b>（parent/attrs），同 (source,target,kind) 边去重。
+</p>
+<table>
+  <tr><th>指标</th><th class="num">修前</th><th class="num">修后</th></tr>
+  <tr><td>conv 9736 BDD 节点数</td><td class="num">45</td><td class="num">9</td></tr>
+  <tr><td>其中唯一 id</td><td class="num bad">9</td><td class="num ok">9</td></tr>
+  <tr><td>重复 id 个数</td><td class="num bad">9（每名 5 份）</td><td class="num ok">0</td></tr>
+  <tr><td>带 parent 的节点</td><td class="num">3</td><td class="num">3</td></tr>
+</table>
+<p class="note">去重是<b>布局的前置条件</b>，不是对数据问题的掩盖 —— 代码重复本身另有 <code>sysml_v2_validate</code> 兜底。</p>
+
+<h3>1.3 「包包含」从未提升为父子层级</h3>
+<p>
+全库 332 个视图（BDD 54 + PKG 30 等）、84 个 BDD/PKG 的节点里，<code>parent</code> 字段<b>一个都没有</b>。
+渲染层的包框样式（Cytoscape 的 <code>node:parent</code>）因此从未生效，层级视图一律平铺。
+根因在<b>投影层</b>：解析器已产出「包 → 成员」的包含边，投影却把它当普通组合连线输出。
+</p>
+<table>
+  <tr><th>改动</th><th>位置</th><th>要点</th></tr>
+  <tr><td>提升层级</td><td><code>view_generator._attach_package_hierarchy</code></td><td><b>只有 package 能当父</b>（part 之间的组合是连线语义，画成嵌套会改变模型含义）；包可嵌包；防环</td></tr>
+  <tr><td>BDD 节点集</td><td><code>view_generator._project</code></td><td>把 <code>package</code> 纳入（否则层级无处承载）</td></tr>
+  <tr><td>布局建图</td><td><code>static/view_layout_engine.js::_elkFlatGraph</code></td><td>父节点<b>排除出分层</b>（其坐标由子节点包围盒决定，占位只会留空洞并让包框错位），相关边一并丢弃</td></tr>
+  <tr><td>坐标回写</td><td><code>static/js/mods/25-graphview.js</code></td><td>父节点坐标不回写（否则与 Cytoscape 自动包围盒打架）</td></tr>
+  <tr><td>开关</td><td><code>core/config.py :: sysml.view_package_nesting</code></td><td>默认开；关掉逐字节回到改动前（有断言）</td></tr>
+</table>
+
+<h2>二、布局量化：把「好看」变成三个可复现指标</h2>
+<p>
+用真实数据（库里 8 个真实版本的 <code>code_text</code> 重新生成 BDD/PKG，共 20 个视图）跑 ELK，
+对<b>同一份数据</b>比较四种建图口径。指标定义：<b>交叉</b>＝线心连线两两穿越的次数；<b>重叠</b>＝两个叶子节点矩形相交；
+<b>套错</b>＝按子节点包围盒算出的包框，套住了不属于该包的元素（或包框互插）。
+</p>
+<table>
+  <tr><th>口径</th><th>说明</th><th class="num">交叉</th><th class="num">重叠</th><th class="num">套错</th><th>结论</th></tr>
+  <tr><td>A 改动前</td><td>全部节点按 150×60 参与分层，父节点也当普通节点</td><td class="num bad">3412</td><td class="num">0</td><td class="num">—</td><td>现状</td></tr>
+  <tr><td><b>B 已采用</b></td><td>父节点排除出分层 + 按 kind 对齐真实尺寸</td><td class="num ok"><b>588</b></td><td class="num ok">0</td><td class="num warn">407</td><td><b>交叉最低，采用</b></td></tr>
+  <tr><td>B2 试过</td><td>B + 同包相邻初序</td><td class="num">597</td><td class="num">0</td><td class="num">402</td><td>无实质改善，弃</td></tr>
+  <tr><td>C 试过</td><td>复合图交 ELK（<code>INCLUDE_CHILDREN</code>）</td><td class="num bad">7903</td><td class="num">0</td><td class="num ok">0</td><td>包框天生紧，但交叉暴涨，弃</td></tr>
+  <tr><td>D 试过</td><td>两级布局（组内先排、再组间）</td><td class="num bad">7331</td><td class="num">0</td><td class="num ok">0</td><td>同上，弃</td></tr>
+</table>
+<p class="note">
+C/D 的「套错＝0」是<b>构造出来的</b>（包框由组内包围盒决定，必然紧贴），代价是容器被撑大、组间长边绕行，
+直线交叉比 B 差一个数量级。结论：<b>当前渲染是直线连线，容器感知布局的收益抵不过长边代价</b> ⇒ 采用 B。
+「包框套住外部元素」作为已知残留计入 P2（见第四节），并保留了 C/D 的量化证据，将来换成可绕行的渲染方式可直接复用这套基准。
+</p>
+
+<h2>三、开源组件：结论是「不用换」，但有三个值得评估的补充</h2>
+<table>
+  <tr><th>组件</th><th>许可</th><th>本仓状态</th><th>能解决什么</th><th>不能解决什么 / 代价</th></tr>
+  <tr><td><b>Cytoscape.js</b></td><td>MIT（Cytoscape Consortium）</td><td>已本地化 373 KB</td><td>复合节点（包框）、样式体系、交互</td><td>本身不做布局，只执行坐标</td></tr>
+  <tr><td><b>ELK / elkjs</b></td><td>EPL-2.0（Eclipse）</td><td>已本地化 1.6 MB</td><td>layered + <code>LAYER_SWEEP</code> 交叉最小化、正交布线、端口约束</td><td>不理解 SysML 空间语义（actor 居框外、生命线时序）</td></tr>
+  <tr><td><b>dagre</b> / cytoscape-dagre</td><td>MIT</td><td>已本地化 284 KB / 12.7 KB</td><td>轻量分层，PKG/TRACE 够用</td><td>无交叉最小化强度，不处理端口</td></tr>
+  <tr><td>cytoscape-fcose</td><td>MIT（iVis@Bilkent）</td><td>未引入</td><td>力导向 + <b>复合节点内聚</b>，可缓解「包成员散落」</td><td><b>非确定性</b>（每次跑位置可能不同），与「同一模型出同一张图」冲突</td></tr>
+  <tr><td>webcola / cytoscape-cola</td><td>MIT</td><td>未引入</td><td>约束式布局：可写「同包对齐」「同层等距」约束</td><td>约束调参成本高，规模大时收敛慢</td></tr>
+  <tr><td>AntV G6</td><td>MIT（Ant/Alipay）</td><td>未引入</td><td>combo（分组容器）为原生概念，Canvas/SVG/WebGL 三渲染</td><td>等于<b>重写整层渲染</b>，现有 8 视图专用布局器全部要迁移</td></tr>
+  <tr><td>Sigma.js + graphology</td><td>MIT</td><td>未引入</td><td>WebGL，十万级节点</td><td><b>无复合节点</b> ⇒ 画不出包框，与本需求相反</td></tr>
+  <tr><td>vis-network</td><td>MIT / Apache-2.0 双许可</td><td>未引入</td><td>上手快</td><td>层级/端口/复合能力弱于现状</td></tr>
+  <tr><td>GoJS</td><td><b>商业授权</b></td><td>—</td><td>复合布局质量最好</td><td>付费、非开源，私有化交付不合规风险</td></tr>
+</table>
+<p>
+<b>建议</b>：<span class="tag">P0</span>不换渲染层 —— 实测瓶颈在数据（编码/去重/层级/尺寸），换库对这四条一条都不解决；
+<span class="tag">P1</span>若要继续压交叉，优先给 ELK 补 <b>端口约束与层级内聚</b>（已有 <code>_elkIbdGraph</code> 端口方案可推广），
+而不是引入 f cose（非确定性）或 G6（重写）；
+<span class="tag">P2</span>若未来节点规模上到 2000+ 或需要容器绕行布线，再评估 G6 combo / WebCola 约束式方案。
+</p>
+
+<h2>四、产物命名与版本一致性（第 2 问）</h2>
+<p>
+新增单一真源 <code>core/artifact_naming.py</code>：<code>derive_subject</code>（包名 → 定义名 → 实例名 → 生成诉求 → 兜底）
++ <code>compose_title</code>（「主体 · 诉求 · vX」）+ <code>filename_for</code>（<code>LinkBudget_v0.2.sysml</code>）。
+会话内 <code>name_base</code> 锁定 ⇒ <b>多版本前缀必然一致</b>，只差版本号。
+</p>
+<table>
+  <tr><th>检查项</th><th>结果</th></tr>
+  <tr><td>历史回填（只用客观标识：包名/定义名/实例名）</td><td>改名 <b>141/150</b>，剩 4 条无客观标识按设计保留原名；自动备份</td></tr>
+  <tr><td>真实接口 <code>/api/artifacts?conversation_id=990541&amp;kind=code</code></td><td class="ok">5 条全部为 <code>ParametricExample · v0.1 / v0.2 / v0.3</code>（前缀一致）</td></tr>
+  <tr><td>文件名</td><td><code>ParametricExample_v0.2.sysml</code>（无空格/非法字符，扩展名随 lang）</td></tr>
+  <tr><td>门禁</td><td><code>verify_artifact_naming.py</code> 28 断言 · tier=pr · 2.1s</td></tr>
+</table>
+
+<h2>五、P1 契约固化与机器回执（第 1 问）</h2>
+<table>
+  <tr><th>项</th><th>落地内容</th><th>判据</th><th>状态</th></tr>
+  <tr><td>版本差分双向对称</td><td><code>added/removed_nodes</code>、<code>added/removed_edges</code>、<code>kept_nodes</code>；nodes/edges 去重保序</td><td><code>verify_version_diff.py</code> 22 断言</td><td class="ok">全绿</td></tr>
+  <tr><td>累积契约覆盖率</td><td><code>contract</code>（滚动 5 版元素并集）+ <code>coverage</code>；摘要报「相对累计契约缺 N 个元素」</td><td>历史重算 131 版，末版仍缺元素的链 <b>10/91</b>（conv 990541 精准命中：契约 5、缺 1，缺的正是 <code>LinkBudget</code>）</td><td class="ok">已回填</td></tr>
+  <tr><td>完成态绑定机器回执</td><td><code>agent_todos.evidence</code> 新列；completed 时回查 <code>tool_call_logs</code>（<code>COALESCE(call_kind,'tool')='tool' AND ok=1</code>）；<code>call_kind='skill'</code> <b>不算回执</b></td><td><code>verify_todo_evidence.py</code> 16 断言；列表标注「✅机器回执 #id」/「⚠️仅声称完成」</td><td class="ok">全绿</td></tr>
+</table>
+<p class="note">
+证据分级：以上「全绿」指<b>代码与单测门禁</b>。<code>evidence</code> 列已随服务重启部署，
+但库中 2 条非空样本来自验证脚本（会话 <code>990999801</code>），<b>不是生产流量</b>；
+因此该项按「代码已生效、线上真实会话样本待观察」记录，不把测试数据当作线上证据。
+另：<code>conv 990541</code> 末版 <code>coverage</code> 实测为
+<code>{"contract_size":5,"covered":4,"lost_n":1,"lost":["LinkBudget"],"window":5}</code>，
+即「重复犯错」已被机器化判据精确命中。
+</p>
+
+<h2>六、存量数据修复：让改动对历史会话真正可见</h2>
+<p>
+只改生成链路不够 —— 前端加载历史消息读的是 <code>card_data.sysml_views</code>
+（<code>static/js/mods/04-artifacts.js:601/609</code>、<code>05-markdown.js:243</code>），
+产物预览读 <code>artifacts.meta.sysml_views</code>（<code>04-artifacts.js:448</code>）。
+两处存的都是<b>生成时的快照</b>，不重投影，用户在旧会话里看不到任何变化。
+</p>
+<table>
+  <tr><th>口径</th><th>改动前（实测）</th><th>改动后（落库复核）</th><th>写库</th></tr>
+  <tr><td>产物 <code>meta.sysml_views</code><br>230 个 / 3976 节点</td><td>带 parent <b>0</b>；含重复 id 的视图 55；含乱码的视图 65</td><td class="ok">带 parent <b>1366</b>；重复 0；乱码 0（3444 节点）</td><td>更新 <b>167</b> 条；跳过 63（55 条该视图类型重投影为空→保留旧快照、8 条会话内无代码）</td></tr>
+  <tr><td>历史消息 <code>card_data.sysml_views</code><br>78 条 / 3409 节点</td><td>带 parent <b>0</b>；含重复 id 的视图 51；含乱码的视图 65</td><td class="ok">带 parent <b>1164</b>；重复 0；乱码 0（全库 3197 节点）</td><td>更新 <b>56</b> 条；2 条重投影无变化；20 条无病灶不动</td></tr>
+</table>
+<p class="note">
+数字口径说明：迁移日志里的「3409 → 2885 节点」只统计进入计划的 58 条；
+全库 78 条消息快照为 3197 节点。两次写库前均自动备份
+（<code>mbse.db.bak_viewreproj_*</code> / <code>.bak_msgviewreproj_*</code>）。
+线上复核：<code>GET /api/conversations/990541/messages</code> 返回的 BDD 已带
+<code>Transponder → ParametricExample</code> 父子关系。
+工具：<code>tools/migrate_view_models.py</code>（<code>--target artifacts|messages|both</code>，默认 dry-run）。
+</p>
+<h3>两处必须写清的口径修正</h3>
+<ul>
+<li><b>禁用会话级兜底代码</b>：早期统计「353 条消息带快照」是 SQL <code>LIKE '%sysml_views%'</code> 的假阳性 —— 其中 <b>275 条只是文本里出现了这个词</b>，真正带视图字典的只有 <b>78 条</b>（75 条精确命中同消息代码、3 条无码）。若用「会话里最新一版代码」重投影历史消息，会把 v0.5 的视图套到 v0.1 的消息上，内容看似合理、实则张冠李戴。脚本因此严格只取同消息来源；无码时仅做<b>无损去重</b>（直接复用生成侧 <code>_dedupe_view</code>，两处口径同源），不引入任何外部内容。</li>
+<li><b>验证脚本自身也会错</b>：消息迁移分支曾被插在 <code>sqlite3.connect</code> 之前，<code>ast.parse</code> 语法检查全绿、实跑才报 <code>UnboundLocalError</code>；后按结构过滤重写并实跑 dry-run → apply 两轮。计数口径也修过一次（「重投影 58 次」但「更新 56 条」，改为只统计真正进入写入计划的条目）。</li>
+</ul>
+
+<h2>七、门禁与回归</h2>
+<table>
+  <tr><th>门禁脚本</th><th class="num">断言</th><th class="num">耗时</th><th>层级</th><th>状态</th></tr>
+  <tr><td><code>verify_view_hierarchy.py</code>（新增）</td><td class="num">18</td><td class="num">~3s</td><td>pr</td><td class="ok">全绿</td></tr>
+  <tr><td><code>verify_version_diff.py</code></td><td class="num">22</td><td class="num">2.5s</td><td>pr</td><td class="ok">全绿</td></tr>
+  <tr><td><code>verify_artifact_naming.py</code></td><td class="num">28</td><td class="num">2.1s</td><td>pr</td><td class="ok">全绿</td></tr>
+  <tr><td><code>verify_todo_evidence.py</code></td><td class="num">16</td><td class="num">2.0s</td><td>pr</td><td class="ok">全绿</td></tr>
+  <tr><td><code>verify_harness_gate_p02.py</code>（存量断言校准）</td><td class="num">55</td><td class="num">—</td><td>pr</td><td class="ok">全绿</td></tr>
+  <tr><td><code>verify_gate_manifest.py</code></td><td class="num">17+5 变异</td><td class="num">—</td><td>pr</td><td class="ok">全绿（清单 372 条）</td></tr>
+</table>
+<p class="note">
+新闸门已注册进 <code>tools/gates_manifest.json</code>（tier=pr, timeout=60，清单共 372 条）与 <code>.github/workflows/ci.yml:1448</code>，
+并由 <code>verify_gate_manifest.py</code> 的 G6a/G11 守卫（清单与 CI 必须一一对应）锁死；
+守卫实跑「常态 17 条 + 变异 5 组全部按预期判红」全绿。
+</p>
+<p class="note">
+PR 层全量回归：<code>gate_runner.py --tier pr</code> 共 <b>180 条，179 PASS / 1 FAIL</b>。
+该 1 条为 <code>verify_async_resume.py</code>，报告里 <code>fails: []</code>（断言一条没红），
+异常是 <code>shutil._copyfileobj_readinto</code> 的 <code>PermissionError: [Errno 13]</code> ——
+与同时运行的迁移备份发生文件占用冲突；隔离单跑 <b>exit=0 全绿</b>，属环境级 IO 冲突，不是逻辑缺陷。
+</p>
+
+<h3>服务</h3>
+<p>
+改动涉及 <code>view_generator.py</code> / <code>sysml_ast.py</code> / <code>core/config.py</code> / <code>static/*.js</code>，
+已重启并<b>用 PID 前后对比证明</b>：<code>306276 → 313024</code>，端口 127.0.0.1:8000 LISTENING、探活 200；
+<code>/static/view_layout_engine.js</code> 线上内容已含 <code>_elkNodeSize</code> 与 <code>parentIds</code>。
+</p>
+
+<h2>八、剩余项与建议</h2>
+<table>
+  <tr><th>优先级</th><th>事项</th><th>依据</th></tr>
+  <tr><td><span class="tag p2">P2</span></td><td>包框在成员散落时仍会几何上套住外部元素（实测 20 视图 407 处）</td><td>C/D 两个容器感知方案实测交叉反而更差（7903 / 7331 vs 588）；需「可绕行布线」或约束式布局才能同时满足，属渲染方式变更</td></tr>
+  <tr><td><span class="tag p2">P2</span></td><td>模型整块重复输出（一份代码 5 份包裹）目前只做去重兜底，未在生成侧拦截</td><td>建议在 <code>output_contracts</code> 增加「同 package 声明重复率」检查，超阈值视为交付不合格</td></tr>
+  <tr><td><span class="tag p1">P1</span></td><td>REQ/UC/ACT/STM 等语义惯例视图仍用自研确定性布局，未纳入本基准</td><td>本轮基准只覆盖 BDD/PKG（图结构类）；语义类布局的「好看」需要另一套指标（分区命中率、泳道归属正确率）</td></tr>
+  <tr><td class="ok">已完成</td><td>历史视图快照重投影（产物 + 历史消息两处）</td><td>见第六节：产物 167 条、消息 56 条写库，parent 0→1366 / 0→1164，重复与乱码均归零；工具 <code>tools/migrate_view_models.py</code> 可复跑</td></tr>
+  <tr><td><span class="tag p1">P1</span></td><td>机器回执尚无真实生产样本</td><td><code>agent_todos.evidence</code> 现有 2 条非空均来自验证脚本（会话 <code>990999801</code>），非生产流量；逻辑已过 16 断言并随服务部署，需在新会话中观察「✅机器回执」是否出现</td></tr>
+</table>
+
+<div class="lead" style="margin-top:26px">
+  <b>一句话总结</b>：视图不好看的根因是「乱码 + 重复 + 无层级 + 错尺寸」四件事叠在一起，
+  而它们全部在生成侧 —— 修完后交叉降 82.8%、包框从无到有；<b>换开源组件解决不了这四个问题</b>，
+  ELK 已经是正确的内核，下一步该补的是「容器内聚 + 可绕行布线」，不是换库。
+</div>
+
+</div>
+</body>
+</html>

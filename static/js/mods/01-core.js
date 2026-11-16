@@ -281,6 +281,9 @@ const MODAL_FORMS = {
           <div id="ot-parent-hint" style="font-size:12.5px;color:var(--mut);margin-top:3px;"></div></div>
         <div class="form-row" id="ot-abstract-row" style="display:none;"><label>抽象类型 <span class="info-tip" title="勾选后该类型不可直接创建实例，仅作分类节点">ⓘ</span></label>
           <input type="checkbox" id="ot-abstract" style="width:16px;height:16px;"></div>
+        <div class="form-row" id="ot-tlo-row" style="display:none;"><label>上层本体锚点 <span class="info-tip" title="BFO 轻量子集（决策 D1=A）：把本类型归入基本范畴。对象=在时间中保持同一性的东西（部件/设备/系统）；过程=在时间中展开的事（功能/验证活动）；质量=可测量特征（属性）；信息内容实体=需求/规范/用例。留空则沿父类型继承。">ⓘ</span></label>
+          <select id="ot-tlo" style="border:1px solid var(--line);border-radius:6px;padding:5px 8px;font-size:13.5px;"></select>
+          <div id="ot-tlo-hint" style="font-size:12.5px;color:var(--mut);margin-top:3px;"></div></div>
         <div class="form-row" id="ot-disjoint-row" style="display:none;"><label>互斥类型 <span class="info-tip" title="disjointWith：本类型实例与所选类型实例无交集（如 人 互斥 部件）。多选=对多互斥">ⓘ</span></label>
           <select id="ot-disjoint" multiple size="4" style="border:1px solid var(--line);border-radius:6px;padding:5px 8px;font-size:13.5px;width:100%;"></select><small class="multi-hint"><b>按住 Ctrl/Shift 多选</b> = 与所有选中类型互斥（disjointWith）</small></div>
         <div class="form-row" id="ot-status-row"><label>生命周期 <span class="info-tip" title="draft=草稿（仅自用）/ review=评审中（待发布）/ released=已发布（生效）/ deprecated=已弃用（被新类型替代）">ⓘ</span></label>
@@ -290,6 +293,10 @@ const MODAL_FORMS = {
             <option value="released">released（已发布）</option>
             <option value="deprecated">deprecated（已弃用）</option>
           </select></div>
+        <div class="form-row" id="ot-alt-row"><label>别名 / 同义词 <span class="info-tip" title="SKOS altLabel：同一概念的其它叫法（如「通信载荷分系统」的别名「载荷舱」）。导出为 skos:altLabel，Protégé/TopBraid 原生识别；检索与实体消歧也会用到。">ⓘ</span></label>
+          <input id="ot-alt-labels" placeholder="逗号分隔，如：载荷舱、通信载荷"></div>
+        <div class="form-row" id="ot-lang-row"><label>语言 <span class="info-tip" title="BCP-47 语言标签（zh / en / zh-CN）。用于给 rdfs:label 与 skos:altLabel 打语言标记。">ⓘ</span></label>
+          <input id="ot-lang" placeholder="留空默认 zh" style="max-width:140px;"></div>
       </div>
       <div class="form-section" id="ot-props-section">
         <!-- 2026-09-07 方案A（Protégé/OWL 对齐）：属性全局定义（数据属性），类视图=只读引用＋局部约束覆盖 -->
@@ -490,7 +497,9 @@ const MODAL_FORMS = {
           <div id="f-think-hint" style="font-size:12px;color:var(--mut);margin:-2px 0 10px 0;line-height:1.7;"></div>
           <div class="form-row"><label>温度</label><input id="f-temp" type="number" min="0" max="2" step="0.1" style="width:150px;" value="0.3"> <span style="font-size:12.5px;color:var(--mut);">0~2，越小越确定</span></div>
           <div class="form-row"><label>TopP</label><input id="f-top-p" type="number" min="0" max="1" step="0.01" style="width:150px;" placeholder="留空不设置"> <span style="font-size:12.5px;color:var(--mut);">0~1 核采样</span></div>
-          <div class="form-row"><label>TopK</label><input id="f-top-k" type="number" min="1" max="100" step="1" style="width:150px;" placeholder="1~100 整数"> <span style="font-size:12.5px;color:var(--mut);">整数 1~100</span></div>
+          <div class="form-row"><label>TopK <span class="info-tip" title="⚠️ 非 OpenAI 标准参数：多数 OpenAI 兼容网关会**静默忽略**它（不报错也不生效）。仅部分厂商（部分 vLLM / 内部网关）支持。留空不设置最稳。">ⓘ</span></label><input id="f-top-k" type="number" min="1" max="100" step="1" style="width:150px;" placeholder="1~100 整数"> <span style="font-size:12.5px;color:var(--mut);">整数 1~100，可能不被上游支持</span></div>
+          <div class="form-row"><label>频率惩罚 FrequencyPenalty <span class="info-tip" title="-2~2。抑制已出现 token 的重复（正值降复读，负值提黏性）。留空 = 不下发该字段（保持上游默认）。DeepSeek 只支持这一项，presence_penalty 会被自动跳过。">ⓘ</span></label><input id="f-freq-penalty" type="number" min="-2" max="2" step="0.1" style="width:150px;" placeholder="留空不设置"> <span style="font-size:12.5px;color:var(--mut);">-2~2</span></div>
+          <div class="form-row"><label>存在惩罚 PresencePenalty <span class="info-tip" title="-2~2。鼓励换新话题（正值降复读，负值加强话题黏性）。留空 = 不下发该字段。DeepSeek / Anthropic 不支持，会被自动跳过。">ⓘ</span></label><input id="f-pres-penalty" type="number" min="-2" max="2" step="0.1" style="width:150px;" placeholder="留空不设置"> <span style="font-size:12.5px;color:var(--mut);">-2~2</span></div>
         </div>
       </div>
       <div class="form-actions"><button class="btn ghost" onclick="closeModal()">取消</button><button class="btn ghost" onclick="testLLMFromForm()" title="用当前表单配置发起连通性测试（未保存也可测）">🔌 测试</button><button class="btn" onclick="saveLLM()">保存</button></div>`,
@@ -515,6 +524,56 @@ const MODAL_FORMS = {
         <div class="form-section-head"><span class="fs-icon">📡</span><span class="fs-title">MCP Server 配置</span></div>
         <div class="form-row"><label>传输方式 <b class="req">*</b> <span class="info-tip" title="生产环境请使用公网 https 端点；鉴权开启后私网/localhost URL 会被拒绝；stdio 出于安全不自动拉起子进程">ⓘ</span></label><select id="f-tool-transport"><option value="http">Streamable HTTP（推荐）</option><option value="sse">SSE</option><option value="stdio">stdio（不自动拉起）</option></select></div>
         <div class="form-row"><label>URL <b class="req">*</b> <span class="info-tip" title="示例：https://mcp.example.com/mcp（勿填内网/元数据地址）">ⓘ</span></label><input id="f-tool-url-mcp" placeholder="https://mcp.example.com/mcp"></div>
+        <!-- ★ 2026-11-06：测试入口必须**就在编辑弹窗里**。
+             此前只加在「能力中心卡片」上，用户在编辑弹窗找不到 ⇒ 反馈"看不到测试入口"。
+             这里同时给出「当前生效状态」，因为用户真正要回答的是"它还生效吗"，
+             而不是"能否连通"——两者都要看得见。 -->
+        <div class="form-row" style="align-items:flex-start;">
+          <label style="padding-top:4px;">生效状态</label>
+          <div style="flex:1;min-width:0;">
+            <div id="f-mcp-status" style="font-size:12.5px;color:var(--mut);line-height:1.7;">（新增后再测试）</div>
+            <div style="display:flex;gap:8px;margin-top:6px;flex-wrap:wrap;">
+              <button type="button" class="btn sm" id="f-mcp-test-btn" onclick="testMcpFromForm()">🔌 测试连通并刷新</button>
+              <span style="font-size:12px;color:var(--mut);align-self:center;">会真实握手 + 拉取工具清单，约 1 秒</span>
+            </div>
+            <div id="f-mcp-test-result" style="display:none;margin-top:6px;padding:7px 9px;border-radius:6px;font-size:12.5px;line-height:1.7;"></div>
+          </div>
+        </div>
+        <!-- ★ 2026-11-06（用户：「MCP 的工具集合在哪里可以看到，是否可以在编辑页面提供查看入口」）：
+             工具清单此前只存在库里（mcp_servers.tool_meta），界面上只有能力中心卡片一个
+             「工具 71 个」的数字 ⇒ 用户无法回答"到底提供了什么、哪些是写操作"。
+             写操作恰恰是最需要被看见的：71 个里 42 个非只读。
+             side_effect 的来源也一并展示（auto=自动派生 / manual=人工覆写），
+             因为 MCP 升级后只有 auto 项会跟着变。 -->
+        <div class="form-row" style="align-items:flex-start;">
+          <label style="padding-top:4px;">工具清单</label>
+          <div style="flex:1;min-width:0;">
+            <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+              <button type="button" class="btn sm ghost" id="f-mcp-tools-btn" onclick="toggleMcpTools()">📋 查看工具清单</button>
+              <span id="f-mcp-tools-sum" style="font-size:12px;color:var(--mut);">（保存后可查看）</span>
+            </div>
+            <div id="f-mcp-tools-panel" style="display:none;margin-top:8px;">
+              <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:6px;">
+                <input id="f-mcp-tools-q" placeholder="搜索工具名或描述…" oninput="renderMcpTools()"
+                       style="flex:1;min-width:120px;border:1px solid var(--line);border-radius:6px;padding:4px 8px;font-size:13px;">
+                <select id="f-mcp-tools-filter" onchange="renderMcpTools()"
+                        style="border:1px solid var(--line);border-radius:6px;padding:4px 6px;font-size:13px;">
+                  <option value="">全部档位</option>
+                  <option value="read">只读</option>
+                  <option value="write">写</option>
+                  <option value="destructive">破坏性</option>
+                </select>
+              </div>
+              <div id="f-mcp-tools-list" style="max-height:260px;overflow:auto;border:1px solid var(--line);border-radius:8px;"></div>
+              <div style="font-size:11.5px;color:var(--mut);margin-top:5px;line-height:1.6;">
+                <b>怎么改档</b>：每行右侧下拉选「只读 / 写 / 破坏性」即标为 <b>manual</b>（人工设定，此后 MCP 升级不再覆盖）；
+                选「自动」= 交回按平台契约派生。<br>
+                档位来源：<b>auto</b>=自动派生（随平台契约变化）；<b>manual</b>=人工设定（永不被覆盖）。
+                写类工具默认<b>不注入</b>会话，只有输入含明确写意图（创建/修改/删除…）时才放行。
+              </div>
+            </div>
+          </div>
+        </div>
       </div>
       <div class="form-section" id="tool-http-fields" style="display:none;">
         <div class="form-section-head"><span class="fs-icon">🌐</span><span class="fs-title">HTTP 接口配置</span></div>
@@ -522,7 +581,30 @@ const MODAL_FORMS = {
         <div class="form-row"><label>URL <b class="req">*</b> <span class="info-tip" title="路径参数写成 /users/{id}；query 不要写成 ?q={q}，用下方 schema + 默认 query/body">ⓘ</span></label><input id="f-tool-url-http" placeholder="https://api.example.com/weather/{city}"></div>
         <div class="form-row"><label>input_schema（JSON）<b class="req">*</b> <span class="info-tip" title="必须是 type=object；字段名给模型填，执行时再映射到 path/query/body">ⓘ</span></label><textarea id="f-tool-schema" style="min-height:120px;font-family:monospace;font-size:12.5px;resize:vertical;" placeholder='{\n  "type": "object",\n  "properties": {\n    "city": { "type": "string", "description": "城市名" }\n  },\n  "required": ["city"]\n}'></textarea></div>
         <div class="form-row"><label>param_in（可选 JSON） <span class="info-tip" title="如 {city:path,units:query}。留空则：URL 占位符→path，GET/DELETE 其余→query，其它→body">ⓘ</span></label><textarea id="f-tool-param-in" rows="2" style="min-height:36px;font-family:monospace;font-size:12.5px;resize:vertical;" placeholder='{"city":"path","units":"query"}'></textarea></div>
+        <!-- ★ 2026-11-07（P1b）：body / query 模板。没有它们，界面建出来的 HTTP 工具
+             只能发出**不带业务参数的空请求**（能连上、但对方一定报缺参）。
+             占位符语法与执行器一致：整串为单个占位符时保留原生类型（int/bool），
+             可选参数写作 {args:name,str,optional}。 -->
+        <div class="form-row"><label>body 模板（可选 JSON） <span class="info-tip" title="POST/PUT/PATCH 的请求体。写法：{&quot;vc&quot;:&quot;{args:vc}&quot;}；整串为单个占位符时保留原生类型，如 {args:page,int}；缺省可写 {args:x,str,optional}">ⓘ</span></label><textarea id="f-tool-body" rows="3" style="min-height:52px;font-family:monospace;font-size:12.5px;resize:vertical;" placeholder='{"query": "{args:q}", "top": "{args:top,int,optional}"}'></textarea></div>
+        <div class="form-row"><label>query 模板（可选 JSON） <span class="info-tip" title="URL 查询串。GET 工具用它传参，别把 ?a={a} 写进 URL">ⓘ</span></label><textarea id="f-tool-query" rows="2" style="min-height:36px;font-family:monospace;font-size:12.5px;resize:vertical;" placeholder='{"page": "{args:page,int}"}'></textarea></div>
+        <div class="form-row"><label>响应取值路径 <span class="info-tip" title="从响应 JSON 的哪一层取结果。如 data / data.items / result。留空默认 data">ⓘ</span></label><input id="f-tool-data-path" placeholder="data"></div>
+        <div class="form-row"><label>参数缺省值（可选 JSON） <span class="info-tip" title="模型没给该参数时的回落值，支持 {cfg:分组.键} 引用系统配置（如 {cfg:zhiyuan.default_vc}）">ⓘ</span></label><textarea id="f-tool-defaults" rows="2" style="min-height:36px;font-family:monospace;font-size:12.5px;resize:vertical;" placeholder='{"vc": "{cfg:zhiyuan.default_vc}"}'></textarea></div>
         <div class="form-row"><label>超时（秒）<b class="req">*</b></label><input id="f-tool-timeout" type="number" value="15" min="1" max="300"></div>
+        <!-- ★ 2026-11-07（P1b）：试跑入口。放在了编辑弹窗里（与 MCP 测试同一位置逻辑）：
+             用户真正要回答的是"配好了能不能用"，而不只是"保存成功了吗"。
+             它会**真实调用**对方接口 —— 这点必须写明，否则会被当成 dry-run。 -->
+        <div class="form-row" style="align-items:flex-start;">
+          <label style="padding-top:4px;">试跑</label>
+          <div style="flex:1;min-width:0;">
+            <div id="f-http-se" style="font-size:12.5px;color:var(--mut);line-height:1.7;">档位由 Method 自动派生（GET→只读 / POST·PUT·PATCH→写 / DELETE→破坏性），保存后生效</div>
+            <div style="display:flex;gap:8px;margin-top:6px;flex-wrap:wrap;align-items:center;">
+              <input id="f-http-test-args" placeholder='试跑参数 JSON，如 {"q":"test"}' style="flex:1;min-width:160px;border:1px solid var(--line);border-radius:6px;padding:4px 8px;font-size:12.5px;font-family:monospace;">
+              <button type="button" class="btn sm" id="f-http-test-btn" onclick="testHttpToolFromForm()">🌐 试跑</button>
+            </div>
+            <div style="font-size:11.5px;color:var(--mut);margin-top:5px;line-height:1.6;">⚠️ 试跑会<b>真实调用</b>该接口（不是 dry-run）—— 否则查不出鉴权与 URL 错误。破坏性工具需先保存再单独确认。</div>
+            <div id="f-http-test-result" style="display:none;margin-top:6px;padding:7px 9px;border-radius:6px;font-size:12.5px;line-height:1.7;"></div>
+          </div>
+        </div>
       </div>
       <div class="form-section" id="tool-resilience-box">
         <div class="form-section-head"><span class="fs-icon">🛡</span><span class="fs-title">容错策略 <span class="fs-hint">（仅 MCP/HTTP 集成工具生效）</span></span></div>
@@ -530,8 +612,11 @@ const MODAL_FORMS = {
         <div class="form-row"><label>退避基数 ms / 倍数 <span class="info-tip" title="指数退避：基数 500ms × 倍数 2 → 500/1000/2000ms">ⓘ</span></label><div style="display:flex;gap:8px;"><input id="f-tool-backoff" type="number" min="100" value="500" style="flex:1;border:1px solid var(--line);border-radius:6px;padding:4px 8px;font-size:13.5px;"> <input id="f-tool-backoff-mult" type="number" min="1" max="5" value="2" style="flex:1;border:1px solid var(--line);border-radius:6px;padding:4px 8px;font-size:13.5px;"></div></div>
       </div>
       <div class="form-section" id="tool-headers-box">
-        <div class="form-section-head"><span class="fs-icon">📨</span><span class="fs-title">Headers <span class="fs-hint">（可选）</span></span><span style="flex:1;"></span><button class="btn sm ghost" onclick="addToolHeader()" style="padding:1px 8px;font-size:12.5px;">＋ 添加</button></div>
-        <div id="tool-headers-list" style="display:flex;flex-direction:column;gap:4px;"><div style="display:flex;gap:6px;align-items:center;"><input class="tool-hdr-key" placeholder="Key" style="flex:1;border:1px solid var(--line);border-radius:6px;padding:4px 8px;font-size:13.5px;"><input class="tool-hdr-val" placeholder="Value" style="flex:1.5;border:1px solid var(--line);border-radius:6px;padding:4px 8px;font-size:13.5px;"><button class="btn sm ghost" onclick="this.parentElement.remove()" style="padding:2px 8px;font-size:12.5px;">✕</button></div></div>
+        <div class="form-section-head"><span class="fs-icon">📨</span><span class="fs-title">请求头 Headers <span class="fs-hint">可添加多条（如 Authorization、X-Api-Key）</span></span><span style="flex:1;"></span><button type="button" class="btn sm ghost" onclick="addToolHeader()" style="padding:1px 8px;font-size:12.5px;">＋ 添加一条</button></div>
+        <div style="font-size:12.5px;color:var(--mut);line-height:1.7;margin-bottom:6px;">
+          已保存的值出于安全<b>不回显明文</b>（只显示长度）。要换成新值点行内「改」；不改的行保存时会<b>原样保留</b>。
+        </div>
+        <div id="tool-headers-list" style="display:flex;flex-direction:column;gap:4px;"><div class="form-row hdr-row" data-mode="new" style="display:flex;gap:6px;align-items:center;"><input class="tool-hdr-key" placeholder="Key，如 Authorization" style="flex:1;border:1px solid var(--line);border-radius:6px;padding:4px 8px;font-size:13.5px;"><input class="tool-hdr-val" placeholder="Value，如 Bearer xxx" style="flex:1.5;border:1px solid var(--line);border-radius:6px;padding:4px 8px;font-size:13.5px;"><button type="button" class="btn sm ghost" onclick="hdrRemoveRow(this)" style="padding:2px 8px;font-size:12.5px;">✕</button></div></div>
       </div>
       <div class="form-actions"><button class="btn ghost" onclick="closeModal()">取消</button><button class="btn" onclick="saveTool()">保存</button></div>`,
   'mcp-detail': `<h3>🔌 MCP 服务器详情</h3>
@@ -579,7 +664,7 @@ const MODAL_FORMS = {
         <div class="form-row"><label>内容 <span class="info-tip" title="指令正文，注入到 Agent system prompt；支持 Markdown">ⓘ</span></label><textarea id="f-content" style="min-height:240px;font-family:monospace;font-size:12.5px;resize:vertical;" placeholder="当用户询问天气时，调用天气接口并返回结构化结果…"></textarea></div>
       </div>
       <div class="form-actions"><button class="btn ghost" onclick="closeModal()">取消</button><button class="btn" onclick="saveSkill()">保存</button></div>`,
-  agent: `<h3>新建 Agent</h3>
+  agent: `<h3 id="agent-modal-title">新建 Agent</h3>
       <div class="form-section">
         <div class="form-section-head"><span class="fs-icon">🤖</span><span class="fs-title">基础信息</span></div>
         <div class="form-row"><label>展示名称 <b class="req">*</b> <span class="info-tip" title="界面上看到的名字（卡片标题、下拉选项）。改动会同步历史调用日志里已记录的旧展示名">ⓘ</span></label><input id="f-disp" placeholder="如：需求分析Agent" oninput="onAgentDispInput()"></div>

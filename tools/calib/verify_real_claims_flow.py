@@ -240,40 +240,37 @@ def main():
     try:
         from agent.pipeline import AgentPipeline
         pipe = AgentPipeline()
-        # ★ 打桩 `_try_reuse_planner_flow` ⇒ **强制走主路径** `_stream_orchestrated_flow`。
+        # ★ 2026-11-05：原先这里打桩 `_try_reuse_planner_flow` 以强制走主路径。
+        #   该复用路径（匹配 `agent_flows` 里已发布的沉淀流程）**已随画布工作流移除**，
+        #   因此不再需要打桩 —— 但下面的理由仍记录着当时为什么必须限定路径。
         #   理由（实测）：生产库里有多条已发布沉淀流程，问什么都会命中它
         #   ⇒ 走 `_stream_orchestrated` 复用路径 —— 而那条路径**只 yield 占位事件、
         #   不执行子任务** ⇒ claims / conflicts / structure_check 三项**无从产生**。
         #   ⇒ 那条路径验不出本批改动，继续跑只是浪费 token。
         #   ⚠️ 这是**为验证而限定路径**，不是掩盖问题 —— 脚本末尾会如实标注
         #     「本次刻意绕开复用路径」，而复用路径是能力盲区这件事写在记忆里。
-        _orig_reuse = AgentPipeline._try_reuse_planner_flow
-        AgentPipeline._try_reuse_planner_flow = lambda *a, **k: None
+        user = {"id": 1, "name": "verify"}
+        _conv = sqlite3.connect(DB)
         try:
-            user = {"id": 1, "name": "verify"}
-            _conv = sqlite3.connect(DB)
-            try:
-                cid = _conv.execute(
-                    "INSERT INTO conversations (title,intent,user_id,project_id)"
-                    " VALUES ('b3-verify','chat',1,'')").lastrowid
-                _conv.commit()
-            finally:
-                _conv.close()
-            # ⚠️ 提问必须**能触发编排**（意图路由判否 ⇒ 走单 Agent，
-            #   事件里只有 1 对 agent ⇒ 同样验不出子任务协议）。
-            #   实测踩过：「梳理一份通用的接口评审清单」⇒ 未进编排（agent 事件仅 2 个）。
-            #   判据：事件统计里 agent 数应 ≥ 4（≥2 子任务 × run/done）。
-            goal = ("请为一个新的城市轨道交通信号系统做完整的 MBSE 建模："
-                    "先做需求分析，再做架构设计，最后给出校验结论")
-            types = [e.get("type") for e in
-                     pipe.execute_stream(goal, 0, None, None, user=user)]
+            cid = _conv.execute(
+                "INSERT INTO conversations (title,intent,user_id,project_id)"
+                " VALUES ('b3-verify','chat',1,'')").lastrowid
+            _conv.commit()
         finally:
-            AgentPipeline._try_reuse_planner_flow = _orig_reuse
+            _conv.close()
+        # ⚠️ 提问必须**能触发编排**（意图路由判否 ⇒ 走单 Agent，
+        #   事件里只有 1 对 agent ⇒ 同样验不出子任务协议）。
+        #   实测踩过：「梳理一份通用的接口评审清单」⇒ 未进编排（agent 事件仅 2 个）。
+        #   判据：事件统计里 agent 数应 ≥ 4（≥2 子任务 × run/done）。
+        goal = ("请为一个新的城市轨道交通信号系统做完整的 MBSE 建模："
+                "先做需求分析，再做架构设计，最后给出校验结论")
+        types = [e.get("type") for e in
+                 pipe.execute_stream(goal, 0, None, None, user=user)]
         run_ok = True
         n_tok = sum(1 for t in types if t == "token")
         print("  编排事件类型统计：%s"
               % {t: sum(1 for x in types if x == t) for t in set(types)})
-        print("  （已刻意打桩 `_try_reuse_planner_flow` ⇒ 强制走主路径"
+        print("  （画布流程复用路径已移除 ⇒ 本路径即主路径"
               " `_stream_orchestrated_flow`）")
         check("C1 主路径真编排跑通并产出 token", n_tok > 0,
               "事件类型=%s（token 数=%d）" % (set(types), n_tok),

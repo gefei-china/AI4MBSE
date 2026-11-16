@@ -110,6 +110,10 @@ jobs:
         if: ${{ !cancelled() }}
         run: python tools/verify/verify_llm_context_guard.py
 
+      - name: Guard 采样参数优先级 + penalty 透传（13 项）
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_llm_sampling_params.py
+
       - name: Guard 上下文防腐 / 范围自愈（51 项）
         if: ${{ !cancelled() }}
         run: python tools/verify/verify_context_scope_guard.py
@@ -127,6 +131,106 @@ jobs:
       - name: Guard 意图路由评测（19 项，准确率下限见 core/config.py eval_gates）
         if: ${{ !cancelled() }}
         run: python tools/eval/run_ci_eval.py
+
+      # ── 2026-11-08：零召回成因分型（shadow）门禁 ──────────────────────────
+      # 只断言"分型是纯观测"：四态判定正确 + `_gap_info` 不被任何
+      # if/return/continue 消费。**不是**在把"覆盖度低"做成门禁 ——
+      # 恰恰相反，判据反向写，谁把它接进决策就判红。
+      - name: Guard 零召回成因分型「只观测不决策」（14 项 + 2 变异）
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_retrieval_gap_shadow.py
+
+      # ── 观测链路可信度（2026-11-08）──────────────────────────────────────
+      # 这两道守的是「指标本身可不可信」，不是某个功能对不对：
+      #   · top_score 曾把图置信度(0~1)与融合检索分(0~0.63)塞进同一列，
+      #     且图路取值路径根本取不到分 ⇒ graph/mixed 恒为 0 ⇒ 低置信采样恒采同一批；
+      #   · trace 写入失败被裸 except 吞掉 ⇒ 所有基于 query_trace 的比率分母偏小，
+      #     而看板上长得像"已统计全量"。
+      # 判据都反向写：跨量纲比较 / 静默兜底，任何一条被加回来都判红。
+      - name: Guard 查询分数口径分离（22 项 + 2 变异）
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_trace_score_kind.py
+
+      - name: Guard 观测失败不冒泡但必须留痕（21 项 + 2 变异）
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_observe_fail_visible.py
+
+      # ── 样本问法可信度（2026-11-08）────────────────────────────────────
+      # `query_trace.query` 存的一直是"上游拼装 + Glossary 归一化"后的串，
+      # 而转正会把它写进 qrels.jsonl / intent_samples ⇒ **评测集的"标准问法"
+      # 不是用户说的话**（用户问「宽带载荷」，集合里是「宽带通信载荷」），
+      # 且这种失真在数据里看不出来。本门禁钉住三件事：
+      #   ① 原话单独落 query_raw，历史行为 NULL（不可恢复，不许伪造）；
+      #   ② 捕获点在归一化覆盖**之前**（只看存在性会放过顺序错误）；
+      #   ③ 转正/标注都优先读原话，历史行显式标 src='retrieval'。
+      - name: Guard 样本记录用户原话（28 项 + 3 变异）
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_trace_raw_query.py
+
+      # ── 归一化必须幂等（2026-11-08）──────────────────────────────────
+      # 原 `normalize` 是**多轮** re.sub，后一轮作用于前一轮的结果；而词表里
+      # 12 条 entry 的 canonical 自己就包含 user_term（`宽带`→`宽带通信`、
+      # `v2`→`SysML_V2`、`ibd`→`内部块图_IBD`…）⇒ 每替换一次串就被撑长一截：
+      #   `宽带通信`→`宽带通信通信`、`SysML v2`→`SysML_SysML_V2`。
+      # 实测存量 6572 条 query 中 1030 条（15.7%）被污染，699 条（23.3%）
+      # **再归一化一次还会变** ⇒ 同一条 query 因归一化次数不同得到不同检索串，
+      # 召回不可复现。判据以**幂等性**为核心（不依赖词表内容），外加 `_` 边界、
+      # 长词优先、区间互斥、已规范形态跳过四条合成反例，3 组变异各自翻红。
+      - name: Guard 归一化幂等（25 项 + 3 变异）
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_glossary_normalize_idempotent.py
+
+      # ── 术语边界（2026-11-08）──────────────────────────────────────────
+      # `match()` 曾用子串、`_span_replace()` 用词边界 ⇒ **命中判据比替换判据宽**，
+      # 而宽的一侧正是 force_domain / force_intent 的来源：PA⊂part(452 条)、
+      # SA⊂satisfy(248)、CEP⊂accept(57)、LM⊂LLM(50) ⇒ `ref part` 被判成
+      # satellite_comms（库内 0 chunk）⇒ 必零召回。现在两处共用一个
+      # `_term_pattern()`：ASCII 边缘加边界、CJK 边缘不加（否则 `转发器EIRP`
+      # 里的 `转发器` 被漏掉），`_` 算标识符分段符（否则蛇形标识符丢信号）。
+      - name: Guard 术语边界（21 项 + 3 变异）
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_glossary_term_boundary.py
+
+      # ── 2026-11-11：R2 词表对齐 + Claude 四层记忆架构对标（P0/P1/P2）──
+      # 五道新门禁，全部带变异自证；明细见各自脚本头。
+      - name: Guard 规范词前缀相邻重复 R2（12 项 + 2 变异）
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_glossary_prefix_adjacency.py
+
+      - name: Guard 流水 FTS 与 notes 视图（9 项 + 2 变异）
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_transcript_layer.py
+
+      - name: Guard 离线 Dreaming 只读对账（14 项 + 5 变异）
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_memory_dream.py
+
+      - name: Guard 记忆索引注入 P1-1（10 项 + 3 变异）
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_memory_index_injection.py
+
+      - name: Guard 衰减/软引导/A-B 度量 P2（15 项 + 4 变异）
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_memory_retention.py
+
+      # 端点契约门禁：函数级判据测不出"没人调用"（上一批交付后实测暴露的真问题：
+      # memory_dream 功能齐全、门禁全绿，却零调用方 ⇒ 281 条记忆永远停在 unverifiable）。
+      - name: Guard 记忆层 API 契约（16 项 + 4 变异）
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_memory_api.py
+
+      # 闭环末端：端点必须有前端调用方、双臂评测不得编造数字。
+      # 上一批实测教训：函数级判据全绿，但零调用方 ⇒ 281 条记忆永远停在 unverifiable。
+      - name: Guard Dreaming 闭环末端（21 项 + 3 变异）
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_memory_dream_ui.py
+
+      # ── 服务可访问性（2026-11-12）────────────────────────────────────────
+      # 真机报障「127.0.0.1 打不开」的根因是绑定协议族：Windows 的 localhost
+      # 解析到 ::1，只绑 IPv4 就打不开；而绑 `::` 在本机并非 dual-stack。
+      - name: Guard 双栈绑定（IPv4 + IPv6 同时可用）
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_dual_stack_bind.py
 
       # ── 评测基础设施自检（2026-10-22）────────────────────────────────────
       # 这道门禁保护的是**上面那些门禁本身**：ci.yml 注释里的数字若与脚本实值
@@ -327,7 +431,7 @@ jobs:
       #   P2   pipeline_detail 无阶段耗时 ⇒ 排查"慢在哪"只能靠 cProfile 反推
       - name: Guard 大文件链路（35 项 + 7 变异）
         if: ${{ !cancelled() }}
-        continue-on-error: true   # 已知红（2026-11-04 盘点，见 gates_manifest.json）
+        continue-on-error: true   # 已知红（2026-11-04 盘点 + 2026-11-15 P0-3 逐条定性，见 docs/评测/P0-3评测常态化与红项定性-20261115.md）
         run: python tools/verify/verify_largefile_pipeline.py
 
       # ── P1-10（2026-10-04）：分层绕过**卡增量**，不清存量 ─────────────────
@@ -336,7 +440,11 @@ jobs:
       # 全量搬迁的收益是「架构整洁」（用户不可感知），风险是漏掉过滤条件。
       # ⇒ 本门禁只做两件事：① 断言不超过基线；② 新增须登记豁免且**带理由**。
       # 基线值由 tools/verify/verify_layering.py 的 BASELINE_DIRECT_SQL 持有
-      # （2026-10-21 重测为 323；历史 292 是过期值，2026-10-22 修正本注释）。
+      # （2026-11-08 重测为 354；323 是 2026-10-21 的值，292 更早。两次漂移都已
+      #  用 git archive 逐 commit 归因并登记在脚本注释里，本期零贡献）。
+      - name: Guard 分层绕过卡增量（7 项 + 3 变异）
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_layering.py
       # ── P2-1（2026-10-04）：列表 limit 边界语义统一 ───────────────────────
       # 原估「82 处已分页 / 573 端点要覆盖，3~5 天重构」—— 实测**推翻**：
       #   最大表 document_chunks 7269 行、业务表百级；
@@ -492,6 +600,48 @@ jobs:
         if: ${{ !cancelled() }}
         run: python tools/verify/verify_continuation.py
 
+      # ── 2026-11-15 新增：自主续跑「白跑一轮 + 正文重复堆叠」三道防线 ──
+      #   真机故障：conv 999999024 / msg 6585 —— 一轮问答跑了 4 次主答复 + 3 次评估
+      #   （403 秒），落库 29,774 字 = 3 个完整周期（同一件事讲三遍）。
+      #   三道防线：① EVAL_SYS 反向澄清（判定类结论 ≠ AI 自己的待办）
+      #              ② 正文级空转闸（Dice + 长度比复合判据）
+      #              ③ merge_round_content 增补 ④b/④c（措辞微调的重述也要去重）
+      #   无 mbse.db 时 C 组（真机标定）SKIP，A/B/D 组照跑。
+      - name: Guard 自主续跑停止与去重（31 项，真机标定组无库时 SKIP）
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_auto_continue_stop.py
+
+      # ── 2026-11-15 新增：引用编号的**单一真源**（引用登记簿）──
+      #   真机故障：conv 999999033 / msg 6603 —— 走工具检索（Skill 硬门槛的主路径）时
+      #   citations 为空、正文 5 个 [n] 全部越界、点不动，而检索其实命中了 11 次。
+      #   根因：提示词注入与工具输出是**两套编号坐标系**，citations 只认前者。
+      #   修法：一本引用登记簿（初始检索 + 工具检索登记到同一处），两边都读它。
+      - name: Guard 引用编号单一真源（23 项，真机组无库时 SKIP）
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_citation_registry.py
+
+      # ── 2026-11-15 新增：正文条款号（§x.y）自动链接到来源片段 ────────────
+      #   同一故障的**第二层**：登记簿让 citations 有内容后，正文里仍然点不到东西 ——
+      #   真机 msg 6614：正文 §5.2.5 出现 20 次、§x.y 合计 41 次，`[n]` 0 处。
+      #   提示词已写成"硬性要求"，仍无效：结构化输出时模型天然只写条款号
+      #   （JSON 的 clause_ref 语义上就该放 "…§5.2.5 Unambiguous"）。
+      #   ⇒ 不指望模型：前端用后端已算好的 anchor，把正文 §x.y 直接渲染成可点元素。
+      #   判据用 node 跑 05-markdown.js 的**真函数体**（不复刻，避免两套实现漂移）。
+      - name: Guard 正文条款号自动链接（22 项，含 3 组变异自证；无 node/无库时 SKIP）
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_citation_clause_link.py
+
+      # ── 2026-11-15 新增：SHACL 独立校验交叉验证 ────────────────────────
+      # 本工程所有实例校验都靠自研实现；若自研有 bug，**没有任何人能发现**。
+      # 接 pySHACL（W3C SHACL 参考实现之一）做独立校验，与自研逐维度比对：
+      #   数据类型 / 必填 / 枚举 三维要求"两边都检出且指向同一属性"，
+      #   唯一性维度**如实登记差异**（SHACL 无「全局唯一」构件，maxCount 只表达
+      #   单实例单值；要全局唯一须 SHACL-SPARQL）——不把差异硬凑成一致。
+      # 射程内已抓到自研漏发 sh:in（枚举约束对实例永不生效）。
+      - name: Guard SHACL 与自研校验器交叉一致（pySHACL，缺依赖 SKIP）
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_shacl_crosscheck.py
+
       - name: Guard 流式中断兜底落库（11 项）
         if: ${{ !cancelled() }}
         run: python tools/verify/verify_partial_persist.py
@@ -544,6 +694,22 @@ jobs:
       - name: Guard 环境可重建（资产快照 ↔ 库漂移 + 空库自举覆盖）
         if: ${{ !cancelled() }}
         run: python tools/verify/verify_asset_snapshot_sync.py
+
+      # 2026-11-15 P0/D1：视图生成能力已由 sysml_view_generation_* 技能承接，
+      # 8 个视图 Agent 已从库与快照同步永久移除。
+      # 只删库行会被资产快照自举复活：快照 agents 记录不含 status 列 ⇒
+      # INSERT 分支走 DDL 默认 'active'，比停用前更糟。
+      # 本步骤真跑 init_db() 到隔离空库，证明重建后 8 个名字仍 0 命中。
+      - name: Guard P0/D1 视图 Agent 已移除且不被资产自举复活
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_d1_view_agents_removed.py
+
+      # 2026-11-16 P1 前置：方案 §6 规定「P1 任何合并动作必须等 P0 跑出基线」。
+      # 本步骤把这条纪律变成判据：前置机制不健全 / 有人伪造 ready 声明即红；
+      # 当前无 live 基线时只报告 p1_release=blocked，不判红（属状态而非缺陷）。
+      - name: Guard P1 前置（基线门禁 + 拒绝伪造 ready 声明）
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_p1_prerequisite.py
 
       # pr 层的准入判据 = 「全新克隆 + 空库能绿」。本门禁是其静态部分：
       # 本机绝对路径 / 平台特定解释器 / 引用了未入库的 data 文件，三者任一即红。
@@ -657,6 +823,14 @@ jobs:
       - name: Guard 记忆分层（8 项）
         if: ${{ !cancelled() }}
         run: python tools/verify/verify_memory_tier.py
+
+      - name: Guard 记忆作用域隔离（22 项）
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_memory_scope_isolation.py
+
+      - name: Guard 自进化可感知性契约（45 项 + 3 组变异）
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_self_evolution_perception.py
 
       # ── LLM 可观测 ──
       - name: Guard LLM 健康探针（48 项）
@@ -983,9 +1157,6 @@ jobs:
         if: ${{ !cancelled() }}
         run: python tools/verify/verify_stream_event_log.py
 
-      - name: Guard run_id 作用域正确（真实建模验证抓出的崩溃，AST 级 + 9 处误报豁免）
-        if: ${{ !cancelled() }}
-        run: python tools/verify/verify_orch_run_id_scope.py
 
       # ── Task #43（2026-10-20）：编排观测性 trace（span 树）──────────────────
       # 锁的是"建好没人用"这一失效模式：orch_run_spans 表 + SpanCollector 服务 +
@@ -1114,15 +1285,6 @@ jobs:
       - name: Guard 8 阶段流水线子 Agent（齐备 + 可被 planner 选中，11 条 + 1 GAP）
         if: ${{ !cancelled() }}
         run: python tools/verify/verify_stage_pipeline_agents.py
-
-      # ── B4-7（2026-10-14）：沉淀流程复用的「泛词劫持」 ──────────────────
-      # 真实前端验证抓到：`_try_reuse_planner_flow` 的准入是 `score >= 2`，
-      # 而 `_flow_tokens` 是字符 bigram、模板名只有 12 个 bigram
-      # ⇒ **一个泛词就足以劫持整条编排**（「生成一份报告」被当成建模流程）。
-      # 本门禁用 3 条实测负样本锁住，并强制带「区分度」判据防空转。
-      - name: Guard 沉淀复用泛词劫持（B4-7，5 条 + 1 已知 GAP）
-        if: ${{ !cancelled() }}
-        run: python tools/verify/verify_reuse_gate.py
 
       # ── B5-2（2026-10-14）：能力中心「工具/MCP 配置无效」+「意图标签枚举化」 ──
       # ① 需认证的 MCP 此前**无法接入**：新增返回 {"ok":true}，紧接着 /test 就是
@@ -1350,6 +1512,105 @@ jobs:
         if: ${{ !cancelled() }}
         run: python tools/verify/verify_plan_guard.py
 
+      # 2026-11-09：三处建计划 prompt 的**字段奇偶性**。团队模式模板曾少列
+      # expected_output/tools/skills 三项，导致该路径子任务**永久无验收标准**
+      # 且不报错（实测 8 个 run 全 0%，普通编排同期 100%）。
+      - name: Guard plan prompt parity
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_plan_prompt_parity.py
+
+      - name: Guard harness verify safety
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_harness_verify_safety.py
+
+      # 2026-11-09：SysML 版本链的**差分方向**。diff 原只算 added_nodes，
+      # 于是"修订时把上一版的东西删了"在数据层结构上不报（全库 99.2% 版本无 removed，
+      # 而实算 86.5% 的父子版本对在丢元素）。本闸锁死：removed 必须算、nodes 必须去重、
+      # 有代码无视图的交付轮也必须建档。
+      - name: Guard sysml version diff
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_version_diff.py
+
+      # 2026-11-09：产物命名。此前 code 产物全叫「代码块 1（sysml）」/「代码文件 v0.1（SysML）」，
+      # 用户在清单里看不出是哪个模型。本闸锁死：主体识别优先级、多版本前缀一致、文件名合法。
+      - name: Guard artifact naming
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_artifact_naming.py
+
+      # 2026-11-10：需求分析五项优化（验收标准/工具可见性/后置质量闸/落库/变更台账）。
+      # 锁的判据里两条来自实测事故：800 Ah 被抽成 800 A、门禁把生产库写脏。
+      - name: Guard requirement optimization
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_requirement_optimization.py
+
+      # 2026-11-10：run 维度下沉到判据层。不变量事件 / context_audit / 机器回执
+      # 三处都要带 run_id —— 否则"上一批的工具调用能给这一批的待办背书"（假 machine）。
+      - name: Guard run scope criteria
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_run_scope_criteria.py
+
+      # 2026-11-10：上传去重。实测同名文档被两次导入（851/852，各 270 chunk）。
+      # 锁"同内容⇒skip / 同名异内容⇒warn"两类语义 + 前端提示接线。
+      - name: Guard upload dedup
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_upload_dedup.py
+
+      # 2026-11-10：编排可中断。最要紧的判据是「暂停 ≠ 销毁」：
+      # interrupted 的 cancelled 任务可重排，硬取消的同名任务不得复活。
+      - name: Guard orchestration interrupt
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_orch_interrupt.py
+
+      # 2026-11-09：待办完成态必须能区分「有机器回执」与「只是模型声称」。
+      # 关键判据：skill 注入不算回执（conv 990541 的 01:49 那条就是 skill，未独立执行）。
+      - name: Guard todo evidence
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_todo_evidence.py
+
+      # 2026-11-09：视图层级。实测全库 332 个视图的节点 parent 字段**全为空**，
+      # 渲染层的包框样式（node:parent）从未生效，BDD/PKG 永远平铺。
+      # 本闸锁死：只有 package 能当父、包可嵌包、防环、开关可回滚。
+      - name: Guard view hierarchy
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_view_hierarchy.py
+
+      # 2026-11-09：评测集语料指纹单一真源。实测构建器曾自拼 v1 指纹、
+      # 打分门禁用 v2 ⇒ 构建成功但评测集被拒绝使用，且构建侧看不到失败。
+      - name: Guard evalset fingerprint
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_evalset_fingerprint.py
+
+      # 2026-11-09：通用 Agent 内核（P0-1/P0-3/P1-1~P1-4/P2-1/P2-2）。
+      # 56 条行为级断言，每条含正常通过 + 变异必被拒；覆盖请求重建不变量、
+      # 单调否决与 shadow 零执行、三层 seam、profile 冲突、事件词表、计量同源、
+      # MCP 原子换世代。默认 shadow，不改线上返回值。
+      - name: Guard universal agent core
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_universal_agent_core.py
+
+      # 2026-11-09：三态开关此前「有读取、无登记」⇒ save_override 抛未知配置项、
+      # INFO 事件从未落盘 ⇒ 「shadow 确认无误报后切 enforce」无法执行。本闸锁死
+      # 配置三处同源、台账可持久化、就绪判据只看真实样本且变异必被拒。
+      - name: Guard invariant audit
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_invariant_audit.py
+
+      # 2026-11-09：把 5 项剩余边界的触发条件变成机器可判据（只读看板）。
+      # 状态只报告不做断言，未来合法演进不会误报红；硬断言只覆盖判据可用性与
+      # 双向变异自证。空库缺表时显式 SKIP，不伪装通过。
+      - name: Guard activation triggers
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_activation_triggers.py
+
+      # 2026-11-09：幽灵配置开关。排查路由基线时实测发现 6 个开关
+      # （explain_preempt_short / continue_inherit / generic_clarify /
+      #  multi_intent_clarify / platform_read_route / inherit_silent）
+      # 代码在读、注释承诺可回退，但 DEFAULT/SCHEMA/ENV 三处全无 ⇒
+      # save_override 与影子层都拒绝，A/B 根本做不了。本闸锁死「读取键必须登记」。
+      - name: Guard config switches
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_config_switches.py
+
       - name: Guard react delegation
         if: ${{ !cancelled() }}
         run: python tools/verify/verify_react_delegation.py
@@ -1567,12 +1828,25 @@ jobs:
       - name: Guard 多工程作用域与新建任务归属 · 变异版（干净库绿，>15s）
         if: ${{ !cancelled() }}
         run: python tools/verify/verify_multi_project_scope_mutate.py
+
+      # ── 2026-11-15 新增：本体导出三格式（RDF/XML / Turtle / JSON-LD）────────
+      # 为什么进 nightly 而不是 pr：它要**真库全量本体**（读 mbse.db）+ rdflib
+      #   解析器；干净库/无 rdflib 时按设计 SKIP(rc=2)。
+      # 该门禁射程内抓到 3 个真 bug（都不是"没写"，而是"写了但读不出来"）：
+      #   ① to_turtle 局部名含 `/`（G/T值）⇒ PN_LOCAL 非法 ⇒ 整份 Turtle BadSyntax；
+      #   ② 插 skos:altLabel 时漏了分隔符 `;` 与 `@prefix skos:` ⇒ 非法；
+      #   ③ JSON-LD 顶层 `@id` + `@graph` 构成**命名图** ⇒ 普通 Graph 解析出 0 条
+      #      （"看起来有内容、读出来是空"最隐蔽）。
+      # 判据：三格式都能被 rdflib 解析 + 关键事实三路齐备 + 规模同量级 + 变异自证。
+      - name: Guard 本体导出三格式合法与语义等价（rdflib 全量解析 + 变异自证）
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_ontology_export_formats.py
   nightly-evals:
     # 同 nightly-guards：只在定时 / 手动触发。此前无 `if:` ⇒ 每个 PR 都跑评测
     #（还带 secrets.OPENAI_API_KEY），PR 上要么白等、要么因缺 secret 空转。
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
-    continue-on-error: true          # 定时跑失败不阻断（评测集漂移单独通知），见末尾
+    continue-on-error: true          # 定时跑失败不阻断（评测集漂移单独通知）；P0-3 已逐条定性，见 docs/评测/P0-3评测常态化与红项定性-20261115.md
     env:
       PYTHONIOENCODING: utf-8
     steps:
@@ -1630,14 +1904,19 @@ jobs:
       # 原设计是"失败并不静默绿"（防恒绿占位作业）—— 那是在本作业**什么都不跑**
       # 的前提下成立的。现在意图段每天真跑，作业不再是占位；检索段每日失败
       # 只会制造告警疲劳（结论永远是"未接线"，没有新信息）。
-      # 不静默的保证换成三样：①本步骤名与 ::warning:: 明说未接线及原因；
+      # 2026-11-15 P0-3 接线形态已明确：CI 侧**有意不跑检索**（语料库不入 git），
+      # 主路径是本机跑批器 tools/eval/run_nightly_local.py + 常驻门禁
+      # tools/verify/verify_eval_freshness.py（检查 eval_reports 新鲜度 /
+      # online_eval_queue pending / Golden Set 基线漂移，并写 checked-in 快照）。
+      # ⇒ 不再是「未接线」，而是「不在这一层跑、由另一层跑且可被机器验证」。
+      # 不静默的保证换成三样：①本步骤名与 ::warning:: 明说主路径在哪及原因；
       # ②注释里留全四方案决策矩阵；③ PR 门禁消费本地跑批器的 checked-in
       # 快照（docs/评测/nightly/），检索指标的退化不会因为这里跳过而看不见。
-      - name: ⚠ 检索段未接线（语料库不入 git；方案决策见上方注释）
+      - name: 检索段由本机跑批器承接（CI 不含语料库）
         if: steps.corpus.outputs.found != 'true'
         run: |
-          echo "::warning title=nightly 检索段未接线::mbse.db（约378MB，含用户会话/附件）不入 git，干净 checkout 无语料。"
-          echo "::warning::检索/生成质量评测的主路径是本机跑批器 tools/eval/run_nightly_local.py（报告 checked-in 后 PR 门禁消费）。"
+          echo "::warning title=检索段不在 CI 跑::mbse.db（约378MB，含用户会话/附件）不入 git，干净 checkout 无语料。"
+          echo "::warning::主路径=本机 tools/eval/run_nightly_local.py + tools/verify/verify_eval_freshness.py（常驻门禁，消费真库与 checked-in 快照）。"
           echo "::warning::本作业的意图路由段（上方）不受影响，每日真跑。"
 
       - name: 构建评测集（从真实语料派生 gold）

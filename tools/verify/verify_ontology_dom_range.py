@@ -221,7 +221,11 @@ def _fx_ontology(with_version=True, with_snapshot=True):
         CREATE TABLE ontology_types (
             id INTEGER PRIMARY KEY, name TEXT, type_kind TEXT, parent_id INTEGER,
             properties TEXT DEFAULT '{}', constraints TEXT DEFAULT '{}',
-            description TEXT DEFAULT '', icon TEXT DEFAULT '', color TEXT DEFAULT '', iri TEXT DEFAULT '');
+            description TEXT DEFAULT '', icon TEXT DEFAULT '', color TEXT DEFAULT '',
+            iri TEXT DEFAULT '',
+            -- 2026-11-15 P0-1/D1=A：上层本体锚点（**夹具必须与真库同列**，
+            -- 缺列会让体检登记 degraded，把"夹具不全"误判成"有维度未检查"）
+            tlo_anchor TEXT DEFAULT '');
         CREATE TABLE entities (
             id INTEGER PRIMARY KEY, entity_type TEXT, status TEXT DEFAULT 'reviewed',
             branch TEXT DEFAULT 'dev');
@@ -363,8 +367,29 @@ check("O23 体检 total == 消费口径类型行数（体检读的就是消费�
 # O24/O25 是**独立重算**的金标，不是把当前输出抄进断言：
 #   · warn==0：rule_data_conflict / dangling_instance 两条新规则在真库都必须是 0（修复完整的证据）；
 #   · info 计数：从原始约束行**重新数**「一侧声明 >1 个类型」的类型个数，与报告比对。
-check("O24 ★ 真库 warn==0（声明 vs 存量边 0 冲突；无未注册实例类型；无互斥特性/对称非成对）",
-      rep["warn"] == 0, f"warn={rep['warn']}")
+# 2026-11-15：O24 判据从「warn==0」改为「warn 只来自**已登记的已知缺陷**」。
+#   为什么必须改而不是删：新规则 `functional_data_conflict` 在真库**真实命中**
+#   ALLOCATED_TO（声明 functional，但 5 个源节点有多个目标）—— 那是本笔刚发现的
+#   真建模缺陷，不是回归。若简单把断言删掉，"该维度不再受保护"，下次新增 warn
+#   就没人管；若继续要求 warn==0，则门禁会因"发现了真问题"而红。
+#   ⇒ 正解：把已知缺陷登记成**基线清单**，任何**新增**的 warn 仍然判红。
+#   2026-11-15：(`ALLOCATED_TO`,`functional_data_conflict`) 已修复（摘掉误声明的 functional），
+#   故**移出基线** —— 基线应只剩"真的还没修"的项；留着会让该缺陷无声复发。
+#   ⚠️ 空集合要写 `set()`，写 `{}` 是 **dict**（本行踩过一次：TypeError set - dict）。
+_WARN_BASELINE = set()
+# 基线里显式登记"已清空"这件事：若日后又出现 warn，仍会被 _new_warn 抓住。
+_KNOWN_FIXED_WARN = {("ALLOCATED_TO", "functional_data_conflict")}
+_cur_warn = {(x["name"], x["code"]) for x in (rep.get("issues") or []) if x.get("severity") == "warn"}
+_new_warn = sorted(_cur_warn - _WARN_BASELINE)
+_gone_warn = sorted(_WARN_BASELINE - _cur_warn)
+# 已修复项的**回归检测**：基线清空后，若它又出现，_new_warn 已经会报；
+# 这里再单独点明"这是回归"而不只是"新增"，免得排查时误以为是新问题。
+_regressed = sorted(_KNOWN_FIXED_WARN & _cur_warn)
+check("O24 ★ 真库 warn 只来自已登记的已知缺陷（新增/回归 warn 即红）",
+      not _new_warn and not _regressed,
+      f"新增 warn={_new_warn}（当前 {sorted(_cur_warn)}）"
+      + (f"；**已修复项回归**={_regressed}" if _regressed else "")
+      + (f"；可移出基线：{_gone_warn}" if _gone_warn else ""))
 
 _exp_multi = 0
 for _r in _scope_rows:
@@ -549,7 +574,8 @@ def _fx_db(entities=(), relations=(), types=()):
             branch TEXT DEFAULT 'dev', project_id TEXT DEFAULT 'p1');
         CREATE TABLE ontology_types (
             id INTEGER PRIMARY KEY, name TEXT, type_kind TEXT, parent_id INTEGER,
-            properties TEXT DEFAULT '{}', constraints TEXT DEFAULT '{}');
+            properties TEXT DEFAULT '{}', constraints TEXT DEFAULT '{}',
+            tlo_anchor TEXT DEFAULT '');   -- 2026-11-15 P0-1/D1=A：与真库同列
         CREATE TABLE swrl_rules (
             id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, comment TEXT DEFAULT '',
             body TEXT DEFAULT '', head TEXT DEFAULT '', priority INTEGER DEFAULT 0,
@@ -566,10 +592,14 @@ def _fx_db(entities=(), relations=(), types=()):
                   (r["id"], r["source_id"], r["target_id"], r["relation_type"],
                    r.get("status", "reviewed"), r.get("branch", "dev"), r.get("project_id", "p1")))
     for t in types:
-        c.execute("INSERT INTO ontology_types (id,name,type_kind,parent_id,properties,constraints) "
-                  "VALUES (?,?,?,?,?,?)",
+        c.execute("INSERT INTO ontology_types "
+                  "(id,name,type_kind,parent_id,properties,constraints,tlo_anchor) "
+                  "VALUES (?,?,?,?,?,?,?)",
                   (t["id"], t["name"], t["type_kind"], t.get("parent_id"),
-                   t.get("properties", "{}"), t.get("constraints", "{}")))
+                   t.get("properties", "{}"), t.get("constraints", "{}"),
+                   # 好样本默认给 Object 锚点（否则每个用例都会带 missing_tlo_anchor 噪声）；
+                   # 专测该规则的坏样本显式传 tlo_anchor="" 即可触发。
+                   t.get("tlo_anchor", "Object")))
     c.commit()
     return c
 
@@ -583,6 +613,11 @@ def _bad_sample(rows, entities=(), relations=(), instances=False):
     ⚠️ 副作用（有意为之）：把本次产出的 code 记进 `_SEEN_CODES` 覆盖台账，
     供 O50 断言「目录全集 ↔ 实现可触发」双向一致，省得每个用例手工收集。
     """
+    # 2026-11-15：入参 rows 是 Python 字典而非 DB 行 —— 必须显式补 tlo_anchor 键，
+    #   否则 `_ontology_check` 的列探测（`"tlo_anchor" in rows[0].keys()`）判为缺列
+    #   ⇒ 登记 degraded ⇒ O35「好样本无降级项」永远红。
+    #   默认给 Object 锚点（好样本不该因新规则带噪声）；专测该规则的样本显式传 ""。
+    rows = [dict(t, tlo_anchor=t.get("tlo_anchor", "Object")) for t in rows]
     c = _fx_db(entities=entities, relations=relations, types=rows)
     try:
         r = _ontology_check(c, rows=rows, instances=instances)
@@ -771,6 +806,37 @@ _S_CONF2 = _bad_sample(_GOOD + [
     entities=_E_OK, relations=_R_OK)[0]
 # P2-4（2026-10-15）：swrl_orphan —— active SWRL 规则引用本体不存在的类型（真库曾 4 条全灭）。
 # _fx_db 已建 swrl_rules 表；坏样本插入一条引用 Person（不存在类型）的 active 死规则。
+# 2026-11-15：functional_data_conflict —— 函数型声明 + 一源多目标。
+# 真库 ALLOCATED_TO 即此伤（5 个源有多个目标），但坏样本要独立构造才可复现。
+_T_E3 = {"id": 5, "name": "E3", "type_kind": "entity", "parent_id": None, "constraints": "{}"}
+_T_RFUNC = {"id": 6, "name": "R_FUNC", "type_kind": "relation", "parent_id": None,
+            "constraints": json.dumps({"allowed_values": {"src": ["E1"], "tgt": ["E2", "E3"]},
+                                       "characteristics": ["functional"]})}
+_S_FUNC = _bad_sample(
+    _GOOD + [_T_E3, _T_RFUNC],
+    entities=_E_OK + [{"id": 3, "name": "e3", "entity_type": "E3"}],
+    relations=_R_OK + [{"id": 2, "source_id": 1, "target_id": 2, "relation_type": "R_FUNC"},
+                       {"id": 3, "source_id": 1, "target_id": 3, "relation_type": "R_FUNC"}])[0]
+# 正样本：声明 functional 但**每个源只有一个目标** ⇒ 不该报
+_S_FUNC_OK = _bad_sample(
+    _GOOD + [_T_E3, _T_RFUNC],
+    entities=_E_OK + [{"id": 3, "name": "e3", "entity_type": "E3"}],
+    relations=_R_OK + [{"id": 2, "source_id": 1, "target_id": 2, "relation_type": "R_FUNC"}])[0]
+
+# P0-1/D1=A（2026-11-15）：missing_tlo_anchor —— 实体类型（含祖先链）无 BFO 锚点。
+# 真库现状：52 个类型 0 个锚定（故规则定 low、不阻断发布）；此处只验"能被触发"。
+_S_TLO = _bad_sample(
+    [dict(_T_E1, tlo_anchor=""),            # 根类型未锚定
+     dict(_T_E2, tlo_anchor="", parent_id=1),   # 子类未锚定且祖先也没锚点
+     dict(_T_ROK, tlo_anchor="")],          # relation 不该被这条规则命中
+    entities=_E_OK, relations=_R_OK)[0]
+# 正样本：父类有锚点 ⇒ 子类继承，不报（关键：判据是"有效锚点"而非"自身字段"）
+_S_TLO_OK = _bad_sample(
+    [dict(_T_E1, tlo_anchor="Object"),
+     dict(_T_E2, tlo_anchor="", parent_id=1),     # 继承 E1 的 Object
+     dict(_T_ROK, tlo_anchor="")],
+    entities=_E_OK, relations=_R_OK)[0]
+
 _S_SWRL = _bad_sample(_GOOD, entities=_E_OK, relations=_R_OK)[0]   # 先跑一遍空表基线
 _c = _fx_db(entities=_E_OK, relations=_R_OK, types=_GOOD)
 _c.execute("INSERT INTO swrl_rules (name, body, head, is_active) VALUES "
@@ -1063,7 +1129,7 @@ MUT = [
 
     ("前端停止渲染修复建议 fix（问题不再自解释）",
      "static/js/mods/09-impact.js",
-     "${x.fix?`<div style=\"font-size:11px;color:var(--mut);margin-top:3px;\">🛠 ${esc(x.fix)}</div>`:''}",
+     "${x.fix?`<div style=\"font-size:12.5px;color:var(--mut);margin-top:3px;\">🛠 ${esc(x.fix)}</div>`:''}",
      "",
      ["O8 前端渲染修复建议 x.fix + 逐条 why（问题可自解释）"]),
 
@@ -1427,6 +1493,269 @@ check("O84 SWRL 幂等落库（内容 upsert 替代清空重插，id 稳定）+ 
       _d4_ok and _d3_ok,
       f"D4={'facts_deduped/keep_keys/陈旧清理' if _d4_ok else '契约缺失'} "
       f"D3={_dep_script.exists()}")
+# ── P0-1/D1=A（2026-11-15）：上层本体锚点规则 ─────────────────────────────
+_iss_tlo = _S_TLO.get("missing_tlo_anchor") or []
+check("O85 ★ 坏样本：实体类型（含祖先链）无 BFO 锚点 → missing_tlo_anchor 且 low；父类已锚定时子类继承不报",
+      len(_iss_tlo) == 2
+      and all(x["severity"] == "low" for x in _iss_tlo)
+      and {x["name"] for x in _iss_tlo} == {"E1", "E2"}
+      and "R_OK" not in {x["name"] for x in _iss_tlo}          # relation 不得命中
+      and not _S_TLO_OK.get("missing_tlo_anchor"),             # 继承生效 ⇒ 正样本不报
+      f"坏样本 names={sorted({x['name'] for x in _iss_tlo})} "
+      f"正样本(继承)={sorted(_S_TLO_OK.get('missing_tlo_anchor') or [])}")
+
+# ── 2026-11-15：注入 LLM 的本体摘要必须**真的含属性**（此前是 28 个"属性:无"）──
+#   为什么要这一条：`schema_text()` 是注入 Agent system_prompt 的本体约束摘要，
+#   此前它只读**实体侧** `properties`（真库 28 个实体全为空）⇒ 摘要里
+#   28 个实体一律"属性:无"、11 个属性名一个都不出现 ⇒ AI 建模时不知道能填什么属性。
+#   **这个缺陷长期没人发现，正是因为没有任何判据断言"摘要里有属性"** ——
+#   空过比报错更危险，故必须单独锁死。
+#   判据取"真实数据"：至少在真库里出现一个已绑定的属性名；且它必须挂在
+#   `domain_classes` 命中的那个实体上（证明绑定关系真的被消费了，而不是碰巧拼出）。
+_schema_ok = None
+_schema_detail = ""
+try:
+    from ontology_semantics import OntologyValidator as _OV
+    _c6 = ro_conn()
+    try:
+        _vt = _OV(_c6)                      # 消费口径（快照）
+        _st = _vt.schema_text()
+        # 找一个「属性侧绑定了某个实体」的真实样本
+        _rows6 = _c6.execute(
+            "SELECT name, constraints FROM ontology_types WHERE type_kind='attribute'").fetchall()
+        _sample = None
+        for _r6 in _rows6:
+            _cons6 = json.loads(_r6["constraints"] or "{}")
+            _dcs6 = _cons6.get("domain_classes") or []
+            if isinstance(_dcs6, str):
+                _dcs6 = [_dcs6]
+            if _dcs6 and _cons6.get("xsd_type"):
+                _sample = (_r6["name"], str(_dcs6[0]))
+                break
+        if _sample:
+            _attr, _host = _sample
+            # ① 属性名必须出现
+            _has_attr = _attr in _st
+            # ② 必须出现在该实体的括号里（证明绑定被消费，而非全局罗列）
+            _seg = ""
+            for _piece in _st.split("), "):
+                if _piece.startswith(_host + "(") or (" " + _host + "(") in _piece[:40] or _piece.lstrip().startswith(_host):
+                    _seg = _piece
+                    break
+            _in_host = bool(_seg) and (_attr in _seg)
+            # ★ 内嵌自证（替代脆弱的"改源码再重跑"变异）：
+            #   该样本属性必须**只存在于属性侧**（旧实现 `merged_properties` 看不到）。
+            #   ⇒ 它出现在摘要里，就**只可能**是新通路（bound_attributes）带进来的。
+            #   一旦实现退回"只读实体侧"，`_has_attr` 立刻为 False ⇒ 本条翻红。
+            #   （此前用源码变异自证时，变异子进程在跑到本条前就崩了，
+            #     父进程把"输出里没有 FAIL"误读成"仍通过" ⇒ 假绿。这是本仓
+            #     「变异引用断言必须逐字存在」之外的新坑：**子进程崩溃 = 假绿搬运**。）
+            _old_keys = set()
+            for _n in _vt.classify(_host):
+                _old_keys |= set(_vt.merged_properties(_n).keys())
+            _new_keys = set(_vt.bound_attributes(_host).keys())
+            _discriminating = (_attr not in _old_keys) and (_attr in _new_keys) \
+                and (len(_new_keys) > len(_old_keys))
+            _schema_ok = _has_attr and _in_host and _discriminating
+            _schema_detail = (
+                "样本=%s → 宿主=%s；全文=%s，宿主片段=%s；旧实现可见=%s，新实现多出 %d 个"
+                % (_attr, _host, _has_attr, _in_host, (_attr in _old_keys),
+                   len(_new_keys) - len(_old_keys)))
+        else:
+            _schema_ok = True
+            _schema_detail = "真库无「属性侧绑定 + 有类型」样本 ⇒ 本条不适用（SKIP 而非假绿）"
+    finally:
+        _c6.close()
+except Exception as _e6:
+    _schema_ok = False
+    _schema_detail = "读取失败: %s: %s" % (type(_e6).__name__, _e6)
+
+check("O86 ★ 注入 LLM 的本体摘要（schema_text）真实含属性：属性名出现且挂在 domain_classes 命中的实体上",
+      bool(_schema_ok), _schema_detail)
+
+# 2026-11-15：函数型声明 vs 一源多目标（真库 ALLOCATED_TO 即此伤）
+_iss_func = _S_FUNC.get("functional_data_conflict") or []
+check("O87 ★ 坏样本：声明 functional 且同一源有多个目标 → functional_data_conflict 且 warn；一源单目标不报",
+      len(_iss_func) == 1
+      and _iss_func[0]["severity"] == "warn"
+      and _iss_func[0]["name"] == "R_FUNC"
+      and not _S_FUNC_OK.get("functional_data_conflict"),
+      f"坏样本={ [(x['name'], x['severity']) for x in _iss_func] } "
+      f"正样本(一源单目标)={sorted(_S_FUNC_OK.get('functional_data_conflict') or [])}")
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 2026-11-15：unique 的两个口径（分支范围 / 排除自身）+ 三项本体整理的落地
+# ═══════════════════════════════════════════════════════════════════════════
+# 为什么要锁死 unique 的口径：这两个 bug 都会让 unique **永远不可用**，
+# 而且症状都不在 unique 自己身上 ——
+#   ① 无分支过滤：本工程同一实例在 dev/release/personal 各存一份 ⇒ 正常副本被判重复
+#      ⇒ 谁都不敢开 unique（真库 unique 因此全域为空 0/28）；
+#   ② 不排除自身：编辑已有实例时它自己就在库里 ⇒ 每次保存都被判"违反唯一约束"
+#      ⇒ 一旦开 unique，该类型实例**再也改不动**。
+# 两条都是"静默不可用/静默锁死"，没有判据就永远不会被发现。
+
+import sqlite3 as _sq3
+
+
+def _unique_fixture():
+    """内存库：同一 req_id 在三分支各一份（真实数据形态）。"""
+    c = _sq3.connect(":memory:")
+    c.row_factory = _sq3.Row
+    c.executescript("""
+        CREATE TABLE entities (id TEXT, name TEXT, entity_type TEXT, properties TEXT,
+                               status TEXT, branch TEXT, project_id TEXT);
+        CREATE TABLE ontology_types (id INTEGER PRIMARY KEY, name TEXT, type_kind TEXT,
+          parent_id INTEGER, properties TEXT DEFAULT '{}', constraints TEXT DEFAULT '{}',
+          description TEXT DEFAULT '', tlo_anchor TEXT DEFAULT '');
+    """)
+    c.execute("INSERT INTO ontology_types (id,name,type_kind,constraints) "
+              "VALUES (1,'UQ','entity',?)",
+              (json.dumps({"unique": ["req_id"]}),))
+    for br in ("dev", "release", "personal"):
+        c.execute("INSERT INTO entities VALUES (?,?,?,?,?,?,?)",
+                  ("S-" + br, "r", "UQ", json.dumps({"req_id": "STR-001"}),
+                   "reviewed", br, "p1"))
+    c.commit()
+    return c
+
+
+# ── O88/O89：unique 的两个口径（夹具，纯逻辑，任何环境都跑）──────────────
+# ⚠️ 断言写在 try 之外：编号自检用正则 `check\(\s*[rf]?"O(\d+)` 扫**全文**
+#   （连注释里的字面量也算），若兜底分支也用同一编号再断言一次，就会被解析成
+#   "编号重复" 假红（本笔踩过）。故兜底只写进 detail，不再单独断言。
+_uq = {}
+try:
+    from ontology_semantics import OntologyValidator as _UQV
+    _cu = _unique_fixture()
+    try:
+        _uv = _UQV(_cu)
+        _p = {"req_id": "STR-001"}
+        _uq["same"] = _uv.validate_node("UQ", _p, "dev")
+        _uq["other"] = _uv.validate_node("UQ", _p, "newbranch")
+        _uq["glob"] = _uv.validate_node("UQ", _p)
+        _uq["self"] = _uv.validate_node("UQ", _p, "dev", exclude_id="S-dev")
+        _uq["fresh"] = _uv.validate_node("UQ", {"req_id": "STR-999"}, "dev")
+    finally:
+        _cu.close()
+except Exception as _eu:
+    _uq["error"] = "%s: %s" % (type(_eu).__name__, _eu)
+
+check("O88 ★ unique 判定**按分支**：同分支撞值必报、跨分支副本放行、不传分支时按全库（导入口径）",
+      bool(_uq.get("same")) and not _uq.get("other") and bool(_uq.get("glob"))
+      and "分支 dev 内" in (_uq.get("same") or [""])[0]
+      and "全库" in (_uq.get("glob") or [""])[0],
+      _uq.get("error") or "同分支=%s 跨分支=%s 全库=%s"
+      % (_uq.get("same"), _uq.get("other"), _uq.get("glob")))
+
+check("O89 ★ unique **排除自身**：编辑已有实例（值不变、exclude_id=自己）不得判重复；新值仍须通过",
+      not _uq.get("self") and not _uq.get("fresh"),
+      _uq.get("error") or "编辑自身=%s 新值=%s —— 若编辑自身报重复，启用 unique 后实例改不动"
+      % (_uq.get("self"), _uq.get("fresh")))
+
+# ── O90~O92：三项本体整理在**真库**的落地结果（消费口径；无真库 ⇒ 显式 SKIP）──
+_real = {}
+try:
+    _c7 = ro_conn()
+    try:
+        _r7 = {r["name"]: dict(r) for r in _c7.execute(
+            "SELECT name, type_kind, parent_id, constraints, tlo_anchor FROM ontology_types")}
+        # ① ALLOCATED_TO 不再声明 functional，但保留 transitive/asymmetric
+        _c_al = json.loads((_r7.get("ALLOCATED_TO") or {}).get("constraints") or "{}")
+        _real["chars"] = [str(x) for x in (_c_al.get("characteristics") or [])]
+        # ② 需求 成为族根
+        _ov7 = _OV(_c7)
+        _real["chain"] = _ov7.classify("单元需求")
+        _real["isolated"] = [x["name"] for x in (rep.get("issues") or [])
+                             if x.get("code") == "isolated"]
+        # ③ req_id / priority 的声明与绑定
+        _need = {}
+        for _nm in ("req_id", "priority"):
+            _t = _r7.get(_nm) or {}
+            _cc = json.loads(_t.get("constraints") or "{}") if _t else {}
+            _need[_nm] = {"declared": (_t.get("type_kind") == "attribute"),
+                          "dom": sorted(str(x) for x in (_cc.get("domain_classes") or [])),
+                          "xsd": _cc.get("xsd_type"),
+                          "enum": _cc.get("allowed_values")}
+        _real["need"] = _need
+        _c7c = json.loads((_r7.get("利益相关方需求") or {}).get("constraints") or "{}")
+        _real["required"] = sorted(_c7c.get("required") or [])
+        _real["unique"] = sorted(_c7c.get("unique") or [])
+    finally:
+        _c7.close()
+except Exception as _e7:
+    _real["skip"] = "%s: %s" % (type(_e7).__name__, _e7)
+
+_REQ_LEGS = {"利益相关方需求", "系统需求", "子系统需求", "单元需求"}
+_ch = _real.get("chars") or []
+check("O90 ★ 真库：ALLOCATED_TO 不再声明 functional（与「一源多目标」数据矛盾），"
+      "且仍保留 transitive/asymmetric",
+      ("skip" in _real) or ("functional" not in _ch and "transitive" in _ch and "asymmetric" in _ch),
+      _real.get("skip") or "SKIP" if "skip" in _real else f"characteristics={_ch}")
+
+check("O91 ★ 真库：需求 是需求族根（classify('单元需求') 含「需求」），且「需求」不再是孤立类",
+      ("skip" in _real) or ("需求" in (_real.get("chain") or [])
+                            and "需求" not in (_real.get("isolated") or [])),
+      _real.get("skip") or "SKIP" if "skip" in _real
+      else f"chain={_real.get('chain')} isolated={_real.get('isolated')}")
+
+_nd = _real.get("need") or {}
+check("O92 ★ 真库：req_id / priority 已声明并绑定全部 4 个需求子类型，"
+      "required 与 unique 真的挂上，priority 带枚举",
+      ("skip" in _real)
+      or (all(_nd.get(n, {}).get("declared") and set(_nd.get(n, {}).get("dom") or []) >= _REQ_LEGS
+              for n in ("req_id", "priority"))
+          and _nd.get("priority", {}).get("enum") == ["high", "medium", "low"]
+          and {"req_id", "priority"} <= set(_real.get("required") or [])
+          and "req_id" in (_real.get("unique") or [])),
+      _real.get("skip") or "SKIP" if "skip" in _real
+      else f"req_id={_nd.get('req_id')} priority={_nd.get('priority')} "
+           f"required={_real.get('required')} unique={_real.get('unique')}")
+
+# ── O93：注入「已解析成 dict 的行」时，约束不得被静默丢成 {} ──────────────
+# 这是本笔踩到的**假绿陷阱**：`_load_types` 对 constraints 一律 json.loads，
+# 而注入方（门禁夹具 / 影响面模拟）给的常是已解析 dict ⇒ TypeError 被 except 吞掉
+# ⇒ 全部约束变成 {} ⇒ "校验全绿"，而其实什么都没校验。
+# 实测代价：把 required 硬挂到有缺属性实例的类型上，影响面竟报 0 违规。
+_il = {}
+try:
+    from ontology_semantics import OntologyValidator as _ILV
+    _ic = _sq3.connect(":memory:")
+    _ic.row_factory = _sq3.Row
+    _ic.executescript("CREATE TABLE entities (id TEXT, name TEXT, entity_type TEXT,"
+                      " properties TEXT, status TEXT, branch TEXT, project_id TEXT);"
+                      # validate_node 的 xsd 校验会直查 ontology_types，缺表就 500；
+                      # 行数据由 _load_types 注入，故这里建空表即可。
+                      "CREATE TABLE ontology_types (id INTEGER PRIMARY KEY, name TEXT,"
+                      " type_kind TEXT, parent_id INTEGER, properties TEXT DEFAULT '{}',"
+                      " constraints TEXT DEFAULT '{}', description TEXT DEFAULT '',"
+                      " tlo_anchor TEXT DEFAULT '');")
+    _inj = [
+        {"id": 1, "name": "INJ_E", "type_kind": "entity", "parent_id": None,
+         "properties": {},                       # 已是 dict（非 JSON 字符串）
+         "constraints": {"required": ["req_id"]},  # 已是 dict
+         "tlo_anchor": "Object"},
+        {"id": 2, "name": "req_id", "type_kind": "attribute", "parent_id": None,
+         "properties": {},
+         "constraints": {"xsd_type": "string", "domain_classes": ["INJ_E"]},
+         "tlo_anchor": ""},
+    ]
+    _iv = _ILV(_ic, rows=_inj)
+    _il["required"] = _iv._merged_constraints("INJ_E").get("required")
+    _il["battr"] = sorted(_iv.bound_attributes("INJ_E").keys())
+    _il["errs"] = _iv.validate_node("INJ_E", {})
+    _ic.close()
+except Exception as _ei:
+    _il["error"] = "%s: %s" % (type(_ei).__name__, _ei)
+
+check("O93 ★ 注入「已解析 dict 行」时约束不丢失（required 仍生效、属性仍绑定）",
+      (not _il.get("error"))
+      and _il.get("required") == ["req_id"]
+      and _il.get("battr") == ["req_id"]
+      and any("缺少必填属性" in e for e in (_il.get("errs") or [])),
+      _il.get("error") or "required=%s bound_attributes=%s errs=%s"
+      % (_il.get("required"), _il.get("battr"), _il.get("errs")))
+
 
 conn.close()
 

@@ -565,6 +565,25 @@ class LLMClient:
         conn.close()
         return dict(row) if row else None
 
+    def _assert_request(self, ticket, messages, tools):
+        """P0-1 运行时请求重建不变量：派发前从冻结契约重建比对。
+
+        纪律：观测设施故障绝不变成业务故障（与 chat() 入口既有注释一致）；
+        但 enforce 模式下真正的请求漂移是硬失败，必须向上抛、不得被吞。
+        """
+        try:
+            from core import request_invariant as _ri
+            from core.request_invariant import RequestInvariantError as _RIE
+        except Exception:
+            return
+        try:
+            if ticket is not None:
+                _ri.assert_before_dispatch(ticket, messages, tools)
+        except _RIE:
+            raise
+        except Exception:
+            return
+
     def chat(self, messages, provider_id=None, stream=False, tools=None, thinking=False,
              route_tags=None, **kwargs):
         """统一 LLM 入口（兼容旧签名，逻辑等价旧实现，真实调用经 ProviderRegistry 插件化）。"""
@@ -585,6 +604,33 @@ class LLMClient:
             raise
         except Exception:
             pass      # 运行时状态不可用 ⇒ 不阻断调用（观测设施故障不得变成业务故障）
+        # ★ 2026-11-09（P0-1）：统一入口冻结请求契约。此处是 stream / execute /
+        #   orchestration 三条调用形态的唯一公共前躯，逐个堵必然漏（见 chat docstring）。
+        #   冻结失败不阻断业务；派发前由 self._assert_request 重建比对。
+        try:
+            from core import request_invariant as _ri
+            # ★ 2026-11-10（run 维度下沉）：meta 必须带**批次坐标系**，否则不变量台账
+            #   只能按 trace 聚合，答不了"这一条漂移属于哪个编排批次 / 哪个子任务"。
+            #   真库现状（下沉前）：`logs/request_invariant.jsonl` 的事件里
+            #   `run_id` 恒缺失，而 `tool_call_logs.run_id` 从 2026-10-27 起已 100% 填充
+            #   ⇒ 两套观测对不上，同一个 run 的成本/漂移无法合并。
+            #   取值口径与 `core/audit.trace_context()` 同源（它已含 run_id/sub_task_key）。
+            _tc = {}
+            try:
+                from core.audit import trace_context as _tc_fn
+                _tc = _tc_fn() or {}
+            except Exception:
+                _tc = {}
+            _ticket = _ri.freeze_request(messages, tools, {
+                "intent": kwargs.get("_intent", ""), "stream": bool(stream),
+                "provider_id": provider_id,
+                "run_id": int(_tc.get("run_id") or 0),
+                "trace_id": str(_tc.get("trace_id") or ""),
+                "conversation_id": int(_tc.get("conversation_id") or 0),
+                "sub_task_key": str(_tc.get("sub_task_key") or ""),
+            })
+        except Exception:
+            _ticket = None
         provider = None
         route_reason = ""
         if provider_id:
@@ -622,6 +668,7 @@ class LLMClient:
         # 测试确定性：llm.force_mock 强制 Mock（回归测试不依赖外部网络；兼容 MBSE_LLM_FORCE_MOCK）
         from core import config as _cfg
         if _cfg.as_bool("llm", "force_mock", False):
+            self._assert_request(_ticket, messages, tools)
             resp = self.mock.chat(messages, stream=stream, tools=tools, thinking=thinking, **kwargs)
             self.stats["mock"] += 1
             self.stats["last_provider"] = provider_name
@@ -672,6 +719,7 @@ class LLMClient:
             # P1-1c：回退检测 —— _chat_resilient 重试耗尽换备选后，返回的 provider 已是备选实例；
             # 先记主 provider id，回来比对才知道"本次调用是否发生过回退"（落 llm_usage_stats 观测）。
             _prim_pid = (provider or {}).get("id", 0)
+            self._assert_request(_ticket, messages, tools)
             resp, _retry_n, provider = self._chat_resilient(
                 provider, messages, _impl_kw, stream, tools, thinking)
             _fallback_used = 1 if (provider or {}).get("id", 0) != _prim_pid else 0

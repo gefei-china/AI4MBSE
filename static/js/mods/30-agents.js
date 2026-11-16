@@ -255,7 +255,7 @@ async function loadMCPServers() {
     ${builtinNote}
     ${err}
     <div style="margin-top:6px;display:flex;gap:6px;">
-      <button class="btn sm ghost" onclick="testMCP(${s.id})">🔌 测试</button>
+      <button class="btn sm ghost" onclick="testMCP(${s.id})" title="initialize + tools/list 连通测试，并刷新工具清单/参数契约">🔌 测试/发现</button>
       <button class="btn sm ghost" onclick="editMCP(${s.id})">✏️</button>
       <button class="btn sm ${s.enabled===0?'ok':'ghost amb'}" onclick="toggleMCPStatus(${s.id},${s.enabled===0?1:0},'${escA(s.name)}')">${s.enabled===0?'启用':'停用'}</button>
       ${s.builtin?'<span style="font-size:12px;color:var(--mut);align-self:center;">内置不可删</span>':(s.scope==='public'?'<span class="st" style="background:#e8f5e9;color:#2e7d32;align-self:center;">市场在售</span>':`<button class="btn sm ghost" onclick="marketPublishFrom('mcp','${esc(s.name.replace(/'/g,"\\'"))}')">⬆ 发布</button><button class="btn sm red" onclick="deleteMCP(${s.id},'${escA(s.name)}')">删除</button>`)}
@@ -329,42 +329,131 @@ function editMCP(id) {
     document.getElementById('f-tool-desc').value = s.description||'';
     setTransportSelect(document.getElementById('f-tool-transport'), s.transport);
     document.getElementById('f-tool-url-mcp').value = s.endpoint||'';
-    // Headers：出参已脱敏（只有 {key: {set, len}}），回显 key 名 + 已配置标记
+    // Headers：出参已脱敏（只有 {key: {set, len}}）⇒ 只读行显示 Key + 掩码
+    _hdrDeleted = [];                      // 每次打开弹窗重置删除台账
     const hdrList = document.getElementById('tool-headers-list');
     if (hdrList) {
       hdrList.innerHTML = '';
       const masked = s.headers_masked || {};
       const keys = Object.keys(masked);
-      if (!keys.length) addToolHeader();
-      else keys.forEach(k=>{
-        const info = masked[k] || {};
-        // ⚠️ 先算好 title 再拼进 innerHTML：三元表达式里直接内嵌中文全角括号极易漏闭合括号，
-        //   而 `node --check` 会当场拦下（本次即由此发现）。
-        const tip = info.set
-          ? ('已配置（长度 ' + info.len + '，出于安全不回显）；留空=保持原值，填入新值=覆盖')
-          : '尚未配置；填入即新增';
-        const row = document.createElement('div');
-        row.className = 'form-row';
-        row.style.cssText = 'display:flex;gap:6px;align-items:center;';
-        // ⚠️ 值**故意留空**：占位符说明"已配置且不展示"，留空保存时后端按"未提供"处理
-        //   （`headers=None` 保持原值）⇒ 用户不碰它就不会把凭据清掉。
-        row.innerHTML =
-          '<input class="tool-hdr-key" placeholder="Key" title="请求头名称" ' +
-          'style="flex:1;border:1px solid var(--line);border-radius:6px;padding:4px 8px;font-size:13.5px;" value="'+esc(k)+'">' +
-          '<input class="tool-hdr-val" placeholder="留空则保持原值" title="'+esc(tip)+'" ' +
-          'style="flex:1.5;border:1px dashed var(--line);border-radius:6px;padding:4px 8px;font-size:13.5px;" value="">' +
-          '<button class="btn sm ghost" onclick="this.parentElement.remove()" title="移除该请求头" ' +
-          'style="padding:2px 8px;font-size:12.5px;">✕</button>';
-        hdrList.appendChild(row);
-      });
+      if (!keys.length) {
+        addToolHeader();                   // 一个都没有：给一条空行直接填
+      } else {
+        keys.forEach(k => {
+          const info = masked[k] || {};
+          const maskText = info.set ? ('******（' + info.len + ' 位）') : '（空值）';
+          hdrList.appendChild(_hdrRow('masked', k, maskText));
+        });
+      }
     }
-  }).catch(e=>{ toast('加载 MCP 配置失败：'+(e && e.message || e)); });
+    // ★ 2026-11-06：把「当前生效状态」直接摆在编辑框里，用户不必回到卡片去看。
+    renderMcpStatus(s);
+    _curMcpId = id;
+    // ★ 2026-11-06：工具清单入口的摘要（不展开也先告诉用户"有多少、几个是写"），
+    //   并清掉上一次打开其它 MCP 时的缓存/面板状态（否则会串到上一个服务的工具）。
+    _mcpToolsCache = null;
+    (function(){
+      const panel = document.getElementById('f-mcp-tools-panel');
+      if(panel) panel.style.display = 'none';
+      const list = document.getElementById('f-mcp-tools-list');
+      if(list) list.innerHTML = '';
+      const q = document.getElementById('f-mcp-tools-q'); if(q) q.value = '';
+      const f = document.getElementById('f-mcp-tools-filter'); if(f) f.value = '';
+      const sum = document.getElementById('f-mcp-tools-sum');
+      if(sum){
+        let n = 0;
+        try{ const t = typeof s.tools === 'string' ? JSON.parse(s.tools||'[]') : (s.tools||[]); n = (t||[]).length; }catch(e){ n = 0; }
+        sum.textContent = n ? ('服务端提供 ' + n + ' 个工具（点开可看档位与用途）') : '（尚无工具清单，先点上方测试连通）';
+      }
+    })();
+  }).catch(e=>{ toast('加载 MCP 配置失败：'+(e && (e.message||e))); });
+}
+
+// ── MCP「是否还生效」的可见化（2026-11-06） ─────────────────────────────
+// 用户诉求原话：「MCP 还是没看到测试入口，怎么简单进行测试看是否还生效」
+// 关键点：用户要的是「还生效吗」，不只是「能连通吗」⇒ 状态与测试都要给。
+//   生效判据（按后端真实消费口径）：mcp_servers.status='online' 且 enabled=1
+//   —— 只有这两条同时成立，工具才会被注入会话（见 repositories/agent_repo.py）。
+let _curMcpId = 0;
+
+function renderMcpStatus(s) {
+  const el = document.getElementById('f-mcp-status');
+  if (!el) return;
+  if (!s) { el.innerHTML = '<span style="color:var(--mut);">（新增后再测试）</span>'; return; }
+  const online = s.status === 'online';
+  const enabled = s.enabled !== 0;
+  const toolN = (() => { try { const t = typeof s.tools === 'string' ? JSON.parse(s.tools || '[]') : (s.tools || []); return Array.isArray(t) ? t.length : 0; } catch (e) { return 0; } })();
+  const eff = online && enabled;
+  const badge = (ok, txt) => '<span class="badge ' + (ok ? 'g' : 'r') + '">' + txt + '</span>';
+  el.innerHTML =
+    '<div>生效状态：' + badge(eff, eff ? '✅ 生效中' : '❌ 未生效') +
+      (eff ? '' : '<span style="margin-left:6px;color:var(--mut);">原因：' +
+        (!enabled ? '已被停用' : 'MCP 服务离线（鉴权或连通失败）') + '</span>') + '</div>' +
+    '<div style="margin-top:3px;">连接：' + badge(online, online ? '在线' : '离线') +
+      ' · 工具 ' + toolN + ' 个' +
+      (s.last_check ? ' · 上次巡检 ' + esc(String(s.last_check).slice(5, 19)) : '') + '</div>' +
+    (!online && s.last_error
+      ? '<div style="margin-top:3px;color:var(--red,#A32D2D);font-size:12px;word-break:break-all;">错误：' + esc(String(s.last_error).slice(0, 160)) + '</div>'
+      : '');
+}
+
+async function testMcpFromForm() {
+  const btn = document.getElementById('f-mcp-test-btn');
+  const res = document.getElementById('f-mcp-test-result');
+  if (!_curMcpId) {
+    toast('先保存这个 MCP 服务器，再点测试（新增态还没有服务端记录）');
+    return;
+  }
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ 测试中…'; }
+  if (res) { res.style.display = 'block'; res.style.background = 'var(--blue-l)'; res.style.color = 'var(--blue-d)'; res.textContent = '正在握手并拉取工具清单…'; }
+  try {
+    // 走 /discover：同时刷新在线状态、工具清单与参数契约（比只测 /test 更有用）
+    const r = await api('/api/studio/mcp-servers/' + _curMcpId + '/discover', { method: 'POST' });
+    if (r && r.ok !== false) {
+      const n = (r.tools || []).length;
+      if (res) {
+        res.style.background = 'rgba(47,133,90,.10)';
+        res.style.color = '#2f855a';
+        res.textContent = '✅ 连通成功：' + n + ' 个工具 · ' + (r.latency_ms || '-') + 'ms'
+          + (r.protocol ? ' · 协议 ' + r.protocol : '') + '。状态已刷新，本对话框下方「生效状态」同步更新。';
+      }
+      // 重新拉一次详情，让状态行立即反映新结果
+      try {
+        const items = await api('/api/studio/mcp-servers');
+        const s = (items || []).find(x => x.id === _curMcpId);
+        if (s) renderMcpStatus(s);
+      } catch (e) {}
+      if (typeof loadMCPServers === 'function') loadMCPServers();
+      if (typeof capRender === 'function') { try { capRender('st-mcp'); } catch (e) {} }
+    } else {
+      if (res) {
+        res.style.background = 'rgba(163,45,45,.08)';
+        res.style.color = '#A32D2D';
+        res.textContent = '❌ 失败：' + ((r && (r.error || r.note)) || '未知错误');
+      }
+    }
+  } catch (e) {
+    if (res) {
+      res.style.background = 'rgba(163,45,45,.08)';
+      res.style.color = '#A32D2D';
+      res.textContent = '❌ 请求失败：' + (e && (e.message || e));
+    }
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = '🔌 测试连通并刷新'; }
+  }
 }
 async function testMCP(id) {
-  toast('正在测试连通…');
+  toast('正在测试连通并刷新工具清单…');
+  // ★ 2026-11-06：端点从 /test 改为 /discover。实测原因：
+  //   /test 成功路径调用 update_mcp_status(..., tools) 时拼出 `tools=?, , last_error=...`
+  //   ⇒ SQLite `near ",": syntax error` ⇒ 502，且异常分支会把服务**标成 offline**
+  //   （点一次「测试」反手把在线服务弄下线）。后端 studio_repo.py 已修，
+  //   但运行中的服务仍加载旧代码（需重启才生效）⇒ 前端先走 /discover 绕过。
+  //   /discover 同样做 initialize + tools/list，返回字段 tools/latency_ms/protocol 与 /test 兼容，
+  //   且额外落库 tool_meta + last_discover ⇒ 一次点击同时完成「测试连通」与「动态发现」。
   try {
-    const r = await api(`/api/studio/mcp-servers/${id}/test`, {method:'POST'});
-    if(r.ok!==false) toast(`✅ 连通成功：${r.tools.length} 工具 / ${r.latency_ms}ms${r.protocol?' / 协议 '+r.protocol:''}`);
+    const r = await api(`/api/studio/mcp-servers/${id}/discover`, {method:'POST'});
+    if(r.ok!==false) toast(`✅ 连通并已发现：${(r.tools||[]).length} 工具 / ${r.latency_ms}ms${r.protocol?' / 协议 '+r.protocol:''}`);
     else toast(`❌ 失败：${r.error||r.note||''}`);
   } catch(e) { toast('❌ 测试失败：'+e.message); }
   loadMCPServers();
@@ -375,6 +464,151 @@ async function deleteMCP(id, name) {
   await api(`/api/studio/mcp-servers/${id}`, {method:'DELETE'});
   toast('已删除'); loadMCPServers(); loadMinePlugins(); loadMarket(); loadMarketManage();
 }
+
+// ══════════════════════════════════════════════════════════════════════════
+// MCP 工具清单查看（2026-11-06）
+// 用户诉求：「MCP 的工具集合在哪里可以看到，是否可以在 MCP 的编辑页面提供查看入口」
+//
+// 为什么需要：工具清单此前只存库里（mcp_servers.tool_meta），界面只有能力中心卡片上
+//   「工具 71 个」一个数字 ⇒ 无法回答"提供了什么、哪些是写操作"。
+//   而 71 个里 **42 个非只读** —— 这恰恰是最该被看见的部分。
+//
+// 判据：清单来自 `/api/studio/mcp-servers/{id}/tools`，它合并
+//   `tools` 表的 side_effect 标注 + `tool_meta` 的描述；
+//   未同步过的工具用派生值兜底（避免"MCP 刚发现、界面显示空清单"）。
+// ══════════════════════════════════════════════════════════════════════════
+let _mcpToolsCache = null;
+
+async function toggleMcpTools(){
+  const panel = document.getElementById('f-mcp-tools-panel');
+  if(!panel) return;
+  if(panel.style.display !== 'none'){ panel.style.display = 'none'; return; }
+  if(!_curMcpId){ toast('先保存这个 MCP 服务器，再查看工具清单'); return; }
+  panel.style.display = 'block';
+  await loadMcpTools();
+}
+
+async function loadMcpTools(){
+  const list = document.getElementById('f-mcp-tools-list');
+  const sum = document.getElementById('f-mcp-tools-sum');
+  if(!list) return;
+  list.innerHTML = '<div style="padding:12px;color:var(--mut);font-size:12.5px;">正在读取工具清单…</div>';
+  try{
+    const r = await api(`/api/studio/mcp-servers/${_curMcpId}/tools`);
+    if(r && r.error){ list.innerHTML = '<div style="padding:12px;color:var(--red,#A32D2D);font-size:12.5px;">'+esc(r.error)+'</div>'; return; }
+    _mcpToolsCache = r;
+    if(sum){
+      const c = r.counts || {};
+      sum.innerHTML = '共 <b>'+ (r.total||0) +'</b> 个 · 只读 '+ (c.read||0)
+        + ' · 写 <b style="color:#BA7517;">'+ (c.write||0) +'</b>'
+        + ' · 破坏性 <b style="color:#A32D2D;">'+ (c.destructive||0) +'</b>'
+        + (r.last_discover ? ' · 上次发现 '+esc(String(r.last_discover).slice(5,19)) : '');
+    }
+    renderMcpTools();
+  }catch(e){
+    list.innerHTML = '<div style="padding:12px;color:var(--red,#A32D2D);font-size:12.5px;">读取失败：'+esc(e.message||e)+'</div>';
+  }
+}
+
+function renderMcpTools(){
+  const list = document.getElementById('f-mcp-tools-list');
+  if(!list || !_mcpToolsCache) return;
+  const q = (document.getElementById('f-mcp-tools-q')||{}).value || '';
+  const f = (document.getElementById('f-mcp-tools-filter')||{}).value || '';
+  const ql = q.trim().toLowerCase();
+  const items = (_mcpToolsCache.items || []).filter(it=>{
+    if(f && (it.side_effect||'read') !== f) return false;
+    if(!ql) return true;
+    return (String(it.name||'').toLowerCase().includes(ql)
+         || String(it.description||'').toLowerCase().includes(ql));
+  });
+  if(!items.length){
+    list.innerHTML = '<div style="padding:12px;color:var(--mut);font-size:12.5px;">无匹配工具</div>';
+    return;
+  }
+  const badge = (eff)=>{
+    const m = {read:['#EAF3DE','#3B6D11','只读'], write:['#FAEEDA','#854F0B','写'],
+               destructive:['#FCEBEB','#A32D2D','破坏性']}[eff] || ['#F1EFE8','#5F5E5A',eff||'-'];
+    return '<span style="flex:none;background:'+m[0]+';color:'+m[1]+';border-radius:4px;padding:1px 6px;font-size:11.5px;white-space:nowrap;">'+m[2]+'</span>';
+  };
+  list.innerHTML = items.map(it=>{
+    const src = it.side_effect_source === 'manual'
+      ? '<span style="color:#185FA5;font-size:11px;" title="人工设定，MCP 升级也不会被覆盖">manual</span>'
+      : '<span style="color:var(--mut);font-size:11px;" title="按平台契约自动派生，MCP 升级会跟着变">auto</span>';
+    const dep = it.status === 'deprecated'
+      ? '<span style="color:#A32D2D;font-size:11px;">（服务端已移除）</span>' : '';
+    // ★ 2026-11-06（用户：「显示标 manual 怎么操作」）：上一版**只展示、没给操作入口**
+    //   —— 用户能看到 manual/auto 标签，却无法把某个工具标成 manual（只能直接调接口）。
+    //   这里每行右侧加一个紧凑下拉：自动 / 只读 / 写 / 破坏性。
+    //   选「自动」= 交回派生（清掉 manual 标记并按当前规则重推）；
+    //   选其它三个 = 写 side_effect_source='manual'，此后 discover 永不覆盖。
+    const _eff = it.side_effect || 'read';
+    const opts = [['auto','自动'],['read','只读'],['write','写'],['destructive','破坏性']];
+    const selHtml = '<select class="mcp-eff-sel" data-name="' + escA(it.name) + '" '
+      + 'onchange="onMcpEffectChange(this)" title="设定该工具的副作用档位；选「自动」= 交回按平台契约派生" '
+      + 'style="flex:none;border:1px solid var(--line);border-radius:5px;padding:1px 3px;font-size:11.5px;'
+      + 'background:#fff;color:var(--mut);cursor:pointer;max-width:74px;">'
+      + opts.map(o=>'<option value="'+o[0]+'"'+(o[0]===_eff?' selected':'')+'>'+o[1]+'</option>').join('')
+      + '</select>';
+    return '<div style="display:flex;gap:8px;align-items:flex-start;padding:6px 10px;border-bottom:1px solid var(--line);">'
+      + badge(it.side_effect)
+      + '<div style="flex:1;min-width:0;">'
+      +   '<div style="font-size:12.5px;word-break:break-all;"><b>'+esc(it.name)+'</b> '+dep
+      +     '<span style="margin-left:6px;">'+src+'</span></div>'
+      +   '<div style="font-size:11.5px;color:var(--mut);line-height:1.5;margin-top:1px;">'
+      +     esc(String(it.description||'').slice(0,140) || '（无描述）')+'</div>'
+      + '</div>'
+      + selHtml + '</div>';
+  }).join('');
+}
+
+// 改档：把某个工具的副作用标成人工设定（或交回自动派生）
+// 判据：接口 POST /api/studio/mcp-servers/{sid}/tools/{name}/side-effect
+//   body {"side_effect": "read|write|destructive|auto"}
+//   返回 {"ok":true,"mode":"manual","side_effect":...} 或 {"ok":true,"mode":"auto",...}
+async function onMcpEffectChange(sel){
+  const name = sel.getAttribute('data-name') || '';
+  const val = sel.value;
+  if(!name || !_curMcpId) return;
+  sel.disabled = true;
+  try{
+    const r = await api('/api/studio/mcp-servers/' + _curMcpId
+      + '/tools/' + encodeURIComponent(name) + '/side-effect',
+      { method:'POST', body: JSON.stringify({ side_effect: val }) });
+    if(r && r.error){
+      toast('改档失败：' + r.error);
+      sel.disabled = false;
+      return;
+    }
+    if(val === 'auto'){
+      toast('已交回自动派生：' + name + '（会跟随平台契约变化）');
+    }else{
+      toast('已标为人工设定：' + name + ' → ' + val + '（此后 MCP 升级不会覆盖）');
+    }
+    // 原地刷新：保留搜索词 / 档位筛选 / 滚动位置，避免整块跳回顶部
+    await reloadMcpToolsKeepView();
+  }catch(e){
+    toast('改档失败：' + (e && e.message || e));
+    sel.disabled = false;
+  }
+}
+
+// 重新拉清单但保留用户在工具栏上的输入与滚动位置（改档后调用）
+async function reloadMcpToolsKeepView(){
+  const list = document.getElementById('f-mcp-tools-list');
+  const sc = list ? list.scrollTop : 0;
+  const qEl = document.getElementById('f-mcp-tools-q');
+  const fEl = document.getElementById('f-mcp-tools-filter');
+  const qv = qEl ? qEl.value : '';
+  const fv = fEl ? fEl.value : '';
+  await loadMcpTools();          // 内部会 renderMcpTools()，用的是当前 input 值
+  if(qEl) qEl.value = qv;
+  if(fEl) fEl.value = fv;
+  renderMcpTools();              // 按恢复后的条件再渲一次
+  const l2 = document.getElementById('f-mcp-tools-list');
+  if(l2) l2.scrollTop = sc;
+}
+
 // ── P0 平台化：Agent 管理 ──
 let agentEditId = null;
 let agentRunId = null;
@@ -704,10 +938,31 @@ async function loadProviderOptions(selectedId) {
 function editAgent(id) {
   agentEditId = id;
   showModal('agent');
+  // ★ 2026-11-06（用户：「agent 编辑页面顶部显示『新建 agent』表达不准确」）：
+  //   标题此前是**写死的**「新建 Agent」⇒ 编辑既有 Agent 时也显示"新建"，
+  //   用户无法判断这次保存是新增还是覆盖。
+  //   与 MCP/工具弹窗同口径（30-agents.js:320 / :1633 都用 `*-modal-title` 切换）。
+  //   ⚠️ 必须在 showModal 之后取（showModal 会重建 innerHTML）。
+  //   ⚠️ 用裸 `_agentsCache`，**不能写 `window._agentsCache`** —— 它是 `let` 声明
+  //      （12-chatsend.js:9），不会挂到 window 上，写 window 版恒为 undefined（静默失效）。
+  (function(){
+    const t = document.getElementById('agent-modal-title');
+    if(!t) return;
+    const by = (typeof _agentsCache !== 'undefined' && _agentsCache || []).find(x => x && x.id === id);
+    const nm = by ? (by.display_name || by.name) : '';
+    t.textContent = nm ? ('编辑 Agent「' + nm + '」') : '编辑 Agent';
+  })();
   loadProviderOptions();
   api('/api/studio/agents').then(items=>{
     const a = items.find(x=>x.id===id);
     if(!a) return;
+    // ★ 2026-11-06：异步回填时再设一次标题 —— 上面那处依赖 `_agentsCache`，
+    //   首次直接打开编辑（列表还没加载过）时缓存为空 ⇒ 只能显示通用「编辑 Agent」。
+    //   这里拿到真实对象后补精确名称（缓存为空也能显示对）。
+    (function(){
+      const t = document.getElementById('agent-modal-title');
+      if(t) t.textContent = '编辑 Agent「' + (a.display_name || a.name || ('#' + id)) + '」';
+    })();
     document.getElementById('f-name').value = a.name;
     document.getElementById('f-disp').value = a.display_name||'';
     _agentNameTouched = true;   // 编辑既有 Agent：标识名是路由键，绝不随展示名自动改写（要改由用户显式改）
@@ -835,6 +1090,14 @@ async function syncAgentTeam(aid){
 const _BIND_KINDS = ['skill','mcp','tool'];
 const _BIND_LABEL = {skill:'技能', mcp:'MCP', tool:'工具'};
 let _agentBindSets = {skill:new Set(), mcp:new Set(), tool:new Set()};
+// ★ 2026-11-06（事故：Agent#735 智源对接agent 的 MCP + 技能在 16:35:04 被**一次保存**清空）：
+//   `syncAgentBindings` 的语义是「按当前渲染状态做 diff」，旧绑定里没出现在当前集合中的
+//   一律 DELETE。于是只要出现「弹窗已打开、绑定列表还没完整渲染/回填」就点保存，
+//   就会把**用户根本没碰过**的绑定全部删掉（库里留下 agent_tool_unbind 审计，
+//   而用户以为"我只是打开看了一眼"）。
+//   ⇒ 只有用户在本轮**真的勾选/取消勾选过**（dirty）才允许执行删除；
+//     没动过就只做新增、绝不删除。这样"打开→保存"变成幂等操作。
+let _agentBindDirty = false;
 let _agentBindCands = {skill:[], mcp:[], tool:[]};   // 缓存候选（异步加载；未到时用已选值兜底）
 const _CB = 'width:auto;flex:none;margin:0;accent-color:var(--blue-d,#3478f6);cursor:pointer;';
 const _TX = 'flex:1;text-align:left;min-width:0;';
@@ -905,6 +1168,7 @@ async function _confirmImpact(kind, name, verb){
 async function loadAgentBindOptions(selected){
   const sel = new Set(selected||[]);
   _agentBindSets = {skill:new Set(), mcp:new Set(), tool:new Set()};
+  _agentBindDirty = false;   // ★ 每次打开弹窗/回填都从"未改动"起算（见 _agentBindDirty 注释）
   [...sel].forEach(k=>{
     const [t, n] = k.split(/:(.*)/s);
     if(n && t in _agentBindSets) _agentBindSets[t].add(n);
@@ -937,11 +1201,25 @@ async function loadAgentBindOptions(selected){
     _agentBindCands.mcp = (mcps||[]).map(m=>{
       const dis = (m.enabled===0 || String(m.enabled)==='0');
       const off = m.status !== 'online';
-      const note = dis ? '已停用（不参与发现）'
-                : off ? '离线（尚未测通 / 上次探测失败）' : '';
       const err = m.last_error ? String(m.last_error) : '';
+      // ★ 2026-11-06（用户：「agent 绑定 zhiyuan_dev_mcp 字段显示 mcp 下线，
+      //   你不是验证了是可用的嘛」）：**只写「（离线）」等于把排查甩给用户**。
+      //   实测那次是 Bearer 过期（401 invalid_token）—— 界面必须说出这个原因，
+      //   否则用户只能怀疑"是不是平台在乱报"。
+      //   口径：短因（鉴权 401 / 403 / 502 / 超时）→ 直接标在名称后面；
+      //        其它错误 → 只挂 title（避免把 URL + Mozilla 文档链接塞进折叠摘要）。
+      let _short = '';
+      if (off && !dis) {
+        if(/401/.test(err)) _short = '鉴权失败 401：凭据已失效，需重新签发';
+        else if(/403/.test(err)) _short = '拒绝访问 403';
+        else if(/502|Bad Gateway/i.test(err)) _short = '网关错误 502';
+        else if(/timeout|timed out/i.test(err)) _short = '连接超时';
+        else _short = '上次探测失败';
+      }
+      const note = dis ? '已停用（不参与发现）'
+                : off ? ('离线：' + _short) : '';
       return {value:m.name,
-              disp:m.name + (dis ? '（已停用）' : off ? '（离线）' : ''),
+              disp:m.name + (dis ? '（已停用）' : off ? ('（离线：' + _short + '）') : ''),
               note,
               title:[m.name, m.endpoint, note,
                      err ? ('上次错误：' + err.slice(0, 120) + (err.length > 120 ? '…' : '')) : ''
@@ -1026,6 +1304,9 @@ function renderBindChecks(kind){
 function bindToggle(kind, value, checked){
   if(!(kind in _agentBindSets) || value==null) return;
   if(checked) _agentBindSets[kind].add(value); else _agentBindSets[kind].delete(value);
+  // ★ 2026-11-06：记「用户这次真的动过绑定」。
+  //   只有动过才允许 syncAgentBindings 做**删除**（见那里的护栏）。
+  _agentBindDirty = true;
   _bindSumRefresh(kind);
 }
 function bindDdToggle(kind, ev){
@@ -1062,6 +1343,12 @@ async function syncAgentBindings(aid){
       await api(`/api/studio/agents/${aid}/tools`, {method:'POST', body:JSON.stringify({tool_type:t, tool_name:n})});
     }
     // 移除：旧绑定中但不在新选择 → DELETE（需先查 id）
+    // ★ 2026-11-06：**只有用户这轮真动过绑定才允许删**（见 _agentBindDirty 注释）。
+    //   事故：Agent#735 的 mcp+技能 在 16:35:04 被一次"打开就保存"清空，
+    //   而它正是会话 990480 的主 Agent ⇒ 之后无论意图多准都没有工具可用。
+    if(!_agentBindDirty){
+      return;   // 没动过 ⇒ 只保留上面的"新增"，一条也不删（幂等保存）
+    }
     if([...oldSet].some(k=>!wantSet.has(k))) {
       const stale = (a.tools||[]).filter(t=>!wantSet.has(`${t.tool_type}:${t.tool_name}`));
       for(const t of stale) await api(`/api/studio/agents/${aid}/tools/${t.id}`, {method:'DELETE'});
@@ -1070,6 +1357,11 @@ async function syncAgentBindings(aid){
 }
 function openAgentForm(){
   showModal('agent');
+  // ★ 2026-11-06：新建态标题（编辑态会被 editAgent 覆盖成「编辑 Agent「xxx」」）
+  (function(){
+    const t = document.getElementById('agent-modal-title');
+    if(t) t.textContent = '新建 Agent';
+  })();
   _agentNameTouched = false;            // 新建时标识名尚未被手动改过 → 跟随展示名自动建议
   document.getElementById('f-name').value = '';
   document.getElementById('f-disp').value = '';
@@ -1234,17 +1526,93 @@ function toggleToolType() {
   //   用户改了以为生效、实际毫无作用（本次一并藏起来，减少"改了没用"的困惑）。
   show('tool-resilience-box', !builtin && mode === 'http');
   show('tool-headers-box', !builtin);
+  // ★ 2026-11-06（用户反馈「执行通道：空着的，没作用就移除」）：
+  //   `renderToolChannel()` 只在**工具**编辑（showToolForm）里被调用，`editMCP()` 从不调用它
+  //   ⇒ MCP 编辑弹窗里这一整块永远是空白（不是"留空待填"，是"没人往里面写"）。
+  //   而 MCP 的"谁在执行"信息本来就在下面「传输方式」里（http/sse/stdio），
+  //   再加一个空白区块只会让人以为漏配了东西 ⇒ **MCP 类型直接隐藏该区**。
+  show('tool-channel-box', !builtin && mode !== 'mcp');
   // ⚠️ 这里曾因模板缺 #f-tool-name-hint 而拿到 null，紧接着 hint.title=... 抛出 TypeError，
   //    导致 showToolForm 后续回填一行都没跑 → 整个编辑表单空白。加空防御，别再让一个缺 id 炸掉全页。
   const hint = document.getElementById('f-tool-name-hint');
   if (hint) hint.title = (mode === 'mcp') ? '将作为运行时工具标识名' : '将作为运行时工具名，如 get_weather';
 }
+// ── 请求头编辑：三种行态（2026-11-06 重做） ───────────────────────────────
+// 旧实现的困惑（用户原话：「内容已经添加了还有个输入框提示词『留空则保持原值』，
+// 这个是什么意思，还可以编辑修改吗，有点奇怪」）：
+//   已保存的行同时出现「******（92 位，已保存）」和一个**空值输入框**，
+//   用户不知道这个空框该不该填、填了算修改还是算新增 ⇒ 语义冲突。
+// 新设计（每行一个 data-mode，判据只有一处）：
+//   · masked —— 已保存且未动：只读显示 Key + 掩码 + [改][✕]，**保存时不提交该 key**（后端保持原值）
+//   · edit   —— 用户点了「改」：出现输入框，填了新值才提交；留空=放弃修改，保存时仍按原值
+//   · new    —— 「＋ 添加一条」产生的空行：Key+Value 都填了才提交
+// ⇒ 这样"留空则保持原值"这句含糊提示彻底消失，改成显式的「改」按钮。
+let _hdrDeleted = [];   // 被用户删除的已保存 header key（提交 header_delete，由后端精确剔除）
+
+function _hdrRow(mode, key, maskText) {
+  const row = document.createElement('div');
+  row.className = 'form-row hdr-row';
+  row.dataset.mode = mode;
+  row.dataset.key = key || '';
+  row.style.cssText = 'display:flex;gap:6px;align-items:center;';
+  const btnCss = 'padding:2px 8px;font-size:12.5px;';
+  if (mode === 'masked') {
+    // 已保存：只读。key 用灰色静态文本（不可编辑 —— 改名等于删旧建新，容易误会）
+    row.innerHTML =
+      '<span class="hdr-k" style="flex:1;font-family:monospace;font-size:13px;color:var(--fg);" title="请求头名称">' + esc(key) + '</span>' +
+      '<span class="hdr-mask" style="flex:1.5;font-family:monospace;font-size:13px;color:var(--mut);" title="出于安全不回显明文，只显示长度">' + esc(maskText) + '</span>' +
+      '<button type="button" class="btn sm ghost" onclick="hdrStartEdit(this)" style="' + btnCss + '" title="改成新值（不改就保持原样）">改</button>' +
+      '<button type="button" class="btn sm ghost" onclick="hdrRemoveRow(this)" style="' + btnCss + ';color:var(--red,#A32D2D);" title="删除该请求头">✕</button>';
+  } else if (mode === 'edit') {
+    row.innerHTML =
+      '<span class="hdr-k" style="flex:1;font-family:monospace;font-size:13px;">' + esc(key) + '</span>' +
+      '<input class="tool-hdr-val" placeholder="输入新值（不填=放弃修改）" autocomplete="off" ' +
+      'style="flex:1.5;border:1px solid var(--blue-bd,#8ab4f8);border-radius:6px;padding:4px 8px;font-size:13.5px;">' +
+      '<button type="button" class="btn sm ghost" onclick="hdrCancelEdit(this)" style="' + btnCss + '" title="放弃修改，恢复原值">取消</button>' +
+      '<button type="button" class="btn sm ghost" onclick="hdrRemoveRow(this)" style="' + btnCss + ';color:var(--red,#A32D2D);">✕</button>';
+  } else {
+    row.innerHTML =
+      '<input class="tool-hdr-key" placeholder="Key，如 Authorization" autocomplete="off" style="flex:1;border:1px solid var(--line);border-radius:6px;padding:4px 8px;font-size:13.5px;">' +
+      '<input class="tool-hdr-val" placeholder="Value，如 Bearer xxx" autocomplete="off" style="flex:1.5;border:1px solid var(--line);border-radius:6px;padding:4px 8px;font-size:13.5px;">' +
+      '<button type="button" class="btn sm ghost" onclick="hdrRemoveRow(this)" style="' + btnCss + '">✕</button>';
+  }
+  return row;
+}
+
+function hdrStartEdit(btn) {
+  const row = btn.closest('.hdr-row');
+  if (!row) return;
+  const key = row.dataset.key || '';
+  const maskEl = row.querySelector('.hdr-mask');
+  const maskText = maskEl ? maskEl.textContent : '******';
+  row.replaceWith(_hdrRow('edit', key, maskText));
+  const inp = document.querySelector('.hdr-row[data-mode="edit"] .tool-hdr-val');
+  if (inp) inp.focus();
+}
+function hdrCancelEdit(btn) {
+  const row = btn.closest('.hdr-row');
+  if (!row) return;
+  // 取消 = 回到 masked（保留原掩码文本，不用重新拉接口）
+  const key = row.dataset.key || '';
+  row.replaceWith(_hdrRow('masked', key, '******（已保存）'));
+}
+function hdrRemoveRow(btn) {
+  const row = btn.closest('.hdr-row');
+  if (!row) return;
+  if (row.dataset.mode === 'masked' || row.dataset.mode === 'edit') {
+    const k = row.dataset.key;
+    if (k && _hdrDeleted.indexOf(k) < 0) _hdrDeleted.push(k);
+  }
+  row.remove();
+}
+
 function addToolHeader() {
   const list = document.getElementById('tool-headers-list');
-  const row = document.createElement('div');
-  row.className = 'form-row'; row.style.cssText = 'display:flex;gap:6px;align-items:center;';
-  row.innerHTML = '<input class="tool-hdr-key" placeholder="Key" style="flex:1;border:1px solid var(--line);border-radius:6px;padding:4px 8px;font-size:13.5px;"><input class="tool-hdr-val" placeholder="Value" style="flex:1.5;border:1px solid var(--line);border-radius:6px;padding:4px 8px;font-size:13.5px;"><button class="btn sm ghost" onclick="this.parentElement.remove()" style="padding:2px 8px;font-size:12.5px;">✕</button>';
+  if (!list) return;
+  const row = _hdrRow('new', '', '');
   list.appendChild(row);
+  const inp = row.querySelector('.tool-hdr-key');
+  if (inp) inp.focus();
 }
 
 const _PARAM_TYPE_ZH = {string:'字符串', integer:'整数', number:'数字', boolean:'布尔', array:'数组', object:'对象'};
@@ -1323,6 +1691,13 @@ let toolEditId = null;
 async function showToolForm(id) {
   toolEditId = id || null;
   showModal('tool');
+  // ★ 2026-11-06：新增态必须清掉上一条 MCP 的残留（否则「生效状态」会显示错的对象，
+  //   「测试连通」也会打到上一个服务器上）。这两项只对 MCP 编辑有意义。
+  _curMcpId = 0;
+  _hdrDeleted = [];
+  if (typeof renderMcpStatus === 'function') renderMcpStatus(null);
+  const _oldRes = document.getElementById('f-mcp-test-result');
+  if (_oldRes) { _oldRes.style.display = 'none'; _oldRes.textContent = ''; }
   let t = (id && _toolsCache) ? _toolsCache.find(x=>x.id===id) : null;
   // 2026-09-30（用户报告「编辑页参数全空」的根因修复）：
   //   自 2026-09-16「工具移出插件市场」改造后，st-mcp 页的工具列表改由**能力中心**渲染
@@ -1370,6 +1745,27 @@ async function showToolForm(id) {
   document.getElementById('f-tool-url-http').value = cfg.url || '';
   document.getElementById('f-tool-schema').value = t ? JSON.stringify(t.input_schema||{}, null, 1) : '';
   document.getElementById('f-tool-param-in').value = cfg.param_in ? JSON.stringify(cfg.param_in) : '';
+  // ★ 2026-11-07（P1b）：新模板字段回填（留着空 = 编辑时不清空已有模板）
+  const _fillJson = (id, v) => {
+    const el = document.getElementById(id);
+    if(el) el.value = (v && typeof v === 'object' && Object.keys(v).length) ? JSON.stringify(v, null, 1) : '';
+  };
+  _fillJson('f-tool-body', cfg.body);
+  _fillJson('f-tool-query', cfg.query);
+  _fillJson('f-tool-defaults', cfg.defaults);
+  const _dpe = document.getElementById('f-tool-data-path');
+  if(_dpe) _dpe.value = cfg.data_path || '';
+  // 档位提示：说清"保存后会是什么档位、依据是什么"，避免用户以为自己选的 read 生效了
+  const _seBox = document.getElementById('f-http-se');
+  if(_seBox){
+    const _m = (cfg.method || 'GET').toUpperCase();
+    const _d = _m === 'DELETE' ? '破坏性'
+             : (_m === 'POST' || _m === 'PUT' || _m === 'PATCH') ? '写'
+             : (_m === 'GET' || _m === 'HEAD' || _m === 'OPTIONS') ? '只读' : '写（未知方法按写放行）';
+    _seBox.innerHTML = `按 Method（${_m}）派生档位：<b>${_d}</b>`
+      + (t && t.side_effect ? `；当前库内档位：<b>${t.side_effect}</b>（改严格会收紧、放宽会被拒）` : '');
+  }
+  const _tr = document.getElementById('f-http-test-result'); if(_tr) _tr.style.display = 'none';
   document.getElementById('f-tool-timeout').value = cfg.timeout || 15;
   // Headers 回填
   const hdrList = document.getElementById('tool-headers-list');
@@ -1419,34 +1815,44 @@ async function saveTool() {
   }
   const type = document.getElementById('f-tool-type').value;
   // 收集 Headers
-  // ★ B5-4：凭据类字段的「留空 = 保持原值」语义。
-  //   脱敏后回显的是「key + 空值输入框」，若照直收集 `headers[k]=""`，
-  //   保存就会把用户早已配好的 Authorization **清成空串** ⇒ 认证头被静默抹掉、
-  //   下次探测直接 401（而界面看上去"保存成功了"）。
-  //   ⇒ **值留空的一律不进 payload**（后端按"未提供"保持原值）；
-  //     真要删某个头，用行尾的 ✕ 把整行删掉（那才是"显式删除"的表达）。
-  const hdrKeys = document.querySelectorAll('#tool-headers-list .tool-hdr-key');
-  const hdrVals = document.querySelectorAll('#tool-headers-list .tool-hdr-val');
+  // ★ 2026-11-06（三态行版）：按 **行的 data-mode** 决定去留，不再靠"值是否留空"猜意图。
+  //   旧实现的判据是"值留空 ⇒ 不计入"，于是「已保存的行」和「新增未填的行」在数据上无法区分
+  //   ⇒ 才需要那句含糊的"留空则保持原值"提示，也才会出现"填了一个新头顺手抹掉其它凭据"的风险。
+  //   现在：masked=未动（不提交）/ edit=填了才算改 / new=填全才算新增。
+  const hdrRows = document.querySelectorAll('#tool-headers-list .hdr-row');
   const headers = {};
-  hdrKeys.forEach((el,i) => {
-    const k = el.value.trim();
-    const v = hdrVals[i].value.trim();
-    if(k && v) headers[k] = v;
+  let halfFilled = 0;      // **新增行**只填了一半（有 Key 无 Value，或反之）
+  hdrRows.forEach(row => {
+    const mode = row.dataset.mode || 'new';
+    if (mode === 'masked') return;                     // 未动 ⇒ 交给后端保持原值
+    const keyEl = row.querySelector('.tool-hdr-key');
+    const valEl = row.querySelector('.tool-hdr-val');
+    const key = (keyEl ? keyEl.value : (row.dataset.key || '')).trim();
+    const val = (valEl ? valEl.value : '').trim();
+    if (key && val) { headers[key] = val; return; }
+    // ⚠️ 只有 **new** 行才判"半填"。
+    //   edit 行的 key 来自 dataset（本来就有），用户点了「改」却不填值 = **放弃修改**，
+    //   这是合法操作（等价于没改），不能当成"填了一半"拦下 —— 否则用户点错「改」就被卡住、
+    //   保存按钮永远报错。实测抓出：edit 留空时 halfFilled=1 ⇒ 保存被拒。
+    if (mode === 'new' && (key || val)) halfFilled += 1;
   });
   if (type === 'mcp') {
     // MCP Server → 走 mcp-servers API
     const endpoint = document.getElementById('f-tool-url-mcp').value.trim();
     if(!endpoint) { toast('URL 必填'); return; }
-    // ★ B5-4：`description` 必须带上 —— 此前**根本没进 body**，
-    //   后端也无此字段 ⇒ 用户填的描述在保存那一刻被丢弃（"描述信息不见了"）。
+    if (halfFilled > 0) {
+      toast(`有 ${halfFilled} 条请求头只填了一半（Key 或 Value 缺一个），请补全或点 ✕ 删掉`);
+      return;
+    }
+    const isMcpEdit = !!toolEditId;
+    const _hasHdr = Object.keys(headers).length > 0;
+    const _hasDel = _hdrDeleted.length > 0;
+    // 只有在「真的改了/加了/删了」时才提交 headers；否则整个字段不提交（后端按 None 保持原值）。
+    // ★ 删除已保存的头必须走 header_delete（前端拿不到其它头的明文，无法整体重写）。
     const body = {name, endpoint, transport: document.getElementById('f-tool-transport').value,
                   description: desc,
-                  // ★ B5-2：headers **上面已经收集好了**（`#tool-headers-list`），
-                  //   但 MCP 分支的 body **从来没把它带上** ⇒ 用户在表单里填了
-                  //   Authorization，保存后被静默丢弃 ⇒ 「配了但用不了」。
-                  //   （实测：无 header 时 /test 返回 `HTTP 401 invalid_token`，
-                  //     而 POST 新增仍返回 {"ok":true} ⇒ 看起来成功、实则失效。）
-                  headers};
+                  ...(_hasHdr ? {headers} : {}),
+                  ...(_hasDel ? {header_delete: _hdrDeleted.slice()} : {})};
     // ★ B5-4：**编辑态不提交 tools / args / env / command** ——
     //   tools 是「探测发现的清单」，前端并不掌握；写回 `tools: []` 会把已发现的
     //   工具清单清空 ⇒ 该 MCP 对 Agent 彻底不可用（一次编辑保存就能触发）。
@@ -1473,6 +1879,22 @@ async function saveTool() {
     let paramIn = {};
     const piRaw = document.getElementById('f-tool-param-in').value.trim();
     if(piRaw) { try { paramIn = JSON.parse(piRaw); } catch(e) { toast('param_in 不是合法 JSON'); return; } }
+    // ★ 2026-11-07（P1b）：body / query / defaults 三个模板 —— 没有它们，
+    //   界面建出来的 HTTP 工具只能发"不带业务参数的空请求"（能连上、对方必报缺参）。
+    const _jsonField = (id, label) => {
+      const el = document.getElementById(id);
+      const raw = (el && el.value || '').trim();
+      if(!raw) return null;                       // null ⇒ 后端保留原值（不清空）
+      try { return JSON.parse(raw); }
+      catch(e) { toast(label + ' 不是合法 JSON'); throw new Error('__json__'); }
+    };
+    let bodyTpl = null, queryTpl = null, defaultsTpl = null;
+    try {
+      bodyTpl = _jsonField('f-tool-body', 'body 模板');
+      queryTpl = _jsonField('f-tool-query', 'query 模板');
+      defaultsTpl = _jsonField('f-tool-defaults', '参数缺省值');
+    } catch(e) { return; }
+    const dataPath = (document.getElementById('f-tool-data-path')||{value:''}).value.trim();
     const timeout = Math.max(1, parseInt(document.getElementById('f-tool-timeout').value)||15);
     const retry_policy = {
       max_retries: Math.max(0, parseInt(document.getElementById('f-tool-retries').value)||0),
@@ -1484,14 +1906,72 @@ async function saveTool() {
       input_schema: schema,
       method: document.getElementById('f-tool-method').value,
       url, param_in: paramIn, timeout, headers,
+      // ★ 2026-11-07（P1b）：新模板字段（null = 不改，由后端保持原值）
+      body: bodyTpl, query: queryTpl, defaults: defaultsTpl,
+      data_path: dataPath,
       retry_policy,
       fallback_to: (document.getElementById('f-tool-fallback')||{value:''}).value.trim(),
     };
-    if(toolEditId) { await api(`/api/studio/tools/${toolEditId}`, {method:'PUT', body:JSON.stringify(body)}); toast('已更新'); }
-    else { await api('/api/studio/tools', {method:'POST', body:JSON.stringify(body)}); toast('已注册'); if(_mmCreate){ _mmCreate = null; await mmAutoPublish('tool', name); } }
+    if(toolEditId) {
+      const _r = await api(`/api/studio/tools/${toolEditId}`, {method:'PUT', body:JSON.stringify(body)});
+      if(_r && _r.error){ toast('保存失败：' + _r.error); return; }
+      // 副作用若被自动收紧，必须说出来 —— 悄悄变档会让人以为"我选的 read 生效了"
+      if(_r && _r.side_effect_rule && /user_looser_denied/.test(_r.side_effect_rule)){
+        toast(`已更新；副作用按 Method 收紧为「${_r.side_effect}」（${_r.side_effect_rule}）`);
+      } else { toast('已更新'); }
+    }
+    else {
+      const _r2 = await api('/api/studio/tools', {method:'POST', body:JSON.stringify(body)});
+      if(_r2 && _r2.error){ toast('注册失败：' + _r2.error); return; }
+      toast(`已注册（副作用：${_r2.side_effect||'read'}）`);
+      if(_mmCreate){ _mmCreate = null; await mmAutoPublish('tool', name); }
+    }
     closeModal(); toolEditId = null; loadTools(); loadMinePlugins(); loadMarketManage();
   }
 }
+/**
+ * HTTP 工具试跑（2026-11-07 P1b）
+ *
+ * 为什么必须"先保存再试跑"：试跑调的是**库里已存的 config**（那才是模型真正会执行的东西）。
+ * 若拿表单里未保存的值去试，试通了也不代表模型调得通 —— 这正好是本仓反复踩的
+ * "配了但没生效"同型问题。所以这里对未保存的编辑明确拦下并说明原因，而不是静默用旧配置。
+ */
+async function testHttpToolFromForm(){
+  const box = document.getElementById('f-http-test-result');
+  const btn = document.getElementById('f-http-test-btn');
+  const show = (ok, text) => {
+    if(!box) return;
+    box.style.display = 'block';
+    box.style.background = ok ? 'var(--green-l,#e8f5e9)' : 'var(--red-l,#fdecea)';
+    box.style.color = ok ? '#1b5e20' : '#b71c1c';
+    box.textContent = text;
+  };
+  if(!toolEditId){
+    show(false, '请先保存，再试跑 —— 试跑执行的是库里已存的配置（模型实际会用的那份），未保存的表单值不参与。');
+    return;
+  }
+  let args = {};
+  const raw = (document.getElementById('f-http-test-args')||{value:''}).value.trim();
+  if(raw){
+    try { args = JSON.parse(raw); }
+    catch(e){ show(false, '试跑参数不是合法 JSON'); return; }
+  }
+  if(btn){ btn.disabled = true; btn.textContent = '试跑中…'; }
+  show(true, '正在真实调用接口…');
+  try{
+    const r = await api(`/api/studio/tools/${toolEditId}/test`, {
+      method:'POST', body: JSON.stringify({arguments: args})
+    });
+    if(r && r.error){ show(false, '试跑被拒：' + r.error); return; }
+    const _txt = typeof r.result === 'string' ? r.result : JSON.stringify(r.result, null, 2);
+    show(!!r.ok, (r.ok ? '✅ 调用成功' : '❌ 调用失败') + `（档位 ${r.side_effect||'-'}）\n` + (_txt||'').slice(0, 2000));
+  }catch(e){
+    show(false, '试跑异常：' + e.message);
+  }finally{
+    if(btn){ btn.disabled = false; btn.textContent = '🌐 试跑'; }
+  }
+}
+
 async function toggleToolStatus(id, enabled) {
   const t = _toolsCache.find(x=>x.id===id);
   if(enabled) {
@@ -1664,6 +2144,9 @@ function addLLM() {
   document.getElementById('f-budget').value = 0;
   document.getElementById('f-top-p').value = '';
   document.getElementById('f-top-k').value = '';
+  // 2026-11-13：新增 penalty 控件清空（空 = 不下发该字段）
+  const _nfp = document.getElementById('f-freq-penalty'); if(_nfp) _nfp.value = '';
+  const _npp = document.getElementById('f-pres-penalty'); if(_npp) _npp.value = '';
   setThinkingControl('tier');       // 默认按挡位（细粒度），用户可切按开关
   setThinkingLevel('模型默认');
   syncCtxTier(8192);
@@ -1771,6 +2254,9 @@ async function editLLM(id) {
   const mp = p.model_params || {};
   document.getElementById('f-top-p').value = (mp.top_p ?? '');
   document.getElementById('f-top-k').value = (mp.top_k ?? '');
+  // 2026-11-13：penalty 回填（空 = 不下发；null 显示为空而非 "null"）
+  const _rfp = document.getElementById('f-freq-penalty'); if(_rfp) _rfp.value = (mp.frequency_penalty ?? '');
+  const _rpp = document.getElementById('f-pres-penalty'); if(_rpp) _rpp.value = (mp.presence_penalty ?? '');
   syncCtxTier(p.context_window || 8192);
   // 思考控制方式回填：新字段 thinking_control；老数据没有该字段时按值推断 ——
   //   有 thinking_level 且是 低/中/高 ⇒ tier；否则看 thinking_mode：
@@ -1827,6 +2313,12 @@ async function saveLLM() {
   }
   const level = getThinkingLevel();                 // 模型默认 | 开启 | 关闭 | 低 | 中 | 高
   const control = getThinkingControl();             // tier(挡位) | toggle(开关)
+  // 2026-11-13：penalty（-2~2，留空 = 不下发该字段）
+  //   ⚠️ 与温度同理：0 是合法值，不能用 || 兜底；留空 → parseFloat('') = NaN → null
+  const freqRaw = parseFloat(document.getElementById('f-freq-penalty')?.value);
+  const freq = (Number.isFinite(freqRaw) && freqRaw >= -2 && freqRaw <= 2) ? freqRaw : null;
+  const presRaw = parseFloat(document.getElementById('f-pres-penalty')?.value);
+  const pres = (Number.isFinite(presRaw) && presRaw >= -2 && presRaw <= 2) ? presRaw : null;
   // thinking_mode 保持三态写入（**兼容**：后端旧链路仍读它，且历史数据/其他面板依赖该字段）
   // thinking_level 是新字段（后端优先消费），二者由同一选择推导，不会互相矛盾。
   const thinking_mode = level === '关闭' ? '关闭' : (level === '模型默认' ? '模型默认' : '开启');
@@ -1847,8 +2339,10 @@ async function saveLLM() {
     const r = await api('/api/llm/providers', {method:'POST', body:JSON.stringify(body)});
     savedId = r.id || '';
   }
-  // 高级参数（top_p/top_k/thinking_mode/thinking_level）落库 model_params
-  if(savedId) await api(`/api/llm/providers/${savedId}/params`, {method:'PATCH', body:JSON.stringify({model_params:{top_p:topP, top_k:topK, thinking_mode, thinking_level:level, thinking_control:control}})});
+  // 高级参数（top_p/top_k/penalty/thinking_mode/thinking_level）落库 model_params
+  // ⚠️ PATCH /params 是**整列覆盖**（后端直接存整个 JSON）⇒ 必须把已知键一次带全，
+  //    漏一个就会把该键清掉（这正是"同一语义多处各写一份"的典型错位点）。
+  if(savedId) await api(`/api/llm/providers/${savedId}/params`, {method:'PATCH', body:JSON.stringify({model_params:{top_p:topP, top_k:topK, frequency_penalty:freq, presence_penalty:pres, thinking_mode, thinking_level:level, thinking_control:control}})});
   closeModal(); toast(id ? '已保存' : '已添加'); loadLLMProviders(); loadHome();
   // 会话入口的模型切换面板与本表同源（都读 /api/llm/providers）⇒ 改完必须同步刷新，
   // 否则"改了描述但入口列表还是旧的"（双份缓存不同步的典型症状）。

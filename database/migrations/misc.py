@@ -644,7 +644,9 @@ def _migrate_config_proposals(conn):
         created_at TEXT DEFAULT CURRENT_TIMESTAMP,
         reviewed_by TEXT DEFAULT '',
         reviewed_at TEXT,
-        review_note TEXT DEFAULT ''
+        review_note TEXT DEFAULT '',
+        origin TEXT DEFAULT '',
+        source_feedback_ids TEXT DEFAULT '[]'
     )""")
     c.execute("CREATE INDEX IF NOT EXISTS idx_config_proposals_status "
               "ON config_proposals(status)")
@@ -879,64 +881,79 @@ def _migrate_agent_archive_p23(conn):
           "已建立（P2-3，死路记忆；只记录不切换生效版本）")
 
 
-def _migrate_flow_topology_p24(conn):
-    """P2-4（2026-10-19 自进化调研路线图 P2 第四项）：画布拓扑台账。
+def _migrate_feedback_consumed_at_utc(conn):
+    """2026-11-06：把 feedback.consumed_at 的历史值（本地时间）校正为 UTC。
 
-    路线图原文「多画布流拓扑实验」。落地前勘察真实库，两个事实改写了口径：
+    背景（execute 模式端到端实跑抓到的缺陷）：P0 首版 `advance_feedback_state`
+    用 `time.strftime` 写 consumed_at（**本地**），而 `feedback.created_at` 的
+    DDL 默认 `CURRENT_TIMESTAMP`（SQLite = **UTC**）⇒ 同一行差一个时区偏移，
+    时间线看起来「先消费、后创建」。实测 feedback#120：
+      created_at=07:25:02(UTC)、consumed_at=15:25:13(本地)，本地真实时间 15:25。
 
-    ① **运行证据不足以支撑拓扑实验**：agent_flows 62 条定义 vs
-       flow_runs 仅 11 条 / flow_run_steps 33 条，其中 9 条是同日三个同构
-       画布各跑 3 次（49–82ms，秒级），只有 run 198 是真实长时运行
-       （94.8s / 6 步 / 1 个 error）。在 11 条记录上比较两种拓扑的优劣
-       得到的是噪声。**实验的前提是先有可比较的台账**，故本期落台账与体检。
+    判据为什么可以直接用「非空」：`consumed_at` 是本次 P0 才新增的列，
+    迁移前**所有非空值都是本地时间**，无需猜时间窗（用时间窗反而会误判
+    "消费发生在 8 小时前"的正常行）。
 
-    ② **同一条路线图的安全红线 #6 写着「不碰权重、不碰架构拓扑」**：
-       自动生成新拓扑并自动切换生效画布直接违反这条自己定的红线。
-
-    ## flow_topology_variants —— 画布拓扑台账（一行 = 一幅画布）
-    把「画布数量」这个看不出问题的指标，换成「结构是否健康、是否重复」：
-    - flow_id UNIQUE：一幅画布一行，扫描反复跑只刷新不新增（台账不注水）。
-    - fingerprint = sha1(节点 id + 有向边 + 节点类型计数)，**不含 name /
-      version / label / 时间戳**——改个名字不该造出新拓扑（P2-3 变体指纹
-      同型坑：指纹含易变字段会让台账注水）。
-    - defects_json 存结构缺陷明细 + 按类别计数（blocker/warn 两档，
-      不做可配阈值打分：没有先验支撑「3 warn 比 2 blocker+1 warn 更糟」）。
-    - evidence_state = covered（至少跑过一次）| uncovered（**从未跑过**），
-      逐画布独立判，**不回落 0**：没跑过不是跑了零次。
-    - 本表**只记录，绝不写 agent_flows**——拓扑台账是体检镜不是手
-      （门禁 E 段静态断言 repo 里没有 UPDATE/DELETE agent_flows）。
-
-    幂等：IF NOT EXISTS + 索引；**不塞种子**（台账只能由真实画布体检
-    收敛出来——凭空塞行等于伪造健康度）。
+    安全：只更新 `datetime()` 能解析的行 —— 否则非法值会被写成 NULL（丢数据）。
+    幂等：settings 打标记，重复启动不再重复减偏移。
     """
-    c = conn.cursor()
-    c.execute("""CREATE TABLE IF NOT EXISTS flow_topology_variants (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        flow_id INTEGER NOT NULL UNIQUE,
-        flow_name TEXT DEFAULT '',
-        fingerprint TEXT DEFAULT '',
-        node_count INTEGER DEFAULT 0,
-        edge_count INTEGER DEFAULT 0,
-        status TEXT DEFAULT '',
-        source TEXT DEFAULT '',
-        blocker_count INTEGER DEFAULT 0,
-        warn_count INTEGER DEFAULT 0,
-        defects_json TEXT DEFAULT '{}',
-        runs INTEGER DEFAULT 0,
-        failed_runs INTEGER DEFAULT 0,
-        evidence_state TEXT DEFAULT 'uncovered',
-        first_seen_at TEXT DEFAULT CURRENT_TIMESTAMP,
-        last_seen_at TEXT DEFAULT CURRENT_TIMESTAMP
-    )""")
-    c.execute("CREATE INDEX IF NOT EXISTS idx_ftv_fingerprint "
-              "ON flow_topology_variants(fingerprint)")
-    c.execute("CREATE INDEX IF NOT EXISTS idx_ftv_evidence "
-              "ON flow_topology_variants(evidence_state)")
-    c.execute("CREATE INDEX IF NOT EXISTS idx_ftv_blocker "
-              "ON flow_topology_variants(blocker_count)")
-    conn.commit()
-    print("[init_db] 迁移: 画布拓扑台账 flow_topology_variants 已建立"
-          "（P2-4，结构体检 + 同构去重；只记录不改拓扑，红线 #6）")
+    key = "migrate.feedback_consumed_at_utc"
+    try:
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(feedback)")}
+        if "consumed_at" not in cols:
+            return
+        if conn.execute("SELECT 1 FROM settings WHERE key=?", (key,)).fetchone():
+            return
+        from core.timefmt import local_to_utc_sql_offset
+        off = local_to_utc_sql_offset()
+        n = conn.execute(
+            "UPDATE feedback SET consumed_at=datetime(consumed_at, ?) "
+            "WHERE COALESCE(consumed_at,'')<>'' AND datetime(consumed_at) IS NOT NULL",
+            (off,)).rowcount
+        conn.execute(
+            "INSERT OR REPLACE INTO settings (key, value, description, updated_at) "
+            "VALUES (?,?,?,datetime('now','localtime'))",
+            (key, "1", "feedback.consumed_at 已由本地时间校正为 UTC（offset=%s）" % off))
+        conn.commit()
+        print("[init_db] 迁移: feedback.consumed_at 校正为 UTC %d 行（offset=%s）" % (n, off))
+    except Exception as e:                       # noqa: BLE001
+        print("[init_db] 迁移 feedback.consumed_at 失败（不阻断启动）：%s" % str(e)[:160])
+
+
+def _migrate_feedback_link_sanity(conn):
+    """2026-11-06：解绑「link 指向早于本条反馈创建时间」的错误关联（幂等自愈）。
+
+    背景：`reconcile_feedback_states` 早期版本只按 message_id 匹配、取 id 最小的
+    队列项，**不校验时间先后** ⇒ 新反馈被挂到历史采样上。实测：
+      feedback#121 created 07:34:11 → link 到 online_eval#50 created 05:51:43
+    ⇒ 追踪页显示「已采样」但实际它自己的采样尚未发生，时间线出现
+      「消费早于创建」的倒挂。
+
+    代码侧已修（门禁 G12 锁住「只认本条创建之后的队列项」）；本迁移纠正
+    **已产生的错数据**：清 link 与 consumed_*，state 回到 'new'，留 last_note
+    说明原因 —— 属**数据纠正**而非状态机倒退；下一轮 tick 会重新采样并正确关联。
+
+    幂等：解绑后 link 为空，不再命中本条件。
+    """
+    try:
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(feedback)")}
+        if "link_id" not in cols:
+            return
+        n = conn.execute(
+            "UPDATE feedback SET "
+            "last_note='原关联指向早于本条创建的采样项，已解绑（时间基准校正）；等待重新采样', "
+            "link_kind='', link_id='', consumed_at='', consumed_by='', state='new' "
+            "WHERE COALESCE(link_kind,'')='online_eval' AND COALESCE(link_id,'')<>'' "
+            "AND EXISTS (SELECT 1 FROM online_eval_queue q "
+            "            WHERE CAST(q.id AS TEXT)=feedback.link_id "
+            "              AND COALESCE(q.created_at,'')<COALESCE(feedback.created_at,''))"
+        ).rowcount
+        conn.commit()
+        if n:
+            print("[init_db] 迁移: 解绑 %d 条指向更早采样项的错误关联" % n)
+    except Exception as e:                       # noqa: BLE001
+        print("[init_db] 迁移 feedback.link 自愈失败（不阻断启动）：%s" % str(e)[:160])
+
 
 def _migrate_online_eval_tables(conn):
     """P0-b（2026-10-25）生产回流两表：online_eval_queue + eval_gen_labels。幂等建表。
@@ -1029,6 +1046,8 @@ def _migrate_agent_todos(conn):
         subject TEXT NOT NULL,                -- 待办标题（具体到对象，如"校验包 P-001 的 SysML v2 语法"）
         status TEXT DEFAULT 'pending',         -- pending|in_progress|completed|blocked|deleted
         verify TEXT DEFAULT '',               -- ★ 验收方式（可执行描述）；completed 必填
+        verify_tool TEXT DEFAULT '',          -- ★ 2026-11-09：结构化验收 —— 只读工具名（白名单内才执行）
+        verify_args TEXT DEFAULT '',          -- ★ 2026-11-09：结构化验收 —— JSON 对象参数（非 JSON 不执行）
         verify_result TEXT DEFAULT '',        -- ★ 验收回执；completed 必填且表示通过
         blocked_by TEXT DEFAULT '',           -- 依赖/阻塞原因；blocked 必填
         note TEXT DEFAULT '',
@@ -1037,6 +1056,29 @@ def _migrate_agent_todos(conn):
     )""")
     c.execute("CREATE INDEX IF NOT EXISTS ix_atodo_conv ON agent_todos(conversation_id, status)")
     c.execute("CREATE INDEX IF NOT EXISTS ix_atodo_run ON agent_todos(conversation_id, run_id)")
+
+    # ── P0-2a（2026-11-09）harness 判定台账 ──
+    # 用途：shadow 期回答「若开闸会拦吗 / 有多少条验收真能自动执行 / 多少条被护栏挡下」。
+    # 为什么单独建表而不复用 audit_logs：这是**结构化指标**（pending/manual/autoready/guarded），
+    #   需要 GROUP BY 与趋势对比；日志字段做不了这种统计（本仓已经踩过"同一个数字各写一份"）。
+    # 注意：观测设施故障不得变业务故障 ⇒ 写入侧全程 try/except。
+    c.execute("""CREATE TABLE IF NOT EXISTS harness_decisions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        conversation_id INTEGER DEFAULT 0,
+        mode TEXT DEFAULT '',                   -- shadow | enforce
+        would_block INTEGER DEFAULT 0,          -- 判定"该拦"（shadow 下不真拦）
+        force_release INTEGER DEFAULT 0,
+        reason TEXT DEFAULT '',
+        remaining_n INTEGER DEFAULT 0,          -- 未完成待办数
+        pending_n INTEGER DEFAULT 0,            -- 参与验收的 pending 数
+        manual_n INTEGER DEFAULT 0,             -- 只能人工验收（含自然语言/非白名单）
+        autoready_n INTEGER DEFAULT 0,          -- 可自动执行（结构化 + 只读白名单）
+        guarded_n INTEGER DEFAULT 0,            -- ★ 被护栏挡下的（旧实现会误判成 tool）
+        tools_json TEXT DEFAULT '',             -- 可执行工具分布
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP
+    )""")
+    c.execute("CREATE INDEX IF NOT EXISTS ix_hdec_conv ON harness_decisions(conversation_id, id)")
+    c.execute("CREATE INDEX IF NOT EXISTS ix_hdec_mode ON harness_decisions(mode, id)")
     conn.commit()
     print("[init_db] 迁移: agent_todos 已建立（计划外化；verify/verify_result 为 completed 前置条件）")
 
@@ -1073,3 +1115,58 @@ def _migrate_tool_idempotency(conn):
     c.execute("CREATE INDEX IF NOT EXISTS ix_tool_idem_created ON tool_idempotency(created_at)")
     conn.commit()
     print("[init_db] 迁移: tool_idempotency 已建立（写类工具幂等键）")
+
+def _migrate_orch_interrupts(conn):
+    """编排「中断」台账（2026-11-10，可中断策略的数据落点）。
+
+    与既有 `TaskQueue.cancel_run` 的分工（**两者语义不同，不要合并**）：
+      · 取消（cancel）  = 这批不要了  ⇒ checkpoint.phase='cancelled'，不进可恢复清单；
+      · 中断（interrupt）= 这批先停下、**保留续跑资格** ⇒ phase='interrupted' + 本表留痕。
+    为什么中断要单独一张表而不是只改 checkpoint 一个字段：
+      ① 用户改向时常带一句新指令（`instruction`），它要能被下一轮 resume 消费，
+         并且**必须可审计**（谁在什么时候叫停了哪一批、补了什么话）；
+      ② `orch_checkpoints` 每个 run 只有一行，写不下"中断过几次"；
+      ③ 硬取消与中断在同一列上只能存一个值，历史就丢了。
+    """
+    c = conn.cursor()
+    c.execute("""CREATE TABLE IF NOT EXISTS orch_interrupts (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        run_id INTEGER NOT NULL,             -- 批次号（orch_checkpoints.run_id）
+        conversation_id INTEGER DEFAULT 0,   -- 归属会话（越权校验用）
+        kind TEXT DEFAULT 'interrupt',       -- interrupt（保留续跑）| cancel（不要了）
+        reason TEXT DEFAULT '',              -- 一句人读的原因（前端展示）
+        instruction TEXT DEFAULT '',         -- 中断时用户补的新指令（resume 时注入被重排任务）
+        requested_by TEXT DEFAULT '',        -- 操作人
+        cancelled_tasks INTEGER DEFAULT 0,   -- 本次协作式停止波及的任务数
+        consumed_at TEXT DEFAULT '',         -- 被 resume 消费的时刻（''=尚未消费）
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP
+    )""")
+    c.execute("CREATE INDEX IF NOT EXISTS ix_orch_int_run ON orch_interrupts(run_id)")
+    c.execute("CREATE INDEX IF NOT EXISTS ix_orch_int_created ON orch_interrupts(created_at)")
+    conn.commit()
+    print("[init_db] 迁移: orch_interrupts 已建立（编排可中断台账）")
+
+
+def _migrate_requirement_acceptance(conn):
+    """需求验收标准两列（P0-1，2026-11-10）。
+
+    为什么必须补：真库实测 74 条需求实体的 properties 键全集只有
+    `{kind, req_id, priority}` —— **验收标准填充率 0/24、来源 0/24**。
+    Agent prompt 承诺了 Given-When-Then，但没有任何结构化列承接 ⇒ 需求不可验收。
+
+    ⚠️ 存量行一律留空串（**不回填**）：回填需要重新解析原始需求文本，
+    而"当时那条需求的验收标准是什么"应由人确认（见 tools/backfill_requirement_ac.py
+    的只读盘点）；空串语义 = 未知，不参与覆盖率断言。
+    """
+    from .columns import add_column_if_missing as _add_col
+    _add_col(conn, "requirement_items", "acceptance_criteria", "TEXT DEFAULT ''")
+    _add_col(conn, "requirement_items", "ac_kind", "TEXT DEFAULT ''")
+    # 需求实体表也补一列：需求可能直接以实体形态存在（entities.entity_type like '%需求%'），
+    # 而它此前只能把验收标准塞进 properties JSON ⇒ SQL 统计不到。
+    _add_col(conn, "entities", "acceptance_criteria", "TEXT DEFAULT ''")
+    try:
+        conn.execute("CREATE INDEX IF NOT EXISTS ix_req_items_ac "
+                     "ON requirement_items(acceptance_criteria)")
+    except Exception:
+        pass
+    conn.commit()

@@ -194,7 +194,14 @@ def _scan_conn(conn, res: dict, *, max_runs: int, stale_s: int | None,
     from agent.orch_checkpoint import prepare_resume, apply_resume, touch, resumable
 
     try:
-        cands = resumable(conn, conversation_id=0, limit=50, stale_s=stale_s)
+        # ★ 2026-11-10：**必须**排除用户主动中断的批次。
+        #   实测事故：人工点停止 3 分钟后，守护把它当"停滞批次"自动重投跑起来了
+        #   （run 990223：02:26:55 中断 → 02:30:29 任务被置回 ready/running）。
+        #   `interrupted` 的语义是"用户让它停下、等他说下一步"，
+        #   自动复活既违背用户意图，又真的烧 LLM 额度。
+        #   ⇒ 与人工路径（GET /resumable）显式分叉：两者对同一批数据的需求相反。
+        cands = resumable(conn, conversation_id=0, limit=50, stale_s=stale_s,
+                          include_interrupted=False)
         res["scanned"] = len(cands)
         # 0 = 预演：走完**全部判定与分类**，但一个都不触发。
         # 为什么不早`continue`：预演的价值就在于看清"哪些能投、哪些不能、为什么"，

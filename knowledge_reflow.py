@@ -115,7 +115,18 @@ def reflow_from_text(conn, text: str, source: str = "conversation", batch_id: st
     #    又污染管理界面；一旦哪天有人"顺手"给空 project_id 补默认项目，**测试数据就会变成项目知识**。
     #    故与 agent_memory 路**取同一口径**：无归属 → 不写 project_memories。
     _pid = (project_id or "").strip()
-    _scope_type, _scope_id = ("project", _pid[:120]) if _pid else ("", "")
+    # ★ 2026-11-05（S2）：无工程归属时**不再写存量槽 `('','')`**，改落**显式共享层** ('agent', agent_id)。
+    #   为什么必须改：`scope_type=''` 是"来历不明的存量行"槽，读取侧靠
+    #   `(scope_type='' AND agent_id=?)` 无条件兜底 ⇒ 会被任何项目上下文召回。
+    #   实测（真库 269 行）：作用域上线后仍在产生的活跃存量行有 3 条，正是"不传 scope 的写入点"造成的。
+    #   为什么不是"干脆不写"：reflow 的 agent_memory 路径本身已收窄到"真经验类"（见下方 _EXP_TYPES），
+    #   无项目归属时它表达的是**该 agent 的通用方法论**，属于显式共享语义，丢掉可惜。
+    #   召回面不变（已实测论证）：这类行的 agent_id 恒为传参 agent_id，改槽后
+    #   ① scopes=None 的旧路径按 `agent_id=?` 仍能取到；② 带 scopes 时 `('agent', intent)` 槽在
+    #   intent==agent_id 时命中 —— 而改动前的 `('' AND agent_id=?)` 兜底同样要求 agent_id 相等，
+    #   故两者可见范围**逐条等价**，唯一变化是它不再被"别的项目上下文"误召回。
+    _scope_type, _scope_id = (("project", _pid[:120]) if _pid
+                              else ("agent", str(agent_id or "reflow")[:120]))
     # 同批次内去重（同一标题只写一次）—— 实测同一批 candidates 里
     # 「IP67防护等级要求」「CAN总线通信接口」会被反复提炼出来，逐条插入即造成 12 遍重复。
     _seen_title = set()

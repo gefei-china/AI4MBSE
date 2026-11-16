@@ -32,6 +32,10 @@ import tempfile
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, ROOT)
 
+
+# 2026-11-09：本门禁真实调用 LLMClient.chat，声明 verify 来源 ⇒ 不写生产台账
+# logs/request_invariant.jsonl（否则会污染「切 enforce」的就绪统计）。
+os.environ.setdefault("MBSE_INVARIANT_ORIGIN", "verify")
 _n_pass = 0
 _n_fail = 0
 

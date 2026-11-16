@@ -34,7 +34,9 @@ __all__ = ["EVAL_SYS", "AUTO_CONTINUE_STAGE", "AUTO_EVAL_STAGE",
            "build_eval_messages", "parse_verdict", "normalize_step",
            "is_spinning", "decide", "continuation_prompt", "tools_brief",
            "looks_awaiting_permission", "has_continue_cue", "clarify_from_verdict",
-           "default_progress_verdict", "build_degrade_notice"]
+           "default_progress_verdict", "build_degrade_notice",
+           "merge_round_content", "_code_blocks", "_ngram_sim", "_ngram_dice",
+           "strip_json_blocks", "is_content_repeating"]
 
 #: 前端 proc 时间线环节名（11-pipeline.js onStageEvent 按此渲染 🔄 块）
 AUTO_CONTINUE_STAGE = "自主续跑"
@@ -73,6 +75,16 @@ EVAL_SYS = (
     "（那是 next_step，不是 needs_user）；\n"
     "d. 答复自述**尚未校验 / 尚未验证 / 未测试**（自己说没验证，就是没完成）。\n"
     "\n"
+    "【反向澄清：以下情形**不**算未完成，别把它误判成硬信号】\n"
+    "e. 当用户请求本身就是「检查 / 评审 / 评估 / 判定 / 比对」某份内容时，"
+    "答复里的「不合格 / 不通过 / 待核实 / 建议修改 / 缺属性 / 需回查」等，"
+    "都是**判定结论本身**（用户要的恰恰就是这个结论），**不是** AI 自己欠下的活"
+    " ⇒ 此时只要判定已给出、依据已写出，就判 done=true。\n"
+    "   只有「AI 自己还得再做一步」（去查、去跑校验、去导出、去写库、去生成文件）"
+    "才算未完成 —— 这与规则 1「需要调用工具才能完成」同义，不是新例外。\n"
+    "   ⚠️ 反过来：用户若要求「检查**并写入 / 并修复**」，那「尚未写入 / 尚未修复」"
+    "仍属未完成（硬信号照旧适用）。\n"
+    "\n"
     "只输出一行 JSON，禁止任何其他文字：\n"
     '{"done": true}\n'
     '或 {"done": false, "next_step": "下一步做什么（一句话，具体到对象）", '
@@ -92,14 +104,66 @@ _EVAL_TOOL_RESULT_CAP = 120
 _EVAL_TOOLS_MAX = 12
 
 
+def strip_json_blocks(text: str) -> str:
+    """剥掉 ```json 围栏块（结构化结果是**给系统解析的**，不是"给人看的答复"）。
+
+    ★ 为什么评估器必须先剥再看（2026-11-15 真机实证）：
+      `_EVAL_ANSWER_CAP = 2000` 会把答复截到前 2000 字符，而两段式输出下
+      这 2000 字符 = 结论摘要（约 480 字）+ **半截 JSON**（正切在对象中间）。
+      ⇒ 评估器读到的是「一段散文 + 一堆 JSON 残片」，JSON 残片对它纯属噪音，
+      真正的答复（散文结论）反而被挤到只剩开头。
+      剥掉 JSON 后再截断，评估器拿到的是**完整的结论摘要**。
+
+    ⚠️ 只剥 ```json：其它语言的代码块**必须保留** —— 那是交付物本身
+      （"我已经把代码写出来了"本身就是"做完了"的证据）。
+    ⚠️ 剥完若整篇为空（答复本来就是纯 JSON 的旧形态）⇒ 调用方回退用原文，
+      不能让评估器什么都看不到。
+    """
+    out, buf, inside, keep, lang = [], [], False, False, ""
+    for line in str(text or "").split("\n"):
+        s = line.strip()
+        if s.startswith("```"):
+            if inside:
+                # 围栏正常结束：保留的围栏连标记一起还原，被剥的整块丢弃
+                if keep:
+                    out.append("```" + lang)
+                    out.extend(buf)
+                    out.append("```")
+                inside = False
+                buf = []
+                keep = False
+                lang = ""
+                continue
+            lang = s[3:].strip()
+            inside = True
+            buf = []
+            keep = (lang.lower() != "json")
+            continue
+        if inside:
+            buf.append(line)
+            continue
+        out.append(line)
+    # ⚠️ 围栏未闭合（模型被截断）：把残余内容**原样吐出** ——
+    #   宁可让评估器多看一点残片，也不能把正文吞掉。
+    if inside:
+        out.append("```" + lang)
+        out.extend(buf)
+    return "\n".join(out).strip()
+
+
 def build_eval_messages(user_input: str, tools_brief: str, answer: str,
                         agent_name: str = "") -> list:
     """构造评估器消息（system + user 两条，无工具、非流式由调用方发）。"""
     who = f"（执行 Agent：{agent_name}）" if agent_name else ""
+    # ★ 先剥结构化 JSON 再截断（见 strip_json_blocks 的注释）；
+    #   剥完为空 ⇒ 回退原文（旧形态纯 JSON 的答复不能被剥成空）。
+    _ans = str(answer or "")
+    _stripped = strip_json_blocks(_ans)
+    _ans = (_stripped or _ans)
     user = (
         f"【用户原始请求】\n{user_input or '（空）'}\n\n"
         f"【AI 已执行的工具调用】\n{tools_brief or '（本轮未调用工具）'}\n\n"
-        f"【AI 的最终答复】\n{(answer or '')[:_EVAL_ANSWER_CAP]}\n\n"
+        f"【AI 的最终答复】\n{_ans[:_EVAL_ANSWER_CAP]}\n\n"
         f"请判定{who}用户的原始请求是否已被完整完成。只输出 JSON。"
     )
     return [{"role": "system", "content": EVAL_SYS},
@@ -193,10 +257,85 @@ def is_spinning(next_step: str, seen_steps) -> bool:
     return any(ns == normalize_step(x) for x in (seen_steps or []))
 
 
+def _ngram_dice(a: str, b: str, n: int = 3) -> float:
+    """两段正文的字符 3-gram **多重集 Dice 系数**（去空白后），范围 0~1。
+
+    ★ 为什么空转闸用 Dice 而不是 `_ngram_sim`（集合 Jaccard）——两者盲区相反：
+      · 集合 Jaccard：长文本 + 少量新增会被**稀释**（集合语义把重复内容去重）
+        ⇒ 实测「重复底稿 + 少量新增」只有 0.72；
+      · 多重集 Dice：对「几乎没新增」**敏感**，但中文通用语料会把底噪抬高
+        ⇒ 实测同域的另一条长答复也有 0.80。
+      ⇒ 两者都要 0.95 以上的阈值才安全，而 Jaccard 在真机重述上是 0.85~0.95
+        （卡在阈值边缘），Dice 是 0.97~0.99（稳过）⇒ **空转闸用 Dice**。
+      而 `merge_round_content` 的④b 要判的是"是不是同一份产物"（有代码块、块数相同），
+        那里 Jaccard 的低底噪更有利 ⇒ **保持 Jaccard 不动**。
+      两个判据各用各的度量，**不要混用**（混用就会出现"改了阈值另一个判据失效"）。
+    """
+    from collections import Counter
+    x, y = " ".join(str(a or "").split()), " ".join(str(b or "").split())
+    if len(x) < n or len(y) < n:
+        return 1.0 if x == y else 0.0
+    ca = Counter(x[i:i + n] for i in range(len(x) - n + 1))
+    cb = Counter(y[i:i + n] for i in range(len(y) - n + 1))
+    inter = sum((ca & cb).values())
+    total = sum(ca.values()) + sum(cb.values())
+    return (2.0 * inter / total) if total else 0.0
+
+
+#: 判「正文原地打转」的 Dice 阈值。
+#: 标定（真库 msg 6585，2026-11-15 实测）：
+#:   同一任务三次重述  dice = 0.9759 / 0.9705 / 0.9923
+#:   同域另一条长答复  dice = 0.8009（底噪）
+#:   构造「长底稿 + 大段实质新增」dice = 0.8172（这是**必须放行**的一侧）
+#: 取 0.95 —— 落在"实质改进"(0.8172)与"真机重述最低值"(0.9705)之间，两侧都有余量。
+#: ⚠️ 构造样本是**人为**的（真机没有"实质改进"对照样本）—— 这是本阈值最弱的一环，
+#:   门禁 `verify_auto_continue_stop.py` 的 C 组把该限制写进断言。
+_REPEAT_SIM = 0.95
+
+
+def is_content_repeating(cur: str, prev: str, thr: float = _REPEAT_SIM) -> bool:
+    """正文级空转：本轮正文与上一轮**高度雷同且长度几乎没变** ⇒ 判定在原地打转。
+
+    ★ 为什么需要它（2026-11-15 真机 conv 999999024 / msg 6585）：
+      `is_spinning` 比的是 `next_step`（一句话），而模型每轮换个说法写同一个
+      next_step（"补充属性与追溯信息" vs "回查属性完整性"）⇒ 逐字判据抓不到 ⇒
+      连续续跑 3 轮，每轮把整份答案重写一遍 ⇒ 用户看到 3 份、预算白烧 3 次。
+
+    ⚠️ 为什么用**复合判据**（Dice + 长度比）而不是单一相似度：
+      纯相似度会误伤「实质改进」—— 真正的迭代通常**正文明显变长**（多做了东西）。
+      加上"长度比几乎不变"这一条，语义就变成
+      **「换了几个字的重述」** 而不是「变短/变长的新内容」。
+    ⚠️ 阈值与标定的诚实边界：
+      真机只取到三个样本群 ——
+        · 同一任务的重述（msg 6585 三份）：dice 0.9759 / 0.9705 / 0.9923；
+        · 同域另一条长答复（底噪）：dice 0.8009；
+        · 构造的「长底稿 + 大段实质新增」（**必须放行**的一侧）：dice 0.8172。
+      **真机没有「实质改进」的对照样本** ⇒ 阈值 0.95 是夹在构造样本(0.8172)与
+      真机重述最低值(0.9705)之间取的，靠长度比复合约束再兜一层。
+      这是本判据最弱的一环，如实标注。
+    """
+    c, p = str(cur or "").strip(), str(prev or "").strip()
+    if not c or not p:
+        return False
+    try:
+        _ratio = len(c) / float(len(p) or 1)
+    except Exception:
+        return False
+    # 长度差超过 ±5% ⇒ 视为有新内容，不算空转（真机三轮的长度比都在 1±0.5% 内）
+    if not (0.95 <= _ratio <= 1.05):
+        return False
+    try:
+        return _ngram_dice(c, p) >= float(thr)
+    except Exception:
+        return False
+
+
 def decide(verdict, *, used: int, max_used: int, seen_steps,
            deadline_left_s=None, budget_left: bool = True,
            budget_ratio: float = 0.0, degrade_ratio: float = 0.7,
-           hard_stop_ratio: float = 0.95):
+           hard_stop_ratio: float = 0.95,
+           content_prev: str = "", content_cur: str = "",
+           content_sim_thr: float = _REPEAT_SIM):
     """纯决策：这一轮工作结束后，要不要自主续跑。
 
     :returns: ``(continue: bool, reason: str)`` —— reason 供 stage/reasoning 透传。
@@ -238,6 +377,13 @@ def decide(verdict, *, used: int, max_used: int, seen_steps,
         return False, "评估结论缺少下一步描述，按不续跑处理"
     if is_spinning(ns, seen_steps):
         return False, "剩余工作与此前步骤相同，判定空转，停止续跑"
+    # ⑤ 正文级空转闸（本轮正文 = 上一轮正文，只换了几个字）—— 2026-11-15 新增。
+    #   为什么放在这里（预算降级之前）：预算吃紧时"收紧续跑"仍值得试一次，
+    #   但如果正文**根本没变**，再跑一轮也是同样的内容 ⇒ 那是纯烧钱，直接停。
+    if content_cur and content_prev and is_content_repeating(
+            content_cur, content_prev, content_sim_thr):
+        return False, ("正文与上一轮高度雷同且长度几乎未变（判定在原地打转），"
+                       "停止续跑——继续只会重复同一份内容")
     # ② 预算吃紧但还有额度 ⇒ **续跑**，只是收紧动作面
     if _dr > 0 and _br >= _dr:
         return True, ("token 预算已用 %.0f%%（阈值 %.0f%%）⇒ 收紧续跑："
@@ -290,6 +436,31 @@ def _code_blocks(text: str) -> list:
     return out
 
 
+def _ngram_sim(a: str, b: str, n: int = 3) -> float:
+    """两段正文的字符 3-gram Jaccard 相似度（去空白后），范围 0~1。
+
+    为什么用字符 n-gram 而不是分词/编辑距离：
+      · 中文没有分词边界，字符 n-gram 才稳，且**零依赖**（本模块是纯函数模块，不引库）；
+      · 编辑距离对 1 万字符是 O(n²)，续跑轮每轮都要判一次，成本不可接受；
+      · 实测分离度足够（见 `merge_round_content` 的标定数据）：同一任务的两次重述
+        落在 0.85~0.95，而**不同主题**的两段正文只有 0.30 ⇒ 判据有很大的中间地带。
+    """
+    x, y = " ".join(str(a or "").split()), " ".join(str(b or "").split())
+    if len(x) < n or len(y) < n:
+        return 1.0 if x == y else 0.0
+    ga = {x[i:i + n] for i in range(len(x) - n + 1)}
+    gb = {y[i:i + n] for i in range(len(y) - n + 1)}
+    return len(ga & gb) / float(len(ga | gb) or 1)
+
+
+#: 判「同一份产物的又一次重述」的相似度阈值。
+#: 标定（真库 msg 6585，2026-11-14）：同一轮任务被续跑 3 次生成的 3 份正文
+#:   J(1,2)=0.8768 / J(1,3)=0.8483 / J(2,3)=0.9540；而与该会话无关的另一条长答复只有 0.3034。
+#: 取 0.70 —— 命中区间最低值之上还留 0.15 余量，非同类文本（0.30）离得很远。
+#: ⚠️ 调这个数之前先跑 `tools/verify/verify_conv9736_write.py` 的 E7~E11（真机样本标定）。
+_RESTATE_SIM = 0.70
+
+
 def merge_round_content(prev: str, cur: str) -> str:
     """把**同一任务的续跑轮正文**并进已有正文，但**不许堆出多份相同内容**。
 
@@ -299,11 +470,21 @@ def merge_round_content(prev: str, cur: str) -> str:
       拼接策略的错在于：**续跑轮的正文本意是"接着做"**，而模型每轮都会重写一份
       完整报告；把每轮都追加 ⇒ 用户看到 7 份重复，重点被稀释。
 
+    ★ 2026-11-14（conv 999999024 / msg 6585 实证）：**判据④"md5 相同"抓不到真机形态**。
+      那次续跑生成的三份正文措辞并不逐字相同（"负载/工况" vs "负载与工况"），
+      三个 ```json 块 md5 全不同 ⇒ ④ 不命中 ⇒ 走 ⑤ 追加 ⇒ 用户仍看到 **3 份**
+      （29,774 字符，同一份"结论摘要 + 结构化结果"讲了三遍）。
+      ⇒ 补判据④b/④c：**同一份产物的重述不一定逐字相同**，用 3-gram 相似度判。
+      ⚠️ 为什么不干脆去掉 ④ 只留相似度：md5 相同是**充分**证据（相似度必为 1），
+        保留它可让"逐字重复"这条最确定的路零成本先短路。
+
     判据（纯函数，可单测）：
       ① `cur` 空 ⇒ 保留 `prev`；
       ② `cur` 包含 `prev`（cur 是更完整版）⇒ **取 cur**；
       ③ `prev` 包含 `cur`（cur 只是片段）⇒ **保留 prev**；
       ④ 两边的代码块集合相同（同一份产物重述）⇒ **取 cur**（最新措辞/结论）；
+      ④b 代码块**数量相同**且都 ≥1、整体相似度 ≥ `_RESTATE_SIM` ⇒ 取 cur；
+      ④c 两边都无代码块、整体相似度 ≥ 0.85 ⇒ 取 cur（纯散文重述，判据更严）；
       ⑤ 其余（确实是新增的不同内容）⇒ 追加，保信息。
     """
     p, c = str(prev or "").strip(), str(cur or "").strip()
@@ -321,16 +502,29 @@ def merge_round_content(prev: str, cur: str) -> str:
     if _np in _nc:
         return c
     # ④ 代码块集合相同 ⇒ 同一产物的又一次重述
+    _bp, _bc = [], []
     try:
-        bp, bc = _code_blocks(p), _code_blocks(c)
-        if bp and bc:
-            sp = {b for b in bp if b}
-            sc = {b for b in bc if b}
+        _bp, _bc = _code_blocks(p), _code_blocks(c)
+        if _bp and _bc:
+            sp = {b for b in _bp if b}
+            sc = {b for b in _bc if b}
             if sp and sc and sp == sc:
                 return c
             # 新内容是旧内容的超集（多了代码块）⇒ 取新
             if sc and sc > sp:
                 return c
+    except Exception:
+        pass
+    # ④b / ④c 逐字不同但语义同一份（措辞微调）—— 见函数头 2026-11-14 那段标定
+    try:
+        _sim = _ngram_sim(p, c)
+        if _bp and _bc:
+            # 有产物：块数相同 = 同一份产物的重述（多一块/少一块都算真有新增，不吞）
+            if len(_bp) == len(_bc) and _sim >= _RESTATE_SIM:
+                return c
+        elif not _bp and not _bc and _sim >= 0.85:
+            # 纯散文：没有代码块可对齐，只认"几乎逐句改写"这一种，判据刻意更严
+            return c
     except Exception:
         pass
     return p + "\n\n" + c

@@ -80,6 +80,14 @@ public class SysMLAstExport {
 
     public static void main(String[] args) {
         try {
+            // ★ 2026-11-09：stdout 必须显式钉成 UTF-8。
+            //   实测症状：`package '通信子系统时序图'` 导出的节点名是 `ͨ����ϵͳʱ��ͼ`。
+            //   根因不是解析器的，是**隧道两端编码不一致**：
+            //   JVM 在 Windows 上按系统代码页（GBK/MS936）写 stdout，
+            //   Python 侧按 utf-8 解码 ⇒ 中文名全毁，所有视图标签都是乱码。
+            //   钉死 UTF-8 后两端一致，与平台/区域设置无关。
+            System.setOut(new java.io.PrintStream(
+                    new java.io.FileOutputStream(java.io.FileDescriptor.out), true, StandardCharsets.UTF_8));
             if (args.length < 1) {
                 System.out.println("{\"ok\":false,\"error\":\"usage: SysMLAstExport <file.sysml> [libraryDir]\"}");
                 return;

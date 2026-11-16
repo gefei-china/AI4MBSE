@@ -360,7 +360,8 @@ def _llm_rationale(rule_label: str, pattern: dict, draft: dict, settings: dict) 
     return None
 
 
-def generate(conn, *, settings: Optional[dict] = None) -> dict:
+def generate(conn, *, settings: Optional[dict] = None, origin: str = "",
+             source_feedback_ids: Optional[list] = None) -> dict:
     """跑规则 → 落库（经 proposal_repo，只写提案队列，绝不写配置）。
 
     返回 {created, skipped, proposals, patterns_summary, llm_drafted}。
@@ -383,6 +384,9 @@ def generate(conn, *, settings: Optional[dict] = None) -> dict:
             if enriched:
                 d = dict(d, rationale=enriched)
                 llm_drafted += 1
+        import json as _json
+        d = dict(d, origin=origin,
+                 source_feedback_ids=_json.dumps(source_feedback_ids or [], ensure_ascii=False))
         row, is_new = repo.insert_proposal(d)
         if is_new:
             created.append(row)

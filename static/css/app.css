@@ -518,22 +518,46 @@ body.nr-full-lock{overflow:hidden;}
  * 中文单行舒适区 ~35-45 字：14.5px 汉字 ≈ 14.5px/字 ⇒ 45 字 ≈ 650px；
  * 但表格/代码需要 900px+ 才不折行。两者取舍 ⇒ 取**自适应**而非固定值。
  *
- * ## 取值
- *   clamp(880px, 72vw, 1180px)
- *     1280 视口 → 921px（与改前几乎一致，小屏零风险）
- *     1440      → 1037px
- *     1600      → 1152px
- *     1920+     → 1180px（封顶，避免超宽行反而难读）
+ * ## 取值（★ 2026-11-06 五次校准 · 用户拍板：**1360px 上限**）
+ *   clamp(880px, 72vw, 1360px)
  *
- * ## ⚠️ 为什么这次敢用 CSS 变量（此前踩过"变量解析不到 ⇒ 整条 max-width 静默失效"）
+ * ## 决策依据（用户实测选择，不是我的推断）
+ *   用户此前反馈"1920×1080 / 两边空白太多"，随后我把值调到 78vw/1560（1920 下 1498、填充 92%），
+ *   用户看后回复「导航栏和内容区都变形了、太小了」。
+ *   同页 A/B 实测（`outputs/_verify_track_ab.json`，只切变量不改文件）：
+ *     | 轨道值        | 导航W | 内容W | 填充 | 两侧留白 |
+ *     | 78vw/1560     | 200  | 1498 | 92% | 65/65   |
+ *     | 72vw/1360 ★   | 200  | 1360 | 84% | 134/134 |
+ *     | 70vw/1240     | 200  | 1240 | 76% | 194/194 |
+ *     | 72vw/1180(旧) | 200  | 1180 | 72% | 224/224 |
+ *   ⇒ **导航宽度在所有候选值下都是 200px，从未变化**；"导航显小"是内容一下拉宽 27% 造成的
+ *     视觉对比失衡，不是布局缺陷（`dockMsgDeltaL` 四个值恒为 -39，也是原有设计）。
+ *   用户最终选定 **1360**（比旧值宽 15%、填充 84%、两侧各留 134），并明确「导航不动」。
+ *
+ * ## 各档推算（nav=200 / area=视口-292）
+ *   1024 → 732（min(100%) 兜底，铺满）
+ *   1280 → 921（填充 93%）
+ *   1600 → 1152（填充 88%）
+ *   1920 → 1360（填充 84%）← 用户主力分辨率
+ *   2560 → 1360（封顶）
+ *
+ * ## 历史（四次误改，全部记录在这一段里，避免第五次）
+ *   ① 1720 上限：无分辨率信息，只按"2560 填充率 50%"推断 ⇒ 方向对、幅度过大；
+ *   ② 固定 920：把"6462c78 之前"当成用户要的"昨天"；
+ *   ③ clamp(880,72vw,1180)：那确是 713673a 的值，但它在 1920 上仅 72%、两侧各 224px，
+ *      正是用户抱怨的"空白太多"；
+ *   ④ 78vw/1560：过宽，导航被衬小 ⇒ 用户退回 1360。
+ *   ⇒ 纪律：**尺寸类需求必须先拿到「分辨率 + 系统缩放 + 浏览器缩放 + 窗口宽高」**，
+ *      并且**改完必须让用户在同页 A/B 里选**，不能靠我单方面判断"填充率多少算好"。
+ *
+ * ## ⚠️ 为什么敢用 CSS 变量（此前踩过"变量解析不到 ⇒ 整条 max-width 静默失效"）
  *   ① `--chat-track` 定义在 `:root`，任何后代都能解析；
  *   ② 每一处使用都带 **fallback**（`var(--chat-track, 920px)`）——
- *      即使变量真的丢了，也只是退回旧值，不可能失效成通栏。
- *   ③ 四处（消息轨道 / 用户气泡 / 底部输入区 / 执行过程）**共用同一变量**：
- *      原实现把 920 和 998(=920+78) 分散写死，改一处必然对不齐（本轮就差点又踩）。
- *   ④ 门禁 `verify_chat_track_width` 断言四处同源 + 无裸 920 残留。
+ *      即使变量真的丢了，也只是退回 920，不可能失效成通栏。
+ *   ③ 四处（消息轨道 / 用户气泡 / 底部输入区 / 执行过程）**共用同一变量**。
+ *   ④ 门禁 `verify_chat_track_width` 断言四处同源 + 多档无横向溢出。
  * ══════════════════════════════════════════════════════════════════════ */
-:root{--chat-track:clamp(880px, 72vw, 1180px);}
+:root{--chat-track:clamp(880px, 72vw, 1360px);}
 
 /* 2026-09-28：会话内容**居中收窄**（此前 .msg 最大 94% → 宽屏下几乎铺满整页，阅读行长过长）；
    同时它是「打开预览时会话流向左推动」的机制来源：预览面板展开 → #chat-col 变窄 →
@@ -939,6 +963,13 @@ h4.md-h{font-size:13.5px;margin:8px 0 3px;color:var(--fg);}
 /* 问答可解释性：答案内 [n] 引用来源链接 */
 sup.cite{color:var(--blue-d);font-size:11.5px;font-weight:600;cursor:pointer;margin:0 1px;padding:0 3px;background:#eef4ff;border:1px solid #d6e4ff;border-radius:3px;white-space:nowrap;user-select:none;}
 sup.cite:hover{background:var(--blue-d);color:#fff;border-color:var(--blue-d);}
+/* ★ 2026-11-15：正文条款号（§5.2.5）自动可点 —— 与 [n] 上标刻意区分：
+   它出现在句子中间，必须**跟正文同基线、同字号**，只用虚线下划线暗示可点，
+   否则整段文字会被抬高、字号忽大忽小，反而更难读（米爸要的是"能点"，不是"跳"）。 */
+sup.cite-sec{vertical-align:baseline;font-size:inherit;font-weight:500;line-height:inherit;
+  background:transparent;border:none;border-bottom:1px dashed var(--blue-d);border-radius:0;
+  padding:0 1px;margin:0;color:var(--blue-d);}
+sup.cite-sec:hover{background:#eef4ff;border-bottom-style:solid;color:var(--blue-d);}
 .md-code{background:#f6f8fa;border:1px solid var(--line);border-radius:8px;padding:10px 12px;overflow-x:auto;margin:8px 0;}
 .md-code code{font-family:Consolas,monospace;font-size:12.5px;color:var(--fg);line-height:1.5;white-space:pre;}
 .md-table-wrap{overflow:hidden;max-width:100%;margin:8px 0;border:1px solid #d5dee8;border-radius:8px;}

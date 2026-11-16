@@ -137,44 +137,14 @@ check("1.12 未声明 tools ⇒ None（继承 Agent 绑定，不再自造默认�
 
 
 print()
-print("=" * 70)
-print("[2] 画布节点 _exec_react（已废弃链路，但必须同源）")
-print("=" * 70)
-
-CAPTURED.clear()
-_out = fx._exec_react("node_1", {"goal": "查一下模型里的需求覆盖",
-                                 "agent": "trace_verification",
-                                 "tools": "graph_retrieve", "max_steps": 2},
-                      {}, {}, conn, None)
-check("2.1 返回 status=done", _out.get("status") == "done", _out.get("status"))
-check("2.2 标记了委托去向（便于排障）",
-      _out.get("delegated_to") == "AgentPipeline.execute", _out.get("delegated_to"))
-check("2.3 画布节点的 agent 也真的生效",
-      CAPTURED.get("forced_intent") == "trace_verification", CAPTURED.get("forced_intent"))
-check("2.4 画布节点的工具白名单生效",
-      CAPTURED.get("tools_whitelist") == ["graph_retrieve"], CAPTURED.get("tools_whitelist"))
-check("2.5 画布节点的轮次上限生效", CAPTURED.get("max_tool_rounds") == 2,
-      CAPTURED.get("max_tool_rounds"))
-check("2.6 steps 恒空（轨迹以 card_data.exec.tools / tool_call_logs 为准，不重复抄）",
-      _out.get("steps") == [] and _out.get("step_count") == 0, _out.get("steps"))
-check("2.7 data 里如实记录实际生效的参数（可审计）",
-      (_out.get("data") or {}).get("agent") == "trace_verification"
-      and (_out.get("data") or {}).get("max_steps") == 2, _out.get("data"))
-
-# execute 抛异常 ⇒ 节点 status=failed，而不是静默成功
-def _boom(self, *a, **k):
-    raise RuntimeError("模拟主链路异常")
-
-
-AgentPipeline.execute = _boom
-_bad = fx._exec_react("node_2", {"goal": "x"}, {}, {}, conn, None)
-check("2.8 主链路异常 ⇒ status=failed 且带 error（不静默成功）",
-      _bad.get("status") == "failed" and "模拟主链路异常" in str(_bad.get("error")),
-      (_bad.get("status"), _bad.get("error")))
-AgentPipeline.execute = _stub_execute
-
-
 print()
+print("=" * 70)
+print("[2] 画布节点 _exec_react —— 已随画布工作流移除，本段断言一并删除")
+print("=" * 70)
+print("  说明：`workflows/nodes.py::_exec_react` 与画布 DAG 引擎同时下线；")
+print("        编排侧 react 走 `planner.py::_run_task`（本文件 [1] 段已覆盖）。")
+
+
 print("=" * 70)
 print("[3] 源码级：旧循环（文本 JSON + 正则）已不存在")
 print("=" * 70)
@@ -196,17 +166,8 @@ def _func_src(path: str, name: str) -> str:
     return "\n".join(out)
 
 
-_nodes = _func_src("workflows/nodes.py", "_exec_react")
-check("3.1 _exec_react 不再用正则提取 JSON",
-      "re.search" not in _nodes and "json.loads" not in _nodes,
-      [t for t in ("re.search", "json.loads") if t in _nodes])
-check("3.2 _exec_react 不再自己拼 think→act→observe 循环",
-      "action_input" not in _nodes and "max_steps + 1" not in _nodes,
-      [t for t in ("action_input", "max_steps + 1") if t in _nodes])
-check("3.3 _exec_react 不再直连 llm_client", "llm_client" not in _nodes)
-check("3.4 _exec_react 显式标注了画布链路已废弃",
-      "已废弃" in _nodes and "画布" in _nodes)
-
+# ★ 2026-11-05：3.1–3.4 断言随 `_exec_react` 删除（它们检查的是该画布节点的内部实现）。
+#   仍保留 3.5（编排路径不得调用旧实现）与 3.6/3.7（execute 轮次覆盖）。
 _planner = io.open(os.path.join(REPO, "workflows", "planner.py"), encoding="utf-8").read()
 check("3.5 编排路径不再调用旧实现（`self._exec_react` 应只在注释里）",
       "self._exec_react(" not in _planner.replace("`self._exec_react(...)`", ""),

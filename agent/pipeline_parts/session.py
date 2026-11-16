@@ -170,6 +170,62 @@ class SessionMixin:
         except Exception:
             return []
 
+    def _bound_mcp_offline_note(self, intent, main_agent=None) -> str:
+        """★ 2026-11-06：本 Agent 绑定的 MCP **离线**时，返回一条可读的系统提示。
+
+        为什么必须有（conv 990480，用户原话「我的对接智源的任务还是没完成」）：
+          智源 MCP 的 Bearer 失效（401 invalid_token）后，`status` 变 offline，
+          而 `status='online'` 是工具注入的**硬闸门** ⇒ 71 个平台工具全部消失。
+          但界面上没有任何一处说"凭据失效了，去换 token"，模型只能自己编
+          "我没找到 MCP / 工具清单里没有" ⇒ 用户被引向"是不是路由错了"这条错路
+          （实测连续三轮如此）。
+
+        ⇒ 把「能力为什么不可用」变成**系统事实**而不是模型的猜测。
+        返回 "" 表示没有离线项（正常路径零输出、零DB开销可忽略：一次子查询）。
+        """
+        names = [n for n in (intent, main_agent) if n]
+        if not names:
+            return ""
+        try:
+            with db_conn() as c:
+                marks = ",".join("?" * len(names))
+                rows = c.execute(
+                    "SELECT DISTINCT m.name, m.status, m.last_error "
+                    "FROM agent_tools at "
+                    "JOIN agents ag ON ag.id=at.agent_id "
+                    "JOIN mcp_servers m ON m.name=at.tool_name "
+                    "WHERE at.tool_type='mcp' AND at.enabled=1 AND m.enabled=1 "
+                    "AND m.status IS NOT NULL AND m.status<>'online' "
+                    "AND ag.name IN (%s)" % marks, tuple(names)).fetchall()
+        except Exception:
+            return ""
+        if not rows:
+            return ""
+        items = []
+        for r in rows:
+            _nm = r[0]
+            _err = str(r[2] or "")
+            if "401" in _err:
+                _why = "401 鉴权失败，凭据已失效"
+            elif "403" in _err:
+                _why = "403 拒绝访问"
+            elif "502" in _err or "Bad Gateway" in _err:
+                _why = "502 网关错误"
+            elif "timed out" in _err.lower() or "timeout" in _err.lower():
+                _why = "连接超时"
+            elif _err:
+                _why = _err.splitlines()[0][:60]
+            else:
+                _why = "尚未测通"
+            items.append(_nm + "（" + _why + "）")
+        # ⚠️ 前缀 `（能力不可用）` **由调用点拼**（stream.py）。
+        #   原因：门禁 S3b 用 AST 字面量校验"progress 文案是否带系统指纹"，
+        #   穿不透函数调用 ⇒ 把前缀藏在这里会让判据**永远看不见**它。
+        return ("本 Agent 绑定的 MCP 服务 " + "、".join(items)
+                + " 当前离线，平台数据读写工具本轮**没有注入** —— 这不是模型不会用工具，"
+                  "而是工具确实不在清单里。请到「能力中心 → 工具与 MCP → MCP 服务」"
+                  "重新签发凭据，再点「🔌 测试/发现」确认回到在线。")
+
     def _load_history_for_intent(self, conversation_id) -> list:
         """P0-5：意图识别用的历史（读配置 → 取最近 N 条用户话）。开关关闭/取不到时返回 []。"""
         try:

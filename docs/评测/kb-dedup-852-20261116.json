@@ -1,0 +1,27 @@
+{
+ "schema": "kb/dedup-softdelete@1",
+ "applied_at_utc": "2026-11-16 05:47:18",
+ "backup": "backups/mbse.db.bak-before-kb-dedup-20261116_134714.db",
+ "dropped": {
+  "id": 852,
+  "filename": "1_800_SysML-v2-AI建模知识文档.md",
+  "lifecycle_status": "stored -> deprecated",
+  "chunks": 270,
+  "cites": 1
+ },
+ "kept": {
+  "id": 800,
+  "filename": "SysML-v2-AI建模知识文档.md",
+  "lifecycle_status": "stored",
+  "chunks": 270,
+  "cites": 23
+ },
+ "sha256": "5f7a571faa2351351bcdb6722916ada8e1d806bf3b2eac9bef78dbb4c84f02d3",
+ "why_keep_800_not_852": "_dedupe_documents.py 的 same_content 策略是「保留最新」，会删 800 保 852；但 800 被历史 citations 引用 23 次、852 仅 1 次 ⇒ 删 800 会制造 23 条断链。正确判据是「被引用最多，并列取最早」",
+ "why_soft_delete": "检索侧 rag.py:399/1275 与图谱侧 graph_provenance.py:120 均过滤 deprecated ⇒ 软删后检索不可见（效果等同真删），但历史引用仍可打开且单步可回滚",
+ "rollback_sql": [
+  "UPDATE documents SET lifecycle_status='stored', deprecated_at='', deprecated_by='', deprecate_reason='', lifecycle_version=lifecycle_version+1 WHERE id=852;",
+  "UPDATE document_chunks SET lifecycle_status='stored' WHERE document_id=852;",
+  "DELETE FROM document_lifecycle_log WHERE document_id=852 AND operator='kb-dedup-20261116';"
+ ]
+}

@@ -109,6 +109,41 @@ def severity_of(*, review_type: str = "", quality: str = "") -> str:
                                  NEGATIVE_SEVERITY.get((quality or "").strip(), "medium"))
 
 
+# ── 反馈处理状态机（2026-11-06 P0：把「将用于改进」变成可追踪状态）──
+# 背景：前端点踩后的 toast 承诺「将用于改进」，但 feedback 表没有任何状态列，
+#   用户查不到「我那条反馈到哪一步了」，引擎也无从标记「已消费」。
+#   ⇒ 状态机是 P0「先诚实」的数据契约，同时是 P1 时间线的数据源。
+FEEDBACK_STATES: Tuple[str, ...] = (
+    "new",       # 已收到，尚未进入任何消费链路
+    "sampled",   # 已进 badcase / online_eval 队列
+    "proposed",  # 已产出改进候选（config_proposals）
+    "promoted",  # 已入 HIL 待批准队列（尚未生效）
+    "verified",  # 配置已生效且效果已判定
+    "expired",   # 超过窗口仍未消费
+)
+FEEDBACK_STATE_LABELS: Dict[str, str] = {
+    "new": "待采样",
+    "sampled": "已采样",
+    "proposed": "已生成改进候选",
+    "promoted": "待你批准",
+    "verified": "已生效并验证",
+    "expired": "已过期未消费",
+}
+#: 只允许前进（与 alert_disposition 的 forward-only 同款纪律）；expired 是异常终态。
+FEEDBACK_STATE_ORDER: Dict[str, int] = {
+    s: i for i, s in enumerate(FEEDBACK_STATES[:-1])
+}
+
+
+def can_advance_state(current: str, target: str) -> bool:
+    """状态是否允许前进；未知状态一律拒绝（fail-closed）。"""
+    if target == "expired":
+        return current not in ("promoted", "verified")
+    a = FEEDBACK_STATE_ORDER.get(current or "new")
+    b = FEEDBACK_STATE_ORDER.get(target)
+    return a is not None and b is not None and b > a
+
+
 def public_catalog() -> dict:
     """下发给前端的取值目录（`GET /api/feedback-types`）。
 
@@ -121,4 +156,6 @@ def public_catalog() -> dict:
         "negative_quality": list(NEGATIVE_QUALITY),
         "negative_behavior_events": list(NEGATIVE_BEHAVIOR_EVENTS),
         "weak_behavior_events": list(WEAK_BEHAVIOR_EVENTS),
+        "feedback_states": list(FEEDBACK_STATES),
+        "feedback_state_labels": dict(FEEDBACK_STATE_LABELS),
     }

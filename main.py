@@ -5,6 +5,8 @@
 新增功能域流程：新建 routers/xxx.py → routers/__init__.py 注册 → 本文件 include 一行。
 """
 import os
+import time
+import uuid
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -53,7 +55,6 @@ from routers import (
     proposals_router,      # 2026-10-18 P1-3 配置提案（失败轨迹→修订提议，只提议不自动应用）
     curriculum_router,     # 2026-10-19 P2-2 失败驱动任务提案（EnvBuilder 式自造课程，只提议不自动执行）
     agent_archive_router,  # 2026-10-19 P2-3 Agent 档案库/种群（变体台账 + 死路记忆，只记录不切换生效版本）
-    flow_topology_router,  # 2026-10-20 P2-4 画布拓扑台账（结构体检 + 同构去重，只读不改拓扑）
     evolution_report_router,  # 2026-10-20 自进化周报（回答「这周系统替我做了什么、我该做什么」）
     evaluation_router,        # 2026-10-22 评测管理（评测历史 / 趋势 / 可信度 / 门禁接线）
     diagnostics_router,       # 2026-10-26 P0-8 上下文归因只读诊断（让 token 构成可见）
@@ -303,6 +304,16 @@ async def lifespan(app: FastAPI):
     except Exception as _e:
         print("[startup] 运行时状态初始化失败（退化用默认值）：%s" % str(_e)[:120], flush=True)
 
+    # ── 2026-11-06 P1：自进化周期触发器（默认 observe，零副作用）──
+    try:
+        from core.evolution_tick import start_tick as _start_evo_tick
+        _start_evo_tick(
+            interval_s=int(config.get("evolution", "tick_interval_s", 300) or 300),
+            mode=str(config.get("evolution", "tick_mode", "observe") or "observe"),
+            enabled=config.as_bool("evolution", "tick_enabled", True))
+    except Exception as _e:
+        print("[startup] 自进化 tick 启动失败（不影响主流程）：%s" % str(_e)[:160], flush=True)
+
     yield
 
     # ══════════════════════════════════════════════════════════════════════
@@ -460,7 +471,6 @@ for _router in (
     proposals_router,  # 2026-10-18 P1-3 配置提案（失败轨迹→修订提议，只提议不自动应用）
     curriculum_router,  # 2026-10-19 P2-2 失败驱动任务提案（失败证据→该练什么，只提议不自动执行）
     agent_archive_router,  # 2026-10-19 P2-3 Agent 档案库/种群（记住死路，避免重走；只记录不切换生效版本）
-    flow_topology_router,  # 2026-10-20 P2-4 画布拓扑台账（记住结构缺陷与同构冗余；只读不改拓扑）
     evolution_report_router,  # 2026-10-20 自进化周报（回答「这周系统替我做了什么、我该做什么」）
     evaluation_router,        # 2026-10-22 评测管理（评测历史 / 趋势 / 可信度 / 门禁接线）
     diagnostics_router,       # 2026-10-26 P0-8 上下文归因只读诊断
@@ -497,6 +507,30 @@ def health_live():
     return {"status": "alive", "draining": runtime_state.is_draining()}
 
 
+# ★ 2026-11-06：**进程身份快照** —— 用于回答「这一轮中断到底是不是服务重启」。
+#   背景（conv 990485 14:54）：用户看到「本轮未产出正文内容（连接中断或服务端异常）」，
+#   第一反应是"服务重启了"。可在同一份日志里进程从 14:30 起**只有一次启动、零 shutdown**，
+#   真正原因是该轮被路由到「通用问答Agent」（无工具/无上下文）⇒ 提示语把排查引向错路。
+#   判据设计：前端在**开流前**取一次 boot_id，中断时再取一次；
+#     变了 ⇒ 一定是重启（进程内 UUID 每次启动都不同，不依赖时间对齐、不受时钟漂移影响）；
+#     没变 ⇒ 一定不是重启，只能是路由/模型/客户端断开等进程内原因。
+_BOOT_ID = uuid.uuid4().hex[:12]
+_BOOT_AT = time.time()
+_BOOT_PID = os.getpid()
+
+
+@app.get("/api/system/boot")
+def system_boot():
+    """进程身份：boot_id 每次启动唯一；started_at 为本地时间字符串（便于人读）。"""
+    import datetime as _dt
+    return {
+        "boot_id": _BOOT_ID,
+        "pid": _BOOT_PID,
+        "started_at": _dt.datetime.fromtimestamp(_BOOT_AT).strftime("%Y-%m-%d %H:%M:%S"),
+        "uptime_s": round(time.time() - _BOOT_AT, 1),
+    }
+
+
 @app.get("/api/health/ready")
 def health_ready():
     """就绪探针：关闭中返 503（让上游摘流量），否则 200。
@@ -525,6 +559,44 @@ def index():
     return HTMLResponse("<h1>MBSE AI System</h1><p>Frontend not found. API docs: <a href='/docs'>/docs</a></p>")
 
 
+def _bind_dual_stack(port: int) -> list:
+    """同时绑定 IPv4 与 IPv6，返回 socket 列表供 `uvicorn.Server.run(sockets=...)`。
+
+    ## 为什么必须两个 socket（2026-11-12 本机实测，不是理论风险）
+    1. Windows 上 `ping localhost` 解析到 **`::1`**（IPv6）。uvicorn 绑 `0.0.0.0`
+       只覆盖 IPv4 ⇒ 浏览器访问 `http://localhost:8000` **连接被拒**，
+       表现为"服务没启动"（用户实际报障就是这个）。
+    2. 反过来绑 `::` 在本机实测 **不是 dual-stack**（socket 的 `IPV6_V6ONLY=1`）：
+       `127.0.0.1` 与局域网 IPv4 全部变 `000`，比只绑 IPv4 更糟。
+    ⇒ 只能显式各绑一个，不能让内核替我们决定。
+
+    端口占用语义：Windows 上 `SO_REUSEADDR` 允许**抢占**已监听端口，
+    会造成"两个进程都以为自己绑上了"的隐形冲突（历史踩过）。故优先
+    `SO_EXCLUSIVEADDRUSE`（Windows 专用，独占），其它平台退回 `SO_REUSEADDR`。
+    绑定失败只打印并跳过该协议族，另一个仍可服务（不让 IPv6 缺失拖垮整个服务）。
+    """
+    import socket as _socket
+    socks = []
+    for fam, addr, v6only in ((_socket.AF_INET, "0.0.0.0", None),
+                              (_socket.AF_INET6, "::", 1)):
+        try:
+            s = _socket.socket(fam, _socket.SOCK_STREAM)
+            if hasattr(_socket, "SO_EXCLUSIVEADDRUSE"):
+                s.setsockopt(_socket.SOL_SOCKET, _socket.SO_EXCLUSIVEADDRUSE, 1)
+            else:
+                s.setsockopt(_socket.SOL_SOCKET, _socket.SO_REUSEADDR, 1)
+            if v6only is not None:
+                s.setsockopt(_socket.IPPROTO_IPV6, _socket.IPV6_V6ONLY, v6only)
+            s.bind((addr, port))
+            s.listen(2048)
+            socks.append(s)
+            print("[startup] 已绑定 %s:%d" % (addr, port), flush=True)
+        except OSError as exc:
+            print("[startup] 绑定 %s:%d 失败（跳过该协议族）：%s"
+                  % (addr, port, exc), flush=True)
+    return socks
+
+
 if __name__ == "__main__":
     import uvicorn
     # ★ 2026-10-30（P0 缺口①）：`timeout_graceful_shutdown` **必须显式给**。
@@ -538,5 +610,14 @@ if __name__ == "__main__":
         _drain_s = int(runtime_state._cfg("shutdown_drain_s") or 30)
     except Exception:
         _drain_s = 30
-    uvicorn.run(app, host=config.HOST, port=config.PORT,
-                timeout_graceful_shutdown=_drain_s)
+    _host = (config.HOST or "").strip()
+    # 通配地址才做双栈；用户显式指定某个 IP 时保持原语义（只绑那一个地址）。
+    _socks = _bind_dual_stack(config.PORT) if _host in ("0.0.0.0", "::", "") else None
+    if _socks:
+        uvicorn.Server(uvicorn.Config(
+            app, host=_host or "0.0.0.0", port=config.PORT,
+            timeout_graceful_shutdown=_drain_s)).run(sockets=_socks)
+    else:
+        uvicorn.run(app, host=_host, port=config.PORT,
+                    timeout_graceful_shutdown=_drain_s)
+

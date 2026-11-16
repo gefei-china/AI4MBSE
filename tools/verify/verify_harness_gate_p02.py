@@ -131,16 +131,22 @@ def group_c():
     s = hg.parse_verify_spec("人工确认")
     check("C", "『人工确认』⇒ manual", s["kind"] == "manual", str(s))
 
+    # ★ 2026-11-09 契约变更（P0-2a 四级 strict）：断言随实现同步更新。
+    #   旧契约「纯工具名 ⇒ tool」会**真去执行** —— 生产上已造成
+    #   conv 990463 的「未知工具: JSON」空转（verify 写自然语言"JSON 含…"，被切成工具名）。
+    #   新契约只认「白名单工具 + 合法 JSON 参数」，其余一律 manual（漏拦优于乱调）。
+    #   不改这 3 条，门禁会永久红，反而失去对真回归的鉴别力。
     s = hg.parse_verify_spec("sysmlv2_check")
-    check("C", "纯工具名 ⇒ tool", s["kind"] == "tool" and s["tool"] == "sysmlv2_check", str(s))
+    check("C", "纯工具名 ⇒ manual（无参数无法确定校验对象，不执行）",
+          s["kind"] == "manual" and bool(s.get("parse_error")), str(s))
 
     s = hg.parse_verify_spec('sysmlv2_check {"pkg": "P-001"}')
-    check("C", "工具名+JSON 参数 ⇒ 参数解析正确",
-          s["kind"] == "tool" and s["args"].get("pkg") == "P-001", str(s))
+    check("C", "非白名单工具+JSON 参数 ⇒ manual（带 blocked_reason）",
+          s["kind"] == "manual" and "不在只读白名单" in (s.get("blocked_reason") or ""), str(s))
 
     s = hg.parse_verify_spec("some_tool 裸参数")
-    check("C", "非 JSON 参数 ⇒ 按 value 传",
-          s["kind"] == "tool" and s["args"].get("value") == "裸参数", str(s))
+    check("C", "非 JSON 参数 ⇒ manual（不再硬塞 value=自然语言）",
+          s["kind"] == "manual" and "非 JSON" in (s.get("parse_error") or ""), str(s))
 
     s = hg.parse_verify_spec("")
     check("C", "空 verify ⇒ manual（不抛异常）", s["kind"] == "manual", str(s))
@@ -166,16 +172,19 @@ def group_c():
     check("C", "★★自然语言 verify 一律降级 manual（不当工具名调用）",
           not bad, f"被误当工具名：{bad}")
 
-    # 反向：真工具名仍必须是 tool（防矫枉过正把真工具也降级）
-    REAL_TOOLS = ["query_data_tree", "sysmlv2_check", "gen_pkg",
-                  "mcp:zhiyuan:query_projects",
-                  'query_data_tree {"branch": "dev"}']
+    # 反向：白名单工具 + 合法 JSON 参数仍必须是 tool（防矫枉过正把真工具也降级）
+    #   ★ 2026-11-09：旧的 REAL_TOOLS 里含裸工具名（无参数），新契约下它们正确降级为
+    #     manual —— 那不是"矫枉过正"，是"没有参数就不知道怎么验"。故反向用例改为
+    #     **可执行的形态**（白名单 + JSON），这才是"真工具仍被识别"的正确证据。
+    REAL_TOOLS = ['query_data_tree {"branch": "dev"}',
+                  'sysml_v2_validate {"code": "package P;"}',
+                  'file_read {"path": "a.txt"}']
     bad2 = []
     for v in REAL_TOOLS:
         sp_ = hg.parse_verify_spec(v)
         if sp_["kind"] != "tool":
-            bad2.append(v)
-    check("C", "★真工具名仍识别为 tool（未矫枉过正）", not bad2, str(bad2))
+            bad2.append((v, sp_.get("blocked_reason") or sp_.get("parse_error")))
+    check("C", "★白名单工具+JSON ⇒ tool（未矫枉过正）", not bad2, str(bad2))
 
 
 # ══════════════ D. 接线（两处同构 + 位置正确）══════════════
@@ -334,11 +343,20 @@ def group_d():
         if '"force_release": False' in blk and "build_force_release_notice" in blk:
             bad.append(blk[:80])
     # 更严格：检查所有含 notice 变量的返回块，force_release 不得写死 False
+    #   ★ 2026-11-09 修正假阳性：原判据只看块里出没出现 "notice" 字样，
+    #     于是 `"notice": ""`（**没有**强制放行通知）也被判红 —— 而这种情况
+    #     force_release 本来就该是 False。判据改为：**非空** notice 与 False 共存才算违规。
+    #     （这条属于 D9「实际0报1冤枉」：门禁自己冤枉代码，会教人忽略它。）
     for m in _re.finditer(
             r'return\s*\{"block":\s*False.*?\}', a, _re.S):
         blk = m.group(0)
-        if "notice" in blk and '"force_release": False' in blk:
-            bad.append(blk[:100])
+        if '"force_release": False' not in blk:
+            continue
+        if "notice" not in blk:
+            continue
+        if '"notice": ""' in blk or "'notice': ''" in blk:
+            continue          # 空通知 ⇒ False 是正确语义
+        bad.append(blk[:100])
     check("D", "★★不变式：放行时 force_release 不得写死 False（notice 与之联动）",
           not bad, f"命中 {len(bad)} 处：{bad[:2]}")
     check("D", "force_release 从 decision 透传（bool(...get(...))）",

@@ -167,10 +167,14 @@ def resolve_push_tool_gate(conn, version_id: int) -> dict:
     pj = conn.execute("SELECT id, tool_binding FROM projects WHERE id=?", (pid,)).fetchone()
     if not pj:
         # 孤儿归属：指向的工程已被移除。不能等价于"已绑定"，更不能放行。
-        return {"ok": False, "code": "PROJECT_NOT_BOUND",
+        # ⚠️ 2026-11-07：code 从 PROJECT_NOT_BOUND 拆出 `PROJECT_ORPHANED` ——
+        #   两种情况的**自救路径不同**（前者是"还没归入工程"，后者是"归入的工程没了"），
+        #   用同一个 code 会让前端只能给一句笼统提示。实测 7 条版本挂在已删除的
+        #   `project-satnet-broadband` 上，此前用户**没有任何入口**改回来。
+        return {"ok": False, "code": "PROJECT_ORPHANED",
                 "error": f"该版本归属的工程（{pid}）已不存在，无法写回建模工具"
-                         "（请先把会话归入一个有效项目）",
-                "tool": ""}
+                         "（调用 /api/sysml-versions/{id}/reattribute 重新归属到现有工程）",
+                "tool": "", "stale_project_id": pid}
     try:
         _b = json.loads((pj["tool_binding"] if hasattr(pj, "keys") else pj[1]) or "{}")
     except Exception:
@@ -225,6 +229,155 @@ def push_zhiyuan(version_id: int, body: dict = None,
           f"SysML v{version_id} 写入智源（vc={b.get('vc') or '-'}）: "
           f"{'成功' if res.get('ok') else '失败'}", conn=conn)
     return res
+
+
+@router.get("/api/sysml-versions/{version_id}/closure")
+def version_closure(version_id: int, conn=Depends(db_session)):
+    """闭环进度：一个版本走到哪一步、卡在哪、下一步该做什么（只读）。
+
+    ## 为什么需要它
+    2026-11-07 实测：`sysml_versions` 128 条里 **120 条有代码但 `imported_batch` 为空**、
+    `committed` 0 条、`zhiyuan_imported_id` 0 条。也就是说"生成→入库→写回"这条路
+    **从未被走完过**，但从界面上看每一条都是"正常版本"，看不出卡在哪。
+    真实链路是四段（每段都有独立闸，跳过哪段都不算闭环）：
+
+        ① 候选化   import-candidates  → v2g_candidates(SYSM-*) / imported_batch
+        ② 提交审核  review_status=submitted（V2 候选强制待审闸）
+        ③ 三元组   triples(pending) → 审核通过 → approved
+        ④ 图库     commit_approved_triples → entities/relations（committed）
+        ⑤ 写回智源 push-zhiyuan → zhiyuan_imported_id（外部系统，需 vc/配置）
+
+    `adopted` 列**不参与**判定：它 2026-09-24 已随「📌 采纳」入口一并下线，
+    仅作历史留痕、无写入方（见本文件头注）。
+    """
+    row = conn.execute("SELECT id, project_id, status, code_text, imported_batch, "
+                       "zhiyuan_imported_id FROM sysml_versions WHERE id=?",
+                       (version_id,)).fetchone()
+    if not row:
+        return JSONResponse({"error": "版本不存在"}, 404)
+    pid = str(row["project_id"] or "")
+    has_code = bool(str(row["code_text"] or "").strip())
+    batch = str(row["imported_batch"] or "")
+    stages = []
+
+    # ① 候选化
+    cand_n = sub_n = 0
+    if batch:
+        cand_n = conn.execute("SELECT COUNT(*) FROM v2g_candidates WHERE batch_id=?",
+                              (batch,)).fetchone()[0]
+        sub_n = conn.execute("SELECT COUNT(*) FROM v2g_candidates WHERE batch_id=? "
+                             "AND review_status='submitted'", (batch,)).fetchone()[0]
+    stages.append({"stage": "candidates", "name": "候选化（解析→v2g 候选）",
+                   "done": bool(batch and cand_n > 0),
+                   "detail": f"批次 {batch or '—'}／候选 {cand_n} 条",
+                   "action": "" if batch else "POST /import-candidates"})
+
+    # ② 提交审核
+    stages.append({"stage": "review", "name": "提交审核（V2 候选强制待审）",
+                   "done": bool(cand_n and sub_n == cand_n),
+                   "detail": f"已提交 {sub_n}/{cand_n}",
+                   "action": "" if (cand_n and sub_n == cand_n) else "POST /api/knowledge/v2g/submit-review"})
+
+    # ③ 三元组
+    t_all = conn.execute("SELECT COUNT(*) FROM triples WHERE sysml_version_id=?",
+                         (version_id,)).fetchone()[0]
+    t_ok = conn.execute("SELECT COUNT(*) FROM triples WHERE sysml_version_id=? AND status='approved'",
+                        (version_id,)).fetchone()[0]
+    stages.append({"stage": "triples", "name": "三元组审核",
+                   "done": bool(t_all and t_ok == t_all),
+                   "detail": f"已通过 {t_ok}/{t_all}",
+                   "action": "" if (t_all and t_ok == t_all) else "确认候选（v2g/confirm）后审核三元组"})
+
+    # ④ 图库
+    ent_n = conn.execute("SELECT COUNT(DISTINCT graph_entity_id) FROM triples "
+                         "WHERE sysml_version_id=? AND coalesce(graph_entity_id,'')<>''",
+                         (version_id,)).fetchone()[0]
+    stages.append({"stage": "graph", "name": "图库入库（entities/relations）",
+                   "done": bool(ent_n),
+                   "detail": f"落地实体 {ent_n} 条／版本状态 {row['status']}",
+                   "action": "" if ent_n else "commit_approved_triples（审核通过后自动）"})
+
+    # ⑤ 写回智源
+    zid = str(row["zhiyuan_imported_id"] or "")
+    gate = resolve_push_tool_gate(conn, version_id)
+    # 闸门通过 ≠ 能写回：还需要 base_url + vc（实测这台机器 base_url 为空 ⇒ push 必报
+    # CONFIG_MISSING，但 closure 若只报"闸门通过"会让人以为差一步点击，属误导）。
+    cfg_ok, cfg_why = True, ""
+    if not zid:
+        try:
+            from zhiyuan_client import _load_config
+            _cfg = _load_config()
+            if not str(_cfg.get("base_url") or "").strip():
+                cfg_ok, cfg_why = False, "智源 base_url 未配置（ZHIYUAN_BASE_URL）"
+            elif not str(_cfg.get("default_vc") or "").strip():
+                cfg_ok, cfg_why = False, "智源默认版本上下文 vc 未配置"
+        except Exception as exc:                                # noqa: BLE001
+            cfg_ok, cfg_why = False, f"智源配置读取失败：{type(exc).__name__}"
+    _zy_action = ""
+    if not zid:
+        _zy_action = (gate["error"] if not gate["ok"]
+                      else ("POST /push-zhiyuan（缺配置：" + cfg_why + "）" if not cfg_ok
+                            else "POST /push-zhiyuan"))
+    stages.append({"stage": "zhiyuan", "name": "写回智源（外部系统）",
+                   "done": bool(zid),
+                   "detail": (f"写回记录 {zid}" if zid else
+                              ("闸门：通过" if gate["ok"] else f"闸门：{gate['code']}")
+                              + ("" if cfg_ok else f"；配置：{cfg_why}")),
+                   "action": _zy_action})
+
+    blocked = [s for s in stages if not s["done"]]
+    return {"version_id": version_id, "project_id": pid, "has_code": has_code,
+            "stages": stages,
+            "closed": not blocked,
+            "next": (blocked[0]["stage"] if blocked else ""),
+            "next_action": (blocked[0]["action"] if blocked else ""),
+            "note": "adopted 列已于 2026-09-24 下线，不参与闭环判定"}
+
+
+def reattribute_version(version_id: int, body: dict = None, conn=Depends(db_session),
+                        user=Depends(current_user)):
+    """把版本**重新归属**到一个现有工程（修「孤儿归属无法自救」）。
+
+    ## 为什么必须有这个端点
+    `resolve_push_tool_gate` 对「版本归属的工程已不存在」只给一句「请先把会话归入有效项目」——
+    但 `sysml_versions.project_id` 是**写入时定格**的（P1-1，2026-09-28：故意不让它随会话漂移），
+    所以改会话归属**不会**改变历史版本，用户手里没有任何可执行的动作。
+    2026-11-07 实测：7 条版本挂在已删除的 `project-satnet-broadband` 上、113 条版本 project_id
+    为空 —— 这批版本**永远无法写回**，且从界面上看只是"写回失败"。
+
+    ## 边界（不能变成绕过闸门的后门）
+    · 只改 `project_id`，**不动** `zhiyuan_imported_id` / `imported_batch` / `status`；
+    · 目标工程必须存在（否则又造一个孤儿）；
+    · `body.project_id=""` 表示"退出工程"（允许，写回会回到 PROJECT_NOT_BOUND，属显式选择）；
+    · 全量审计：`sysml_reattribute` 记录前后值。
+    """
+    b = body or {}
+    if "project_id" not in b:
+        return JSONResponse({"error": "缺少 project_id（空串表示退出工程）"}, 400)
+    target = str(b.get("project_id") or "").strip()
+    row = conn.execute("SELECT id, project_id FROM sysml_versions WHERE id=?",
+                       (version_id,)).fetchone()
+    if not row:
+        return JSONResponse({"error": "版本不存在"}, 404)
+    if target:
+        pj = conn.execute("SELECT id FROM projects WHERE id=?", (target,)).fetchone()
+        if not pj:
+            return JSONResponse({"error": f"目标工程不存在: {target}", "code": "PROJECT_NOT_FOUND"}, 400)
+    before = str(row["project_id"] or "")
+    if before == target:
+        return {"ok": True, "changed": False, "project_id": target}
+    conn.execute("UPDATE sysml_versions SET project_id=? WHERE id=?", (target, version_id))
+    conn.commit()
+    audit(_actor(user), "sysml_reattribute",
+          f"SysML v{version_id} 归属 {before or '（空）'} → {target or '（空）'}", conn=conn)
+    return {"ok": True, "changed": True, "before": before, "project_id": target}
+
+
+@router.post("/api/sysml-versions/{version_id}/reattribute")
+def reattribute_version_post(version_id: int, body: dict = None, conn=Depends(db_session),
+                             user=Depends(current_user)):
+    """POST 入口（与函数体同一实现，供前端与门禁脚本调用）。"""
+    return reattribute_version(version_id, body, conn, user)
 
 
 @router.delete("/api/sysml-versions/{version_id}/import-candidates")

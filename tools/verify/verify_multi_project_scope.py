@@ -317,8 +317,8 @@ g4 = resolve_push_tool_gate(_c5, 24)
 check("归属工程未绑定工具 → 放行（既有行为：走 vc 手填，不阻断）", g4["ok"] is True, f"got={g4}")
 
 g5 = resolve_push_tool_gate(_c5, 25)
-check("★ 孤儿归属（指向已删项目）→ PROJECT_NOT_BOUND（不能等价于已绑定）",
-      (not g5["ok"]) and g5["code"] == "PROJECT_NOT_BOUND", f"got={g5}")
+check("★ 孤儿归属（指向已删项目）→ PROJECT_ORPHANED（不能等价于已绑定；孤儿与未归属的自救路径不同）",
+      (not g5["ok"]) and g5["code"] == "PROJECT_ORPHANED", f"got={g5}")
 _c5.close()
 os.unlink(_db5)
 

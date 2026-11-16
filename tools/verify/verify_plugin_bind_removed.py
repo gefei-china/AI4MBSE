@@ -214,18 +214,44 @@ def main():
         pipe = AgentPipeline()
         pipe._load_db_agents()
         pool = pipe._global_skill_pool(user={"id": 1, "role_name": "admin"}) or []
+
+        def _is_fileops(s):
+            nm = str((s or {}).get("name") or "")
+            return "文件操作" in nm or "file-ops" in nm or "file_ops" in nm.lower()
+
         if not pool:
             # ⚠️ 全局技能池来自 skills 表；干净库里一张都没有 ⇒ 无从验证"触发"。
             # 这同样是"没样本"，不是"能力没了" ⇒ SKIP（判 FAIL 会让 CI 恒红且红因不对）。
             skip("技能能力未丢失（file-ops 仍可经全局池触发）",
                  "本库 skills 表为空，无全局技能池可触发")
+        elif not any(_is_fileops(s) for s in pool):
+            # ★ 2026-11-15：判据从「池是否为空」收紧到「池里**有没有** file-ops」。
+            #
+            # 为什么必须再细化（CI 上这条长期红，而本地绿）：
+            #   「文件操作」技能的 `package_path` 指向 `static/skill_packages/<hash>`，
+            #   该目录**已被 .gitignore 排除**（source='manual'、builtin=1，本地安装的），
+            #   不随仓库分发。CI 全新克隆 ⇒ skills 表里没有它；但 CI **可能**有别的技能
+            #   （其它来源导入）⇒ `pool` 非空 ⇒ 旧判据走 check 分支 ⇒ hits 里当然没有
+            #   file-ops ⇒ FAIL。红因是"这条技能不在本环境"，不是"技能绑定被删导致能力丢失"。
+            #
+            # 而本门禁要守的是**后者**：插件绑定移除后，技能能力不应跟着丢。
+            #   判据应当是「池里有 file-ops 时，它必须能被触发」——
+            #   只要池里有却命不中，那才是匹配机制真坏了（仍判红）。
+            skip("技能能力未丢失（file-ops 仍可经全局池触发）",
+                 "全局池共 %d 个技能，但无「文件操作」"
+                 "（其技能包在 static/skill_packages/，已被 .gitignore 排除，不随仓库分发）"
+                 % len(pool))
         else:
             pipe._build_skill_prompt("requirement_analysis", "请把分析结果保存为文件",
                                      user={"id": 1, "role_name": "admin"})
             hits = getattr(pipe, "_last_skill_hits", None) or []
-            check("技能能力未丢失（file-ops 仍可经全局池触发）",
-                  any("文件操作" in str(h) or "file-ops" in str(h) for h in hits),
-                  "hits=" + str(hits))
+            _hit_ok = any("文件操作" in str(h) or "file-ops" in str(h) for h in hits)
+            check("技能能力未丢失（file-ops 仍可经全局池触发）", _hit_ok,
+                  # ⚠️ detail 只在失败时才该给"为什么失败"。此前写成
+                  #   "池中确有该技能，却未命中 ⇒ 匹配机制问题"，PASS 时也会被打印
+                  #   ⇒ 日志自相矛盾（本仓已有同类教训：PASS 行后挂 skipped=True）。
+                  "" if _hit_ok else ("池中共 %d 个技能、命中 %r —— 池中有 file-ops 却未命中"
+                                      " ⇒ 匹配机制问题" % (len(pool), hits[:5])))
     except Exception as e:
         check("技能能力未丢失（file-ops 仍可经全局池触发）", False, "异常: " + str(e))
 

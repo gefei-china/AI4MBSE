@@ -1,3 +1,4 @@
+// CI-OPTIONAL: [local] tier=local（见 tools/gates_manifest.json）：真实浏览器门禁——需本机 Chromium（agent-browser）+ 8000 真实服务/真库，CI runner 无该组合 ⇒ 本机跑；改法须同步改清单 tier 并接线，不允许只删这行
 /* 多方案对比卡 · 真实浏览器验证（FR-MG-6 平台化）—— 常驻门禁
  *
  * 判据：真实打开会话 → 断言对比表在 DOM 里、**在消息级**（不在默认收起的执行过程区）、

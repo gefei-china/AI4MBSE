@@ -98,7 +98,21 @@ def graph_data_properties(type: Optional[str] = None, conn=Depends(db_session)):
         cur_row = conn.execute("SELECT name FROM ontology_types WHERE id=?", (r["parent_id"],)).fetchone()
         cur = cur_row["name"] if cur_row else None
     chain_set = set(chain)
-    return [d for d in result if any(x in chain_set for x in d["domain_classes"])]
+    out = [d for d in result if any(x in chain_set for x in d["domain_classes"])]
+    # 2026-11-15：**合并实体侧的 required**。
+    #   `_dprop_proj` 只读属性侧 constraints（全局声明），而"本类必填"写在实体侧
+    #   `constraints.required`（如 利益相关方需求: [req_id, priority]）⇒ 不合并的话
+    #   前端实例编辑器不显示必填星号/缺项 ⚠（26-grapheditor.js、19-governance.js
+    #   都按 `p.required` 渲染），用户填完保存却被 400 拦住 —— 前后端口径不一致。
+    #   这里刻意**不吞异常**：字典查不到类型也不会抛（classify 回退为自身），
+    #   真出错就该让它响，而不是静默回到"没有必填"。
+    from ontology_semantics import OntologyValidator
+    _req = set(OntologyValidator(conn)._merged_constraints(type).get("required") or [])
+    if _req:
+        for d in out:
+            if d["name"] in _req:
+                d["required"] = True
+    return out
 
 
 @router.post("/api/knowledge/graph/nodes")
@@ -154,7 +168,10 @@ def graph_update_node(nid: str, body: GraphNodeIn, conn=Depends(db_session),
         # P1-6（2026-09-07）：编辑保存同样新建一样过本体校验——此前 PUT 绕过
     # validate_node，可把受控属性改成白名单外的值/删必填/写非法键（约束漏洞）。
     from ontology_semantics import GraphStore
-    errs = GraphStore(conn).validator.validate_node(body.entity_type, body.properties)
+    # 2026-11-15：**必须传 branch 与 exclude_id** —— 唯一性只在分支内判定，且要比对时排除
+    # 自身（否则编辑已有实例时它自己就在库里，每次保存都被判"违反唯一约束"，实例改不动）。
+    errs = GraphStore(conn).validator.validate_node(
+        body.entity_type, body.properties, branch, exclude_id=nid)
     if errs:
         return JSONResponse({"error": "; ".join(errs)}, 400)
     res = repo.update_entity(nid, body.name, body.entity_type,

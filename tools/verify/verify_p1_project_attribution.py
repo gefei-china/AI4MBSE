@@ -187,8 +187,8 @@ _g3 = resolve_push_tool_gate(_c2, 9)
 check("会话未关联工程 → PROJECT_NOT_BOUND（写回是工程操作，不静默放行）",
       _g3["ok"] is False and _g3["code"] == "PROJECT_NOT_BOUND", _g3)
 _g4 = resolve_push_tool_gate(_c2, 10)
-check("★ 孤儿归属（工程已不存在）→ PROJECT_NOT_BOUND（不能等价于已绑定）",
-      _g4["ok"] is False and _g4["code"] == "PROJECT_NOT_BOUND", _g4)
+check("★ 孤儿归属（工程已不存在）→ PROJECT_ORPHANED（不能等价于已绑定；孤儿与未归属的自救路径不同）",
+      _g4["ok"] is False and _g4["code"] == "PROJECT_ORPHANED", _g4)
 check("版本不存在 → VERSION_NOT_FOUND",
       resolve_push_tool_gate(_c2, 999)["code"] == "VERSION_NOT_FOUND",
       resolve_push_tool_gate(_c2, 999))

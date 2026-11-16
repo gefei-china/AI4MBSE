@@ -13,6 +13,7 @@
 """
 import json
 import os
+import sys
 import uuid
 
 from core.config import DB_PATH, STATIC_DIR
@@ -132,10 +133,10 @@ def run(path: str, content: str = "", mode: str = "write") -> str:
         "skill_md": """---
 name: 行业调研
 description: 行业方案调研分析报告生成（对齐《AI Agent 平台搭建行业方案调研分析报告》方法论）
-triggers: [行业调研, 调研报告, 行业方案, 方案对比, 竞品分析, 市场格局, 选型建议, 对标分析]
+triggers: [行业调研, 调研报告, 行业方案, 方案对比, 竞品分析, 市场格局, 选型建议, 对标分析, 调研分析, 方案调研]
 category: 行业通用
 author: 平台内置
-version: v1.0
+version: v1.1
 ---
 # 行业调研技能
 
@@ -158,13 +159,21 @@ version: v1.0
 ## 质量要求
 - 每个模块给出「行业共识 → 量化数据 → 对本平台差距 → 落地映射」四段式
 - 量化数据标注来源编号 [n]；表格一律 markdown 表格
-- 报告产出：先用 file_write 写出到用户指定路径，再向用户汇报核心要点（≤200 字）
+- 报告产出：先用 file_write 写出到用户指定路径；未指定时使用默认路径 ./行业方案调研分析报告.md；写出成功后向用户汇报核心要点（≤200 字）；若 file_write 失败，必须在回复中直接输出完整报告正文或可交付骨架并说明落盘失败，不得无输出。
 
 ## 工具使用
 - file_read：读取用户提供的素材/输入文件
 - graph_retrieve：检索知识库既有资料
 - file_write / file_append：落盘报告
-""",
+
+## 执行流程（强制，防止无输出）
+1. **触发即响应**：识别为行业调研任务后，立即输出简短受理信息：调研主题、将采用的八段结构、当前已有输入与缺失项、下一步动作；不得只进行内部思考、等待或空响应。
+2. **输入缺失并行处理**：若用户未提供调研对象或范围，默认以“AI Agent 平台搭建行业方案”为基准主题，先产出报告骨架、概览对比矩阵与待补充清单，同时用一句话请用户补充范围；不得因等待补充信息而不输出。用户明确指定其他行业时再切换。
+3. **路径缺失处理**：若用户未指定落盘路径，默认写入 ./行业方案调研分析报告.md，并在汇报中说明路径；若目录不可写，改用当前可用路径或在回复中直接交付正文，并说明落盘失败。
+4. **工具失败降级**：file_read / graph_retrieve 无结果或调用失败时，基于可核验的通用行业知识继续完成可交付版本，明确标注“来源不足/待核实”，不得虚构来源编号；不得无输出。
+5. **分段交付**：任务范围过大时，先交付题注、市场格局总览、核心功能对比矩阵和六模块骨架，再迭代模块深度；不得只回复“稍等”或仅给提纲。
+6. **完成回执**：每次响应至少包含进度、结果或下一步之一；完成时回执须包含落盘路径（或正文交付说明）、报告结构、核心结论（≤200 字）与待补充项。未成功落盘不得声称已生成文件。""",
+
         "script_py": '''"""行业调研报告生成器（示例脚本，渐进披露参考）。
 
 用法：run(主题, 覆盖方案数=9, 引用来源数=15, 输出路径, fmt="md")
@@ -355,18 +364,147 @@ Report = {title, sections:[{heading, body, table?}], summary, report_type}
 - docx：标题/分节/列表/表格标准样式；pdf：A4 页面 + 系统中文字体
 """,
     },
+    # ══════════════════════════════════════════════════════════════════
+    # ★ 2026-11-07（P2）：能力资产管理技能
+    #   为什么需要"技能"而不只是"工具"：
+    #   真机实测（会话 990509）用户说「用 capability_query 查一下有哪些 skill」，
+    #   意图被判成 knowledge_qa ⇒ 那个 Agent 没绑 capability_*，模型转而调
+    #   sys_query_monitor/audit，最后**反问用户**。⇒ 光有工具不够，
+    #   还要一个**触发范围覆盖各种说法**、并能把工具带进候选的技能。
+    #   （技能命中 ⇒ allowed_tools 补入候选，这条链路本轮已用 skill_script_run 验证过。）
+    # ══════════════════════════════════════════════════════════════════
+    {
+        "name": "能力资产管理",
+        "description": "在会话里管理平台能力资产：查有哪些 Agent/技能/工具、看某能力绑给了谁、"
+                       "新增 Agent/技能/工具/AI自注册能力、改配置、绑解绑、启停、删除。"
+                       "所有写动作都提交人工确认，用户点批准后才生效",
+        "skill_type": "package",
+        "category": "平台集成",
+        "author": "平台内置",
+        "version": "v1.0",
+        "triggers": ["能力管理", "加个能力", "加一个能力", "新增能力", "注册能力", "自注册",
+                     "新增工具", "加个工具", "建个工具", "注册工具", "加一个工具",
+                     "新增技能", "建个技能", "加个技能", "创建技能",
+                     "新建agent", "新建 agent", "新增agent", "新建智能体", "加个agent",
+                     "绑定工具", "绑定技能", "解绑工具", "解绑技能", "绑给",
+                     "停用工具", "停用技能", "禁用工具", "启用工具", "删除agent", "删除工具",
+                     "有哪些工具", "哪些技能", "有哪些技能", "能力清单", "能力资产",
+                     "capability_query", "capability_apply"],
+        "allowed_tools": ["capability_query", "capability_apply"],
+        "references": [],
+        "scripts": [],
+        "skill_md": """---
+name: 能力资产管理
+description: 在会话里管理平台能力资产（Agent/技能/工具/AI自注册能力）的查询、新增、修改、绑定、启停、删除
+triggers: [能力管理, 加个能力, 注册能力, 新增工具, 新增技能, 绑定工具, 有哪些工具, capability_query]
+category: 平台集成
+author: 平台内置
+version: v1.0
+---
+# 能力资产管理技能
+
+你可以在**会话里**直接管理平台的能力资产，不需要让用户去别的页面点按钮。
+
+## 两个工具，一条铁律
+
+| 工具 | 用途 | 确认 |
+|---|---|---|
+| `capability_query` | 查询：`kind`（agent/skill/tool/capability）+ `action`（list/get/diff） | 只读，不确认 |
+| `capability_apply` | 变更：`action`（create/update/bind/unbind/enable/disable/delete） | **必进人工确认** |
+
+**铁律：你只能"提"，不能"批"。** `capability_apply` 只会写一张确认单，
+用户在会话里点「批准」才真正变更。所以：
+- 不要说「已帮你加好了」——要到看到执行回执才能说完成
+- 不要重复提交同一张单（确认单已存在时系统会提示"不要重复发起"）
+- 被拒绝就如实说明，**不要换个名字再提一次**
+
+## 标准动作配方
+
+**① 先看现状（几乎所有变更都该先查）**
+```
+capability_query kind=skill action=list keyword=智源
+capability_query kind=tool action=diff target=<工具名>      ← 看它绑给了谁、谁还没绑
+```
+
+**② 加一个"能算 XX"的能力（自注册代码能力）**
+```
+capability_apply kind=capability action=create
+spec={
+  name: "bmi_calc",                       # 只能是字母数字_-.
+  description: "按身高体重算 BMI",         # 必填，模型靠它判断何时调用
+  script: "def run(**kw):\\n    h=float(kw.get('height_cm') or 0)/100\\n    ...\\n    return {'bmi': ...}",
+  input_schema: {"type":"object","properties":{"height_cm":{"type":"number"},...},"required":[...]},
+  agents: ["智源对接agent"]                # 可选，注册后立即绑上
+}
+```
+脚本要求：**必须定义 `run(**kwargs)`**，返回值会被序列化回去；
+写文件请用 `os.environ["MBSE_WORKSPACE"]` 拼路径（沙箱根，其他绝对路径会被静态审查拒绝）；
+禁止 `subprocess` / `os.system` / `eval` / `socket` / 越界绝对路径写 —— 审查不通过会被拒。
+
+**③ 接入一个 HTTP 接口（不用写代码）**
+```
+capability_apply kind=tool action=create
+spec={name, description, url, method, headers, body:{...}, query:{...}, input_schema}
+```
+占位符写法：`{args:参数名}`；整串为单个占位符时保留原生类型（如 `{args:page,int}`）；
+可选参数写 `{args:x,str,optional}`。副作用按 Method 自动定档（GET→只读 / POST·PUT·PATCH→写 / DELETE→破坏性）。
+
+**④ 加技能 / Agent**
+```
+capability_apply kind=skill action=create spec={name, description, content, triggers, agents}
+capability_apply kind=agent action=create spec={name, display_name, description, agent_role:sub, system_prompt, tools:[], skills:[]}
+```
+
+**⑤ 改配置（字段白名单，改不了 builtin/source）**
+```
+capability_apply kind=skill action=update target=<名字> spec={fields:{description:"新描述"}}
+```
+改 `side_effect` 会被标成 manual（此后自动派生不再覆盖）。
+
+**⑥ 绑 / 解绑**
+```
+capability_apply kind=tool     action=bind   target=<工具名> spec={agents:["A","B"]}
+capability_apply kind=agent    action=bind   target=<Agent名> spec={tools:["x"], skills:["y"]}   ← 反向
+capability_apply kind=tool     action=unbind target=<工具名> spec={agents:["A"]}
+```
+
+**⑦ 启停 / 删除**
+```
+capability_apply kind=tool action=disable target=<名字>     # 停用 ≠ 删除；内置只能停用
+capability_apply kind=agent action=delete target=<名字>
+```
+删除会一并清理绑定；内置资产（builtin=1）**不能删**，只能停用。
+
+## 输出铁律
+1. 变更前先 `capability_query` 确认现状（名字是否已存在、绑给了谁）
+2. `target` 用**真实存在的名字**，不要编造
+3. 提交后明确告诉用户「已提交确认单 #N，请在上面点批准」，并复述将要发生什么
+4. 拿到执行回执后才说完成；失败要**原样转述**失败原因（不要再试一次同样参数）
+5. 用户问"有哪些能力"时，用 `capability_query` 的真实结果回答，**不要凭印象列**
+""",
+    },
 ]
 
 
 def _write_package(pkg: dict) -> str:
-    """落盘技能包文件到 static/skill_packages/<uuid>/，返回目录路径。"""
+    """落盘技能包文件到 static/skill_packages/<uuid>/，返回目录路径。
+
+    ★ 2026-11-07：`script_py` 改为**可选**。
+      原实现无条件 `f.write(pkg["script_py"])` ⇒ KeyError。而 `scripts` 字段本身
+      允许为空（一个只讲方法、不带脚本的技能完全合法）⇒ 这是"字段可选但代码必填"
+      的不一致。更糟的是它抛在 `main()` 的 for 循环里 ⇒ **一个包写失败，
+      后面所有包都不注册**（本轮实测：新技能让 3 个内置包的后续处理全部中断，
+      还只留一个 Traceback，看起来像"技能注册功能坏了"）。
+    """
     pkg_dir = os.path.join(STATIC_DIR, "skill_packages", uuid.uuid4().hex[:12])
     os.makedirs(os.path.join(pkg_dir, "scripts"), exist_ok=True)
     os.makedirs(os.path.join(pkg_dir, "references"), exist_ok=True)
     with open(os.path.join(pkg_dir, "skill.md"), "w", encoding="utf-8") as f:
         f.write(pkg["skill_md"])
-    with open(os.path.join(pkg_dir, "scripts", "main.py"), "w", encoding="utf-8") as f:
-        f.write(pkg["script_py"])
+    _sp = pkg.get("script_py")
+    if _sp:
+        with open(os.path.join(pkg_dir, "scripts", "main.py"), "w", encoding="utf-8") as f:
+            f.write(_sp)
     for ref in pkg.get("references") or []:
         rel = ref.get("path", "")
         if not rel or "\\n" in rel:
@@ -375,6 +513,11 @@ def _write_package(pkg: dict) -> str:
         with open(os.path.join(pkg_dir, "references", fname), "w", encoding="utf-8") as f:
             f.write(pkg.get("reference_md", ""))
     return pkg_dir
+
+
+#: ★ 2026-11-06：是否允许启动时用内置包正文**覆盖** DB 中已有的技能正文。
+#: 默认 False —— 见 UPDATE 分支处的事故说明（用户编辑会被重启抹掉）。
+_FORCE_CONTENT = "--force-content" in sys.argv
 
 
 def main() -> None:
@@ -414,14 +557,51 @@ def main() -> None:
             triggers = json.dumps(pkg.get("triggers") or [], ensure_ascii=False)
             allowed_tools = json.dumps(pkg.get("allowed_tools") or [], ensure_ascii=False)
             if row:
-                # 精确按 id 更新（不再用 name 作为写入条件 —— name 不唯一）
-                conn.execute(
-                    "UPDATE skills SET description=?, skill_type=?, triggers=?, category=?, content=?, "
-                    "version=?, status='published', source='manual', allowed_tools=?, `references`=?, scripts=?, "
-                    "package_path=?, builtin=1, scope='public' WHERE id=?",
-                    (pkg["description"], pkg["skill_type"], triggers, pkg["category"], pkg["skill_md"],
-                     pkg["version"], allowed_tools, refs, scripts, pkg_dir, row["id"]))
-                print(f"[skills] 已更新: {name} (id={row['id']})")
+                # ★★ 2026-11-06 修复：**启动时覆盖人工编辑的技能正文**（实测事故）。
+                #
+                #   现象：在界面上把「智源平台管理」的正文合并成 5744 字（v1.4），
+                #   服务重启后变回内置原文 4958 字（v1.3）；而 `updated_at` 仍是编辑时刻
+                #   —— 因为下面这条 UPDATE **不 SET updated_at**，所以连"被改过"都看不出来。
+                #   证据链：`main.py:80` 每次启动都调 `seed_all` → `register_skills.main()`，
+                #   而此处的 `WHERE` 只排除了 ai_improve/draft_revision，**没有排除人工编辑**。
+                #
+                #   语义判断：内置技能包是**种子**，不是"每次启动的权威源"。
+                #   一旦用户改过正文，DB 就是权威 —— 与既有 `register_skills` 注释里
+                #   引用的 Voyager 原则一致（"learning a new skill cannot overwrite an old one"）。
+                #   ⇒ 默认**不覆盖 content/version**，只补齐"配置类"字段
+                #     （triggers/category/allowed_tools/references/scripts/package_path），
+                #     因为这些是随包升级应当跟进的元数据。
+                #   需要强制下发新正文时：`register_skills.py --force-content`（显式意图）。
+                _keep_content = not _FORCE_CONTENT
+                if _keep_content:
+                    # ★★ 2026-11-07：**triggers 也必须保留**（上一轮只保留了 content/version，漏了它）。
+                    #
+                    #   实测事故：本轮把「报告生成」的触发词里的泛词「报告」删掉、换成
+                    #   「报告排版导出」，跑完自检 ERR 归零；**重启服务后它又回来了** ——
+                    #   因为本行的 `triggers=?` 仍用内置包定义覆盖。
+                    #
+                    #   为什么 triggers 与 content 同等对待：
+                    #     · 它直接决定**技能命中率**（子串/合取匹配，先于语义层）；
+                    #     · 界面「技能编辑」可改它（`routers/studio_parts/skills.py`）；
+                    #     · 一个用户能在 UI 里改、又被重启抹掉的字段，就是同一个 bug 的两种表现
+                    #       （与 2026-11-06 的正文覆盖事故同族）。
+                    #   ⇒ 内置包只在**建行时**给初始 triggers；已存在的行由 DB 为准。
+                    #   需要下发新版触发词时：`register_skills.py --force-content`（显式意图）。
+                    conn.execute(
+                        "UPDATE skills SET description=?, skill_type=?, category=?, "
+                        "allowed_tools=?, `references`=?, scripts=?, package_path=?, builtin=1, scope='public' "
+                        "WHERE id=?",
+                        (pkg["description"], pkg["skill_type"], pkg["category"],
+                         allowed_tools, refs, scripts, pkg_dir, row["id"]))
+                    print(f"[skills] 已更新元数据（保留人工正文与触发词）: {name} (id={row['id']})")
+                else:
+                    conn.execute(
+                        "UPDATE skills SET description=?, skill_type=?, triggers=?, category=?, content=?, "
+                        "version=?, status='published', source='manual', allowed_tools=?, `references`=?, scripts=?, "
+                        "package_path=?, builtin=1, scope='public' WHERE id=?",
+                        (pkg["description"], pkg["skill_type"], triggers, pkg["category"], pkg["skill_md"],
+                         pkg["version"], allowed_tools, refs, scripts, pkg_dir, row["id"]))
+                    print(f"[skills] 已更新（--force-content 覆盖正文）: {name} (id={row['id']})")
             else:
                 # 无内置行 ⇒ 检查是否只有 AI 草稿/同名用户技能：若有则**跳过，
                 # 不新建**（避免与草稿搅在一起）——只在完全没有任何同名行时创建。

@@ -47,7 +47,6 @@ def main():
     from database import get_db          # noqa: E402
     from database.migrations import _migrate_columns   # noqa: E402
     from routers.monitor import monitor_sessions, monitor_session_detail  # noqa: E402
-    from workflows.persistence import FlowPersistenceMixin  # noqa: E402
     from core import audit as audit_mod  # noqa: E402
 
     print("== V1 迁移幂等（真实库）==")
@@ -151,55 +150,13 @@ def main():
             print(f"  截断调用样例: #{trunc[0]['id']} finish_reason=length {trunc[0]['total_tokens']}tok")
     conn.close()
 
-    print("== V2 写入链路（临时副本，不污染真库）==")
-    copy_path = os.path.join(ROOT, "tmp", "verify_session_monitor_copy.db")
-    os.makedirs(os.path.dirname(copy_path), exist_ok=True)
-    if os.path.exists(copy_path):
-        os.remove(copy_path)
-    src = sqlite3.connect((os.environ.get("MBSE_DB_PATH") or os.path.join(ROOT, "mbse.db")))
-    cp = sqlite3.connect(copy_path)
-    src.backup(cp)
-    src.close()
-    cp.row_factory = sqlite3.Row
-    cp.execute("PRAGMA journal_mode=WAL")
-    _migrate_columns(cp)
-    cid_row = cp.execute("SELECT id FROM conversations ORDER BY id DESC LIMIT 1").fetchone()
-    cid = int(cid_row["id"])
-    # 模拟请求上下文 + 链路上下文（与 HTTP 中间件/流水线入口同款调用）
-    class _FakeReq:
-        headers = {"x-request-id": "verify-req-1234", "user-agent": "verify-session-monitor",
-                   "x-forwarded-for": "127.0.0.1"}
-        client = None
-    audit_mod.bind_request(_FakeReq())
-    audit_mod.bind_trace(conversation_id=cid, trace_id="verify-trace-1")
-
-    class _P(FlowPersistenceMixin):
-        pass
-    p = _P()
-    run_id = p._ensure_run(cp, 0, "verify-session-monitor")
-    row = cp.execute("SELECT conversation_id FROM flow_runs WHERE id=?", (run_id,)).fetchone()
-    check("_ensure_run 写入 conversation_id", row and int(row["conversation_id"]) == cid,
-          f"run_id={run_id} conv={row['conversation_id'] if row else None}")
-
-    cp.execute("INSERT INTO alert_rules (name, metric, operator, threshold, level, notify_url, secret, status) "
-               "VALUES ('verify-规则','success_rate','<',100,'warning','','','active')")
-    rid_row = cp.execute("SELECT last_insert_rowid() rid").fetchone()
-    fired = p._evaluate_alerts(cp, run_id, {"status": "partial", "total_latency_ms": 123, "errors": ["boom"]})
-    check("run 级告警命中并落库", bool(fired))
-    ev = cp.execute("SELECT conversation_id, request_id, run_id FROM alert_events "
-                    "WHERE rule_id=? ORDER BY id DESC LIMIT 1", (rid_row["rid"],)).fetchone()
-    check("alert_events 带会话溯源", bool(ev) and int(ev["conversation_id"]) == cid,
-          f"conv={ev['conversation_id'] if ev else None}")
-    check("alert_events 带请求溯源", bool(ev) and ev["request_id"] == "verify-req-1234",
-          f"rid={ev['request_id'] if ev else ''}")
-    # 会话下钻端点应能看到刚写入的 run（证明读写闭环）
-    det2 = monitor_session_detail(conversation_id=cid, conn=cp)
-    check("下钻端点可见新写入的工作流 run",
-          any(fr["id"] == run_id for fr in det2.get("flow_runs", [])),
-          f"flow_runs={[(fr['id'], fr['flow_name']) for fr in det2.get('flow_runs', [])]}")
-    cp.close()
-    print(f"  副本保留于 {copy_path}（验证痕迹，可随时删除）")
-
+    # ★ 2026-11-05：V2「写入链路」整段已移除。
+    #   它用 `FlowPersistenceMixin._ensure_run / _evaluate_alerts` 写 flow_runs 与
+    #   alert_events，而 `workflows/persistence.py` 已随画布工作流删除
+    #   （flow_runs 是**画布 DAG 运行轨迹**表，画布舍弃后不再有新写入）。
+    #   仍有效并保留的验证：V1 迁移幂等、V3 列表端点、V4 下钻端点。
+    #   注意 V4 的 `flow_runs` / `flow_steps` 段只能读到**历史**数据 —— 那是数据源枯竭，
+    #   不是缺陷；底层有证据行仍要求端点返段（判据不变）。
     print(f"\n结果: {len(PASS)} PASS / {len(FAIL)} FAIL / {len(SKIP)} SKIP")
     if FAIL:
         print("失败项:", "; ".join(FAIL))

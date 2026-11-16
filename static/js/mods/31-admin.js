@@ -1257,6 +1257,18 @@ function _oeReasonSt(r){
   const m = { neg_feedback:['r','负反馈'], low_conf:['w','低置信'], random_5pct:['b','随机5%'] };
   return `<span class="st ${m[r]?m[r][0]:'g'}">${m[r]?m[r][1]:escMd(r||'?')}</span>`;
 }
+// 2026-11-08：查询列。**优先显示用户原话**（trace_query_raw）。
+// 历史样本（query_raw 列存在之前写入）原话不可恢复，只能显示归一化后的检索串
+// —— 这种情况必须显式标注，否则标注员会把 `宽带通信载荷` 当成用户说的是这个词，
+// 而用户其实说的是 `宽带载荷`。宁可显示"未记录"，也不要让替换后的串冒充原话。
+function _oeQueryCell(it){
+  const raw = it.trace_query_raw;
+  if(raw){ const s = String(raw); return escMd(s.length>60 ? s.slice(0,60)+'…' : s); }
+  const q = it.trace_query;
+  if(!q) return '<span class="mut">—</span>';
+  const s = String(q);
+  return `<span class="mut">${escMd(s.length>40 ? s.slice(0,40)+'…' : s)}（原话未记录·此为归一化检索串）</span>`;
+}
 function renderOpsOnlineEval(d){
   const s = d.summary || {};
   const chips = Object.keys(s.by_status||{}).map(k=>
@@ -1266,6 +1278,7 @@ function renderOpsOnlineEval(d){
     <tr>
       <td style="font-size:12.5px;white-space:nowrap;">#${it.id} ${_oeTypeSt(it.sample_type)}<br>${_oeReasonSt(it.sample_reason)}</td>
       <td style="font-size:12.5px;color:var(--mut);">conv ${it.conversation_id||'-'} · msg ${it.message_id||'-'} · qt ${it.query_trace_id||'-'}</td>
+      <td style="font-size:12.5px;">${_oeQueryCell(it)}</td>
       <td style="font-size:12.5px;">${it.auto_score==null?'<span class="mut">未评</span>':escMd(String(it.auto_score))}</td>
       <td style="white-space:nowrap;">
         <select id="oe-score-${it.id}" style="width:56px;font-size:12.5px;">
@@ -1277,7 +1290,7 @@ function renderOpsOnlineEval(d){
       </td>
     </tr>`).join('');
   return `<div style="margin-bottom:6px;font-size:12.5px;">${chips}<span class="mut">共 ${s.total||0} 条 · 自动评覆盖率 ${cov}（分母=可评样本）</span></div>` +
-    `<table class="t"><tr><th>队列/类型/理由</th><th>溯源</th><th>auto</th><th>人工标注（HIL 确认卡）</th></tr>${rows}</table>`;
+    `<table class="t"><tr><th>队列/类型/理由</th><th>溯源</th><th>查询</th><th>auto</th><th>人工标注（HIL 确认卡）</th></tr>${rows}</table>`;
 }
 // 标注提交：label 端点建 HIL 确认单（幂等）→ 同卡片按钮直接 decide（批准/驳回）。
 async function submitEvalLabel(qid, approve){
@@ -1386,23 +1399,37 @@ async function loadConfigHistory(){
       box.innerHTML = '<div class="mut" style="padding:10px;font-size:13.5px;">暂无配置变更（变更须经 HIL 批准，见 core/config_promotion.py）</div>';
       return;
     }
-    box.innerHTML = `<table class="t"><tr><th>时间</th><th>配置项</th><th>旧值 → 新值</th><th>来源</th><th>效果</th></tr>` +
+    box.innerHTML = `<table class="t"><tr><th>时间</th><th>配置项</th><th>旧值 → 新值</th><th>来源</th><th>效果</th><th>操作</th></tr>` +
       rows.map(h=>{
         const v = h.effect_verdict || '';
         const cls = CFG_EFFECT_CLS[v] || 'g';
         const lbl = CFG_EFFECT_LABEL[v] || v;
         const tip = h.effect_detail ? ` title="${escMd(h.effect_detail)}"` : '';
+        const checked = h.effect_checked_at ? `<div style="font-size:11.5px;color:var(--mut);">判定于 ${escMd(String(h.effect_checked_at).slice(5,16))}</div>` : '';
+        const canRollback = (h.applied !== 0 && h.applied !== false);
         return `<tr>
           <td style="font-size:12.5px;">${escMd(String(h.applied_at||'').slice(5,16))}</td>
           <td><b>${escMd(h.section||'')}.${escMd(h.key||'')}</b></td>
           <td style="font-size:12.5px;">${escMd(String(h.old_value||'').slice(0,18))} → <b>${escMd(String(h.new_value||'').slice(0,18))}</b></td>
           <td style="font-size:12px;color:var(--mut);">${escMd(h.source||'')}${h.applied_by?'·'+escMd(h.applied_by):''}</td>
-          <td><span class="st ${cls}"${tip}>${escMd(lbl)}</span></td>
+          <td><span class="st ${cls}"${tip}>${escMd(lbl)}</span>${checked}</td>
+          <td>${canRollback ? `<button class="btn sm red" onclick="requestConfigRollback(${Number(h.id)})">回滚</button>` : '<span style="font-size:12px;color:var(--mut);">未应用</span>'}</td>
         </tr>`;
       }).join('') + '</table>';
   }catch(e){
     box.innerHTML = '<div class="mut" style="padding:10px;font-size:13.5px;">台账加载失败</div>';
   }
+}
+// ★ 2026-11-06 P2：回滚入口。后端 POST /api/config/rollback 已存在，
+//   它只会把请求放进 HIL 待批准队列（config_rollback），**批准后才真正回滚**。
+async function requestConfigRollback(historyId){
+  if(!confirm('确认对该条台账发起回滚？将进入 HIL 待批准队列，批准后才真正生效。')) return;
+  try{
+    const d = await api('/api/config/rollback', {method:'POST', body: JSON.stringify({history_id: historyId})});
+    if(!d || d.ok===false){ toast('回滚申请失败：'+((d&&d.error)||'未知')); return; }
+    toast('已入 HIL 待批准队列' + (d.confirmation_id ? ('（确认单 #'+d.confirmation_id+'）') : ''));
+    loadConfigHistory();
+  }catch(e){ toast('回滚申请失败：'+((e&&e.message)||'请重试')); }
 }
 async function runConfigEffectCheck(){
   try{

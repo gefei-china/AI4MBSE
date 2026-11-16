@@ -30,6 +30,9 @@
     这里刻意选择**以快照为准**（覆盖），因为快照是"代码的一部分"；
     若允许库里改而不回流，就又回到"环境不可重建"。
     ⚠️ 但 `status` / `enabled` 这两个**运行期开关**不去覆盖（管理员停用不该被自举打开）。
+    ⚠️ 2026-11-06 追加例外：`skills.content / frontmatter / version` 对**已存在的行**不覆盖
+       —— 它们是用户在界面里可编辑的技能正文，快照只作为空库建行时的初始值。
+       事故与判据见 `_bootstrap_tables` 内注释。
 
 ── 配套的闭环 ─────────────────────────────────────────────────────────────
 单靠自举还不够：**手动新增 agent 后忘了重新导出**，快照就又落后。
@@ -64,6 +67,9 @@ SPEC = {
         "exclude": {"id", "created_at", "updated_at", "status",
                     # 统计
                     "use_stats", "feedback_notes", "pinned", "install_count"},
+        # 见 _bootstrap_tables 的事故说明：这三列是**用户可编辑的正文**，
+        # 库里已有该行时**不覆盖**（快照只在空库建行时用来填初始值）。
+        "update_exclude": {"content", "frontmatter", "version"},
     },
 }
 
@@ -102,6 +108,46 @@ REL_SPEC = {
 
 def _q(name: str) -> str:
     return '"%s"' % str(name).replace('"', '""')
+
+
+def _fk_parents(conn, table: str) -> list:
+    """取表的真实外键约束：[(本表列, 父表, 父列)]。
+
+    ★ 2026-11-06 实测：空库跑 `init_db()` 时资产自举**整体回滚**，报
+      `IntegrityError: FOREIGN KEY constraint failed` ⇒ "环境可重建"是假的
+      （门禁 A4b/A4c 五条红：agents 7 / tools 14 / skills 0）。
+      真凶：快照里的 `tools.mcp_server_id`（71 个 MCP 工具指向 mcp_servers.id=161）
+      在空库上不存在。**一条外键就能让 118 个工具 + 31 个 agent 全部丢失**。
+    """
+    try:
+        rows = conn.execute("PRAGMA foreign_key_list(%s)" % _q(table)).fetchall()
+    except Exception:
+        return []
+    return [(r[3], r[2], r[4] or "id") for r in rows if r[3]]
+
+
+def _drop_dangling_fk(conn, table: str, rec: dict, cols: list) -> list:
+    """把指向**不存在的父行**的外键列置空，返回被置空的列名。
+
+    为什么置空而不是跳过整行：绑定/引用可以事后补，配置本体不行 ——
+    丢一行 MCP 工具远好过丢整批资产。置空必须**可观测**（计入 fk_nulled）。
+    """
+    nulled = []
+    for col, ptab, pcol in _fk_parents(conn, table):
+        if col not in cols:
+            continue
+        val = rec.get(col)
+        if val in (None, ""):
+            continue
+        try:
+            hit = conn.execute(
+                "SELECT 1 FROM %s WHERE %s=? LIMIT 1" % (_q(ptab), _q(pcol)), (val,)).fetchone()
+        except Exception:
+            continue
+        if not hit:
+            rec[col] = None            # 就地改副本（调用方传的是 dict 引用）
+            nulled.append(col)
+    return nulled
 
 
 def snapshot_path(base_dir: str | None = None) -> str:
@@ -206,10 +252,13 @@ def bootstrap_assets(conn, path: str | None = None, dry_run: bool = False) -> di
     """把快照 UPSERT 进库（幂等）。返回统计。
 
     **以快照为准**（覆盖库里同名的声明性字段），因为快照随代码版本走；
-    但 `status` / `enabled` 类运行期开关**不覆盖**（见模块头说明）。
+    但 `status` / `enabled` 类运行期开关**不覆盖**（见模块头说明），
+    `skills.content/frontmatter/version` 也**不覆盖已存在的行**
+    （用户可编辑的正文，见 `_bootstrap_tables` 里 2026-11-06 事故说明）。
     """
     snap = load_snapshot(path)
     out = {"ok": False, "reason": "", "inserted": 0, "updated": 0, "unchanged": 0,
+           "content_kept": 0, "fk_nulled": 0,
            "relations": 0, "skipped": 0, "ambiguous": 0, "ambiguous_keys": []}
     if not snap:
         out["reason"] = "no_snapshot"
@@ -244,6 +293,11 @@ def _bootstrap_tables(conn, snap: dict, out: dict, dry_run: bool) -> None:
                 out["skipped"] += 1
                 continue
             cols = [c for c in rec.keys() if c in live_cols and c != key]
+            # 外键悬空 ⇒ 置空（否则整批回滚，见 _fk_parents 的事故说明）
+            _nulled = _drop_dangling_fk(conn, table, rec, cols)
+            if _nulled:
+                out["fk_nulled"] = out.get("fk_nulled", 0) + 1
+                out.setdefault("fk_nulled_cols", []).append("%s:%s" % (table, ",".join(_nulled)))
             # ⚠️⚠️ 2026-11-04 **实测事故修复**：原写法 `UPDATE ... WHERE name=?` 会在
             #   **同名多行**时命中**全部**同名行，把它们的内容统一覆盖成快照那一条。
             #   真库实证（本轮造成，已记录）：`行业调研` 5 行 content 全被改成同一份（1040 字符）、
@@ -259,6 +313,27 @@ def _bootstrap_tables(conn, snap: dict, out: dict, dry_run: bool) -> None:
                 continue
             cur = 1 if _dup_n == 1 else 0
             if cur:
+                # ★★ 2026-11-06 **实测事故修复**：自举把人工编辑的技能正文覆盖回快照。
+                #
+                #   现象：在界面把「智源平台管理」正文合并成 5744 字（v1.4，含「★ 输出铁律」），
+                #   重启服务后变回 4958 字（v1.3，无铁律）。SQLite 触发器 `_skill_probe`
+                #   抓到 old_n=5744/new_n=4958 @ 启动瞬间，即 `init_db` 末尾的本函数。
+                #
+                #   ⚠️ **触发条件是被上一处修复创造的**：下面「同名多行一律跳过」的保护
+                #   在那之前挡住了这个技能（当时 3 行同名）；清理掉重复草稿后只剩 1 行，
+                #   于是条件满足、正文被覆盖。⇒ 「靠同名多行偶然挡住」不是保护，是巧合。
+                #
+                #   语义判断：快照是**空库重建的种子**，不是"每次启动的权威源"。
+                #   用户改过正文之后，DB 就是唯一事实源（与 `register_skills` 同一条原则、
+                #   与 Voyager「learning a new skill cannot overwrite an old one」一致）。
+                #   ⇒ 已存在的行只覆盖**配置类字段**（description/triggers/category/
+                #     allowed_tools/references/scripts/package_path），正文三列保持库内值；
+                #     新建行（空库重建）仍带完整正文，重建能力不受影响。
+                _uex = set(meta.get("update_exclude") or ())
+                _kept = [c for c in cols if c in _uex]
+                if _kept:
+                    cols = [c for c in cols if c not in _uex]
+                    out["content_kept"] = out.get("content_kept", 0) + 1
                 if not cols:
                     out["unchanged"] += 1
                     continue
@@ -327,13 +402,21 @@ def _bootstrap_relations(conn, snap: dict, out: dict, dry_run: bool) -> None:
 # ── 漂移检测（供门禁）────────────────────────────────────────────────────
 
 def snapshot_drift(conn, path: str | None = None) -> dict:
-    """比对快照与库，返回差异。用于"新增了 agent 但忘了导出快照"的告警。
+    """比对快照与库，返回差异。用于"新增了 X 但忘了导出快照"的告警。
 
     返回 {"ok": bool, "missing_in_db": [...], "missing_in_snapshot": [...],
            "field_diff": [...], "relation_drift": [...]}
       · missing_in_db        : 快照有、库无 ⇒ 自举没生效 / 库被删
       · missing_in_snapshot  : 库有、快照无 ⇒ **手动新增但没导出**（最常见）
       · field_diff           : 同名但声明性字段不一致 ⇒ 改了没导出 / 导出了没自举
+      · relation_drift       : 绑定的条数不一致 ⇒ 绑了但没导出（空库重建会丢绑定）
+
+    ## ⚠️ 2026-11-07 修正：此前**只比 agents**
+    实测抓到的后果：当天新增 `requirement_commit` 工具 + 一条绑定后，
+    `--drift` 仍报"一致"（库 122 工具 / 快照 121，库 254 绑定 / 快照 253）。
+    ⇒ 工具/技能/绑定的漏导出**完全不被发现**，而它们正是"空库能否重建出同一平台"
+    的主体。只看 agents 等于把可重建性检查缩到 1/4。
+    现在按**导出时同一套过滤**（`_keep_row`）覆盖三张主表 + 两张关联表。
     """
     snap = load_snapshot(path)
     res = {"ok": False, "reason": "", "missing_in_db": [], "missing_in_snapshot": [],
@@ -341,35 +424,70 @@ def snapshot_drift(conn, path: str | None = None) -> dict:
     if not snap:
         res["reason"] = "no_snapshot"
         return res
+    tables = snap.get("tables") or {}
+
+    # ── 主表：agents / tools / skills（同一套 _keep_row 过滤）──
     # 只看"随代码走的资产"：与导出用**同一套过滤**（否则测试残留/运行产物会让门禁永远红）。
     # 实测反例：真库有 `测试agent`（builtin=0, disabled），若按 builtin=0 纳入比较，
     # 快照里没有它 ⇒ 门禁天天红 ⇒ 又一次"狼来了"。
-    try:
-        live_rows = [dict(r) for r in conn.execute("SELECT * FROM agents")]
-    except Exception:
-        live_rows = []
-    live_names = {r.get("name") for r in live_rows if _keep_row("agents", r)}
-    snap_names = {str(r.get("name")) for r in ((snap.get("tables") or {}).get("agents") or [])}
-    res["missing_in_db"] = sorted(snap_names - {r.get("name") for r in live_rows})
-    res["missing_in_snapshot"] = sorted(n for n in (live_names - snap_names) if n)
+    for tbl in ("agents", "tools", "skills"):
+        try:
+            live_rows = [dict(r) for r in conn.execute("SELECT * FROM %s" % tbl)]
+        except Exception:
+            live_rows = []
+        live_names = {r.get("name") for r in live_rows if _keep_row(tbl, r)}
+        snap_names = {str(r.get("name")) for r in (tables.get(tbl) or [])}
+        all_live = {r.get("name") for r in live_rows}
+        for nm in sorted(snap_names - all_live):
+            res["missing_in_db"].append("%s:%s" % (tbl, nm))
+        for nm in sorted(n for n in (live_names - snap_names) if n):
+            res["missing_in_snapshot"].append("%s:%s" % (tbl, nm))
 
-    # 关键字段比对（只比"声明性且高影响"的几列，避免噪声）
-    KEY_COLS = ("system_prompt", "hil_level", "agent_role", "task_domain",
-                "stage_order", "input_schema", "output_schema", "capabilities")
-    live_cols = {r[1] for r in conn.execute("PRAGMA table_info(agents)")}
-    KEY_COLS = [c for c in KEY_COLS if c in live_cols]
-    live = {r["name"]: dict(r) for r in conn.execute(
-        "SELECT name,%s FROM agents" % ",".join(KEY_COLS))}
-    for rec in ((snap.get("tables") or {}).get("agents") or []):
-        nm = str(rec.get("name"))
-        if nm not in live:
+    # ── 关键字段比对（只比"声明性且高影响"的几列，避免噪声）──
+    # 工具侧补 description/input_schema/side_effect：这三个决定"模型看不看得见、怎么调、要不要确认"，
+    # 改了不导出 ⇒ 空库重建后行为与原库不同，而 agents 层完全看不出来。
+    KEY_COLS = {
+        "agents": ("system_prompt", "hil_level", "agent_role", "task_domain",
+                   "stage_order", "input_schema", "output_schema", "capabilities"),
+        "tools": ("description", "input_schema", "side_effect", "risk_level", "source"),
+        "skills": ("description", "triggers", "allowed_tools", "category"),
+    }
+    for tbl, cols in KEY_COLS.items():
+        live_cols = {r[1] for r in conn.execute("PRAGMA table_info(%s)" % tbl)}
+        cols = [c for c in cols if c in live_cols]
+        if not cols:
             continue
-        for c in KEY_COLS:
-            a, b = rec.get(c), live[nm].get(c)
-            if str(a if a is not None else "") != str(b if b is not None else ""):
-                res["field_diff"].append("%s.%s" % (nm, c))
+        live = {r["name"]: dict(r) for r in conn.execute(
+            "SELECT name,%s FROM %s" % (",".join(cols), tbl))}
+        for rec in (tables.get(tbl) or []):
+            nm = str(rec.get("name"))
+            if nm not in live:
+                continue
+            for c in cols:
+                a, b = rec.get(c), live[nm].get(c)
+                # skills.content 刻意不比：正文是用户可编辑资产，快照只作初始值（见 SPEC.update_exclude）
+                if str(a if a is not None else "") != str(b if b is not None else ""):
+                    res["field_diff"].append("%s.%s.%s" % (tbl, nm, c))
 
-    res["ok"] = not (res["missing_in_db"] or res["missing_in_snapshot"] or res["field_diff"])
+    # ── 关联表：绑定漏导出 ⇒ 空库重建后"工具在、但没绑给 Agent"（模型看不见）──
+    try:
+        rels = snap.get("relations") or {}
+        # 快照里的键名是 `agent`（导出时把 owner id 换成了名字），不是 `owner` ——
+        # 写成 owner 会让集合恒为空、比对**永远无声通过**（本轮实测踩过：漏导出 1 条绑定也不报）。
+        snap_bind = {(r.get("agent"), r.get("tool_type"), r.get("tool_name"))
+                     for r in (rels.get("agent_tools") or [])}
+        live_bind = {(r[0], r[1], r[2]) for r in conn.execute(
+            "SELECT a.name, t.tool_type, t.tool_name FROM agent_tools t "
+            "JOIN agents a ON a.id=t.agent_id")}
+        for x in sorted(snap_bind - live_bind, key=str):
+            res["relation_drift"].append("agent_tools 快照有库无：%s→%s(%s)" % x)
+        for x in sorted(live_bind - snap_bind, key=str):
+            res["relation_drift"].append("agent_tools 库有快照无：%s→%s(%s)" % x)
+    except Exception as exc:                                   # noqa: BLE001
+        res["relation_drift"].append("agent_tools 比对失败：%s" % type(exc).__name__)
+
+    res["ok"] = not (res["missing_in_db"] or res["missing_in_snapshot"]
+                     or res["field_diff"] or res["relation_drift"])
     if not res["ok"] and not res["reason"]:
         res["reason"] = "drift"
     return res

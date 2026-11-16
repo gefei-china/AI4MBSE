@@ -700,25 +700,20 @@ class OpenAICompatProvider(BaseLLM):
                     "reasoning passthrough: 补齐 %d 条 assistant(tool_calls) 消息", _fixed)
         except Exception:      # noqa: BLE001 —— 补齐失败不得阻断主链路
             pass
-        payload = {
-            "model": model_name,
-            "messages": messages,
-            "temperature": (_ovr.get("temperature") if _ovr.get("temperature") is not None
-                            else (temperature if temperature is not None else cfg.get("temperature", 0.3))),
-            "max_tokens": mt,
-            "stream": stream,
-        }
-        if tools:
-            payload["tools"] = tools
-        # 模型参数模板（DB llm_providers.model_params）：top_p / top_k / thinking_mode
+        # ── 模型参数模板（provider 级 DB 列 + Agent 级覆盖）────────────────
+        # ★ 2026-11-13：**解析前移到 payload 组装之前**。
+        #   原因：temperature 要参与优先级裁决（Agent 级 > provider 级），
+        #   而此前 mp 在 payload 之后才解析 ⇒ Agent/Provider 级 temperature
+        #   **根本没有参与机会**（配了不生效的"死配置"残根）。
+        #   合并语义不变：同名键 Agent 级优先（浅合并），其余沿用 provider 级。
         mp = {}
         try:
             mp = json.loads(cfg.get("model_params") or "{}")
         except Exception:
             mp = {}
+        if not isinstance(mp, dict):
+            mp = {}
         # ★ P1-b（2026-10-10）**Agent 级 model_params 覆盖 provider 级**
-        #   为什么：`agents.model_params` 列一直有、前端一直在存，但**全仓无消费点**
-        #   ⇒ 在 Agent 表单里配思考档位/temperature **配了不生效**（死配置）。
         #   语义：同名键以 **Agent 级为准**，其余沿用 provider 级（浅合并，Agent 优先）。
         #   ⚠️ 调用方显式传参仍高于两者（语义分层：调用点 > Agent > provider > 模型默认）。
         try:
@@ -729,6 +724,52 @@ class OpenAICompatProvider(BaseLLM):
                 mp = _merged
         except Exception:
             pass
+
+        def _num(key, lo=None, hi=None):
+            """从 mp 取数值：缺失/空串/非数值/越界 → None（**不下发**，零漂移）。"""
+            v = mp.get(key)
+            if v is None or v == "":
+                return None
+            try:
+                f = float(v)
+            except (TypeError, ValueError):
+                return None
+            if lo is not None and f < lo:
+                return None
+            if hi is not None and f > hi:
+                return None
+            return f
+
+        # ── temperature 优先级裁决（2026-11-13 修 Agent 级"死配置"）──────────
+        #   本轮覆盖 > 调用点显式 > Agent/Provider 级 model_params > provider 列 > 内置默认 0.3
+        _temp = None
+        if _ovr.get("temperature") is not None:
+            try:
+                _temp = float(_ovr["temperature"])
+            except (TypeError, ValueError):
+                _temp = None
+        if _temp is None and temperature is not None:
+            try:
+                _temp = float(temperature)
+            except (TypeError, ValueError):
+                _temp = None
+        if _temp is None:
+            _temp = _num("temperature", 0.0, 2.0)
+        if _temp is None:
+            try:
+                _temp = float(cfg["temperature"]) if cfg.get("temperature") is not None else 0.3
+            except (TypeError, ValueError):
+                _temp = 0.3
+
+        payload = {
+            "model": model_name,
+            "messages": messages,
+            "temperature": _temp,
+            "max_tokens": mt,
+            "stream": stream,
+        }
+        if tools:
+            payload["tools"] = tools
         if mp.get("top_p") is not None and mp["top_p"] != "":
             try:
                 payload["top_p"] = float(mp["top_p"])
@@ -739,6 +780,29 @@ class OpenAICompatProvider(BaseLLM):
                 payload["top_k"] = int(mp["top_k"])
             except (TypeError, ValueError):
                 pass
+        # ── Frequency / Presence Penalty（2026-11-13 新增；此前全链路缺失）────
+        #   ★ 为什么按厂商分流，而不是"保险起见都发"：
+        #     · DeepSeek 官方**只支持 frequency_penalty**（-2~2），无 presence_penalty；
+        #     · Anthropic（Claude）**两者都不支持**；
+        #     · Qwen/DashScope 与 OpenAI 两者都支持。
+        #     多传一个厂商不认识的键 ⇒ 部分网关 400、部分静默忽略 ⇒ 不猜着发。
+        #   ★ 逃生阀：`model_params.penalty_support` = auto(默认) | all | none
+        #   ★ 零行为漂移：未配置（null）⇒ 两个字段都**不下发** ⇒ 与改动前逐字节等价。
+        _fam = _provider_family(cfg)
+        _psup = str(mp.get("penalty_support") or "auto").strip().lower()
+        _freq = _num("frequency_penalty", -2.0, 2.0)
+        _pres = _num("presence_penalty", -2.0, 2.0)
+        if _psup == "none":
+            _freq = _pres = None
+        elif _psup != "all":
+            if _fam == "anthropic":
+                _freq = _pres = None
+            elif _fam == "deepseek":
+                _pres = None
+        if _freq is not None:
+            payload["frequency_penalty"] = _freq
+        if _pres is not None:
+            payload["presence_penalty"] = _pres
         # ── 思考模式（2026-10-09 重构：**三态**）────────────────────────
         #★★ 原实现有两个缺陷，米爸的"实施"要求先修它们：
         #

@@ -1,3 +1,4 @@
+// CI-OPTIONAL: [local] tier=local（见 tools/gates_manifest.json）：真实浏览器门禁——需本机 Chromium（agent-browser）+ 8000 真实服务/真库，CI runner 无该组合 ⇒ 本机跑；改法须同步改清单 tier 并接线，不允许只删这行
 // 修复验证：能力中心点「编辑」→ 应显示「编辑工具 #4047」+ 完整数据
 const { spawnSync } = require("child_process");
 const fs = require("fs"); const path = require("path");

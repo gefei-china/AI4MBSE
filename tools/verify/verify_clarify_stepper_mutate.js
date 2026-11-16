@@ -1,3 +1,4 @@
+// CI-OPTIONAL: [local] tier=local（见 tools/gates_manifest.json）：真实浏览器门禁——需本机 Chromium（agent-browser）+ 8000 真实服务/真库，CI runner 无该组合 ⇒ 本机跑；改法须同步改清单 tier 并接线，不允许只删这行
 // 澄清卡 stepper 的**变异自证**（node 单进程版，与 shots_clarify.js 同构，避开 python 子进程被 SIGTERM）
 //   基线 → M1「一次铺开」还原 → M2「输入框常显」还原，判据必须分别在 M1/M2 下转 FAIL。
 //   变异只在**页面内**对已渲染的卡施加（源码零改动），故无需还原源码。

@@ -1,0 +1,636 @@
+{
+  "schema": "p0/golden-e2e@1",
+  "version": "v0",
+  "derived_at_utc": "2026-11-15 15:20:42",
+  "source_db": "mbse.db (只读，含 WAL)",
+  "derivation": "tools/eval/build_golden_e2e.py",
+  "case_count": 12,
+  "coverage": {
+    "single_agent": 4,
+    "orchestrated": 4,
+    "model_and_validate": 4
+  },
+  "cases": [
+    {
+      "id": "G01",
+      "conv_id": 990712,
+      "chain": "single_agent",
+      "intent": "design",
+      "expected_deliverable_kind": [
+        "sysml",
+        "code"
+      ],
+      "inviolable_rules": [
+        "只输出指定视图的 SysML v2 代码",
+        "标识符不得含中文",
+        "不得伪造校验通过"
+      ],
+      "checks": [
+        {
+          "type": "artifact_kind_present",
+          "kind": "sysml"
+        },
+        {
+          "type": "sysml_code_nonempty"
+        },
+        {
+          "type": "assistant_answer_nonempty"
+        }
+      ],
+      "note": "活动视图；含异常分支约束",
+      "input_source": {
+        "table": "messages",
+        "message_id": 6491,
+        "conversation_id": 990712,
+        "note": "live 重放按 message_id 取完整原文"
+      },
+      "input_preview": "生成活动视图的 SysML v2 代码：热管理启动流程——检测环境温度→判断是否需要加热→执行热泵/加热器→监测电池温度；必须包含异常分支（传感器故障）。只输出活动视图代码。",
+      "input_len": 87,
+      "input_sha1": "ad6bc06c8569",
+      "evidence_at_derivation": {
+        "artifact_kinds": [
+          "code",
+          "sysml"
+        ],
+        "n_artifacts_kinds": 2,
+        "agent_tasks": 0,
+        "agent_tasks_done": 0,
+        "sysml_versions": 1,
+        "assistant_nonempty": 1,
+        "check_verdicts": [
+          "pass"
+        ]
+      }
+    },
+    {
+      "id": "G02",
+      "conv_id": 990713,
+      "chain": "single_agent",
+      "intent": "design",
+      "expected_deliverable_kind": [
+        "sysml",
+        "code"
+      ],
+      "inviolable_rules": [
+        "端口与连接器必须显式定义",
+        "不得伪造校验通过"
+      ],
+      "checks": [
+        {
+          "type": "artifact_kind_present",
+          "kind": "sysml"
+        },
+        {
+          "type": "sysml_code_nonempty"
+        },
+        {
+          "type": "assistant_answer_nonempty"
+        }
+      ],
+      "note": "IBD 内部块图",
+      "input_source": {
+        "table": "messages",
+        "message_id": 6489,
+        "conversation_id": 990713,
+        "note": "live 重放按 message_id 取完整原文"
+      },
+      "input_preview": "生成内部块图（IBD）的 SysML v2 代码：电池冷却回路内部含冷却液泵、Chiller、控制器，通过端口与连接器连接。只输出 IBD 代码。",
+      "input_len": 73,
+      "input_sha1": "348a88157f1a",
+      "evidence_at_derivation": {
+        "artifact_kinds": [
+          "code",
+          "sysml"
+        ],
+        "n_artifacts_kinds": 2,
+        "agent_tasks": 0,
+        "agent_tasks_done": 0,
+        "sysml_versions": 1,
+        "assistant_nonempty": 1,
+        "check_verdicts": [
+          "pass"
+        ]
+      }
+    },
+    {
+      "id": "G03",
+      "conv_id": 990717,
+      "chain": "single_agent",
+      "intent": "design",
+      "expected_deliverable_kind": [
+        "sysml",
+        "code"
+      ],
+      "inviolable_rules": [
+        "用例必须有 subject 且置于最前",
+        "不得伪造校验通过"
+      ],
+      "checks": [
+        {
+          "type": "artifact_kind_present",
+          "kind": "sysml"
+        },
+        {
+          "type": "sysml_code_nonempty"
+        },
+        {
+          "type": "assistant_answer_nonempty"
+        }
+      ],
+      "note": "用例视图",
+      "input_source": {
+        "table": "messages",
+        "message_id": 6499,
+        "conversation_id": 990717,
+        "note": "live 重放按 message_id 取完整原文"
+      },
+      "input_preview": "生成用例视图的 SysML v2 代码：驾驶员可启动车辆、设置目标温度、切换驾驶模式；系统执行热管理调节并反馈状态。只输出用例视图代码。",
+      "input_len": 68,
+      "input_sha1": "46896f4ab4fa",
+      "evidence_at_derivation": {
+        "artifact_kinds": [
+          "code",
+          "sysml"
+        ],
+        "n_artifacts_kinds": 2,
+        "agent_tasks": 0,
+        "agent_tasks_done": 0,
+        "sysml_versions": 1,
+        "assistant_nonempty": 1,
+        "check_verdicts": [
+          "pass"
+        ]
+      }
+    },
+    {
+      "id": "G04",
+      "conv_id": 990719,
+      "chain": "single_agent",
+      "intent": "design",
+      "expected_deliverable_kind": [
+        "sysml",
+        "code"
+      ],
+      "inviolable_rules": [
+        "结构视图必须含 part def",
+        "不得伪造校验通过"
+      ],
+      "checks": [
+        {
+          "type": "artifact_kind_present",
+          "kind": "sysml"
+        },
+        {
+          "type": "sysml_code_nonempty"
+        },
+        {
+          "type": "check_verdict_in",
+          "values": [
+            "pass",
+            "report"
+          ]
+        },
+        {
+          "type": "assistant_answer_nonempty"
+        }
+      ],
+      "note": "结构视图 BDD；带本地校验器结论",
+      "input_source": {
+        "table": "messages",
+        "message_id": 6503,
+        "conversation_id": 990719,
+        "note": "live 重放按 message_id 取完整原文"
+      },
+      "input_preview": "生成结构视图（BDD）的 SysML v2 代码：电池热管理系统包含电池冷却回路、电驱冷却回路、座舱空调回路，三路经多通比例阀与集成热泵耦合。只输出结构视图代码。",
+      "input_len": 81,
+      "input_sha1": "8dcbdcc3c113",
+      "evidence_at_derivation": {
+        "artifact_kinds": [
+          "code",
+          "sysml"
+        ],
+        "n_artifacts_kinds": 2,
+        "agent_tasks": 0,
+        "agent_tasks_done": 0,
+        "sysml_versions": 1,
+        "assistant_nonempty": 1,
+        "check_verdicts": [
+          "pass"
+        ]
+      }
+    },
+    {
+      "id": "G05",
+      "conv_id": 514,
+      "chain": "orchestrated",
+      "intent": "design",
+      "expected_deliverable_kind": [
+        "sysml",
+        "code",
+        "document"
+      ],
+      "inviolable_rules": [
+        "子任务不得看到父会话历史（fresh context）",
+        "未完成子任务必须进入聚合状态，不得报 full"
+      ],
+      "checks": [
+        {
+          "type": "orchestration_done_rate_min",
+          "min": 0.8
+        },
+        {
+          "type": "artifact_kind_present",
+          "kind": "sysml"
+        },
+        {
+          "type": "assistant_answer_nonempty"
+        }
+      ],
+      "note": "18 个任务的需求建模批次",
+      "input_source": {
+        "table": "messages",
+        "message_id": 2973,
+        "conversation_id": 514,
+        "note": "live 重放按 message_id 取完整原文"
+      },
+      "input_preview": "【建模目的】将客户提供的整车需求数据导入模型，形成整车需求分析初始输入\n【输入】客户提供的整车需求，如下：\n<IR-3>车辆动力管理：\n车辆应根据驾驶需求和车辆运行状态，对车辆动力输出进行\n管理，以满足车辆运行需求。\n<IR-1>车辆动力输出：\n车辆应根据驾驶员驾驶意图和车辆运行状态提供满足驾驶需\n求的动力输出。\n<IR-2>动力模式管理\n车辆应根据车辆状态和运行条件选择适合的动力运行模式，\n以满足车辆运行需求。\n<IR-4>能源状态适应\n车辆应根据能源状态调整动力输出策略，",
+      "input_len": 390,
+      "input_sha1": "c47456e4e54c",
+      "evidence_at_derivation": {
+        "artifact_kinds": [
+          "code",
+          "document",
+          "sysml"
+        ],
+        "n_artifacts_kinds": 3,
+        "agent_tasks": 18,
+        "agent_tasks_done": 18,
+        "sysml_versions": 7,
+        "assistant_nonempty": 21,
+        "check_verdicts": [
+          "pass",
+          "report"
+        ]
+      }
+    },
+    {
+      "id": "G06",
+      "conv_id": 9360,
+      "chain": "orchestrated",
+      "intent": "requirement_analysis",
+      "expected_deliverable_kind": [
+        "sysml",
+        "code",
+        "document"
+      ],
+      "inviolable_rules": [
+        "上游交付物必须显式回灌下游子任务",
+        "不得报 full 而无交付物"
+      ],
+      "checks": [
+        {
+          "type": "orchestration_done_rate_min",
+          "min": 0.8
+        },
+        {
+          "type": "artifact_kind_present",
+          "kind": "sysml"
+        },
+        {
+          "type": "assistant_answer_nonempty"
+        }
+      ],
+      "note": "8 个任务的需求视图生成批次",
+      "input_source": {
+        "table": "messages",
+        "message_id": 3982,
+        "conversation_id": 9360,
+        "note": "live 重放按 message_id 取完整原文"
+      },
+      "input_preview": "【建模目的】将客户提供的整车需求数据导入模型，形成整车需求分析初始输入，生成整车的需求视图\n【输入】客户提供的整车需求，如下：\n车辆动力管理：\n车辆应根据驾驶需求和车辆运行状态，对车辆动力输出进行\n管理，以满足车辆运行需求。\n车辆动力输出：\n车辆应根据驾驶员驾驶意图和车辆运行状态提供满足驾驶需\n求的动力输出。\n动力模式管理\n车辆应根据车辆状态和运行条件选择适合的动力运行模式，\n以满足车辆运行需求。\n能源状态适应\n车辆应根据能源状态调整动力输出策略，保证车辆持续运行\n能力。\n\n",
+      "input_len": 376,
+      "input_sha1": "029a4c5e4463",
+      "evidence_at_derivation": {
+        "artifact_kinds": [
+          "code",
+          "document",
+          "sysml"
+        ],
+        "n_artifacts_kinds": 3,
+        "agent_tasks": 8,
+        "agent_tasks_done": 8,
+        "sysml_versions": 6,
+        "assistant_nonempty": 13,
+        "check_verdicts": [
+          "pass",
+          "report"
+        ]
+      }
+    },
+    {
+      "id": "G07",
+      "conv_id": 9565,
+      "chain": "orchestrated",
+      "intent": "knowledge_qa",
+      "expected_deliverable_kind": [
+        "sysml",
+        "code"
+      ],
+      "inviolable_rules": [
+        "不得虚构生命周期阶段之外的实体",
+        "交付物必须自包含"
+      ],
+      "checks": [
+        {
+          "type": "orchestration_done_rate_min",
+          "min": 0.8
+        },
+        {
+          "type": "artifact_kind_present",
+          "kind": "sysml"
+        },
+        {
+          "type": "assistant_answer_nonempty"
+        }
+      ],
+      "note": "生命周期上下文建模批次",
+      "input_source": {
+        "table": "messages",
+        "message_id": 4677,
+        "conversation_id": 9565,
+        "note": "live 重放按 message_id 取完整原文"
+      },
+      "input_preview": "建模目的】建立产品生命周期上下文，为后续用户使用阶段分析提供基础\n【输入】广汽定义的五个生命周期阶段：\n1. 产品开发阶段\n2. 生产制造阶段\n3. 销售服务阶段\n4. 用户使用阶段\n5. 产品报废阶段\n【建模活动】\n1. 创建产品生命周期模型（交互视图（ACT活动图））\n2. 按照固定顺序建立五个生命周期阶段\n3. 建立阶段之间的顺序关系\n【输出】产品全生命周期模型（交互视图（ACT活动图））\n【建模约束】\n1. 生命周期阶段固定，不新增、不删除、不调整\n2. 当前节点只定",
+      "input_len": 260,
+      "input_sha1": "19ba3732b932",
+      "evidence_at_derivation": {
+        "artifact_kinds": [
+          "code",
+          "sysml"
+        ],
+        "n_artifacts_kinds": 2,
+        "agent_tasks": 8,
+        "agent_tasks_done": 8,
+        "sysml_versions": 3,
+        "assistant_nonempty": 5,
+        "check_verdicts": [
+          "report"
+        ]
+      }
+    },
+    {
+      "id": "G08",
+      "conv_id": 9571,
+      "chain": "orchestrated",
+      "intent": "report_generation",
+      "expected_deliverable_kind": [
+        "sysml",
+        "code",
+        "report"
+      ],
+      "inviolable_rules": [
+        "存在失败子任务时聚合状态不得为 full",
+        "不得把门禁失败报成内容合格"
+      ],
+      "checks": [
+        {
+          "type": "orchestration_done_rate_min",
+          "min": 0.5
+        },
+        {
+          "type": "artifact_kind_present",
+          "kind": "report"
+        },
+        {
+          "type": "assistant_answer_nonempty"
+        }
+      ],
+      "note": "含 failed 子任务的历史批次；回归敏感例",
+      "input_source": {
+        "table": "messages",
+        "message_id": 4694,
+        "conversation_id": 9571,
+        "note": "live 重放按 message_id 取完整原文"
+      },
+      "input_preview": "需求分析的实现路径：\n设计师上传需求来源相关的文档或输入需求描述，明确需求分\n析要求，根据需要指定参考的互联数据，调用大语言模型对非结构化的需求进行\n智能化需求分析，输出结构化的需求条目及需求来源追溯，对已有的需求条目进\n行分解细化、规范化等，并生成相应的 SysML 模型（视图、元素等），主要包括\n需求图、用例图及相关模型元素和关系。大语言模型对需求进行打分、评估规范\n性，给出优化建议，由设计师决策是否采纳或修改",
+      "input_len": 209,
+      "input_sha1": "9a72545eefd8",
+      "evidence_at_derivation": {
+        "artifact_kinds": [
+          "code",
+          "report",
+          "sysml"
+        ],
+        "n_artifacts_kinds": 3,
+        "agent_tasks": 6,
+        "agent_tasks_done": 5,
+        "sysml_versions": 2,
+        "assistant_nonempty": 14,
+        "check_verdicts": [
+          "report"
+        ]
+      }
+    },
+    {
+      "id": "G09",
+      "conv_id": 9610,
+      "chain": "model_and_validate",
+      "intent": "view_expansion",
+      "expected_deliverable_kind": [
+        "sysml"
+      ],
+      "inviolable_rules": [
+        "必须真实调用 sysml_v2_validate",
+        "不得跳过校验直接交付"
+      ],
+      "checks": [
+        {
+          "type": "artifact_kind_present",
+          "kind": "sysml"
+        },
+        {
+          "type": "check_verdict_in",
+          "values": [
+            "pass",
+            "report"
+          ]
+        },
+        {
+          "type": "assistant_answer_nonempty"
+        }
+      ],
+      "note": "明确要求调用校验工具",
+      "input_source": {
+        "table": "messages",
+        "message_id": 4821,
+        "conversation_id": 9610,
+        "note": "live 重放按 message_id 取完整原文"
+      },
+      "input_preview": "请基于架构骨架生成 sequence 视图，并调用 sysml_v2_validate 校验产出",
+      "input_len": 48,
+      "input_sha1": "11d95b869179",
+      "evidence_at_derivation": {
+        "artifact_kinds": [
+          "sysml"
+        ],
+        "n_artifacts_kinds": 1,
+        "agent_tasks": 0,
+        "agent_tasks_done": 0,
+        "sysml_versions": 1,
+        "assistant_nonempty": 1,
+        "check_verdicts": [
+          "pass"
+        ]
+      }
+    },
+    {
+      "id": "G10",
+      "conv_id": 9586,
+      "chain": "model_and_validate",
+      "intent": "view_expansion",
+      "expected_deliverable_kind": [
+        "sysml",
+        "code"
+      ],
+      "inviolable_rules": [
+        "诊断必须按词法/语法/语义三路分类",
+        "不得臆造 v2 关键字"
+      ],
+      "checks": [
+        {
+          "type": "artifact_kind_present",
+          "kind": "sysml"
+        },
+        {
+          "type": "sysml_code_nonempty"
+        },
+        {
+          "type": "assistant_answer_nonempty"
+        }
+      ],
+      "note": "校验现有 V2 代码",
+      "input_source": {
+        "table": "messages",
+        "message_id": 4761,
+        "conversation_id": 9586,
+        "note": "live 重放按 message_id 取完整原文"
+      },
+      "input_preview": "帮我校验如下V2代码是否有问题：\npackage '整车动力管理功能分析_活动' {\n    doc /* 整车动力管理功能流程活动图 */\n    action def '整车动力管理功能流程' {\n        doc /* 覆盖启动、正常运行、特殊工况、关机驻车 4 个阶段 */\n        action def '功能步骤';\n        action '检测点火信号' : '功能步骤' { attribute '点火状态' : ScalarValues::",
+      "input_len": 12476,
+      "input_sha1": "e5af31547467",
+      "evidence_at_derivation": {
+        "artifact_kinds": [
+          "code",
+          "sysml"
+        ],
+        "n_artifacts_kinds": 2,
+        "agent_tasks": 6,
+        "agent_tasks_done": 6,
+        "sysml_versions": 6,
+        "assistant_nonempty": 8,
+        "check_verdicts": [
+          "block",
+          "pass"
+        ]
+      }
+    },
+    {
+      "id": "G11",
+      "conv_id": 9999,
+      "chain": "model_and_validate",
+      "intent": "chat",
+      "expected_deliverable_kind": [
+        "sysml",
+        "code"
+      ],
+      "inviolable_rules": [
+        "修复后必须复核",
+        "不得把解析失败报成质量不合格"
+      ],
+      "checks": [
+        {
+          "type": "artifact_kind_present",
+          "kind": "sysml"
+        },
+        {
+          "type": "assistant_answer_nonempty"
+        }
+      ],
+      "note": "分析代码无法通过校验的原因",
+      "input_source": {
+        "table": "messages",
+        "message_id": 5688,
+        "conversation_id": 9999,
+        "note": "live 重放按 message_id 取完整原文"
+      },
+      "input_preview": "分析如下代码是什么问题，为啥无法通过校验：\npackage '运行场景定义' {\n    doc /* 整车需求分析 - 运行场景定义用例视图 */\n    private import UseCases::UseCase;\n    private import Parts::Part;\n    private import '元模型_系统架构设计【新版AI创成】'::'1.元素'::'场景';\n    private import '元模型_系统架构设计【新版AI创成】':",
+      "input_len": 2702,
+      "input_sha1": "67a4b69bec31",
+      "evidence_at_derivation": {
+        "artifact_kinds": [
+          "code",
+          "sysml"
+        ],
+        "n_artifacts_kinds": 2,
+        "agent_tasks": 3,
+        "agent_tasks_done": 3,
+        "sysml_versions": 1,
+        "assistant_nonempty": 1,
+        "check_verdicts": [
+          "report"
+        ]
+      }
+    },
+    {
+      "id": "G12",
+      "conv_id": 9004,
+      "chain": "model_and_validate",
+      "intent": "requirement_analysis",
+      "expected_deliverable_kind": [
+        "sysml",
+        "code"
+      ],
+      "inviolable_rules": [
+        "需求条目必须有稳定 ID",
+        "不得在编排交付物里塞父会话历史"
+      ],
+      "checks": [
+        {
+          "type": "artifact_kind_present",
+          "kind": "sysml"
+        },
+        {
+          "type": "sysml_code_nonempty"
+        },
+        {
+          "type": "assistant_answer_nonempty"
+        }
+      ],
+      "note": "整车需求导入 + 4 子任务",
+      "input_source": {
+        "table": "messages",
+        "message_id": 3054,
+        "conversation_id": 9004,
+        "note": "live 重放按 message_id 取完整原文"
+      },
+      "input_preview": "建模目的】将客户提供的整车需求数据导入模型，形成整车需求分析初始输入\n【输入】客户提供的整车需求，如下：\n车辆动力管理：\n车辆应根据驾驶需求和车辆运行状态，对车辆动力输出进行\n管理，以满足车辆运行需求。\n车辆动力输出：\n车辆应根据驾驶员驾驶意图和车辆运行状态提供满足驾驶需\n求的动力输出。\n动力模式管理\n车辆应根据车辆状态和运行条件选择适合的动力运行模式，\n以满足车辆运行需求。\n能源状态适应\n车辆应根据能源状态调整动力输出策略，保证车辆持续运行\n能力。\n\n【建模活动】\n1.读取",
+      "input_len": 365,
+      "input_sha1": "f5521aeda492",
+      "evidence_at_derivation": {
+        "artifact_kinds": [
+          "code",
+          "sysml"
+        ],
+        "n_artifacts_kinds": 2,
+        "agent_tasks": 4,
+        "agent_tasks_done": 4,
+        "sysml_versions": 1,
+        "assistant_nonempty": 2,
+        "check_verdicts": [
+          "report"
+        ]
+      }
+    }
+  ],
+  "dataset_id": "eb245949e0d84ed1"
+}

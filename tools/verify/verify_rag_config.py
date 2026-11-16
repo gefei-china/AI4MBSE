@@ -77,7 +77,19 @@ B = [
     ("B1 rag.py 路由阈值读配置", rag_py.count('_cfg.get("rag", "route_threshold", 0.75)') == 1),
     ("B2 rag.py top_k 读配置", rag_py.count('int(_cfg.get("rag", "top_k", 4))') == 1),
     ("B3 rag.py 兜底 top_k 读配置", rag_py.count('int(_cfg.get("rag", "fallback_top_k", 5))') == 1),
-    ("B4 rag.py 混合检索传配置 top_k", rag_py.count("top_k=_rag_top_k") == 1),
+    # ★ 2026-11-16：本判据原为 == 1（假设只有一个调用点）。新增「跨语言补召回第二路」
+    #   后又调了一次 hybrid_search，且用的**同一个配置变量** _rag_top_k ——
+    #   意图（必须走配置、不得硬编码）完全满足，是判据的调用点数假设过期了。
+    #   改为：至少 1 处，**且不得存在硬编码 top_k=数字**（这才是真正防的东西）。
+    # ★ 2026-11-16：原判据是 `count("top_k=_rag_top_k") == 1`（假设只有一个调用点）。
+    #   新增「跨语言补召回第二路」后有 2 个调用点，且用的**同一个配置变量** ——
+    #   意图（走配置、不硬编码）完全满足，是「调用点只有一个」这个假设过期了。
+    #   ⚠️ 第一版改法用了 `re.search(r"top_k\s*=\s*\d+\b")`，而 `\b` 在写入时
+    #      变成了真实退格符 \x08 ⇒ 正则永不匹配 ⇒ **空转通过**（假绿）。
+    #      改为逐行扫描：每个 `_hybrid(` 调用行都必须带 `top_k=`，且值不得是字面数字。
+    ("B4 rag.py 混合检索传配置 top_k",
+     all(("top_k=" in ln) and not re.search(r"top_k\s*=\s*\d", ln)
+         for ln in rag_py.splitlines() if "_hybrid(" in ln)),
     ("B5 rag.py 降级路传配置 top_k", rag_py.count("top_k=_rag_fb_top_k") == 1),
     ("B6 rag.py 置信权重读配置", all(f'_cfg.get("rag", "w_{n}"' in rag_py for n in ("coverage", "relations", "typing"))),
     ("B7 rag.py 置信公式用权重变量", "w_cov * hit + w_rel * rels + w_typ * type_match" in rag_py),

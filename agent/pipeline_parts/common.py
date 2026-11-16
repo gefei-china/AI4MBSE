@@ -22,17 +22,57 @@ from core.config import STATIC_DIR
 from file_tools import exec_file_tool, FILE_TOOL_NAMES as _FILE_TOOL_NAMES
 from web_tools import WEB_TOOL_NAMES as _WEB_TOOL_NAMES   # 联网搜索/网页抓取（2026-10-17）
 from report_tools import exec_report_tool, REPORT_TOOL_NAMES as _REPORT_TOOL_NAMES
+# ★ 2026-11-06（P0）：沙箱代码执行 + 文档文本提取。
+#   ⚠️ 必须加在**本文件**（`from .common import *` 的再导出源），不是 pipeline_parts/tools.py。
+#      本轮先误加到 tools.py，`_CODE_TOOL_NAMES` 在该模块里并不存在 ⇒ 真实会话报
+#      `name '_CODE_TOOL_NAMES' is not defined`（而直接调 ToolExecutor 却成功 ——
+#      因为那是 workflows 那套分发，与 Agent 侧是两条独立实现）。
+from code_tools import exec_code_tool, CODE_TOOL_NAMES as _CODE_TOOL_NAMES
+from doc_tools import exec_doc_tool, DOC_TOOL_NAMES as _DOC_TOOL_NAMES
+# ★ 2026-11-07（P1）：技能自带脚本的真实执行通道。
+#   此前 `skills.py:355` 只注入一行「⚙ 脚本（需要时执行）：scripts/main.py」，
+#   没有任何执行入口 ⇒ 7 个技能的脚本是死文件。见 skill_tools.py 头部说明。
+#   ⚠️ 同样必须加在本文件（再导出源），且名字必须进 __all__。
+from skill_tools import exec_skill_tool, SKILL_TOOL_NAMES as _SKILL_TOOL_NAMES
+# ★ 2026-11-07（P2）：元能力 —— 让模型通过会话管理自己的能力资产
+#   （agent / skill / tool / capability 的增删改、绑定、启停）。
+#   写动作全部入人工确认队列，模型只能提不能批。
+from meta_tools import (exec_capability_tool, META_QUERY_NAMES as _META_QUERY_NAMES,
+                        META_APPLY_NAMES as _META_APPLY_NAMES)
+from capability_runtime import is_capability as _is_capability, exec_capability as _exec_capability
 from agent.definition import AgentDefinition
 from agent.registry import AgentRegistry
 from agent.intent import IntentRouter
 from agent.rag import GraphRAG, ConflictDetector
 from agent.utils import (
     _citations_payload,
+    _citations_payload_from_registry,
+    _register_citations,
+    _citation_key,
+    source_anchor,
+    _short,
     _extract_code_blocks,
     _archive_impact_analysis,
     _archive_sysml_version,
     _archive_artifacts,
 )
+
+# ★ 2026-11-15：`from .common import *` **不导出下划线开头的名字**（Python 规则），
+#   而 Mixin 正是靠 `from .common import *` 取用这些函数 ⇒ 不起别名就 NameError。
+#   （本次真机跑门禁才暴露：`NameError: name '_register_citations' is not defined`）
+#   这里给出**不带下划线的别名**，指向同一函数对象 —— 不是两份实现，
+#   而是"内部名"与"再导出名"的关系；改动必须同时改（别名即引用）。
+#
+# ⚠️⚠️ 二重陷阱（本次连续踩了两次，务必记住）：
+#   common.py **定义了 `__all__`** ⇒ `import *` **只导出 `__all__` 名单里的名字**，
+#   "公有名自动导出"那条规则在此**不生效**。
+#   ⇒ 光起别名**还不够**，别名**必须同时列进 `__all__`**，否则照样 NameError。
+#   证据：守卫 verify_common_exports.py [1] 判红
+#     缺: ['citation_key', 'citations_payload_from_registry', 'register_citations', 'short']
+register_citations = _register_citations
+citations_payload_from_registry = _citations_payload_from_registry
+citation_key = _citation_key
+short = _short
 
 # P0-2：工具结果展示上限（SSE 事件与落库共用；超出截断并标记 truncated，前端可展开全文/复制）
 # ★ 2026-10-27（截断清单 P1-B2）：6000 → 8000，与回填给模型的上限（_TOOL_MODEL_CAP）**取同值**。
@@ -237,7 +277,21 @@ PROMPT_CACHEABLE_KEYS = (
     "ontology",        # L1 本体 schema（无参，读 KB 本体）
     "boundary",        # L1 本体边界说明（无参静态）
     "output_rules",    # L1 输出规范（无参字面量）
+    # ★ 2026-11-13：产物自动归档的**事实说明**（两条路径都必须有）。
+    #   为什么单独成块而不并进 `tool_rules`：`tool_rules` **仅流式路径注入**
+    #   （execute 路径 `include_tool_rules=False`），而产物认知是**事实**不是工具用法，
+    #   缺了它模型会把"没调 save_artifact"误判成"没保存" —— 真机 990730/990731/990734
+    #   三连复现（4 条消息虚报未落库，产物库里实际有 3~14 条）。
+    #   ⚠️ 注入规则：**流式路径不重复注入**（它 tool_rules 里已有同一份文案），
+    #   见 build_prompt_blocks 里的 `"" if ctx.include_tool_rules else ...`。
+    "artifact_facts",
     "citation_rules",  # L1 引用规范（无参字面量）
+    # ★ 2026-11-14：结构化输出契约（来自 `agents.output_schema`）。
+    #   此前 `output_schema` 只被 registry 存进元数据、studio 保存接口读写，
+    #   **提示词装配侧从不注入** ⇒ system_prompt 写「见 output_schema」而模型看不到，
+    #   字段名全靠猜（`covered_categories` 猜错即让"类别覆盖齐"恒判未覆盖）。
+    #   Agent 级常量 ⇒ 放静态区（可缓存）；无该配置的 Agent 返回 ""，prompt 逐字节不变。
+    "output_contract",
 )
 
 #: 分界线**以下**的块 key（动态区）。元组顺序 = 实际拼装顺序（层内按「依赖的易变度」升序，
@@ -266,6 +320,10 @@ PROMPT_DYNAMIC_KEYS = (
     "model_code_req",  # L3 建模输出要求 + L0 硬约束卡（依赖 intent；建模/非建模差异巨大）
     "memory",          # L4 长期记忆（依赖 user_input，但 core 层无条件常驻 ⇒ 实测恒定）
     "model_context",   # L4 建模上下文（依赖 branch + conversation ⇒ 同会话稳定）
+    # ★ 2026-11-13：**产物基线内容**（当前 code 产物的正文），让迭代是"在既有产物上增量修改"
+    #   而不是从零重写。依赖 conversation（同会话内稳定 ⇒ 排在易变块之前不破坏缓存原则）。
+    #   位置刻意紧跟 `model_context`：两者都是"当前状态"，语义相邻便于模型串起来读。
+    "artifact_baseline",
     "project_memory",  # L4 项目级记忆（依赖 user_input + conversation）
     "user_ctx",        # L4 用户上下文
     # ── 每轮可能变（必须押后：断点之后的内容一律无法命中缓存）──
@@ -409,6 +467,20 @@ ARTIFACT_AUTO_RULES_TEXT = (
     "平台已经替你保存；\n"
     "· 会话流会显示『📄 取回模型文件 …已自动存入产物』环节，提醒用户到产物面板查看"
     "或下载全文即可，你的回答里只需给出分析结论，**不要**整段复述文件全文。\n"
+    # ★★ 2026-11-13（真机 conv 990730/990731/990734 实证）：**补上此前缺失的最关键一条**。
+    #   实测 6 条助手消息声称「产物保存工具缺失 / 未完成产物落库 / 无 artifact id」，
+    #   其中 4 条的实际产物库里赫然有 3~14 条产物（含 9779 的 14 条）——
+    #   模型把"我没调 save_artifact"误当成"没保存"，在报告里写下与产物面板**自相矛盾**
+    #   的结论，还连带建了无谓的确认单、把不存在的选择推给用户。
+    #   根因就是本段此前只讲了"工具结果里的文件"会归档，**没讲正文代码块也会归档**。
+    "· ★★ 你在回答正文里给出的 ```sysml / ```kerml 代码块（或 ``` 后接 sysml 的围栏）"
+    "**会被平台自动归档为代码产物**，并按产物主体（package/主定义名）**自动递增版本**"
+    "（同一产物 v0.1 → v0.2 → …，不同产物各自独立）。\n"
+    "· ⇒ **不要把『没有调用 save_artifact』说成『没有保存 / 无法保存 / 无 artifact id』**。"
+    "只要你的正文里有完整 SysML 代码块，产物**已经存在**；用户到产物面板即可看到并可下载。"
+    "这种情况下你**不需要**也**不应该**再调 save_artifact、更不该为它发起人工确认。\n"
+    "· `save_artifact` 只在两种情形下才需要：① 要**精确指定**产物标题/类型（非代码类文档，"
+    "如 md 报告）且自动归档覆盖不到；② 自动归档**已经存在同名同型**、需要显式覆盖登记。\n"
     "· ★ 用户明确要求『存入产物/写入产物文档/保存代码』时：若内容在工具结果里且"
     "未被自动归档（如分段展示的片段），调用 **save_artifact** 工具"
     "（参数 title/content，kind 可选 code|document|sysml|report）显式登记进产物库，"
@@ -447,6 +519,37 @@ class PromptBlocksCtx:
     include_tool_rules: bool = False
 
 
+def _citations_for_card(pipe, retrieval) -> list:
+    """生成前端引用数据（citations）的**唯一入口**（2026-11-15）。
+
+    ★ 为什么要有这个统一入口：
+      此前 6 处调用点各自写 `_citations_payload(retrieval.get("chunk_hits"))`，
+      而 `_citations_payload` 只认**初始检索**的 chunk_hits ⇒
+      走**工具检索**（Skill 硬门槛要求的主路径）时 citations 恒为空，
+      正文里的 [n] 全部越界、点不动（真机 conv 999999033 / msg 6603）。
+      ⇒ 现在统一走**引用登记簿**（初始检索 + 工具检索登记到同一本账）；
+      登记簿为空（无检索 / 检索未命中）⇒ 回退旧逻辑（逐字节兼容既有行为）。
+
+    ⚠️ 登记簿优先而不是"合并"：两边的编号空间不同（初始检索的编号从 1 开始，
+      工具检索接着排），合并会让编号与【来源n】对不上 —— 宁可只给登记簿那一份。
+    """
+    try:
+        reg = getattr(pipe, "_citation_registry", None)
+        if reg:
+            out = _citations_payload_from_registry(reg)
+            if out:
+                return out
+    except Exception:
+        pass
+    return _citations_payload((retrieval or {}).get("chunk_hits"))
+
+
+# `citations_for_card` 的再导出别名（stream.py / execute.py 的 6 处调用点用不带下划线的名字）。
+# ⚠️ 必须放在 `_citations_for_card` **定义之后** —— 放在前面会在模块加载时 NameError
+#   （模块顶层赋值在定义前执行 ⇒ 名字还不存在）。
+citations_for_card = _citations_for_card
+
+
 def _citation_footer(context_text: str) -> str:
     """★ B5-10：在检索数据**尾部**就近复述引用规范，并列出本次可用的编号。
 
@@ -471,9 +574,12 @@ def _citation_footer(context_text: str) -> str:
         return ""
     if n == 1:
         return ("\n\n【引用提示】以上数据含【来源1】；"
-                "凡用到它的内容，请在对应论述末尾标注 [1]。\n")
+                "凡用到它的内容，请在对应论述末尾标注 [1]；"
+                "写到条款号（如 §5.2.7）时写成 `§5.2.7 [1]`。\n")
     return ("\n\n【引用提示】以上数据含【来源1】～【来源%d】；"
             "凡用到其中任一条，请在对应论述末尾标注对应编号（如 [1] 或 [2,3]）；"
+            "**写到条款号（如 §5.2.7）时必须紧跟来源序号，写成 `§5.2.7 [2]`**"
+            "（编号与条款的对应关系见上方「可引用编号对照」）；"
             "未使用到的来源不要标注。\n" % n)
 
 
@@ -565,7 +671,17 @@ def build_prompt_blocks(pipe, ctx: PromptBlocksCtx) -> dict:
         "ontology": pipe._build_ontology_hint(),
         "boundary": pipe._build_boundary_hint(),
         "output_rules": pipe._build_output_rules(),
+        # ★ 2026-11-13（P0）：产物自动归档事实 —— **两条路径都必须有**。
+        #   流式路径已从 `tool_rules` 得到同一份文案（ARTIFACT_AUTO_RULES_TEXT 就在里面），
+        #   此处留空避免重复注入；非流式路径（execute，include_tool_rules=False）
+        #   此前**完全收不到**这段 ⇒ 模型不知道正文代码块会自动归档
+        #   ⇒ 真机 990730/990731/990734 连续三次"虚报未落库"（产物实际都在）。
+        "artifact_facts": "" if ctx.include_tool_rules else ARTIFACT_AUTO_RULES_TEXT,
         "citation_rules": pipe._build_citation_rules(),
+        # ★ 2026-11-14：结构化输出契约（`agents.output_schema` → 提示词）。
+        #   两条路径都必须有：非流式 execute 与流式 stream 共用本函数，故在此产出一次。
+        "output_contract": pipe._build_output_contract(ctx.agent_def)
+                           if hasattr(pipe, "_build_output_contract") else "",
         # ── 分界线（PROMPT_LAYER_BOUNDARY）以下为动态区 ──
         # ── L3 会话级 ──
         "intent_line": "当前意图：%s（Agent: %s，HIL 人机协作级别：%s）。\n"
@@ -578,6 +694,8 @@ def build_prompt_blocks(pipe, ctx: PromptBlocksCtx) -> dict:
         "memory": pipe._build_memory_hint(ctx.user_input, ctx.intent, ctx.user),
         "model_context": pipe._build_model_context(ctx.branch, ctx.conversation_id,
                                                    ctx.user_input),
+        # ★ 2026-11-13：当前产物基线正文（迭代起点，见 `_build_artifact_baseline`）
+        "artifact_baseline": pipe._build_artifact_baseline(ctx.conversation_id, ctx.user_input),
         "project_memory": pipe._build_project_memory(user_input=ctx.user_input,
                                                      conversation_id=ctx.conversation_id),
         "slots": build_slots_block(ctx.slots),
@@ -1006,6 +1124,13 @@ __all__ = [
     'os', 're', 'json', 'time', 'uuid', 'logging', 'logger',
     'get_db', 'db_conn', 'VectorEngine', 'QueryRouter', 'llm_client', 'STATIC_DIR',
     'exec_file_tool', '_FILE_TOOL_NAMES', '_WEB_TOOL_NAMES', 'exec_report_tool', '_REPORT_TOOL_NAMES',
+    # ★ 2026-11-06：下划线开头的名字 **必须显式列进 __all__**，否则 `from .common import *`
+    #   会跳过它（`import *` 只导出 `__all__` 里的公有名 + 无 __all__ 时的非下划线名）。
+    #   本轮踩坑：导入语句加对了，但漏了这里 ⇒ 真实会话报 `_CODE_TOOL_NAMES is not defined`。
+    'exec_code_tool', '_CODE_TOOL_NAMES', 'exec_doc_tool', '_DOC_TOOL_NAMES',
+    'exec_skill_tool', '_SKILL_TOOL_NAMES',
+    'exec_capability_tool', '_META_QUERY_NAMES', '_META_APPLY_NAMES',
+    '_is_capability', '_exec_capability',
     'AgentDefinition', 'AgentRegistry', 'IntentRouter', 'GraphRAG', 'ConflictDetector',
     '_citations_payload', '_extract_code_blocks', '_archive_impact_analysis',
     '_archive_sysml_version', '_archive_artifacts', '_TOOL_RESULT_CAP',
@@ -1038,4 +1163,18 @@ __all__ = [
     '_lg_failed_rounds', '_lg_limit_of', '_lg_stop_reason',
     # 2026-10-28：执行闸生效值回显（卡片可证伪"我以为开了"）
     'gates_snapshot',
+    # ★ 2026-11-15：引用登记簿（citation registry）相关再导出名。
+    #   ⚠️ common.py 定义了 __all__ ⇒ `import *` 只导出本名单里的名字 ⇒
+    #      "公有名自动导出"规则在此不生效 ⇒ **新名字必须列进这里**，否则 NameError。
+    #   踩坑记录：起别名但漏加 __all__ ⇒ 守卫 [1] 判红
+    #     缺: ['citation_key', 'citations_payload_from_registry', 'register_citations', 'short']
+    'register_citations', 'citations_payload_from_registry', 'citation_key', 'short',
+    'citations_for_card', 'source_anchor',
+    # ★ 2026-11-15：`context.py::_doc_short` 仍直接调用 `_short(...)`（下划线名）——
+    #   下划线名**默认不导出**，必须显式列进 __all__（同本文件 1114 行那条约定）。
+    #   漏列 ⇒ context.py 运行期 `NameError: _short is not defined`。
+    '_short',
+    # `from dataclasses import dataclass` 是公共名，同样漏在 __all__ 外（既有问题，
+    #   本轮由守卫 [1] 增强到 ImportFrom 名字后暴露）。
+    'dataclass',
 ]

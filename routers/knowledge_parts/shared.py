@@ -12,6 +12,7 @@ from fastapi.responses import JSONResponse
 from core.deps import db_session, current_user, require_permission, require_any_permission
 from core import typevocab
 from core import ontology_rules
+from core import ontology_tlo
 from knowledge_engine import QueryRouter  # P1: 双引擎路由统计
 from repositories.knowledge_repo import KnowledgeRepo
 from repositories.commit_repo import CommitRepo
@@ -337,8 +338,12 @@ def _ont_edit_rows(conn):
     「待发布的那份数据」**（= 编辑态，它即将成为新快照）—— 否则"改了本体却拿旧快照去体检"，
     等于把带病数据放行。故 publish/release 显式传本函数的结果。
     """
-    return conn.execute(
-        "SELECT id, name, type_kind, parent_id, constraints FROM ontology_types").fetchall()
+    # ⚠️ 不要枚举列：2026-11-15 加了 tlo_anchor 后，枚举列写法让
+    #   `tools/verify/verify_ontology_dom_range.py` 的手写 DDL 夹具当场
+    #   `no such column` 崩掉（本仓「夹具手抄 DDL 漂移」老坑的又一次复发）。
+    #   用 `SELECT *` ⇒ 以后再加列不会破任何夹具；下游按需取键即可。
+    # 2026-11-15：下沉到仓储层（layering 门禁 L1c 要求 routers 不直连读 SQL）。
+    return KnowledgeRepo(conn).all_ontology_types_raw()
 
 
 def _scan_edge_conflicts(conn, decl, limit=50):
@@ -537,6 +542,40 @@ def _ontology_check(conn, rows=None, instances=False, scope=None) -> dict:
         has_child = any(str(x["parent_id"] or "") == str(t["id"]) for x in rows)
         if not has_inst and not has_child:
             issues.append(_issue("isolated", t["name"], "孤立类：无实例且无子类"))
+    # ── P0-1 / D1=A（2026-11-15）：上层本体（BFO 轻量子集）锚点 ──────────────
+    #   判据在 core.ontology_tlo（**单一真源**），此处只喂数据。
+    #   ⚠️ 防假绿/假红两条：
+    #     ① 快照表老版本可能没有 tlo_anchor 列 ⇒ 只在列存在时检查，否则登记 degraded。
+    #        **不能**把"列不存在"当成"全部未锚定"——那会造出 N 条假 low（"空过的判据
+    #        比没有判据更危险"同族）。
+    #     ② 锚点可沿 parent 链继承 ⇒ 只给分类树的**上层节点**报一次，不必逐个叶子报，
+    #        否则一条根类型未锚定会让几十个叶子一起刷屏（噪声淹没问题清单）。
+    _tlo_col_ok = False
+    try:
+        _tlo_col_ok = bool(rows) and ("tlo_anchor" in rows[0].keys())
+    except Exception:
+        _tlo_col_ok = False
+    if _tlo_col_ok:
+        for t in rows:
+            if t["type_kind"] != "entity":
+                continue
+            if not ontology_tlo.missing_anchor(t, by_id):
+                continue
+            # 若该类型有子类，只报最上层那个（子类未锚定是"继承来源缺失"的结果，不是独立缺陷）
+            has_child = any(str(x["parent_id"] or "") == str(t["id"]) for x in rows)
+            if has_child:
+                issues.append(_issue("missing_tlo_anchor", t["name"],
+                                     "分类树上层节点未声明上层本体（BFO）锚点"
+                                     "（子类将无处继承）"))
+            elif not t["parent_id"]:
+                issues.append(_issue("missing_tlo_anchor", t["name"],
+                                     "根类型未声明上层本体（BFO）锚点"))
+            else:
+                issues.append(_issue("missing_tlo_anchor", t["name"],
+                                     "未声明上层本体（BFO）锚点，且祖先链上无继承来源"))
+    elif rows:
+        degraded.append("上层本体锚点检查跳过：当前口径的行不含 tlo_anchor 列"
+                        "（老快照未迁移）——该维度本轮**未检查**，非通过")
     ent_names = {x["name"] for x in rows if x["type_kind"] == "entity"}
     decl = {}          # 关系类型名 → (定义域, 值域)，供 rule_data_conflict 复算存量边
     rel_meta = {}      # P1-5：关系类型名 → {chars, inverse_of}（特性/反向声明，供对称性与反向规则复算）
@@ -644,6 +683,33 @@ def _ontology_check(conn, rows=None, instances=False, scope=None) -> dict:
         degraded.append(f"P1-5 边计数跳过（relations 聚合失败）：{type(_e).__name__}: {_e}")
         print(f"[ontology_check] P1-5 边计数失败，对称/方向类规则本次跳过："
               f"{type(_e).__name__}: {_e}", flush=True)
+    # ── 2026-11-15：函数型声明 vs 存量边「一源多目标」──────────────────────
+    #   实测取证（真库 ALLOCATED_TO）：声明 functional，而 5 个源节点有多个目标。
+    #   危害是**数据污染**：OWL 推理器会判多个目标 owl:sameAs 并合并节点，
+    #   被合并方的属性/类型全部互相继承（owlrl 实测：一个功能节点被误推成 20 多个类）。
+    #   为什么不并进 `rule_data_conflict`：那条只比 domain/range 与边端点，
+    #   **完全不看 characteristics** —— 这是它一直的盲区，混进去会让"为什么报"说不清。
+    for t in rows:
+        if t["type_kind"] != "relation":
+            continue
+        _chf = rel_meta.get(t["name"], {}).get("chars") or []
+        if "functional" not in _chf:
+            continue
+        try:
+            # 2026-11-15：下沉到仓储层（layering L1c 要求 routers 不直连读 SQL）
+            _multi = KnowledgeRepo(conn).relation_source_multi_target(t["name"])
+        except Exception as _e:
+            degraded.append(f"functional_data_conflict 跳过（{t['name']} 边聚合失败）："
+                            f"{type(_e).__name__}: {_e}")
+            continue
+        if _multi:
+            _mx = int(_multi[0]["c"]) if _multi else 0
+            issues.append(_issue(
+                "functional_data_conflict", t["name"],
+                f"声明 functional 但 {len(_multi)} 个源节点有多个目标（最多 {_mx} 个）"
+                f"—— 推理器会判这些目标 owl:sameAs 并合并节点（属性/类型互相继承）",
+                multi_src=len(_multi), max_targets=_mx))
+
     for _nm, (_dl5, _rl5) in decl.items():
         _m5 = rel_meta.get(_nm) or {}
         _ch5 = _m5.get("chars") or []

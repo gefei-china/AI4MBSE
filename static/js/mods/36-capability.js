@@ -117,10 +117,15 @@ async function capMount(page) {
     <div style="margin-top:10px;display:flex;align-items:flex-start;gap:12px;flex-wrap:wrap;">
       <div class="caplegend" id="cap-${page}-sum"></div>
       <span style="flex:1"></span>
-      <button class="btn sm ghost" onclick="capToggleManage('${page}')" id="cap-${page}-mbtn">管理能力（审核 / 范围 / 下架）</button>
-    </div>
-    <div class="subpage" id="cap-${page}-manage" style="margin-top:12px;">
-      <div style="font-size:12.5px;color:var(--mut,#8a96ad);padding:8px 0;">治理入口：上架审核、范围分配、全市场插件管理见「插件市场」。<button class="btn sm ghost" onclick="capJumpManage()">前往</button></div>
+      <!-- ★ 2026-11-06（用户：「管理能力（审核/范围/下架）这块没数据，没用的话移除」）：
+           原来这里是一个按钮 + 一个空面板，展开后**只有一句"去插件市场"的提示**，
+           没有任何实体数据 —— 属于占位式的假入口（用户会以为点开能看到审核队列）。
+           现改为**一行轻量文字链**：功能（去插件市场）没丢，但不再伪装成"能力管理"面板。
+           能力中心的治理真入口是上方的「📊 能力账本」（有 KPI，能跳到判定明细）。 -->
+      <a style="font-size:12px;color:var(--mut,#8a96ad);cursor:pointer;text-decoration:none;white-space:nowrap;"
+         onclick="capJumpManage()" title="上架审核 / 范围分配 / 全市场插件管理在「插件市场」页">
+        治理见「插件市场」→
+      </a>
     </div>`;
   capHideSiblings(box);
   // 账本 KPI 异步填充（失败静默：账本不可用不应挡住能力中心本身）
@@ -200,10 +205,9 @@ function capSearch(page, v) {
   s._t = setTimeout(function () { capLoad(page); }, 260);
 }
 function capRefresh(page) { capLoad(page); }
-function capToggleManage(page) {
-  const el = document.getElementById('cap-' + page + '-manage');
-  if (el) el.style.display = (el.style.display === 'block') ? 'none' : 'block';
-}
+// 2026-11-06 删除 `capToggleManage(page)`：它只服务于已被移除的「管理能力（审核/范围/下架）」
+//   空面板（展开后仅一句"去插件市场"的提示，无任何实体数据）。全仓已无调用点（含 html）。
+//   若将来要做真正的治理面板，应新建带数据源的实现，而不是恢复这个只切 display 的壳。
 function capJumpManage() {
   const t = document.querySelector('[data-pane="st-market"]');
   if (t) t.click();
@@ -242,6 +246,11 @@ async function capLoad(page) {
       (Array.isArray(_srv) ? _srv : []).forEach(function (it) {
         if (_seen.has(it.name)) return;
         _seen.add(it.name);
+        let _toolN = 0;
+        try {
+          const _tl = typeof it.tools === 'string' ? JSON.parse(it.tools || '[]') : (it.tools || []);
+          _toolN = Array.isArray(_tl) ? _tl.length : 0;
+        } catch (e) { /* 工具清单脏数据不阻断卡片 */ }
         s.mine.push({
           name: it.name, label: it.name,
           description: it.endpoint || '',
@@ -250,6 +259,13 @@ async function capLoad(page) {
           status: it.status, endpoint: it.endpoint,
           call_total: it.call_total, call_last: it.call_last,
           call_scope: it.call_scope,
+          // ★ 2026-11-06：卡片要能回答「生效了吗 / 凭据填上了吗」——
+          //   过去只带 plugins 侧的 status_label（发布态），与 mcp_servers.status
+          //   （online/offline）是两套语义，且没有任何测试入口 ⇒ 状态显示不准确。
+          mcp_online: it.status === 'online',
+          last_check: it.last_check, last_error: it.last_error,
+          latency_ms: it.latency_ms, tool_count: _toolN,
+          headers_masked: it.headers_masked || {},
           _from_server: true,
         });
       });
@@ -563,6 +579,11 @@ function capCard(x, tab, page) {
   //   此前「分享/卸载/删除」统一埋在「更多 ▾」菜单里，用户在主区看不到入口，
   //   反而菜单里混着一堆市场管理员才有的治理动作（全局上下架/撤回上架/审核）。
   let actions = '';
+  // ★ 2026-11-06：合并进来的 mcp_servers 卡片过去**没有测试入口**，用户无从判定是否生效。
+  //   testMCP（30-agents.js）已改为走 /discover：initialize + tools/list + 刷新工具元数据。
+  if (x._from_server && x.legacy_id) {
+    actions += `<button class="btn sm ghost" onclick="testMCP(${Number(x.legacy_id)})" title="连通测试 + 动态发现：刷新在线状态、工具清单与参数契约">🔌 测试/发现</button>`;
+  }
   // 草稿/驳回态优先给「发布」——不发布就不可被 AI 消费，这是最需要的下一步
   if (x.can_publish_self) {
     actions = `<button class="btn sm" onclick="capPublish('${esc(pid)}','${page}')">发布</button>`;
@@ -602,16 +623,38 @@ function capCard(x, tab, page) {
     }
   }
 
+  // ★ 2026-11-06：MCP 服务卡片的「生效判据」一次给全 —— 在线状态 / 工具数 / 巡检时间 / 凭据掩码。
+  //   凭据只显示 ****** 与长度（后端 headers_masked 已脱敏），既能确认「填上了」，又不泄露明文。
+  let mcpMeta = '';
+  if (x._from_server) {
+    const hm = x.headers_masked || {};
+    const hk = Object.keys(hm);
+    const cred = hk.length
+      ? hk.map(k => esc(k) + ': ******(' + ((hm[k] && hm[k].len) || 0) + '位)').join(' · ')
+      : '未配置认证头';
+    const online = !!x.mcp_online;
+    const lc = String(x.last_check || '').slice(5, 19) || '未巡检';
+    const err = String(x.last_error || '').replace(/[<>"']/g, '').slice(0, 80);
+    mcpMeta = `<div class="capmcpmeta" style="margin:2px 0 6px;display:flex;flex-wrap:wrap;gap:6px;align-items:center;font-size:12px;color:var(--mut);">
+      <span class="capbadge ${online ? 'on' : 'off'}" title="来自 mcp_servers.status（健康巡检写入）">${online ? '● 在线' : '○ 离线'}</span>
+      <span title="最近一次健康巡检">巡检 ${esc(lc)}</span>
+      <span>${Number(x.tool_count || 0)} 工具</span>
+      <span title="认证头已脱敏；保存成功后仍以掩码确认已填写">🔑 ${cred}</span>
+      ${online ? '' : `<span style="color:var(--red,#A32D2D)" title="${esc(err)}">${esc(err || '鉴权/连通未通过')}</span>`}
+    </div>`;
+  }
+
   return `<div class="capcard ${tab === 'mine' ? 'mine' : ''} ${tab === 'mine' && !enabled ? 'dis' : ''}">
     <div class="capcard-h">
       <div class="capico" style="background:${m.color}22;color:${m.color};font-weight:500;">${m.abbr}</div>
       <div class="captit" title="${esc(label)}">${esc(label)}</div>
     </div>
     <div class="capdesc">${esc(desc)}</div>
+    ${mcpMeta}
     <div class="capmeta">
       <span>${isBuiltin ? '内置' : (isMine ? '我创建' : '他人共享')}</span>
       <span>v${esc(x.current_version || '—')}</span>
-      <span class="${x.status === 'disabled' ? 'warn' : ''}">${esc(x.status_label || x.status || '')}</span>
+      <span class="${x.status === 'disabled' ? 'warn' : ''}">${x._from_server ? 'MCP 服务' : esc(x.status_label || x.status || '')}</span>
       ${!isBuiltin ? `<span title="可见范围 —— 与「能否被 AI 消费」无关">${pubShare ? '已上架市场' : (pendingShare ? '申请上架中' : '仅自己')}</span>` : ''}
       ${belong}
       ${installed ? `<span class="capbadge ${enabled ? 'on' : 'off'}" title="个人启用状态 —— 仅影响你自己，不影响他人">${enabled ? '已启用' : '已停用'}</span>` : ''}

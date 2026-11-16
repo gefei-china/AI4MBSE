@@ -24,19 +24,37 @@ RDF_TYPE = "a"
 def load_transitive_properties(conn) -> set:
     """P1-2：从本体公理读传递关系，替代硬编码。
 
-    读取 ontology_types（type_kind='relation'）的 properties JSON，识别：
-    - properties.transitive == true
-    - properties.characteristics 列表含 'transitive'
-    返回标记为传递的关系名集合；本体一个都没标时回退 TRANSITIVE_RELATIONS 兜底。
+    ★ 2026-11-15 修：**此前只读 `properties`，读错了源**。
+      写路径（`routers/knowledge_parts/ontology.py` 的 PUT、前端 `.ot-char` 勾选、
+      OWL 导出）一律写入 **`constraints.characteristics`**；而本函数只读
+      `properties`（JSON）。
+      实测真库：`properties.transitive` 只有 CONTAINS/DERIVES 两条**旧数据**，
+      而 `constraints.characteristics` 里有 9 个关系（含早已声明传递的
+      ALLOCATED_TO / TRACE）⇒ **声明了但推理从没生效**（"同一语义两处各写一份，
+      必然错位"的又一例；症状不在错位那一环：界面上明明勾着"传递"）。
+      ⇒ 现以 `constraints.characteristics` 为**主源**，`properties` 仅作旧数据兼容。
+
+    :returns: 标记为传递的关系名集合；本体一个都没标时回退 TRANSITIVE_RELATIONS 兜底。
     """
     marked = set()
     try:
         rows = conn.execute(
-            "SELECT name, properties FROM ontology_types WHERE type_kind='relation'"
+            "SELECT name, properties, constraints FROM ontology_types "
+            "WHERE type_kind='relation'"
         ).fetchall()
     except Exception:
         rows = []
     for r in rows:
+        # 主源：constraints.characteristics（API/前端/OWL 统一的写入口）
+        try:
+            cons = json.loads(r["constraints"] or "{}")
+        except Exception:
+            cons = {}
+        if isinstance(cons, dict) and \
+                "transitive" in [str(c).lower() for c in (cons.get("characteristics") or [])]:
+            marked.add(r["name"])
+            continue
+        # 兼容：旧数据写在 properties（仅 2 条历史行）
         try:
             props = json.loads(r["properties"] or "{}")
         except Exception:
@@ -113,7 +131,19 @@ def _load_all_triples(conn, branch: str = "") -> list:
         return _ns.local(_ns.loc_key(name))
 
     def _uri(name):
-        return BASE_T + _local(name)
+        """实体 URI —— **必须与图库写入侧同源**（2026-11-15 修）。
+
+        ⚠️ 此前是 `NS_ENT + local(loc_key(id))`，而 `graph_db` 用的是
+        `ns.ent_uri(name, eid)` = `NS_ENT + local(id)`。两者对**连字符**的处理不同：
+            `loc_key("S-9cba2973")` → `S_9cba2973`（连字符→下划线）
+            `ent_uri` 路径          → `S-9cba2973`（保留）
+        真库 189 个实体 id **全是连字符形态**（`S-xxxxxxxx`）⇒ 自研推理产出的
+        s/o URI **在图谱里一个都不存在**：推理"推出来了"但前端匹配不上节点，
+        与「sh:class 约束对数据永远落空」是同一类缺陷（URI 不同源）。
+
+        判据：与 `graph_db.ent_uri` 逐字节一致。
+        """
+        return _ns.ent_uri("", name)
 
     br_sql = " AND branch=?" if branch else ""
     br_params = (branch,) if branch else ()

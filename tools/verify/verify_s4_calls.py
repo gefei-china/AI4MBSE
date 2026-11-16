@@ -24,6 +24,10 @@ _SKIP_DIRS = (".git", "__pycache__", "node_modules", ".venv", "docs", "static", 
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
+# 2026-11-09：本门禁替换 llm_client 后仍走 chat 入口，声明 verify 来源 ⇒
+# 不写生产台账 logs/request_invariant.jsonl（否则会污染「切 enforce」的就绪统计）。
+os.environ.setdefault("MBSE_INVARIANT_ORIGIN", "verify")
+
 _RESULTS = []
 _NOTES = []
 
@@ -435,8 +439,11 @@ _norm_src = read("norm_apply.py")
 _wf_src = read(os.path.join("workflows", "engine.py"))
 chk("3.9 既有调用点仍传采样参数：norm_apply.py（temperature/max_tokens）——现已真正生效",
     ('max_tokens=8192' in _norm_src) and ('temperature=0.1' in _norm_src))
-chk("3.10 既有调用点仍传采样参数：workflows/engine.py（model=）——现已真正生效",
-    "llm_client.chat(messages, provider_id=provider_id, model=model)" in _wf_src)
+# ★ 2026-11-05：3.10 原断言检查 `workflows/engine.py::_exec_llm` 的 model= 透传。
+#   画布 DAG 引擎已移除（engine.py 只剩编排入口壳），LLM 节点执行器不存在了。
+#   改为防回归：该文件不得再出现 LLM 调用（防画布节点执行器被悄悄加回来）。
+chk("3.10 workflows/engine.py 已无 LLM 调用（画布 LLM 节点已移除，防回潮）",
+    "llm_client.chat(" not in _wf_src)
 
 chk("3.11 证据：refine.py 按轮次循环调用（首评 + 最多 max_rounds 次修订）",
     "for round_i in range(1, cls._max_rounds() + 2):" in _refine_src)

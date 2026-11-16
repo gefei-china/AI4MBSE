@@ -173,6 +173,37 @@ def classify(error_text, ok=True):
     return "internal"
 
 
+def classify_terminal(status: str, error_text: str) -> str:
+    """终态任务的归因**单一真源**（★ 2026-11-15 P0-6）。
+
+    为什么需要：`classify()` 只看自由文本，对「用户取消 / 目标已达成提前收敛 /
+    验证收尾」这类**人为或策略性终止**一律兜底成 `internal`（未归类内部错误）——
+    语义是错的。真库实测（2026-11-15 全库口径）：`status='cancelled'` 且
+    `error_class` 为空的 30 行，`error` 文本重放 `classify()` **100% 落 internal**。
+    同时 `agent_tasks.error_class` 此前只在 `TaskQueue.fail()` 写，
+    `cancel()` / `cancel_run()` / 用户中断三个出口全不写
+    ⇒ 失败/取消的 129 行里 93 行（72.1%）没有归因。
+
+    语义约定（**不新增枚举**，全部落在 `ERROR_CLASSES` 8 类内）：
+      - `done` / 其它非终态 ⇒ `""`（成功或仍在跑，不归因）
+      - `cancelled`（含旧拼写 `canceled`）⇒ `interrupted`：
+        人为/策略性终止，与 `orch_checkpoint.PHASE_INTERRUPTED` 同义；
+        不是 `internal` 内部错误。此值**只由 status 决定**，与文本无关。
+      - `failed` ⇒ 委托 `classify(error_text, ok=False)`，保留既有词表与优先级。
+
+    ⚠️ 只用于**写终态时**。重试决策仍以 `classify()` 与
+    `T1_RETRYABLE_CLASSES` 为准，本批对重试行为零改动。
+    ⚠️ 存量回填也走这里：基于当时真实写入的 `error` 文本与 `status`
+    **可复现派生**，不是凭空编造；留痕里必须标 `offline_replay`。
+    """
+    st = str(status or "").strip().lower()
+    if st in ("cancelled", "canceled"):
+        return "interrupted"
+    if st == "failed":
+        return classify(error_text, ok=False)
+    return ""
+
+
 def is_retryable_class(cls: str) -> bool:
     """该分类是否值得重试。空串（成功）返回 False。"""
     if not cls:

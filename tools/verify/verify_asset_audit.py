@@ -300,12 +300,17 @@ def main():
     check("E2 studio_repo 三方法走 audited_update",
           _sr.count("asset_audit.audited_update(") == 3,
           f"count={_sr.count('asset_audit.audited_update(')}")
+    # ★ 2026-11-05：`flows.py` 已从本清单移除 —— 画布工作流舍弃，
+    #   该文件里的 `save_agent_flow` 端点（唯一带 changed_by 的画布写入）随之下线。
+    #   改为**防回归**断言：该文件不得再出现 agent_flows 写端点。
     for f, key in (("agents.py", 'actor=audit_user(user), source="api"'),
                    ("prompts.py", 'actor=audit_user(user), source="api"'),
-                   ("skills.py", 'actor=audit_user(user), source="api"'),
-                   ("flows.py", "actor=audit_user(user)")):
+                   ("skills.py", 'actor=audit_user(user), source="api"')):
         src = open(os.path.join(ROOT, "routers", "studio_parts", f), encoding="utf-8").read()
         check(f"E3 {f} 传 changed_by（操作人入审计）", key in src)
+    _fl = open(os.path.join(ROOT, "routers", "studio_parts", "flows.py"), encoding="utf-8").read()
+    check("E3b flows.py 不再暴露画布流程写端点（画布已舍弃，防回潮）",
+          "agent-flows" not in _fl and "/api/studio/flow-runs" not in _fl)
     check("E4 studio.py 注册 changelog 分片",
           "studio_parts.changelog" in open(os.path.join(ROOT, "routers", "studio.py"),
                                            encoding="utf-8").read())

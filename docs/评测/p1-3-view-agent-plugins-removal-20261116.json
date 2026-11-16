@@ -1,0 +1,81 @@
+{
+ "schema": "p1-3/view-agent-plugins-removal@1",
+ "applied_at_utc": "2026-11-16 03:54:13",
+ "db": "mbse.db",
+ "backup": "backups/mbse.db.bak-before-p1-3-plugins-20261116_115410.db",
+ "method": "soft_delete（照抄既有 removed 范式 plugin#56/94/96/97/146）",
+ "targets": [
+  {
+   "plugins_id": 46,
+   "plugin_id": "com.zhiyuan.legacy.agent.agent-165",
+   "agents_name": "需求视图生成",
+   "skill": "sysml_view_generation_requirement"
+  },
+  {
+   "plugins_id": 47,
+   "plugin_id": "com.zhiyuan.legacy.agent.agent-166",
+   "agents_name": "结构视图生成",
+   "skill": "sysml_view_generation_structure"
+  },
+  {
+   "plugins_id": 48,
+   "plugin_id": "com.zhiyuan.legacy.agent.ibd",
+   "agents_name": "交互视图（IBD）生成",
+   "skill": "sysml_view_generation_ibd"
+  },
+  {
+   "plugins_id": 49,
+   "plugin_id": "com.zhiyuan.legacy.agent.agent-168",
+   "agents_name": "用例视图生成",
+   "skill": "sysml_view_generation_usecase"
+  },
+  {
+   "plugins_id": 50,
+   "plugin_id": "com.zhiyuan.legacy.agent.agent-169",
+   "agents_name": "活动图生成",
+   "skill": "sysml_view_generation_activity"
+  },
+  {
+   "plugins_id": 51,
+   "plugin_id": "com.zhiyuan.legacy.agent.agent-170",
+   "agents_name": "状态机视图生成",
+   "skill": "sysml_view_generation_state"
+  },
+  {
+   "plugins_id": 52,
+   "plugin_id": "com.zhiyuan.legacy.agent.agent-171",
+   "agents_name": "参数视图生成",
+   "skill": "sysml_view_generation_parameter"
+  },
+  {
+   "plugins_id": 53,
+   "plugin_id": "com.zhiyuan.legacy.agent.agent-172",
+   "agents_name": "顺序视图（时序图）生成",
+   "skill": "sysml_view_generation_sequence"
+  }
+ ],
+ "changes": {
+  "plugins.status": "published -> removed (8 行)",
+  "capability_registry": "active/published -> disabled/deprecated (8 行)",
+  "plugin_versions": "不动（既有 removed 插件的版本记录仍为 published）",
+  "plugin_audit_logs": "保留 24 行历史 + 追加 8 行 remove"
+ },
+ "capability_assessment": {
+  "original_prompt_chars": 36158,
+  "skill_content_chars": 51785,
+  "hard_rules_total": 46,
+  "hard_rules_uncovered": 1,
+  "uncovered": [
+   "需求视图：只输出代码,不输出解释性文字"
+  ],
+  "uncovered_verdict": "不补：现行 output_contract（2026-11-15 拍板改为「结论摘要 + JSON 块」两段式）要求写摘要，与原规则相反；view_expansion(637) 有 output_schema 会注入契约，输出格式由契约层管，不应写进 Skill",
+  "sysml_keyword_loss": "8 个视图全部 0 丢失（refine/extend/parameter 为新增）",
+  "extra_closure": "autofix / validate / graph_retrieve / ast / 重试"
+ },
+ "rollback_sql": [
+  "UPDATE plugins SET status='published' WHERE plugin_id IN ('com.zhiyuan.legacy.agent.agent-165','com.zhiyuan.legacy.agent.agent-166','com.zhiyuan.legacy.agent.ibd','com.zhiyuan.legacy.agent.agent-168','com.zhiyuan.legacy.agent.agent-169','com.zhiyuan.legacy.agent.agent-170','com.zhiyuan.legacy.agent.agent-171','com.zhiyuan.legacy.agent.agent-172');",
+  "UPDATE capability_registry SET status='active', lifecycle='published' WHERE capability_id IN ('plugin:com.zhiyuan.legacy.agent.agent-165','plugin:com.zhiyuan.legacy.agent.agent-166','plugin:com.zhiyuan.legacy.agent.ibd','plugin:com.zhiyuan.legacy.agent.agent-168','plugin:com.zhiyuan.legacy.agent.agent-169','plugin:com.zhiyuan.legacy.agent.agent-170','plugin:com.zhiyuan.legacy.agent.agent-171','plugin:com.zhiyuan.legacy.agent.agent-172');",
+  "DELETE FROM plugin_audit_logs WHERE action='remove' AND user_name='p1-3-migration';"
+ ],
+ "caveat": "软删除，行未物理删除；plugin_versions 与历史审计完整保留，可单步回滚"
+}

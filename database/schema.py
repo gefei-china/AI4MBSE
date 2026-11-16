@@ -12,6 +12,10 @@ from .migrations import (
     _migrate_agent_tool_perm,
     _migrate_branch_protection,
     _migrate_skill_revision_rejects,
+    _migrate_run_dimension,
+    _migrate_doc_dedupe,
+    _migrate_orch_interrupts,
+    _migrate_requirement_acceptance,
     _migrate_mr_status,
     _rebuild_entities_pk,
     _repair_relations_fk,
@@ -31,6 +35,8 @@ from .migrations import (
     _backfill_pipeline_detail,
     _apply_env_keys,
     _migrate_glossary_tables,
+    _migrate_glossary_canonical_align,  # 2026-11-11 R2 规范名与首选术语对齐
+    _migrate_memory_layer,             # 2026-11-11 P0/P1 记忆层（列/视图/流水 FTS）
     _migrate_domain_review_queue_orphans,  # 2026-09-19 复核队列孤儿行兜底清理
     _migrate_ontology_change_tables,
     _migrate_ontology_version_tables,
@@ -38,6 +44,8 @@ from .migrations import (
     _migrate_ontology_iri,
     _migrate_eval_tables,
     _migrate_online_eval_tables,  # P0-b 生产回流两表（2026-10-25）
+    _migrate_feedback_consumed_at_utc,  # 2026-11-06 feedback 时间基准校正（本地→UTC）
+    _migrate_feedback_link_sanity,  # 2026-11-06 错误关联自愈（解绑更早采样项）
     _migrate_agent_todos,  # P0-3 计划外化：agent_todos 表（2026-10-28）
     _migrate_tool_idempotency,  # P0-1 写类工具幂等键表（2026-10-30）
     _migrate_kb_v2_enhance,
@@ -80,7 +88,6 @@ from .migrations import (
     _migrate_misevolution_p21,  # 2026-10-19 安全信号基线 + 晋升复测（P2-1，红线 #5）
     _migrate_curriculum_p22,  # 2026-10-19 失败驱动任务提案队列（P2-2，只提议不自动执行）
     _migrate_agent_archive_p23,  # 2026-10-19 Agent 变体台账 + 死路记忆（P2-3，只记录不切换生效版本）
-    _migrate_flow_topology_p24,  # 2026-10-20 画布拓扑台账 + 结构体检（P2-4，只读画布不改拓扑）
     _migrate_event_tables,  # 2026-11-01 事件驱动底座三表（Super-agent 落地 P0-2/P0-4）
 )
 from .seeds import (
@@ -546,6 +553,11 @@ def init_db():
         install_count INTEGER DEFAULT 0,   -- 市场安装计数
         share_status TEXT DEFAULT '',      -- 个人分享审核：'' | submitted | approved | rejected
         origin TEXT DEFAULT '',            -- 来源：admin（管理员创建）| share（个人分享通过）
+        -- ── P0-4 / D2（2026-11-15）：Skill 治理元数据（团队维护的硬前提）──
+        -- 老库由 database/migrations/columns.py 的 _add 幂等补列；新库建表时直接带齐。
+        owner TEXT DEFAULT '',             -- 业务负责人（空=未指派）
+        eval_set TEXT DEFAULT '',          -- 关联评估集 id/路径（空=未纳管）
+        last_reviewed TEXT DEFAULT '',     -- 最近一次人工体检时间（空=从未）
         created_at TEXT DEFAULT CURRENT_TIMESTAMP
     )""")
 
@@ -605,6 +617,9 @@ def init_db():
         pinned INTEGER DEFAULT 0,          -- 市场置顶 1=置顶（市场管理后台）
         install_count INTEGER DEFAULT 0,   -- 市场安装计数
         origin TEXT DEFAULT '',            -- 来源：admin（管理员创建）| share（个人分享通过）
+        -- ── P0-4 / D2（2026-11-15）：工具侧补齐评估集与体检位（owner 由既有迁移补）──
+        eval_set TEXT DEFAULT '',          -- 关联评估集 id/路径（空=未纳管）
+        last_reviewed TEXT DEFAULT '',     -- 最近一次人工体检时间（空=从未）
         created_at TEXT DEFAULT CURRENT_TIMESTAMP
     )""")
 
@@ -1654,6 +1669,48 @@ def init_db():
     except Exception:
         pass
 
+    # ── 需求实体表（2026-11-07）：需求条目的**唯一事实源** ──
+    # 为什么必须有这张表：`requirement_itemize` 自 2026-10-08 起只做**纯函数**返回
+    # （items[] 随对话消失），全库不存在任何需求实体 ⇒ 追溯链
+    # Need→Requirement→Function→Component→Verification 的第一环**在地基上就是空的**
+    # （2026-11-07 实测：`%req%` 只匹配到 merge_requests / query_trace）。
+    # 设计要点：
+    #   · `fingerprint` = 归一化文本的 sha1 ⇒ **同文重复条目化不产生重复资产**（幂等地基）；
+    #   · `req_id` 由仓储在**首次**落库时按分类序列分配，此后固定不变（追溯引用不能漂移）；
+    #   · `kind='gap'` 存"不可验证/待澄清"句 —— 它们是需求质量结论的一部分，
+    #     丢掉就等于把"为什么这条不能建模"也丢了；
+    #   · `status` 收敛：active → merged（并入 merged_into）→ retired（作废留痕）。
+    c.execute("""CREATE TABLE IF NOT EXISTS requirement_items (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        req_id TEXT NOT NULL,                 -- REQ-F001（项目内稳定，追溯引用键）
+        fingerprint TEXT NOT NULL,            -- 归一化文本 sha1（幂等键）
+        kind TEXT DEFAULT 'item',             -- item | gap
+        text TEXT NOT NULL,
+        category TEXT DEFAULT '',             -- functional|performance|interface|constraint（gap 为空）
+        subject TEXT DEFAULT '',              -- 主体（由 N3 视图展开阶段补）
+        sysml_name TEXT DEFAULT '',           -- 需求视图里的 requirement 名（唯一）
+        ambiguous INTEGER DEFAULT 0,
+        reason TEXT DEFAULT '',               -- kind='gap' 时的不可验证原因
+        source_ref TEXT DEFAULT '',
+        -- 验收标准（P0-1，2026-11-10）：真库实测需求侧该字段填充率曾为 0/24，
+        -- 直接卡住甲方「需求可验证性」验收。口径：kind='item' 必填、kind='gap' 为空。
+        acceptance_criteria TEXT DEFAULT '',
+        ac_kind TEXT DEFAULT '',              -- measure | compliance | demo（可执行强度递减）
+        domain TEXT DEFAULT '',
+        project_id TEXT DEFAULT '',
+        conversation_id INTEGER DEFAULT 0,
+        version_id INTEGER DEFAULT 0,         -- 关联的 sysml_versions（需求视图版本）
+        status TEXT DEFAULT 'active',         -- active | merged | retired
+        merged_into TEXT DEFAULT '',
+        created_by TEXT DEFAULT '',
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+    )""")
+    c.execute("CREATE UNIQUE INDEX IF NOT EXISTS uq_req_fp "
+              "ON requirement_items(project_id, fingerprint)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_req_proj ON requirement_items(project_id, req_id)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_req_conv ON requirement_items(conversation_id)")
+
     # ── CIA：变更影响分析记录（FR-CIA-3 每次分析结果快照，可追溯）──
     c.execute("""CREATE TABLE IF NOT EXISTS impact_analyses (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1815,6 +1872,9 @@ def init_db():
     _migrate_plugin_dependencies(conn)
     # ── Glossary 术语表 + 查询 Trace + domain review 队列（P0-1/P2-2/P2-3）──
     _migrate_glossary_tables(conn)
+    # ── R2（2026-11-11）：`C-语法规范` 的 pref_label 与首选术语对齐 ──
+    # 必须在 changelog 表（上）与 glossary 表（本行）都就位之后；幂等，只认旧值。
+    _migrate_glossary_canonical_align(conn)
     # ── 复核队列孤儿行兜底清理（document_id 无外键，删文档不级联；幂等）──
     _migrate_domain_review_queue_orphans(conn)
     # ── 修复 documents 失效外键（data_sources 重建的 RENAME 副作用 → data_sources_old 引用）──
@@ -1860,7 +1920,6 @@ def init_db():
     #    DGM/AlphaZero 式：把散落的进化历史收敛成变体台账 + 记住死路。
     #    只记录，不切换生效 agent、不回滚配置（过人的铁律同 P1-4）。
     _migrate_agent_archive_p23(conn)
-    _migrate_flow_topology_p24(conn)
     # ── 2026-11-01 事件驱动底座（Super-agent 落地 P0-2/P0-4）──
     #    ev_sources / ev_triggers / ev_workitems —— 补"事件驱动"这一层，
     #    使触发不再只能来自"人点一次"。纯新表，幂等建表。
@@ -1909,12 +1968,33 @@ def init_db():
     # 放在 _migrate_columns 之后（纯新表 CREATE IF NOT EXISTS，无补列依赖，
     # 位置仅在语义上归入"表结构迁移"族）；真写端点 S4 才接，本步只建结构。
     _migrate_online_eval_tables(conn)
+    _migrate_feedback_consumed_at_utc(conn)
+    _migrate_feedback_link_sanity(conn)
     # ── P0-3（2026-10-28）计划外化：agent_todos 表（幂等，纯新表无补列依赖）──
     # 放在 _migrate_columns 之后无依赖（纯新表），位置按"表结构迁移"族归类。
     _migrate_agent_todos(conn)
     # ── P0-1（2026-10-30）写类工具幂等键表（幂等，纯新表无补列依赖）──
     # 放在 _migrate_columns 之后（纯新表），语义上属"控制面"族。
     _migrate_tool_idempotency(conn)
+
+    # ── 2026-11-10 run 维度下沉 + 文档去重 + 编排可中断（三件事的数据落点，幂等）──
+    #   同批放这里是有意的：中断要靠 run_id 定位批次，去重要靠内容指纹判同，
+    #   三者都是「judge 面缺一列/缺一张表」型缺口，分开加会出现半成品。
+    _migrate_run_dimension(conn)
+    _migrate_doc_dedupe(conn)
+    _migrate_orch_interrupts(conn)
+    # ── 2026-11-10 需求验收标准（P0-1）：验收标准填充率曾为 0/24，直接卡验收 ──
+    _migrate_requirement_acceptance(conn)
+
+    # ── 2026-11-11 记忆层（Claude 四层架构对标 P0/P1）──
+    #   必须放在**所有源表建好之后**：v_memory_notes 是 UNION 视图、
+    #   transcript_fts 要给三张流水表挂触发器，早一步都会静默缺一半。
+    #   幂等；FTS 索引为空时按规模决定是否全量重建（结果写进返回 dict）。
+    _mem = _migrate_memory_layer(conn)
+    if _mem.get("skipped"):
+        print("[init_db] 记忆层迁移跳过项: %s" % "; ".join(_mem["skipped"]))
+    if _mem.get("fts", {}).get("rebuilt"):
+        print("[init_db] 流水 FTS 全量重建: %d 行" % _mem["fts"].get("rows", 0))
 
     # ── 2026-11-04：**流水线配置资产自举**（把"环境不可重建"补上）──────────────
     # 背景（实测）：同一份代码，`init_db()` 建出的空库只有 7 agents / 14 tools / 0 skills，

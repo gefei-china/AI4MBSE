@@ -75,6 +75,18 @@ def _backfill_agent_roles(conn, *, code: bool = True, orch: bool = True) -> None
         cols = [r[1] for r in conn.execute("PRAGMA table_info(agents)").fetchall()]
         if not cols:
             return
+        # ★ 2026-11-07：顺序也是行为 —— `orch_default` 原来是"按行序"返回，
+        #   改 DB 驱动后**行序不等于旧常量顺序**（实测变成字母序），
+        #   `verify_agent_catalog` 1.6 因此判红（"零行为变化"的承诺被破坏）。
+        #   ⇒ 新增 `orch_order` 把旧顺序**存进数据**，不再靠"碰巧的行序"。
+        if "orch_order" in cols and orch:
+            _done = 0
+            for _i, _n in enumerate(ORCH_DEFAULT, 1):
+                _done += conn.execute(
+                    "UPDATE agents SET orch_order=? WHERE name=? AND orch_order IS NULL",
+                    (_i, _n)).rowcount
+            if _done:
+                print(f"[init_db] 迁移: agents.orch_order 回填 {_done} 行（保持旧常量顺序）")
         for col, names in (("is_code_stage", CODE_STAGES), ("is_orch_default", ORCH_DEFAULT)):
             if not ((col == "is_code_stage" and code) or (col == "is_orch_default" and orch)):
                 continue
@@ -92,6 +104,29 @@ def _backfill_agent_roles(conn, *, code: bool = True, orch: bool = True) -> None
                   + (f"（名单中 {len(missing)} 个名字在库中不存在，已跳过：{missing}）" if missing else ""))
     except Exception as e:  # 回填失败不阻断启动（列已在，读取侧有兜底默认）
         print(f"[init_db] 迁移: agents 角色位回填失败（不阻断启动）：{e}")
+
+
+def add_column_if_missing(conn, table: str, column: str, ddl: str) -> bool:
+    """幂等补列（**模块级**版，供非 `_migrate_columns` 的迁移复用）。
+
+    为什么单独提出来：`_add` 原先只是 `_migrate_columns` 的**闭包**，
+    新写的迁移函数在模块作用域调用它会 `NameError`（2026-11-10 实际撞到）。
+    语义与闭包版一致：表不存在 ⇒ False（跳过），列已存在 ⇒ False，新建 ⇒ True。
+    """
+    try:
+        exists = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)).fetchone()
+        if not exists:
+            return False
+        cols = [r[1] for r in conn.execute("PRAGMA table_info(%s)" % table).fetchall()]
+        if column in cols:
+            return False
+        conn.execute("ALTER TABLE %s ADD COLUMN `%s` %s" % (table, column, ddl))
+        print("[init_db] 迁移: %s 增加列 %s" % (table, column))
+        return True
+    except Exception as e:
+        print("[init_db] 迁移: %s.%s 补列失败（不阻断）: %s" % (table, column, e))
+        return False
 
 
 def _migrate_columns(conn):
@@ -121,6 +156,20 @@ def _migrate_columns(conn):
     # summary_written：与 assistant 消息同事务置 1。它是"能否只重做汇总"的唯一判据 ——
     #   崩在汇总阶段时子任务已全 done（重跑就是白烧 LLM），但若消息已落库又不能重做（会出重复消息）。
     _add("orch_checkpoints", "summary_written", "INTEGER DEFAULT 0")
+    # ── P0-2a（2026-11-09）：验收规格结构化 ──
+    # 为什么必须加列（生产事故，见 harness_gate.READONLY_VERIFY_TOOLS 注释）：
+    #   `verify` 由 LLM 自由书写 ⇒ 761 条全是自然语言 ⇒ 旧解析器把 44% 判成 tool
+    #   并**真去执行**（含写类/交互类），conv 990463 已出现「未知工具: JSON」空转。
+    #   结构化字段把「用哪个工具、带什么参数」从自然语言里分离出来：
+    #   有 verify_tool 才执行，没有就按人工验收（漏拦优于乱调）。
+    _add("agent_todos", "verify_tool", "TEXT DEFAULT ''")
+    _add("agent_todos", "verify_args", "TEXT DEFAULT ''")
+    # ── P1-2b（2026-11-09）：完成态绑定机器回执 ──
+    # 背景：`verify_result` 由模型自己写（conv 990541 那 4 条待办全是自述 completed、
+    #   verify_tool 全空），于是"说完成就完成"，闸门只能看到 status。
+    # 本列存**可核验的来源**：{"kind":"machine|claim|unknown","tool":...,"log_id":...,"at":...}。
+    # 零执行：只查 tool_call_logs，不调用任何工具；skill 类注入不算（call_kind='skill' 不干活）。
+    _add("agent_todos", "evidence", "TEXT DEFAULT ''")
     # ── 内容级澄清挂起（AI 建模信息不清晰 → 选择题确认，回答后续答）──
     _add("conversations", "pending_clarify", "TEXT DEFAULT ''")
     # ── 2026-10-16 R1：会话级「主 Agent」绑定（执行主体持久化）──
@@ -135,7 +184,7 @@ def _migrate_columns(conn):
     _add("ontology_types", "profile_source", "TEXT DEFAULT ''")   # 来源 Profile 名
     _add("ontology_types", "profile_ref", "TEXT DEFAULT ''")      # 来源 Stereotype/metadata 元素名
     # ── P0 平台化：模型参数模板 / Skill 扩展列 / MCP 扩展列 ──
-    _add("llm_providers", "model_params", "TEXT DEFAULT '{}'")          # {"temperature":0.3,"max_tokens":8192,"top_p":0.9}
+    _add("llm_providers", "model_params", "TEXT DEFAULT '{}'")          # {"temperature":0.3,"max_tokens":8192,"top_p":0.9,"frequency_penalty":null,"presence_penalty":null,"penalty_support":"auto"}
     # ── M1 记忆增强：溯源 + 相关度（MemoryService 消费）──
     _add("agent_memory", "source", "TEXT DEFAULT 'agent'")              # agent | llm_agent | rule_agent | push | flow
     _add("agent_memory", "relevance", "REAL DEFAULT 1.0")               # 相关度权重（时间衰减/语义分）
@@ -279,6 +328,17 @@ def _migrate_columns(conn):
     _add("messages", "quality", "TEXT DEFAULT ''")                       # 用户质量信号：up | down（空=未评价）
     _add("feedback", "quality", "TEXT DEFAULT ''")                       # 同上（历史留痕，供采样回查）
     _add("feedback", "signal_kind", "TEXT DEFAULT ''")                   # 信号类型：review | quality（显式标注语义来源）
+    # ── 2026-11-06 P0：反馈处理状态机（把 toast 的空头承诺变成可追踪状态）──
+    # 六列全部带 DEFAULT：存量 8 行自动读 'new'，无需回填；
+    # 全仓 feedback 写入均为**显式列清单**、无 SELECT *，加列不破坏任何写入方。
+    _add("feedback", "state",        "TEXT DEFAULT 'new'")                # new|sampled|proposed|promoted|verified|expired
+    _add("feedback", "consumed_at",  "TEXT DEFAULT ''")                    # 首次被下游消费的时刻
+    _add("feedback", "consumed_by",  "TEXT DEFAULT ''")                    # 消费方（job kind / 模块名）
+    _add("feedback", "link_kind",    "TEXT DEFAULT ''")                    # badcase | online_eval | proposal | hil
+    _add("feedback", "link_id",      "TEXT DEFAULT ''")                    # 下游对象 id（字符串，兼容各类主键）
+    _add("feedback", "last_note",    "TEXT DEFAULT ''")                    # 最近一次状态变更的人话说明
+    if conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='feedback'").fetchone():
+        conn.execute("CREATE INDEX IF NOT EXISTS ix_fb_owner_state ON feedback(created_by, state, created_at)")
     # ── 2026-10-29：告警可处置化（alert_events）──
     # 背景（生产库实证）：328 条告警 **status 全是 'open'**，一条都没被处理；
     #   同一批规则每 30 分钟一条，累积 81 次 ⇒ 看板被同因告警淹没（告警疲劳）。
@@ -297,6 +357,9 @@ def _migrate_columns(conn):
     _add("config_history", "effect_verdict", "TEXT DEFAULT ''")          # effective | ineffective | mixed | no_data | inconclusive
     _add("config_history", "effect_detail", "TEXT DEFAULT ''")           # 判定理由（人可读）
     _add("config_history", "effect_checked_at", "TEXT DEFAULT ''")       # 判定时间
+    # ── 2026-11-06 P1：提案来源（自动触发 vs 人工）与反馈溯源 ──
+    _add("config_proposals", "origin", "TEXT DEFAULT ''")                  # auto | manual
+    _add("config_proposals", "source_feedback_ids", "TEXT DEFAULT '[]'")  # 触发本提案的 feedback id 列表
     _add("skills", "frontmatter", "TEXT DEFAULT '{}'")                   # SKILL.md frontmatter 原文（含 triggers/category/author）
     _add("skills", "content", "TEXT DEFAULT ''")                         # SKILL.md 指令正文
     _add("skills", "triggers", "TEXT DEFAULT '[]'")                      # 触发关键词 JSON
@@ -322,6 +385,14 @@ def _migrate_columns(conn):
     _add("ontology_types", "updated_by", "TEXT DEFAULT ''")       # 最近修改人
     _add("ontology_types", "replaced_by", "TEXT DEFAULT ''")      # 弃用后替代类型名（entity/relation/attribute 通用）
     _add("ontology_types", "deprecated_note", "TEXT DEFAULT ''")  # 弃用原因/说明
+    # ── P0-1 / D1=A（2026-11-15）：上层本体（TLO）锚点 ──
+    #   存 BFO 轻量子集的 local name（Object / Process / Quality /
+    #   InformationContentEntity …），词表唯一真源是 core/ontology_tlo.py。
+    #   为什么存 local name 而不是 IRI：本工程内部只需范畴判别；IRI 集中在
+    #   ontology_tlo.tlo_iri() 一处生成，将来核对/替换 OBO 官方标识符只改一个地方。
+    #   为什么不做成 ontology_types 的行：那张表是「领域类型」集合，
+    #   用户的实例创建/定义域候选/图谱节点都读它，混入 BFO 范畴类会污染候选且永无实例。
+    _add("ontology_types", "tlo_anchor", "TEXT DEFAULT ''")       # BFO 轻量子集 local name（空=未锚定，沿 parent 继承）
     # ── D4 Skills 分层结构：allowed_tools 白名单 + 渐进披露资源（reference/examples/scripts）──
     _add("skills", "allowed_tools", "TEXT DEFAULT '[]'")  # 工具白名单（skill 触发时限制可调用工具，空=不限制）
     _add("skills", "references", "TEXT DEFAULT '[]'")     # 参考文档清单（渐进披露，按需加载）
@@ -335,6 +406,16 @@ def _migrate_columns(conn):
     # ── P0-5 技能使用中自改进：使用反馈采集（命中执行后聚合统计 + 最近失败备注滚动）──
     _add("skills", "use_stats", "TEXT DEFAULT '{}'")      # {"uses":n,"success":n,"fail":n,"last_used":"..."} 聚合统计
     _add("skills", "feedback_notes", "TEXT DEFAULT '[]'") # 最近 5 条失败/改进备注 [{"ts","run_id","intent","note"}]（滚动保留）
+    # ── P0-4 / D2（2026-11-15）：Skill / Tool 治理元数据 ──────────────────────
+    # 文章「团队维护 Skills」的硬前提：owner 决定谁负责修订、eval_set 把 Skill 接到
+    # Golden Set、last_reviewed 让「闲置 / 无评估集」可判定。tools.owner 已在上方补过。
+    # ⚠️ 只加列、**不建引用新列的索引**：本工程踩过「先建索引后补列」导致启动失败；
+    #    将来若要建索引，必须排在这些 _add 之后（同一函数内顺序即执行顺序）。
+    _add("skills", "owner", "TEXT DEFAULT ''")
+    _add("skills", "eval_set", "TEXT DEFAULT ''")
+    _add("skills", "last_reviewed", "TEXT DEFAULT ''")
+    _add("tools", "eval_set", "TEXT DEFAULT ''")
+    _add("tools", "last_reviewed", "TEXT DEFAULT ''")
     # ── TR-P0/P1：工具注册表完备化（行业标准 Tool Registry：schema/版本/副作用/风险/状态机）──
     _add("tools", "input_schema", "TEXT DEFAULT '{}'")    # JSON Schema（LLM function calling 参数定义）
     _add("tools", "version", "TEXT DEFAULT 'v1.0'")       # 语义版本 name@semver
@@ -348,6 +429,17 @@ def _migrate_columns(conn):
     # ── D2 工具容错：重试策略 + 降级链 ──
     _add("tools", "retry_policy", "TEXT DEFAULT '{}'")    # JSON：{"max_retries":2,"backoff_base_ms":500,"backoff_multiplier":2,"retry_on":[...]}
     _add("tools", "fallback_to", "TEXT DEFAULT ''")       # 降级工具名（主工具失败重试耗尽后自动切换）
+    # ── ★ 2026-11-06：MCP 工具的副作用标注来源（自动派生 vs 人工覆写）──
+    #   背景：`side_effect` 是执行策略门控的关键输入（写类工具默认不注入），
+    #   但 MCP 工具从未进过 tools 表（实测 mcp_server_id=161 的行数 = 0/71）
+    #   ⇒ 门控对 MCP 完全失效，42 个非只读工具被无条件全量注入。
+    #   修法不是手工标注（MCP 一升级就失效，且失效方式比不标更危险：
+    #   旧标注写"读"、实际已成"写"），而是 **discover 时派生 + 人工覆写受保护**：
+    #     · side_effect_source='auto'   → 每次 discover 按 RULE_VERSION 重推
+    #     · side_effect_source='manual' → 只更新 description/schema，绝不碰 side_effect
+    #   这样"MCP 增删工具 / 语义从读变写"都能自动跟进，而人工裁决不会被脚本冲掉。
+    _add("tools", "side_effect_source", "TEXT DEFAULT 'auto'")
+    _add("tools", "rule_version", "INTEGER DEFAULT 0")
     _add("mcp_servers", "transport", "TEXT DEFAULT 'sse'")               # sse | stdio | http
     _add("mcp_servers", "command", "TEXT DEFAULT ''")                    # stdio 启动命令
     # ★ B5-2（2026-10-14 真流量抓到）：外部 MCP **普遍需要认证头**（如米爸提供的
@@ -531,10 +623,16 @@ def _migrate_columns(conn):
     #   · 标准意图标签 = `builtin=1 OR stage_order IS NOT NULL`。
     _new_code = _add("agents", "is_code_stage", "INTEGER DEFAULT 0")       # 1=产码阶段（视图/骨架/修复）
     _new_orch = _add("agents", "is_orch_default", "INTEGER DEFAULT 0")     # 1=默认编排池成员
+    # ★ 2026-11-07：默认编排池的**顺序**。`is_orch_default` 只说"在池里"，
+    #   顺序原先由代码常量给定；改成 DB 驱动后若不给顺序字段，返回顺序就变成
+    #   引擎的行序（实测是字母序）⇒ 与改造前**不是同一个池**（编排默认顺序变了）。
+    _new_ord = _add("agents", "orch_order", "INTEGER DEFAULT NULL")        # 1..N=池内顺序（NULL=未定）
     # ⚠️ **只在新列刚建出来时回填**：否则管理员在后台取消勾选后，下次启动会被回填逻辑重新打开
     #    （本仓已因"改了配置≠改了生效值"栽过，反向的"改了配置被悄悄改回来"同样不能有）。
-    if _new_code or _new_orch:
-        _backfill_agent_roles(conn, code=_new_code, orch=_new_orch)
+    if _new_code or _new_orch or _new_ord:
+        # `_new_ord` 也要触发：新加顺序列时同样需要回填，否则 orch_order 全 NULL
+        # ⇒ 排序回落到名字，等于"顺序仍未迁过来"（实测本轮就是这么漏的）。
+        _backfill_agent_roles(conn, code=_new_code, orch=(_new_orch or _new_ord))
     # ── 架构优化：子任务执行快照（负载 / 分派打分 / 结构化摘要 / 重试 / token 统计）──
     _add("agent_tasks", "load_snapshot", "TEXT DEFAULT '{}'")             # 分派时各 Agent 负载快照
     _add("agent_tasks", "assign_score", "REAL DEFAULT 0")                 # 分派打分
@@ -629,6 +727,18 @@ def _migrate_columns(conn):
     # ⚠️ **存量不回填**（用户拍板 2026-09-28）：历史行的归属已不可考，宁可留空走兜底，
     #    也不按当前会话归属"倒推"历史的工程。
     _add("sysml_versions", "project_id", "TEXT DEFAULT ''")
+    # ── ★ 2026-11-13：`sysml_versions.subject` —— 版本链的**分组键** ──
+    # 为什么必须加（真机 conv 990727 实证）：版本计数原按**会话**做
+    #   `SELECT COUNT(*) FROM sysml_versions WHERE conversation_id=?` ⇒ label=v0.{n+1}。
+    #   于是同一会话里两个**完全不同**的产物被串成一条修订链：
+    #     v0.1 = `package '串联混动汽车运行需求'`（需求视图）
+    #     v0.2 = `package '串联混动汽车用例'`（用例视图），且 v0.2 的 parent_id 指向 v0.1
+    #   ⇒ 用户看到"用例视图是需求视图的 v0.2"，版本号与内容对不上。
+    # 修法：按「产物主体」（`derive_subject`：package 名 → 主定义名 → …）分组计数，
+    #   不同 subject 各自从 v0.1 起；parent_id 只在同 subject 内串联。
+    # 存量不回填（与 project_id 同策略）：旧行留空 ⇒ 归到空 subject 组，
+    #   绝不按当前内容"倒推"历史版本属于哪个产物（会制造新的错链）。
+    _add("sysml_versions", "subject", "TEXT DEFAULT ''")
     _add("artifacts", "project_id", "TEXT DEFAULT ''")
     # ── 消歧可用性（2026-10-12）：把「能否参与消歧匹配」从 `term_status` 里拆出来 ──
     # 起因：`glossary_terms.term_status` 一列同时承担了两种正交语义 ——
@@ -714,6 +824,37 @@ def _migrate_columns(conn):
     conn.execute("CREATE INDEX IF NOT EXISTS ix_bc_status ON bad_cases(status)")
     # 防御性补列：早期版本库已建过 bad_cases（无 last_src_id）时补齐，避免通用层读列炸。
     _add("bad_cases", "last_src_id", "INTEGER DEFAULT 0")
+    conn.commit()
+
+
+def _migrate_run_dimension(conn):
+    """run 维度下沉：把批次坐标补进**判据面**（2026-11-10）。
+
+    为什么单独一个迁移而不是散在 _migrate_columns 里：这三列是同一件事的三个落点
+    （块级归因 / 归因聚合 / 待办回执），同批加同批验，避免"只补了一处"的半成品。
+
+    背景（实测）：编排 span 表（6,970 条 / 42 run）、`agent_tasks`、`orch_checkpoints`、
+    ⚠️ 这里刻意不写 span 表的**英文表名**：`verify_orch_span` 的 S1d 判据是
+      「该表名不出现在 columns.py」——它防的是"新表却走补列迁移"。
+      我在注释里写了表名，一度把这条判据误伤成红（断言被自己的说明文字满足，本仓 §6.9a 同型）。
+    `tool_call_logs` 都已有 run_id；但**判据层三处没有** ——
+      · `context_audit` / `context_audit_summary` 只有 trace_id + conversation_id
+        ⇒ 一个会话跑过多轮编排时，"这批 40 个块属于哪个 run"答不出来；
+      · `agent_todos.run_id` 列虽在（DDL 有），但写入恒为 0（见 todo_store 的注释），
+        于是 `machine_evidence` 只能按会话查回执 ⇒ 上一批的回执能给这一批的待办背书。
+
+    幂等：`_add` 自带列存在性与表存在性守卫。
+    """
+    add_column_if_missing(conn, "context_audit", "run_id", "INTEGER DEFAULT 0")
+    add_column_if_missing(conn, "context_audit_summary", "run_id", "INTEGER DEFAULT 0")
+    # 子任务键：一个 run 内多子任务并发装配 prompt 时，靠它把块归到具体子任务
+    add_column_if_missing(conn, "context_audit_summary", "sub_task_key", "TEXT DEFAULT ''")
+    for _idx, _tbl, _col in (("ix_ca_run", "context_audit", "run_id"),
+                             ("ix_cas_run", "context_audit_summary", "run_id")):
+        try:
+            conn.execute("CREATE INDEX IF NOT EXISTS %s ON %s(%s)" % (_idx, _tbl, _col))
+        except Exception:
+            pass      # 表不存在/权限异常：索引是性能优化，不阻断
     conn.commit()
 
 

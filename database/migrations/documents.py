@@ -338,3 +338,28 @@ def _migrate_artifact_ingest(conn):
     c.execute("UPDATE document_chunks SET origin='upload' WHERE origin IS NULL")
     c.execute("CREATE INDEX IF NOT EXISTS idx_documents_origin ON documents(origin)")
     conn.commit()
+
+def _migrate_doc_dedupe(conn):
+    """上传去重所需的内容指纹列（2026-11-10）。
+
+    为什么必须有 content_sha256（而不是靠 filename/文件大小判重）：
+      实测同名重复导入的两份 `1_800_SysML-v2-AI建模知识文档.md`（doc 851/852）
+      **字节完全相同**，但当时库里只有 filename + file_size 可比 ——
+      同名不同版（真升级）与同名同内容（误操作）在数据层**完全无法区分**，
+      于是"要不要拦"这件事只能靠猜。sha256 把这两类分开：
+        · 同 sha256  ⇒ 同一份字节，重复导入零价值（还会成倍放大检索噪声）
+        · 同名不同 sha ⇒ 真的是新版，需要提示而不是拦截
+
+    ⚠️ 存量行一律留空串（**不回填**）：回填需要重读全部源副本，属数据操作，
+       且"当时到底是不是重复"应由人工确认（见 tools/_dedupe_documents.py 的只读盘点）。
+       空串的语义 = "未知"，去重判定据此**跳过内容判据**，只用文件名判据 —— 不猜。
+    """
+    # 用模块级的幂等补列（`_add` 只在 _migrate_staging_tables/_migrate_doc_folders
+    # 内部定义为闭包，模块作用域调不到 —— 2026-11-10 实际撞到过这个 NameError）。
+    from .columns import add_column_if_missing as _add_col
+    _add_col(conn, "documents", "content_sha256", "TEXT DEFAULT ''")
+    try:
+        conn.execute("CREATE INDEX IF NOT EXISTS ix_documents_sha ON documents(content_sha256)")
+    except Exception:
+        pass      # 索引失败不阻断（表不存在/权限异常）
+    conn.commit()

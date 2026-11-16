@@ -77,8 +77,25 @@ with db_conn() as c:
 #   ③ 时间戳用 SQL 生成，避免 Python 与 SQLite 两套时钟。
 
 with db_conn() as c:
-    _H1 = c.execute("SELECT datetime('now','-30 minutes')").fetchone()[0]
-    _YDAY = c.execute("SELECT datetime('now','-1 day')").fetchone()[0]
+    # ★ 2026-11-11 修正：夹具时间必须**保证落在本地"今日"与"昨日同期"**。
+    #   原写法 `_H1 = datetime('now','-30 minutes')` 在**本地刚跨天时**
+    #   （00:00~00:30）会落到**昨日 23:30**，而判据按 `date(created_at,'localtime')`
+    #   分日 ⇒ "今日成本"=0、比值 0.0、M1g 恒红。
+    #   实测：2026-11-12 00:15 连跑三次都是 0.0（`git stash` 反证与本轮改动无关）。
+    #   这正是本门禁自己 M1g' 注释里描述过的 UTC→本地窗口，只是夹具没避开它。
+    #   修法：now-30min 若已跨到昨日，就退到 `now-10 秒`（跨天窗口内 now 本身就在
+    #   本地今日，用它一定落对且**不会落到未来**）。
+    _H1 = c.execute(
+        "SELECT CASE WHEN date('now','-30 minutes','localtime')=date('now','localtime') "
+        "THEN datetime('now','-30 minutes') "
+        "ELSE datetime('now','-10 seconds') END").fetchone()[0]
+    # 昨日同期：本地昨日的同一钟点。用**参数绑定**把 `_H1` 传进 SQL
+    # （它只是 Python 变量，不是 SQL 列 —— 直接写进 SQL 会报 no such column；
+    #   也**不要**硬编码 +8 时区，那会把门禁绑死在中国时区）。
+    _YDAY = c.execute(
+        "SELECT datetime(date(?,'localtime','-1 day')||' '||"
+        "strftime('%H:%M:%S', time(?,'localtime')),'utc')",
+        (_H1, _H1)).fetchone()[0]
     # 近 1h：10 次调用 —— 4 次 mock、2 次回退、3 次截断；延迟含长尾
     for i in range(10):
         c.execute(

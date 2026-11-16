@@ -23,7 +23,7 @@ class AgentDefinition:
 
     def __init__(self, name, description, tools=None, hil_level="L0",
                  kb_required=False, skill=None, model_hint="", kb_scope=None, system_prompt=None,
-                 agent_role="sub", intent_name=""):
+                 agent_role="sub", intent_name="", output_schema=None):
         self.name = name
         self.description = description
         self.tools = tools or []
@@ -40,6 +40,13 @@ class AgentDefinition:
         self.agent_role = agent_role
         # DB 意图标识（agents.name；self.name 为 display_name，查库/路由用 intent_name）
         self.intent_name = intent_name or name
+        # ★ 2026-11-14：`agents.output_schema`（结构化输出 JSON Schema）此前**只入 registry
+        #   元数据、从不进提示词** —— 实测 `requirement_rule_check` 等 Agent 的
+        #   system_prompt 写着「输出必须是结构化 JSON（见 output_schema）」，而模型
+        #   从头到尾看不到这份 schema ⇒ 字段名全靠猜（如 `covered_categories` 猜错
+        #   就会让「类别是否覆盖齐」的判定恒判 insufficient）。
+        #   与 2026-10-13 `tools.input_schema` 未注入是同一类缺陷，故同样由配置驱动注入。
+        self.output_schema = output_schema if isinstance(output_schema, dict) else {}
 
     def to_dict(self):
         return {
@@ -54,5 +61,6 @@ class AgentDefinition:
             "model_hint": self.model_hint,
             "agent_role": self.agent_role,
             "intent_name": self.intent_name,
+            "output_schema": self.output_schema,
         }
 

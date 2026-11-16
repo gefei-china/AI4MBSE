@@ -118,7 +118,8 @@ def _protocol_digest(sm) -> str:
 def build_subtask_context(tk: dict, goal: str, done_items: list = None,
                           artifact_digest: str = "",
                           offload_map: dict = None, plan: list = None,
-                          digest_cap: int | None = None) -> str:
+                          digest_cap: int | None = None,
+                          include_rules: bool = True) -> str:
     """T7 子任务上下文快照：任务定义 + 前置结果摘要 + 会话既有产物 + 交付规范（最小充分上下文）。
 
     供 _run_task 与 _stream_orchestrated_flow 复用，保证会话编排/画布路径行为一致。
@@ -136,6 +137,12 @@ def build_subtask_context(tk: dict, goal: str, done_items: list = None,
     （实测：t3 快照里 grep 不到 t1 的结论）。多阶段任务的末段恰恰最需要开头的需求约束 ——
     「需求分析、方案设计、代码校验」这类多意图输入必然产生长链，全链断头等于把多意图做废。
     plan=None ⇒ 退化为直接依赖（逐字节兼容旧行为）。
+
+    include_rules（★ 2026-11-15 P0-6）：是否拼入 `core/subtask_rules.render_rules()`
+    的「必含规则」段。默认 True —— 方案要求把不可违反的规则**显式**下发给每个子任务；
+    置 False ⇒ **逐字节回到改动前**（回退/对照开关，由常驻门禁断言）。
+    ⚠️ 不重复 `stream.py` 已有的【交付格式】契约，这里只补跨 Golden Set 12 例的通用红线。
+    ⚠️ 规则模块不可用时静默不加段，但绝不让上下文构建失败。
     """
     cfg = tk.get("config") or {}
     if isinstance(cfg, str):
@@ -202,6 +209,14 @@ def build_subtask_context(tk: dict, goal: str, done_items: list = None,
                         f"调用工具 tool_result_fetch（参数 {{\"id\": {_oid_v}}}）取全文，"
                         f"不要凭摘要猜测上游结论。")
     parts.append("- 交付规范：输出需自包含；仅基于给定上下文，禁止虚构；风险/待确认项需显式标注")
+    # ★ 2026-11-15 P0-6：必含规则单一真源。插在「交付规范」之后、artifact_digest 之前，
+    #   刻意不改下面 `if artifact_digest:` 两行（verify_multiturn_context.py 的 M2 变异锚点）。
+    if include_rules:
+        try:
+            from core.subtask_rules import render_rules as _rr
+            parts.append(_rr())
+        except Exception:
+            pass
     if artifact_digest:
         parts.append(str(artifact_digest))
     return "\n".join(parts)
@@ -302,6 +317,95 @@ class FlowPlannerMixin:
             out += "\n```\n"
         return out
 
+    def _archived_artifacts_facts(self, done_items: list | None = None) -> str:
+        """本轮**产物事实**清单（供汇总注入）。查不到 ⇒ 返回 ""（不注入）。
+
+        ## ⚠️ 时序陷阱（第一版写错的地方，务必别再踩）
+        `_summarize_plan` 运行在 `_archive_artifacts` **之前**（planner:887 早于
+        orchestration:516 的落库段）⇒ 汇总时**本轮产物还没入库**，
+        只查 `artifacts` 表会恒为空。第一版就是这么写的，等于没注入。
+        ⇒ 因此本方法分两路：
+          ① **已归档**（工具结果取回的文件等）：查 `artifacts WHERE id>artifact_mark`；
+          ② **待归档**（子任务交付物里的 ```sysml 代码块）：用与归档**同一套命名逻辑**
+             （`_resolve_code_artifact_title`）**预测**出标题/文件名/版本号 ——
+             只读、不写库（预写会造成 message_id 不同 ⇒ 与正式归档重复入库）。
+        两路合并后交给汇总，汇总才能既不说"未落库"、也不编造 id。
+
+        判据来源：
+          · 已归档：`artifacts.id > artifact_mark`（本轮开始前 MAX(id)）且属本会话；
+          · 待归档：`_extract_code_blocks` 取 lang ∈ {sysml,kerml,sysmlv2,kerml2} 的块。
+        """
+        ctx = getattr(self, "_orch_ctx", None) or {}
+        conv = int(ctx.get("conv_id") or 0)
+        mark = int(ctx.get("artifact_mark") or 0)
+        if not conv:
+            return ""
+        lines = []
+
+        # ── ① 已归档（真实入库的）──
+        try:
+            from database import get_db
+            c = get_db()
+            try:
+                rows = c.execute(
+                    "SELECT id, kind, title, filename, meta, "
+                    "       length(COALESCE(preview_content,'')) AS clen "
+                    "FROM artifacts WHERE conversation_id=? AND id>? ORDER BY id",
+                    (conv, mark)).fetchall()
+            finally:
+                c.close()
+            for r in rows:
+                try:
+                    meta = json.loads(r["meta"] or "{}")
+                except Exception:
+                    meta = {}
+                extra = []
+                if str(meta.get("version_label") or "").strip():
+                    extra.append("版本 " + str(meta["version_label"]).strip())
+                if str(r["filename"] or "").strip():
+                    extra.append("文件 " + str(r["filename"]).strip())
+                if int(r["clen"] or 0):
+                    extra.append("%d 字符" % int(r["clen"]))
+                lines.append("· [%s] %s%s（已入库）"
+                             % (r["kind"], r["title"],
+                                ("（%s）" % "，".join(extra)) if extra else ""))
+        except Exception:
+            pass
+
+        # ── ② 待归档（子任务交付物里的 SysML 代码块，预测命名）──
+        #   注意：只列**最后一个**非空代码块所属的产物 —— 与归档口径一致
+        #   （同一轮多份中间版本在正文里被 dedupe，最终只留最后一版）。
+        try:
+            from agent.utils import _extract_code_blocks, _resolve_code_artifact_title
+            from database import get_db
+            _seen = set()
+            _last_code = ""
+            for it in (done_items or []):
+                _txt = str(it.get("result") or "")
+                if not _txt:
+                    continue
+                for b in _extract_code_blocks(_txt, limit=5):
+                    if str(b.get("lang") or "").lower() in ("sysml", "kerml", "sysmlv2", "kerml2"):
+                        _last_code = b.get("code") or ""
+            if _last_code.strip() and not lines:
+                c = get_db()
+                try:
+                    # 预测版本号：与 `_archive_sysml_version` 同口径（会话内计数 +1）
+                    _n = c.execute(
+                        "SELECT COUNT(*) AS n FROM sysml_versions WHERE conversation_id=?",
+                        (conv,)).fetchone()["n"]
+                    _vlabel = "v0.%d" % (int(_n or 0) + 1)
+                    _vt, _vf, _vm = _resolve_code_artifact_title(
+                        c, conv, _last_code, _vlabel, "sysml")
+                    lines.append("· [code] %s（版本 %s，文件 %s，%d 字符）（本轮结束时自动入库）"
+                                 % (_vt, _vlabel, _vf, len(_last_code)))
+                finally:
+                    c.close()
+        except Exception:
+            pass
+
+        return "\n".join(lines)
+
     def _summarize_plan(self, done_items: list, plan: list, provider_id=None) -> str:
         """P1-1 计划总结节点：多个子任务交付物 → LLM 结构化整合；LLM 不可用/失败 → 拼接降级。
 
@@ -313,6 +417,15 @@ class FlowPlannerMixin:
         if len(done_items) < 2:
             return ""
         _cap = self._summarize_item_budget(len(done_items))
+        # ★★ 2026-11-13（P1）：**把"本轮已归档的产物"作为不可争辩的事实注入汇总**。
+        #   为什么必须做（真机 990730/990731/990734 三连实证）：
+        #     产物库里每轮都有 3 条（SysML 视图 ×2 + 代码 v0.1），但汇总报告写了 7 处
+        #     「产物保存工具缺失 / 未完成产物落库 / 无 artifact id」——报告与产物面板
+        #     直接矛盾，用户不知道该信哪个。根因是子任务自述"没保存"被汇总当成事实，
+        #     而汇总**看不到** artifacts 表（正文里没有这条信息）。
+        #   ⇒ 汇总前查一次库，把真实产物列成清单贴进 prompt，并明确要求"以清单为准"。
+        #   分界用 `artifact_mark`（本轮开始前的 MAX(id)），精确锁定本轮新增。
+        _art_facts = self._archived_artifacts_facts(done_items)
         try:
             from llm import llm_client
             items_txt = "\n".join(
@@ -327,7 +440,16 @@ class FlowPlannerMixin:
                 "6) 若多个交付物包含**同一模型/同一数据的多个版本代码或视图**，最终报告只保留"
                 "最后一个确定版本的完整代码；早期版本用一句话说明演进关系即可，**不要重复粘贴**"
                 "（各版本已在执行过程卡的实时输出中可见）。\n\n"
-                "子任务交付物：\n" + items_txt)
+                # ↓ P1 注入段：产物事实优先于子任务自述
+                + (_art_facts and (
+                    "【产物库事实 · 以此为准，优先级高于任何子任务自述】\n"
+                    + _art_facts
+                    + "\n★ 上述产物**已经真实存在于产物库**（含文件名与版本号）。"
+                    "若任何子任务声称『没有保存工具 / 未完成落库 / 无 artifact id』，"
+                    "那是它**看不到自动归档机制**造成的误判，**不得**写进报告；"
+                    "报告中关于产物落库状态的结论必须以本清单为准，"
+                    "并提示用户到产物面板查看或下载。\n\n") )
+                + "子任务交付物：\n" + items_txt)
             # 2026-09-17 S4：汇总环节加输出上限 —— 实测 plan_summary 平均 completion 7,470，
             # 是单任务里最贵的输出之一。上限取 3000（而非更激进的 1500）：本环节产出的是
             # **用户可见的最终报告**，而采纳判定很宽（下方 `len(content) > 80` 即采纳），
@@ -372,7 +494,8 @@ class FlowPlannerMixin:
                          provider_id=None, run_id: int = 0, conn=None, attachments=None, pool=None,
                          conversation_id: int = 0, team_prompt: str = "",
                          branch: str = "dev", user: dict | None = None,
-                         stage_hint: list | None = None) -> dict:
+                         stage_hint: list | None = None,
+                         main_agent: str = "") -> dict:
         """P0-1/P1-1/P1-2 Planner-Executor 服务（会话入口自动编排 / Flow planner 节点共用）。
 
         - LLM 计划生成：目标 → 子任务 DAG（key/title/agent/deps/task_type），
@@ -395,7 +518,8 @@ class FlowPlannerMixin:
         try:
             return self._planner_core(goal, agents, max_tasks, parallel, provider_id, run_id, conn,
                                       attachments, pool, conversation_id, team_prompt,
-                                      branch=branch, user=user, stage_hint=stage_hint)
+                                      branch=branch, user=user, stage_hint=stage_hint,
+                                      main_agent=main_agent)
         finally:
             if own:
                 try:
@@ -407,7 +531,8 @@ class FlowPlannerMixin:
                       provider_id, run_id: int, conn, attachments=None, pool=None,
                       conversation_id: int = 0, team_prompt: str = "",
                       branch: str = "dev", user: dict | None = None,
-                      stage_hint: list | None = None) -> dict:
+                      stage_hint: list | None = None,
+                      main_agent: str = "") -> dict:
         """Planner-Executor 核心（run_planner_plan 的连接由外层管理）。
 
         pool（Task 5）：外部传入的编排候选池意图名列表（pipeline._orch_pool 结果），
@@ -419,6 +544,16 @@ class FlowPlannerMixin:
         from agent import AgentPipeline
         import time as _t
         t0 = _t.time()
+        # ★★ 2026-11-06：**编排子任务必须继承主 Agent 的 MCP 能力**（conv 990480 实证）。
+        #   断链：本文件下面 `pipe = AgentPipeline()` 每次新建实例，从没人设
+        #   `pipe._team_main_agent` ⇒ 子任务只用**成员自己**绑定的 MCP。
+        #   实测团队 7 个成员中 5 个零 MCP（impact / report_generation / knowledge_qa /
+        #   chat / model_validation_repair）⇒ 编排路径下这些成员读不到任何平台数据，
+        #   与"直行路径能继承"形成**同一次请求两条路径结论不同**的分裂。
+        #   语义依据与 `pipeline_parts/tools.py:240`（直行继承）同源：
+        #   用户选主 Agent 就是选了它的平台对接能力，分派只该改"谁思考"。
+        #   开关 `agent.team_member_inherit_mcp`（与直行共用），置 False 逐字节回退。
+        self._orch_main_agent = (main_agent or "").strip()
         goal = goal or "执行该团队任务并汇总结果"
         if agents is None:
             agents = ["requirement_analysis", "design", "impact", "review", "report_generation", "knowledge_qa"]
@@ -481,6 +616,7 @@ class FlowPlannerMixin:
             f"{skill_pool_txt}"
             "要求：任务数 1~{n} 个；每个任务只交付一个明确成果；有依赖关系的用 deps 表达；"
             "context 只写该任务必需的事实与输入引用（上下文隔离，避免膨胀）；"
+            "**每个任务都要写 expected_output**（下游据此把完成标准注入子任务，缺失即失去验收依据）；"
             "config.required 标注该任务产出是否为达成目标所必需（true=必需，false=可选/增强）；"
             "不要输出其他文字。\n"
             f"目标：{goal}"
@@ -615,6 +751,23 @@ class FlowPlannerMixin:
         # 才沿用 clear_run 语义，行为向后兼容。
         _given_run_id = int(run_id or 0)
         run_id = _given_run_id or TaskQueue.new_run_id(conn)
+        # ★★ 2026-11-13（真机 conv 990731 实证）：**本轮的编排坐标**。
+        #   为什么要存到 self：`_run_task` 是独立方法、签名里没有 run_id/conversation_id，
+        #   而子任务执行必须知道"我属于哪个 run / 哪个会话"——
+        #   否则编排写操作会既无法暂存（`_tool_run_ctx=0`）也无法把确认单归属到用户的会话
+        #   （真机实测：确认单 #104 的 conversation_id=0 ⇒ 用户在 UI 里根本看不到这张单）。
+        #   同一轮内 run_id/conv_id 恒定，并行子任务共享 ⇒ 存实例属性无竞态。
+        self._orch_ctx = {"run_id": int(run_id or 0),
+                          "conv_id": int(conversation_id or 0)}
+        # ★ 2026-11-13（P1）：记录本轮**开始前**的产物最大 id 作为分界。
+        #   为什么用 id 分界而不是时间窗：时间戳精度只到秒，同一秒内多轮会串；
+        #   而 artifacts.id 单调递增，`id > mark` 精确等于"本轮新增的产物"。
+        #   用途见 `_summarize_plan` 的产物事实注入（解决报告与产物库自相矛盾）。
+        try:
+            _mw = conn.execute("SELECT COALESCE(MAX(id),0) AS m FROM artifacts").fetchone()
+            self._orch_ctx["artifact_mark"] = int((_mw["m"] if _mw else 0) or 0)
+        except Exception:
+            self._orch_ctx["artifact_mark"] = 0
         executed = []
         _plan_error = ""   # ★ 2026-11-04：落库/执行中断的真实原因（此前被 except 吞掉）
         _done_items = []   # T7：已完成子任务结果（供依赖任务注入上下文快照）
@@ -789,6 +942,36 @@ class FlowPlannerMixin:
         summ = TaskQueue.summary(conn, run_id)
         done_items = [it for it in summ["items"] if it.get("status") == "done"]
         fail_items = [it for it in summ["items"] if it.get("status") in ("failed", "blocked")]
+        # ★★ 2026-11-13（补上非流式编排的**静默丢失**）：汇总前把子任务暂存的写请求
+        #   批量挂人工确认队列，与流式路径 `stream.py:3029` 完全同口径。
+        #
+        #   为什么必须补：上一轮在 `_run_task` 给子任务实例补齐了
+        #   `_orch_subtask/_tool_run_ctx/_tool_task_key`，写工具因此会走「暂存」而不是
+        #   「逐个中断」—— 但 `batch_queue_confirmations` **只在流式路径调用过一次**，
+        #   非流式（本文件 / `execute.py` / `orchestration.py`）一处都没有
+        #   ⇒ 写请求永远躺在 `subtask_artifacts`，既不执行也不生成确认单，
+        #   ⇒ 用户完全看不到，"静默丢弃"（与本仓既有教训同族）。
+        #   影响面：`import_sysml_text` / `create_model_elements` 等真正的平台写入；
+        #   `save_artifact` 尚有自动归档兜住产物，但平台侧的写动作会丢。
+        #   位置刻意与流式一致：**汇总之前**，让汇总能看见"有几个写操作待确认"。
+        try:
+            from services.artifact_materializer import batch_queue_confirmations as _bqc
+            from database import get_db as _gdb_b
+            _oc = getattr(self, "_orch_ctx", None) or {}
+            _qc = _gdb_b()
+            try:
+                _n_queued = _bqc(_qc, int(run_id or 0),
+                                 conversation_id=int(_oc.get("conv_id") or conversation_id or 0))
+            finally:
+                _qc.close()
+        except Exception:
+            _n_queued = 0          # 入队失败不阻断汇总（与流式路径同一个 fail-open 方向）
+        if _n_queued:
+            try:
+                print("[orch-batch] run=%d 汇总前批量入队 %d 个写操作"
+                      % (int(run_id or 0), _n_queued), flush=True)
+            except Exception:
+                pass
         if len(done_items) >= 2:
             content = self._summarize_plan(done_items, plan, provider_id)
         else:
@@ -893,7 +1076,26 @@ class FlowPlannerMixin:
             if ttype == "agent":
                 from agent import AgentPipeline
                 pipe = AgentPipeline()
+                # ★ 2026-11-06：继承主 Agent 的 MCP（见 _planner_core 顶部注释）
+                _ma = getattr(self, "_orch_main_agent", "") or ""
+                if _ma:
+                    pipe._team_main_agent = _ma
                 pipe._load_db_agents()
+                # ★★ 2026-11-13（**这是 A 项修复真正的缺口**，真机 990731 实测）：
+                #   非流式编排在 planner 里 new 一个 AgentPipeline 跑子任务，此前
+                #   **从不设** `_orch_subtask` ⇒ `_exec_tool_call` 的「写请求暂存」分支
+                #   永远进不去 ⇒ 写产物（save_artifact）直接落到统一确认闸
+                #   ⇒ **每个子任务各自被中断**，与流式路径（`stream.py::_run_subtask`
+                #   里设 `_orch_subtask=True`）**行为相反**。
+                #   真机铁证：日志 `[HILGATE-ENTER] tool=save_artifact orch=None wl=Y`
+                #   （`wl=Y` 证明确实是受限子任务，但 `_orch_subtask` 属性**根本不存在**），
+                #   同批确认单 `conversation_id=0` ⇒ 用户界面看不到这张待确认单。
+                #   ⇒ 两套编排实现漂移：流式有暂存、非流式没有。此处补齐，使两路同源。
+                _oc = getattr(self, "_orch_ctx", None) or {}
+                pipe._orch_subtask = True
+                pipe._tool_run_ctx = int(_oc.get("run_id") or tk.get("run_id") or 0)
+                pipe._tool_task_key = str(tk.get("task_key") or "")
+                pipe._orch_conv_id = int(_oc.get("conv_id") or 0)   # execute 里兜底成 _tool_conv_ctx
                 # P1-2：任务 config.skill 指定技能 → 强制注入（仅当技能存在且已发布）
                 skill_name = cfg.get("skill") or None
                 if skill_name:
@@ -922,7 +1124,18 @@ class FlowPlannerMixin:
                 #   依据：docs/react执行器-标杆调研与落地方案-20261104.md。
                 from agent import AgentPipeline
                 pipe = AgentPipeline()
+                # ★ 2026-11-06：继承主 Agent 的 MCP（见 _planner_core 顶部注释）
+                _ma = getattr(self, "_orch_main_agent", "") or ""
+                if _ma:
+                    pipe._team_main_agent = _ma
                 pipe._load_db_agents()
+                # ★★ 2026-11-13：同上（react 分支）—— 委托主链路后它同样会调 `_exec_tool_call`，
+                #   缺这三行就等于"react 子任务的写操作仍会逐条中断"。
+                _oc = getattr(self, "_orch_ctx", None) or {}
+                pipe._orch_subtask = True
+                pipe._tool_run_ctx = int(_oc.get("run_id") or tk.get("run_id") or 0)
+                pipe._tool_task_key = str(tk.get("task_key") or "")
+                pipe._orch_conv_id = int(_oc.get("conv_id") or 0)   # execute 里兜底成 _tool_conv_ctx
                 _react_agent = str(tk.get("agent_id") or cfg.get("agent") or "").strip()
                 # ⚠️ 不要写 `int(cfg.get("max_steps") or 5)`：`0` 是 falsy ⇒ 显式传 0 会被
                 #    静默变成 5（"猜一个默认值"），而调用方本意是"最小轮次"。

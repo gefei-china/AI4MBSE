@@ -127,9 +127,12 @@ def main():
     for c in ("conversation_id", "run_id", "task_key", "event_type", "payload_json"):
         check("C1.%s 列存在" % c,
               c in sc_src.split("CREATE TABLE IF NOT EXISTS orch_stream_events")[1][:900])
+    # ★ 2026-11-05：原断言要求「两处编排 done 都带 orch_run_id」。
+    #   其中一处属画布流程复用路径（`_stream_orchestrated`，已随画布工作流移除），
+    #   现存编排 done 只剩主路径一处 ⇒ 判据改为 1 处。
     check("C2 done 事件带 orch_run_id（落库能归到批次的关键）",
-          s_src.count('"orch_run_id": int(run_id or 0)') == 2,
-          "两处编排 done 都应带；实测 %d 处"
+          s_src.count('"orch_run_id": int(run_id or 0)') == 1,
+          "现存编排 done 仅主路径一处；实测 %d 处"
           % s_src.count('"orch_run_id": int(run_id or 0)'))
     check("C3 路由层接了事件记录器",
           "stream_event_recorder" in r_src)

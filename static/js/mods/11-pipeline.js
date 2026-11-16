@@ -617,6 +617,131 @@ function procMarkClarifyAnswered(answerText){
   procUpsert(id, {status:'done', statusText:'✓ 已确认',
                   sub: answerText ? (' · ' + String(answerText).slice(0, 40)) : ''});
 }
+
+/* ══════════════════════════════════════════════════════════════════════════
+ * 通用「待用户处理」层（Ask）—— 澄清卡与写操作确认卡**共用同一套消费流程**
+ * ══════════════════════════════════════════════════════════════════════════
+ *
+ * 【为什么是通用层而不是两套卡】
+ *   两者**同构**：都是「中断本轮 → 挂一个待办 → 用户处理 → 回灌模型 → 另起一轮」。
+ *   后端原文（agent/pipeline_parts/stream.py:4164）：
+ *     「与 `clarify_required` 的关系：**同构但不同源**」
+ *   用户口径（2026-11-13）：「确认卡与澄清卡应该用同一个前端，和消费逻辑，
+ *     只是信息的来源和环节不同，尽量复用一致的、通用的流程」。
+ *
+ * 【统一生命周期：七步，每种 kind 都走全，缺一不可】
+ *   ① 事件分派  handleAskEvent(kind, ev)
+ *   ② dock 登记 setPendingAsk(kind, payload)  → 输入框上方的可处置卡
+ *   ③ 流内指引 renderAskNote(kind, ev, host)  → 消息流里的一行指引
+ *   ④ 时间线环节 procAddHilConfirm / procAddClarifyGate → 「执行过程」里的一个环节
+ *   ⑤ 处置      clarify=作答　/　confirm=批准·拒绝
+ *   ⑥ 回灌模型  _continueInSameBox(card, resume_text)
+ *   ⑦ 历史还原  消息 card_data + 状态查询（刷新后仍可处置）
+ *
+ * 【两种 kind 的差异只在三处，其余全部共用】
+ *   kind     来源             处置                状态载体
+ *   clarify  模型要问的问题    作答(choices/note)  conversations.pending_clarify（单张）
+ *   confirm  工具写操作被拦    批准 / 拒绝          hil_confirmations（**多张单**）
+ *
+ * ★ 代价（真机 conv 990727）：此前 confirm 只实现了 ④⑤ 两步 —— 卡片默认折叠在
+ *   「详情」里、刷新后按钮全丢 ⇒ 用户**根本没法确认**，确认单一直挂 pending
+ *   （当时全库 19 条 pending，其中 2 条正是 990727 这轮）。
+ */
+const ASK_KINDS = {
+  clarify: {icon:'❓', dockId:'clarify-ask'},
+  confirm: {icon:'🔐', dockId:'confirm-ask'}
+};
+// ② 统一登记：本会话「待用户处理」的待办清单
+function setPendingAsk(kind, payload){
+  window._pendingAsk = window._pendingAsk || {};
+  if(kind === 'confirm'){
+    const p = payload || {};
+    const cid = parseInt(p.confirmation_id || p.id || 0, 10);
+    if(cid){
+      const list = window._pendingAsk.confirm || [];
+      if(!list.some(x=>parseInt(x.id||0,10) === cid)){
+        list.push(Object.assign({}, p, {id: cid}));
+      }
+      window._pendingAsk.confirm = list;
+    }
+  }
+  updateAskHint(kind);
+}
+function updateAskHint(kind){
+  if(kind === 'confirm') return updateConfirmHint();
+  return updateClarifyHint();   // 澄清的老实现原样保留（经 2026-09-29 五轮反馈打磨）
+}
+// confirm 的 dock 卡：**复用澄清 dock 卡的同一套 DOM 与样式**（.clarify-ask-card.dock）
+function updateConfirmHint(){
+  const dock = document.getElementById('chat-input-dock');
+  if(!dock) return;
+  const list = (window._pendingAsk && window._pendingAsk.confirm) || [];
+  let card = document.getElementById('confirm-ask');
+  if(!list.length){
+    if(card) card.remove();
+    return;
+  }
+  if(!card){
+    card = document.createElement('div');
+    card.id = 'confirm-ask';
+    card.className = 'clarify-ask-card dock';   // ★ 同一套前端：样式 / 位置 / 挂载点全同
+    dock.insertBefore(card, dock.firstChild);
+  }
+  card.innerHTML = list.map(c => hilConfirmCardHtml(Object.assign({}, c, {idPrefix:'hildock'}))).join('');
+}
+// ③ 流内指引：两种 kind 同一句式（clarify 走老实现，文案与行为保持不变）
+function renderAskNote(kind, ev, host){
+  if(kind === 'clarify') return renderClarifyAsk(ev, host);
+  const aiBox = document.getElementById('stream-ai');
+  const bodyEl = host || (aiBox ? aiBox.querySelector('.body') : null);
+  if(!bodyEl) return;
+  if(bodyEl.querySelector('.ask-inline-note')) return;
+  const note = document.createElement('div');
+  note.className = 'ask-inline-note clarify-inline-note';
+  note.innerHTML = '⏸ AI 有 <b>1</b> 个写操作待你确认 —— 请在<b>输入框上方</b>的确认卡中<b>批准</b>或<b>拒绝</b>。';
+  bodyEl.appendChild(note);
+  stickBottom();
+}
+// ① 统一事件入口：clarify_ask / hil_confirm 都从这里进（其余步骤由 kind 适配）
+function handleAskEvent(kind, ev){
+  if(kind === 'clarify'){
+    setPendingClarify(ev);
+    renderClarifyAsk(ev);
+    procAddClarifyGate(ev);
+    return;
+  }
+  if(kind === 'confirm'){
+    setPendingAsk('confirm', ev);
+    renderAskNote('confirm', ev);
+    procAddHilConfirm(ev);              // ④ 时间线环节（老实现：含可点按钮）
+    hilAppendMsgCard(ev);               // 消息流里再插一张**可点击**的卡（不依赖折叠的详情）
+    return;
+  }
+}
+// ⑦ 历史还原：刷新后把本会话仍 pending 的确认单重新挂回 dock
+//   （后端已有接口 GET /api/studio/hil-confirmations?status=pending —— **不新增端点**）
+async function loadPendingConfirms(cid){
+  try{
+    const rows = await api('/api/studio/hil-confirmations?status=pending&limit=100');
+    const mine = (rows||[]).filter(r => parseInt(r.conversation_id||0,10) === parseInt(cid||0,10));
+    window._pendingAsk = window._pendingAsk || {};
+    window._pendingAsk.confirm = mine.map(r=>{
+      const pl = r.payload || {};
+      return {
+        id: r.id, tool: pl.tool || r.action || '', tool_type: r.tool_type || '',
+        level: r.level || 'confirm', match_key: pl.match_key || '',
+        kind: pl.kind || '',
+        // ★ 2026-11-13：历史行没有 `preview` 时用 payload.title 兜底（写产物类确认单
+        //   的"影响面"就是**写到哪个产物**）。**不要**把 payload 整包塞进 arguments ——
+        //   里面是完整 SysML 源码（可达数十 KB），展开会把卡片撑爆且无信息量。
+        preview: r.preview || pl.preview || (pl.title ? ('写入产物：' + pl.title) : ''),
+        arguments: pl.arguments || {}, batch_count: r.batch_count || 1,
+        batch_merged: !!r.batch_merged, timeout_at: r.timeout_at || ''
+      };
+    });
+    updateConfirmHint();
+  }catch(e){}
+}
 // ── UX规范 B3（2026-10-03）内联确认闸门 ──
 // 同一确认单在时间线上只允许一个节点（硬规则1）；确认卡 = 需要用户行动的单元，
 // 保持 run 态常驻展开，直至批准/拒绝落终态。
@@ -717,13 +842,50 @@ function procAddConfirmGate(cid, ev){
                   status:'run', statusText:'⏸ 待人工确认', detail});
   uxTrack('confirm_shown', {cid});   // §11 埋点：确认闸门曝光（转化率分母）
 }
+/* ── 写操作待确认：往**消息流**插一张可点击的确认卡（2026-11-13 新增）─────
+ * 为什么必须插在消息流里（而不是只进执行过程时间线）：
+ *   时间线默认折叠在「详情」按钮后面 ⇒ 用户看不到「批准/拒绝」按钮，
+ *   只能看到 done 帧那句不可点击的文本 ⇒ 等于"没有提示我确认"（真机 conv 990727 实证）。
+ *
+ * 为什么插成**独立消息块**（不在流式 aiBox 内）：
+ *   done 帧会用 renderMessage 整体替换流式气泡的 outerHTML ⇒ 插在气泡内的卡会被冲掉。
+ *
+ * 幂等：同一确认单不重复插（实时事件与随后的历史回放可能都来）。
+ */
+function hilAppendMsgCard(ev){
+  const cid = parseInt(ev.confirmation_id || 0, 10);
+  if(!cid) return null;
+  const area = document.getElementById('chat-area');
+  if(!area) return null;
+  if(area.querySelector('.hil-card[data-cid="' + cid + '"]')) return null;
+  const html = renderMessage({
+    role:'assistant', content:'', msg_type:'hil_confirm',
+    card_data:{confirm:{
+      id: cid, tool: ev.tool || '', tool_type: ev.tool_type || '',
+      level: ev.level || 'confirm', match_key: ev.match_key || '',
+      kind: ev.kind || '', preview: ev.preview || '',
+      arguments: ev.arguments || {}, batch_count: ev.batch_count || 1,
+      batch_merged: !!ev.batch_merged, timeout_at: ev.timeout_at || '',
+      idPrefix: 'hilmsg'      // ★ 与时间线卡（hil）错开 id，避免重复 id 导致禁用漏掉本卡
+    }}
+  });
+  area.insertAdjacentHTML('beforeend', html);
+  try{ area.scrollTop = area.scrollHeight; }catch(e){}
+  return cid;
+}
+
 // 批准/拒绝：同一 decide API；失败恢复按钮可重试。
 // 函数名 hilInlineDecide（区别于聊天内联确认卡场景）：2026-10-03 29-flow.js 已随编排孤页移除，
 // 原「与 29-flow 全局 hilDecide 同名冲突」的约束不复存在，保留现名避免无关 churn。
 async function hilInlineDecide(cid, approve){
-  const okBtn = document.getElementById('hil-ok-' + cid), noBtn = document.getElementById('hil-no-' + cid);
-  if(okBtn) okBtn.disabled = true;
-  if(noBtn) noBtn.disabled = true;
+  // ★ 2026-11-13：同一张确认单在页面上可能同时存在**三处**载体（通用 Ask 层）：
+  //   时间线卡(hil-*) / 消息流卡(hilmsg-*) / 输入框 dock 卡(hildock-*)，
+  //   处置时三处按钮都要禁用 ⇒ 用**属性选择器按单号后缀**一次取全（不写死前缀清单）。
+  const _okBtns = document.querySelectorAll('[id$="-ok-' + cid + '"]');
+  const _noBtns = document.querySelectorAll('[id$="-no-' + cid + '"]');
+  const _disable = (els, dis) => { for(let i=0;i<els.length;i++){ els[i].disabled = dis; } };
+  _disable(_okBtns, true);
+  _disable(_noBtns, true);
   try{
     // ★ 2026-10-23：**不再传 decided_by**。
     //   原代码硬编码 decided_by:'王工'，会把虚构人名写进审计流水（"谁批准的"不可追责）。
@@ -741,8 +903,8 @@ async function hilInlineDecide(cid, approve){
                         {method:'POST', body:JSON.stringify(_body)});
     // 409 版本不一致：不执行，恢复按钮可重试（用户需重新定位）
     if(r && r.status === 'version_mismatch'){
-      if(okBtn) okBtn.disabled = false;
-      if(noBtn) noBtn.disabled = false;
+      _disable(_okBtns, false);
+      _disable(_noBtns, false);
       procUpsert('hil_' + cid, {status:'failed', statusText:'⚠ 确认单已过期 · 未执行'});
       if(window.toast && toast.error) toast.error(r.error || '确认单已过期，未执行');
       return;
@@ -752,7 +914,33 @@ async function hilInlineDecide(cid, approve){
       ? {status: _execOk ? 'done' : 'failed',
          statusText: _execOk ? '✓ 已批准 · 已执行' : '✗ 已批准 · 执行失败'}
       : {status:'failed', statusText:'✗ 已拒绝 · 动作不生效'});
+    // ★ 2026-11-13（通用 Ask 层第⑥步）：处置完成 → **从待办清单移除**并重渲染 dock。
+    //   为什么必须做（与澄清卡对齐）：`setPendingClarify(null)` 会把澄清 dock 收掉，
+    //   而确认 dock 此前只把按钮置灰、卡片仍留在输入框上方 ⇒ 用户看不出「这张已经办完了」，
+    //   且下次刷新 `loadPendingConfirms` 之前它会一直占位。
+    try{
+      if(window._pendingAsk && Array.isArray(window._pendingAsk.confirm)){
+        window._pendingAsk.confirm = window._pendingAsk.confirm
+          .filter(x => parseInt(x.id || 0, 10) !== parseInt(cid, 10));
+        updateConfirmHint();
+      }
+    }catch(e){}
     uxTrack('confirm_decided', {cid, approve: !!approve, exec: _execOk});   // §11 埋点：闸门处置（分子）
+    // ★ 2026-11-13：消息流里那张确认卡同步为「已处置」——
+    //   否则用户看到按钮还在，会重复点（第二次 decide 会被后端判为已处理）。
+    try{
+      const _mc = document.querySelector('.hil-card[data-cid="' + cid + '"]');
+      if(_mc){
+        const _bs = _mc.querySelectorAll('button');
+        for(let _i=0;_i<_bs.length;_i++){ _bs[_i].disabled = true; }
+        const _tag = document.createElement('div');
+        _tag.style.cssText = 'margin-top:8px;font-size:12.5px;font-weight:500;';
+        _tag.textContent = approve
+          ? (_execOk ? '✓ 已批准并执行' : '✗ 已批准 · 执行失败')
+          : '✗ 已拒绝 · 该动作不生效';
+        _mc.appendChild(_tag);
+      }
+    }catch(e){}
     if(window.toast && toast.success){
       if(!approve) toast.success('已拒绝确认单 #' + cid + '，该动作不生效');
       else if(_execOk) toast.success('已批准并执行（确认单 #' + cid + '）');
@@ -770,8 +958,8 @@ async function hilInlineDecide(cid, approve){
                          approve ? '✓ 已批准' : '✗ 已拒绝');
     }
   }catch(e){
-    if(okBtn) okBtn.disabled = false;
-    if(noBtn) noBtn.disabled = false;
+    _disable(_okBtns, false);
+    _disable(_noBtns, false);
     if(window.toast && toast.error) toast.error('确认操作失败：' + (e && e.message || e));
   }
 }
@@ -1519,6 +1707,14 @@ function handleSSE(raw) {
        任何后续真实事件都会照常推进轨迹，状态栏也会被后续流程覆盖。 */
     const _cs = document.getElementById('chat-status');
     if(_cs){
+      // ★ 2026-11-06：切到别的会话后，旧流盒子被寄存到隐藏容器但仍在 DOM，
+      //   它的心跳仍会命中这里 ⇒ 新会话状态栏一直显示「仍在执行：t1（已等待 125 秒）」。
+      //   只让**归属当前会话**的流更新状态栏；别的心跳照常推进旧会话轨迹，但不污染本会话 UI。
+      let _curCid = '';
+      try{ _curCid = String((typeof currentConvId !== 'undefined' && currentConvId)
+                            || window.currentConvId || ''); }catch(e){}
+      const _boxCid = (aiBox && aiBox.dataset) ? String(aiBox.dataset.convId || '') : '';
+      if(_boxCid && _curCid && _boxCid !== _curCid) return;
       const _st = ev.last_stage ? ('：' + ev.last_stage) : '';
       _cs.textContent = '仍在执行' + _st + '（已等待 ' + Math.round(ev.elapsed_s || 0) + ' 秒）';
     }
@@ -1541,6 +1737,17 @@ function handleSSE(raw) {
       const body = box.querySelector('.body');
       (body ? body.parentNode : box).appendChild(note);
     }
+  } else if(evType === 'interrupt') {
+    /* ★ 2026-11-10（可中断策略）：用户中断后服务端发来的**确认事件**。
+       为什么必须可见：中断的真相是"停止派发 + 已完成部分保留"，
+       用户需要看到"停了几个、能不能接着跑"，而不是一条干巴巴的"已停止生成"。
+       它与 `progress` 分开是刻意的 —— 后者是过程提示，前者是**状态变更**。 */
+    const _n = Number(ev.cancelled || 0);
+    procAddSystemNotice('⏸ 已中断：停止 ' + _n + ' 个未完成子任务'
+      + (ev.instruction ? '；补充指令已记录' : '')
+      + '。已完成部分保留，可点「继续编排」接着跑。');
+    const _csI = document.getElementById('chat-status');
+    if(_csI) _csI.textContent = '已中断';
   } else if(evType === 'token') {
     // ★ F-1（米爸需求3：最终输出正文在流程执行完成后再输出）：
     //   带 `key` 的 token 是**子任务的实时产出**，归到该子任务卡的"实时输出"区；
@@ -1573,26 +1780,28 @@ function handleSSE(raw) {
     if(_cb && _cb.scrollIntoView){ try{ _cb.scrollIntoView({block:'center'}); }catch(e){ _cb.scrollIntoView(); } }
   } else if(evType === 'clarify_ask') {
     _forceFlushTokens();
-    setPendingClarify(ev);   // 2026-09-25：登记挂起 → 输入框上方出现「AI 正在等待确认」提示（可在此直接作答）
-    renderClarifyAsk(ev);   // 内容级澄清：信息不清晰 → 选择题确认（回答后续答）
-    procAddClarifyGate(ev); // ★ 2026-10-17（米爸反馈1）：澄清 = 原输出流程时间线上的一个环节（不再是独立气泡）
+    // ★ 2026-11-13：统一走通用 Ask 层（澄清与写操作确认共用同一套消费流程）
+    handleAskEvent('clarify', ev);
   } else if(evType === 'hil_confirm') {
     /* ★ 2026-10-28（写前确认 HITL）：**一等公民事件**，不再靠正则从工具结果文本抠单号。
        老前端无此分支 ⇒ `handleSSE` 是 if/else-if 链且**末尾无 else 兜底** ⇒ 静默忽略，
        行为与从前完全一致（与 `redraw_confirm` / `clarify_ask` 同一种兼容策略）。 */
     _forceFlushTokens();
-    procAddHilConfirm(ev);
+    // ★ 2026-11-13：统一走通用 Ask 层（与 clarify_ask 同入口、同七步生命周期）
+    handleAskEvent('confirm', ev);
     uxTrack('scroll_force', {reason: 'hil_confirm'});
     const _hc = _hilCardEl(ev.confirmation_id);
     if(_hc && _hc.scrollIntoView){ try{ _hc.scrollIntoView({block:'center'}); }catch(e){ _hc.scrollIntoView(); } }
   } else if(evType === 'done') {
     _forceFlushTokens();
     _forceFlushSubOutput();   // ★ F-1：子任务实时输出末帧刷齐（防 rAF 未触发丢尾巴）
+    window._sseTerminal = Date.now();   // ★ 2026-11-06：收到终态帧（用于区分"服务端正常收口"与"流被掐断"）
     uxTrack('task_done');   // §11 埋点：任务完成率分子
     finishStream(ev.data, aiBox);
   } else if(evType === 'error') {
     _forceFlushTokens();
     _forceFlushSubOutput();   // ★ F-1：同上，中断时也不能丢子任务已产出的内容
+    window._sseTerminal = Date.now();   // ★ 2026-11-06：同上
     showStopBtn(false); _streaming = false;
     uxTrack('task_error', {message: String(ev.message||'').slice(0,120)});   // §11 埋点：失败分母 + 失败类别
     // V2.6：中断也收口（汇总条切「已中断」，不停留"执行中"）
@@ -1627,7 +1836,11 @@ function renderClarify(ev){
   if(!aiBox || document.getElementById('clarify-bar')) return;
   const inner = aiBox.querySelector('.msg-inner');
   if(!inner) return;
-  const pct = Math.round((ev.confidence||0) * 100);
+  // ★ 2026-11-07（第 16 轮）：优先用**校准后**置信度展示。
+  //   理由：`rule_scored` 等 route 的 confidence 是常量 0.95，而真库回放真实准确率
+  //   只有 70% ⇒ 界面上的"把握 95%"等于对用户撒谎。calibrated_confidence 由
+  //   core/route_calibration.py 按 route 真实命中率算，缺失时回落原值（老服务端兼容）。
+  const pct = Math.round((ev.calibrated_confidence != null ? ev.calibrated_confidence : (ev.confidence||0)) * 100);
   const _det = ev.detected ? `<b>识别为「${esc(ev.detected)}」</b>，` : '';
   // ★ 2026-10-27：澄清条上先摊开「我的理解」，用户才能判断"要不要改"。
   //   原来只写"已按「intent_key」继续执行" —— 给的是内部 key，用户无法据此判断对错。

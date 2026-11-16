@@ -200,12 +200,32 @@ def discover_server(srv: dict, repo=None):
                 #   这次把丢掉的东西存回来。`tools` 字段保持原样（既有消费点不受影响）。
                 tool_meta=_save_tool_meta(tools),
             )
+        # ★★ 2026-11-06：**把工具清单同步进 `tools` 表**（此前只写 mcp_servers.tool_meta，
+        #   完全不碰 tools ⇒ 执行策略门控读不到 MCP 的 side_effect ⇒ 42 个非只读工具
+        #   被无条件全量注入给每个执行主体，包括知识问答/报告生成）。
+        #   语义见 agent/mcp_tool_sync.py：派生产物 + 人工覆写受保护；
+        #   人工覆写行（side_effect_source='manual'）的 side_effect 永不被覆盖。
+        #   本段失败**不得**影响 discover 主结果（工具发现本身是成功的）。
+        _sync_stats = {}
+        if repo is not None:
+            try:
+                from agent.mcp_tool_sync import sync_mcp_tools
+                _sync_stats = sync_mcp_tools(repo.conn, sid, tools)
+                try:
+                    repo.conn.commit()
+                except Exception:
+                    pass
+                print("[mcp_sync] MCP#%s 工具同步: %s" % (sid, _sync_stats))
+            except Exception as _e_sync:
+                print("[mcp_sync] MCP#%s 工具同步失败(不影响发现): %s: %s"
+                      % (sid, type(_e_sync).__name__, str(_e_sync)[:160]))
         return {
             "ok": True, "status": "online", "latency_ms": latency,
             "protocol": handshake.get("protocolVersion", ""),
             "server_info": handshake.get("serverInfo", {}),
             "capabilities": caps,
             "tools": [t.get("name") for t in tools],
+            "tool_sync": _sync_stats,
             "resources": resources,
             "prompts": prompts,
         }

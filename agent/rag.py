@@ -123,17 +123,28 @@ class GraphRAG:
         self.vector = VectorEngine()
         self.router = QueryRouter(threshold=self.confidence_threshold)
 
-    def retrieve(self, query, branch="dev", attachment_text=None, kb_scope=None):
+    def retrieve(self, query, branch="dev", attachment_text=None, kb_scope=None,
+                 query_raw=None):
         """混合检索路由：上传文档优先 → GraphRAG 优先 → 向量兜底。
 
         - attachment_text: 用户上传文档全文（前 4000 字符）。非空时先做附件关键词命中，
           命中片段作为「上传资料」首要依据（attachment_hits）。
         - kb_scope: Agent 级知识库消费范围 {"mode","branches","docs"}（KB-S）：
           branches 非空 → 替代默认 release 分支集合；docs 非空 → 实体/分块/文档均按 source_doc 过滤。
+        - query_raw: **用户这一轮的原话**（未经拼装与归一化）。只用于落 trace 与样本
+          复核，**不参与检索**。为什么必须由调用方传：`query` 进本函数前已被上游拼上
+          kb_hint/槽位实体/附件前 600 字，进来后又被 Glossary 覆盖一次 —— 本函数
+          **无论怎么改都还原不出原话**（信息在入口前就丢了）。缺省（None）回退为
+          `query` 的入口值：宁可记"一个已拼装的串"，也不要写 NULL 去冒充"历史行"。
         - 知识库检索：**真路由**——GraphRAG 命中且置信足够 → 不再跑向量；
           图谱未命中/置信不足 → 才执行向量检索（chunk 级优先，文档粗匹配兜底）。
         - route ∈ {graph, mixed, vector}；统计落库 query_routing_stats。
         """
+        # ★ 2026-11-08：**在任何改写之前**捕获原话（Step 3 会把 query 覆盖成归一化
+        #   文本，见下方 `query = _glossary_res["normalized"] or query`）。
+        #   这条赋值必须留在函数体最前面 —— 它是"原话只在此刻存在"的唯一窗口，
+        #   一旦挪到归一化之后，记下来的就又是被替换过的串，且**看不出来**。
+        _query_raw = query_raw if isinstance(query_raw, str) and query_raw.strip() else query
         conn = get_db()
         t0 = time.time()
         # P0-b M4：rag span（会话级 trace）。开在入口——AST 验证本函数体
@@ -260,6 +271,21 @@ class GraphRAG:
         # → 整个 POST /api/conversations/{id}/chat 返回 500，AI 能力消费链路完全不可用。
         # 现统一在分支外先求值，口径与兜底分支保持一致（消费隔离：默认排除 AI 收编文档）。
         _exclude_ai = not (scope.get("include_ai_generated") or False)
+        # ★ 2026-11-08：因「域内无 chunk」而放弃施加的域名（空串 = 未放弃）。
+        #   必须在 try 之前初始化：否则后续任何异常都会让 trace 块因
+        #   UnboundLocalError 反过来吞掉整次检索（同 2026-09-16 的 500 成因）。
+        _domain_skipped = ""
+        # ★ 2026-11-08：`force_domain` / `boost` 此前只在下面
+        #   `if graph_confidence < self.confidence_threshold:` 分支内赋值，
+        #   而 trace 块**无条件**读 `force_domain` ⇒ 凡走 graph 路由（置信度够，
+        #   不进该分支）必然 `UnboundLocalError`，然后被 trace 的兜底吞掉。
+        #   后果实测：graph 路由**一条 trace 都没有**（"转发器和接收机之间是什么关系"
+        #   复现：hits=0 且无 trace 行），而这正是"观测失败被静默"的典型形态。
+        #   ⚠️ 教训：上一轮我在紧邻的注释里就写了"必须在 try 之前初始化"，
+        #   却只初始化了 `_domain_skipped` 一个变量 —— **风险写进了注释，没写进代码**。
+        #   故此处把该分支内"后续被无条件引用"的变量一次性全部前置初始化。
+        force_domain = None
+        boost = 1.0
         # P1-4：检索条数配置化（rag.top_k / rag.fallback_top_k，默认 4/5 与改动前一致）
         try:
             from core import config as _cfg
@@ -274,6 +300,18 @@ class GraphRAG:
                 # P0-2 行业对齐：Glossary 命中时强制 domain 过滤（sysml_norm 等）+ 术语加权
                 force_domain = (_glossary_res.get("force_domain") or "").strip() or None
                 boost = _glossary_res.get("boost") or 1.0
+                # ★ 2026-11-08：域可用性**前置**校验（见 `_domain_usable`）。
+                #   真库实测：glossary/glossary_concepts 有 60+ 条术语指向
+                #   satellite_comms(30) / loitering_munition(12) / 能力中心(15)
+                #   三个 **0 chunk** 的域 ⇒ 施加约束第一步必然零命中，
+                #   只能靠下面 P1-7 的事后撤域补救（多付一轮检索，
+                #   且若恰好命中别的域就不会触发撤销 ⇒ 召回被污染）。
+                #   不可用时**提前不施加**：省一轮、且不留污染窗口。
+                #   `unknown` 原本就被排除，这里保持一致。
+                if (force_domain and force_domain != "unknown"
+                        and not self._domain_usable(conn, force_domain, scope_docs, _inc_dep)):
+                    _domain_skipped = force_domain
+                    force_domain = None
                 from knowledge_engine import hybrid_search as _hybrid
                 # S4：top_k 配置化（P1-4，默认 4），与消费侧 context_text 的 chunk_hits[:3] 对齐
                 # （此前实取 8 条、仅消费 3 条，多算的 5 条白白走向量检索与 RRF 融合）
@@ -282,6 +320,41 @@ class GraphRAG:
                               glossary_boost=boost, doc_names=scope_docs or None,
                               include_deprecated=_inc_dep)
                 chunk_hits = _hy["hits"]
+                # ── 2026-11-16 跨语言补召回：中文术语密集查询 → 英文术语独立跑第二路 ──
+                # 为什么是"独立一路"而不是"改写原查询"（实测，反直觉）：
+                #   把英文词混进中文 query（`端口 port 和连接器 connector …`）**更差**
+                #   —— 混合串向量落在两种语言之间，两路都变弱，实测仍 miss；
+                #   而纯英文 query 同一问题上 rank 1、12 条命中。
+                # ⇒ 只在**中文查询**上生成第二路（纯英文查询本已最优，不扩）。
+                # 融合用 RRF：两路 `score` 是各自的 RRF 融合分，跨查询不可比，
+                #   只能按排名融合（`fuse_rrf` 的 docstring 有说明）。
+                # 开关 rag.bilingual_expansion（默认 True；置 False 回到改动前逐字行为）。
+                _xl_info = None
+                try:
+                    from core import config as _cfg_xl
+                    if _cfg_xl.as_bool("rag", "bilingual_expansion", True):
+                        from agent.retrieval_bilingual import (expand_to_english as _xl_exp,
+                                                               fuse_rrf as _fuse)
+                        # min_terms 必须真的消费配置 —— 否则该键是死配置
+                        # （新门禁 verify_p0_config_audit 会把它标成 DEAD_SUSPECT，
+                        #  实测本轮就被抓到过一次，所以这里显式取值传入）
+                        _xl_min = int(_cfg_xl.get("rag", "bilingual_min_terms", 2) or 2)
+                        _xl_q = _xl_exp(query, min_terms=_xl_min)
+                        if _xl_q:
+                            _hy2 = _hybrid(conn, _xl_q, top_k=_rag_top_k, branches=None,
+                                           domain=force_domain if force_domain and force_domain != "unknown" else None,
+                                           glossary_boost=None, doc_names=scope_docs or None,
+                                           include_deprecated=_inc_dep)
+                            _sec = _hy2.get("hits") or []
+                            if _sec:
+                                _before = len(chunk_hits)
+                                chunk_hits = _fuse(chunk_hits, _sec, k=60,
+                                                   cap=max(_rag_top_k, _before))
+                                _xl_info = {"query_en": _xl_q, "secondary_hits": len(_sec),
+                                            "before": _before, "after": len(chunk_hits),
+                                            "added": max(0, len(chunk_hits) - _before)}
+                except Exception:
+                    _xl_info = None   # 补召回失败绝不阻断主检索（退化为单路，比丢结果安全）
                 # ── P1-7（2026-10-16）检索侧 Corrective：域约束致零召回 ⇒ 撤域重查一次 ──
                 # 实测根因（69 例评测集 doc 43 例）：4 例金标在召回池位次 1~4、confidence_level「高」，
                 # 但 retrieve() 返回 chunk_hits=0 —— **不是召回差，是被 domain 过滤整个掉**。
@@ -405,6 +478,15 @@ class GraphRAG:
         # 生效范围（很关键）：**只在「向量路由 且 图谱无命中」时**——
         #   · 模型域问题（"转发器 EIRP 多少"）走 graph/mixed，命中实体就算有依据，不受此限；
         #   · 附件命中优先（attachment_hits）也不受此限。
+        # ★ 2026-11-08：零召回成因分型（shadow）的初值。**真正的计算在 trace 块内**
+        #   （`_hit_src` 定稿之后）—— 因为「零命中」的口径必须与 `hit_count` **同源**。
+        #   踩过的坑：这里若用 `not chunk_hits` 或"三路原始结果皆空"来判，
+        #   会与 trace 的 `hit_count` 对不上：
+        #     · `route=mixed` 时命中在 `graph_results`（`宽带载荷` → 16 条）；
+        #     · 低置信过滤会清空 `chunk_hits`，但 `vector_results` 仍有 20 条垃圾
+        #       （问「红烧肉怎么做」也能拿 20 条"相关知识"）。
+        #   两处各写一份判据 ⇒ 打标与统计永远对不上，这是老毛病了，故强制同源。
+        _gap_info = {}
         _reject_info = {"rejected": False}
         try:
             if (route == "vector" and not graph_results and chunk_hits
@@ -556,13 +638,77 @@ class GraphRAG:
                 from glossary import trace_query as _tq
                 _hit_src = (graph_results if route in ("graph", "mixed")
                             else (chunk_hits or vector_results)) or []
-                # 命中档位只在"真的命中"时才有意义；空结果恒 0（不编造 0.0 以外的值）
-                _top = 0
-                if _hit_src:
-                    _f0 = _hit_src[0]
-                    _top = (_f0.get("score") or _f0.get("conf") or 0) if isinstance(_f0, dict) else 0
+                # ── 分数取值（2026-11-08 修）─────────────────────────────────
+                # 旧实现：`_f0.get("score") or _f0.get("conf") or 0`。
+                # 但 `graph_results` 的元素是**图谱实体**（字段有 id/name/type…），
+                # **没有** `score` 也没有 `conf` —— 图路的分数是独立的
+                # `graph_confidence` 变量（多因子加权，见 `_graph_confidence`）。
+                # ⇒ 凡 route ∈ {graph, mixed} 的 trace，`top_score` **恒为 0**。
+                #   实测存量：mixed 路由 27 行 min=avg=max=**0.0**。
+                # 危害不止是"数字不对"：`core/online_eval._cand_low_conf` 按
+                #   `ORDER BY top_score ASC` 挑"最没底"的查询，这 27 行恒占榜首，
+                #   每次都采它们 ⇒ **采样偏置**，且看起来完全正常。
+                # 修法两条，缺一不可：
+                #   ① 图路取 `graph_confidence`（该路真实量纲）；
+                #   ② 取不到分数时记 **NULL 而非 0** —— 0 会被当成"最差"，
+                #      而"没这个量"和"这个量很低"是两件事。
+                def _first_score(rows, keys=("score", "vec_score")):
+                    """返回首条可用分数的 float；无可用分数返回 None（≠0）。"""
+                    for r in (rows or []):
+                        if not isinstance(r, dict):
+                            continue
+                        for k in keys:
+                            v = r.get(k)
+                            if v is None:
+                                continue
+                            try:
+                                return round(float(v), 4)
+                            except (TypeError, ValueError):
+                                continue
+                    return None
+
+                _top_graph = round(float(graph_confidence or 0.0), 4) if graph_results else None
+                _top_chunk = _first_score(chunk_hits)
+                _top_vec = _first_score(vector_results)
+                # 按 route 决定 `top_score` 的语义（保持与既有消费方一致的"择一"含义，
+                # 但这次择的是**各自真实的量**），并把种类写进 score_kind。
+                if route in ("graph", "mixed"):
+                    _top = _top_graph
+                    _kind = "graph_conf" if _top is not None else ""
+                elif chunk_hits:
+                    _top = _top_chunk
+                    _kind = "chunk_score" if _top is not None else ""
+                else:
+                    _top = _top_vec
+                    _kind = "vec_score" if _top is not None else ""
+                if _top is None:
+                    _top = 0   # 兼容既有 REAL NOT NULL 语义；真实缺失由 score_kind='' 表达
+                # ★ 2026-11-08：零召回成因分型（shadow）。判据 = **`_hit_src` 为空**，
+                #   与下面 `hit_count` 同源 —— 分型标签与统计数字必须由同一个量决定。
+                #   只写 trace，**不参与任何决策**：不改 route / 不改 hits /
+                #   不触发反问 / 不阻断生成。四态判据见 `agent/retrieval_gap.py`。
+                if conn is not None and not _hit_src:
+                    _gap_on = True
+                    try:
+                        from core import config as _cfg_gap
+                        _gap_on = bool(_cfg_gap.get("rag", "gap_classify_shadow", True))
+                    except Exception:
+                        pass
+                    if _gap_on:
+                        try:
+                            from agent.retrieval_gap import classify as _gap_classify
+                            _gap_info = _gap_classify(conn, query, 0)
+                        except Exception:
+                            # 旁路观测自身失败，绝不能冒泡影响检索/trace
+                            _gap_info = {"kind": "error"}
                 _tq(conn, query, {
                     "normalized": query,
+                    # ★ 2026-11-08：用户原话（见函数入口的 `_query_raw`）。
+                    #   `query` 这一列是"实际送检索的串"（含上游拼装 + 归一化），
+                    #   标注员/样本复核要看的是原话 ⇒ 单列存储，不复用 `query`：
+                    #   历史 6.5k 行的 `query` 已被污染且**原话不可恢复**，
+                    #   若把语义改掉，同一列在新旧行上含义不同且表里看不出分界。
+                    "query_raw": _query_raw,
                     "intent": "knowledge_qa",
                     "route": route,                    # ← 真实路由（本次修复的核心）
                     "domain": force_domain or "all",
@@ -571,6 +717,15 @@ class GraphRAG:
                                  for h in _hit_src[:5]],
                     "hit_count": len(_hit_src),
                     "top_score": _top,
+                    # ★ 2026-11-08：分数的来源与三路原值（口径分离）。
+                    #   `top_score` 是"按 route 择一"，跨 route 不可比；
+                    #   `score_kind` 说明它到底是哪种量，`top_*` 保留三路原值，
+                    #   使"图置信度"与"文本得分"能在同一行里被分别追溯，
+                    #   不需要事后按 route 猜字段含义。NULL = 该路无结果（≠0 分）。
+                    "score_kind": _kind,
+                    "top_graph": _top_graph,
+                    "top_chunk": _top_chunk,
+                    "top_vec": _top_vec,
                     "latency_ms": latency_ms,
                     "detail": {
                         "reason": reason,              # 路由理由（graph_no_hit 等）
@@ -578,6 +733,11 @@ class GraphRAG:
                         "vector_count": len(vector_results or []),
                         "glossary": [h.get("user_term") for h in (_glossary_res.get("hits") or [])],
                         "glossary_recall": glossary_recall.get("concepts", []),
+                        # ★ 2026-11-08：被「域内无数据」跳过的域（非空即说明 Glossary 本条
+                        #   判了一个空域）。与上面 `domain` 字段互补：`domain` 是**实际生效**
+                        #   的约束，这里记的是**原本想施加但放弃**的域 —— 只记生效值会让
+                        #   「域误判」在日志里彻底消失。
+                        "domain_skipped": _domain_skipped,
                         "recall_reasons": [(h or {}).get("recall_reason", "")
                                            for h in (chunk_hits or [])[:3] if isinstance(h, dict)],
                         # P0-1（2026-11-01）：低置信过滤的可观测性。
@@ -587,10 +747,24 @@ class GraphRAG:
                         # P0-1b：拒答判据数字（rejected/max/avg/阈值）。
                         # 保留数字而不是只存 true/false —— 阈值是否合适要靠这些数字回溯。
                         "out_of_domain": _reject_info,
+                        # ★ 2026-11-08：零召回成因分型（shadow 观测）。
+                        #   kind ∈ ok / recall_miss / grounding_miss / knowledge_gap /
+                        #   indeterminate。**这里出什么问题都不影响本次回答**，
+                        #   它只回答"零命中到底是什么性质"，不回答"该不该回答"。
+                        "retrieval_gap": _gap_info,
                     },
                 })
-        except Exception:
-            pass   # 观测失败绝不阻断检索主链路
+        except Exception as _e_trace:                              # noqa: BLE001
+            # 观测失败绝不阻断检索主链路 —— 但**不能静默**。
+            # 2026-11-08：此前是 `pass`，于是"trace 落库失败"在系统里零痕迹，
+            # 而所有基于 query_trace 的指标（零命中率、低置信采样）都以为自己在
+            # 统计全量。改为计数留痕，主流程行为不变。
+            try:
+                from core.observe_fail import note as _note_obs
+                _note_obs("rag.trace", _e_trace, qlen=len(query or ""),
+                          route=str(route or ""))
+            except Exception:                                      # noqa: BLE001
+                pass
         # P1-4 修（2026-10-06）：`confidence` 此前**恒等于 graph_confidence**，而
         #   `QueryRouter.decide` 在图谱未命中时给出 route='vector'/'mixed' 且 graph 置信度=0
         #   ⇒ **vector 路由下 confidence 恒为 0**。实测（embedding 恢复后）：
@@ -620,8 +794,16 @@ class GraphRAG:
                 _reason_stat = reason
             self.router.record(conn, query, route, _reason_stat, retrieval_confidence,
                                len(graph_results), len(vector_results), latency_ms, branch)
-        except Exception:
-            pass  # 统计落库失败不影响主流程
+        except Exception as _e_stat:                               # noqa: BLE001
+            # 同上：统计落库失败不影响主流程，但必须留痕 —— 否则
+            # `query_routing_stats` 的样本缺失会表现为"某类查询变少了"，
+            # 而不是"统计坏了"，是最容易被误读成业务变化的一种失真。
+            try:
+                from core.observe_fail import note as _note_obs
+                _note_obs("rag.route_stat", _e_stat, route=str(route or ""),
+                          branch=str(branch or ""))
+            except Exception:                                      # noqa: BLE001
+                pass
 
         # Step 5: P0 记忆召回（2026-09-29）——把「已沉淀的经验/决策」作为一路独立召回源。
         # 详见 agent/memory_recall.py 的模块 docstring。此处只做编排：
@@ -792,6 +974,54 @@ class GraphRAG:
         return min(w_cov * hit + w_rel * rels + w_typ * type_match, 1.0)
 
     @staticmethod
+    def _domain_usable(conn, domain: str, scope_docs, inc_dep: bool) -> bool:
+        """域约束的**可用性前置校验**（2026-11-08）：库里没有该域的数据时不施加约束。
+
+        ## 为什么需要（实测，不是推断）
+        真库里 `glossary` / `glossary_concepts` 共 **60+ 条术语指向 3 个 0 chunk 的域**：
+            satellite_comms     30 条概念 / 3 条术语 → 库内 0 chunk
+            loitering_munition  12 条概念            → 库内 0 chunk
+            能力中心              15 条术语            → 库内 0 chunk
+        任何被这些术语 `force_domain` 的查询，**第一步必然零命中**，
+        只能靠 `_retry_without_domain` 事后撤域补救（多付一轮检索，且若恰好命中
+        别的域则不会触发撤销，召回会被污染）。
+
+        实证（`错误 3.1：混淆 part 和 ref part`，trace 2026-10-16）：
+            domain=None              → 5 条，vec 0.751
+            domain='satellite_comms' → 0 条（该域 0 chunk）
+        而含 `ref part` 的 17 个 chunk 全部在 `sysml_norm`。
+        同一查询 4 分钟内出现 20 / 0 / 20 —— 正是「域误判 + 撤域重试是否生效」的抖动。
+
+        ## 为什么不删词表
+        删词表是**数据治理**（运维动作，会随文档导入回退）；本函数是**代码层加固**。
+        判据是「该域在目标范围内有没有 chunk」——数据驱动，
+        新增/导入域自动生效，不需要维护任何域名白名单。
+
+        ## 口径必须与 hybrid_search 一致
+        `branches=None`（`retrieve` 本就是全局检索）+ `doc_names=scope_docs`
+        + `include_deprecated=inc_dep`。少带任何一个都会出现
+        「校验说有数据、实际过滤后没有」的假阴性。
+
+        ## 刻意不做进程内缓存
+        文档导入/下线会改变结论，缓存即 stale；`domain=? LIMIT 1` 在 7k 行表上 <1ms。
+
+        失败时返回 True（保持原行为）：校验本身不该成为新的拒答来源。
+        """
+        try:
+            if not domain:
+                return True
+            from knowledge_pipeline import _doc_clause, _lifecycle_clause
+            dsql, dparams = _doc_clause(scope_docs)
+            lsql, lparams = _lifecycle_clause(inc_dep)
+            row = conn.execute(
+                "SELECT 1 FROM document_chunks WHERE domain=?" + dsql + lsql + " LIMIT 1",
+                [domain] + list(dparams) + list(lparams),
+            ).fetchone()
+            return bool(row)
+        except Exception:
+            return True
+
+    @staticmethod
     def _retry_without_domain(conn, query: str, boost: float, scope_docs,
                               top_k: int, inc_dep: bool) -> list:
         """P1-7：撤掉 domain 约束重查一次（检索侧 Corrective 的唯一动作）。
@@ -830,7 +1060,14 @@ class GraphRAG:
                           glossary_boost=boost,
                           doc_names=scope_docs or None,
                           include_deprecated=inc_dep)
-            return _hy.get("hits") or []
+            hits = _hy.get("hits") or []
+            # ★ 2026-11-08：标注来源，与 `_retry_with_keywords` 的 `recall_via` 同口径。
+            #   此前不标记 ⇒「域误判被撤域救回」在结果侧**完全不可见**，
+            #   也就无法统计域误判率（只能靠人翻 trace 猜）。
+            for h in hits:
+                if isinstance(h, dict):
+                    h["recall_via"] = "domain_retry"
+            return hits
         except Exception:
             return []
 

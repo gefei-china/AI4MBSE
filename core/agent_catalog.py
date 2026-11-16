@@ -117,6 +117,9 @@ def _query(conn=None) -> Optional[Dict[str, Any]]:
         sel.append("stage_order" if has_stage else "NULL AS stage_order")
         sel.append("COALESCE(is_code_stage,0) AS is_code_stage" if has_code else "0 AS is_code_stage")
         sel.append("COALESCE(is_orch_default,0) AS is_orch_default" if has_orch else "0 AS is_orch_default")
+        # ★ 2026-11-07：池内顺序（NULL=未登记，排在已知顺序之后按名兜底）
+        has_ord = "orch_order" in cols
+        sel.append("orch_order AS orch_order" if has_ord else "NULL AS orch_order")
         rows = conn.execute(
             "SELECT %s FROM agents WHERE status='active'" % ", ".join(sel)).fetchall()
         if not rows:
@@ -131,7 +134,7 @@ def _query(conn=None) -> Optional[Dict[str, Any]]:
         stage_pairs: List[tuple] = []
         std: set = set()
         code: set = set()
-        orch: List[str] = []
+        orch: List[tuple] = []       # (order, name)：顺序是行为的一部分，不能靠行序
         for row in rows:
             name = str(_g(row, "name", 0) or "")
             if not name:
@@ -148,7 +151,8 @@ def _query(conn=None) -> Optional[Dict[str, Any]]:
             if is_code:
                 code.add(name)
             if is_orch:
-                orch.append(name)
+                _o = _g(row, "orch_order", 7)
+                orch.append((int(_o) if _o is not None else 10 ** 6, name))
 
         stage_pairs.sort()
         stage_names = [n for _, n in stage_pairs]
@@ -157,7 +161,7 @@ def _query(conn=None) -> Optional[Dict[str, Any]]:
             # 标准意图：内置意图 ∪ 阶段意图（都代表"意图标识"）
             "standard_intents": frozenset(std),
             "code_stages": frozenset(code),
-            "orch_default": orch,
+            "orch_default": [n for _, n in sorted(orch)],
             # 缺列/全空 ⇒ 便于调用方与门禁区分"真没配"和"从没迁移过"
             "has_stage_order": bool(stage_names),
             "columns": {"is_code_stage": has_code, "is_orch_default": has_orch,

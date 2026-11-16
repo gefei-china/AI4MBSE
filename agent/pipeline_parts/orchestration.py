@@ -245,6 +245,8 @@ class OrchestrMixin:
                 parallel=True, provider_id=provider_id, attachments=attachments, pool=pool,
                 conversation_id=conversation_id, branch=branch, user=user,
                 stage_hint=self._build_stage_hint(self.router.detect_multi(user_input)),
+                # ★ 2026-11-06：编排子任务继承主 Agent 的 MCP（见 planner._planner_core 注释）
+                main_agent=getattr(self, "_team_main_agent", "") or "",
                 **_kw)
         except Exception as e:
             self._orch_error = str(e)[:150]
@@ -347,7 +349,9 @@ class OrchestrMixin:
                 goal=user_input, agents=self._ORCH_AGENTS, max_tasks=self._ORCH_MAX_TASKS,
                 parallel=True, provider_id=provider_id, attachments=attachments, pool=_pool,
                 conversation_id=conversation_id, branch=branch, user=user,
-                stage_hint=self._build_stage_hint(_multi))
+                stage_hint=self._build_stage_hint(_multi),
+                # ★ 2026-11-06：同上
+                main_agent=getattr(self, "_team_main_agent", "") or "")
         except Exception as e:
             self._orch_error = str(e)[:150]
             return None
@@ -416,7 +420,6 @@ class OrchestrMixin:
                                            "deps": json.loads(r["deps"] or "[]"),
                                            "context": _cfg.get("context", ""),
                                            "expected_output": _cfg.get("expected_output", "")})
-                    saved_flow_id = self._save_planner_flow(_goal, _plan_dict, intent)
             finally:
                 _conn.close()
         except Exception:
@@ -547,204 +550,9 @@ class OrchestrMixin:
             "matched_flows": [],
         }
 
-    # ── P0-1：自动编排结果沉淀为可复用工作流 ──
-    def _save_planner_flow(self, goal: str, plan: list, intent: str) -> int | None:
-        """把自动编排生成的 plan 归一化为 FlowExecutor 兼容节点/边，写入 agent_flows（draft）。
 
-        - 仅成功编排（done_items≥1，degraded=False 或 plan 非空）调用；
-        - 节点 = 子任务（type=agent, config.agent=意图名, query 模板化引用 payload.input + context）；
-        - 边 = deps 关系；返回新流程 id；异常/无有效节点返回 None（不阻断主流程）。
-        """
-        try:
-            nodes, edges = [], []
-            for t in (plan or []):
-                if not isinstance(t, dict) or not t.get("key"):
-                    continue
-                key = str(t["key"])
-                agent_id = t.get("agent") or ""
-                title = str(t.get("title") or key)
-                ctx = str(t.get("context") or "").strip()
-                exp = str(t.get("expected_output") or "").strip()
-                query = f"{{{{payload.input}}}}\n子任务：{title}"
-                if ctx:
-                    query += f"\n任务上下文（只读）：{ctx[:800]}"
-                if exp:
-                    query += f"\n期望输出：{exp[:500]}"
-                nodes.append({"id": key, "type": "agent", "label": title,
-                              "config": {"agent": agent_id, "query": query}})
-                for dep in (t.get("deps") or []):
-                    dep = str(dep)
-                    if dep and any(n["id"] == dep for n in nodes):
-                        edges.append({"source": dep, "target": key})
-            if not nodes:
-                return None
-            from repositories.studio_repo import StudioRepo
-            from database import get_db
-            conn = get_db()
-            try:
-                name = f"自动编排·{(goal or '')[:18]}"
-                desc = f"由 AI 建模自动编排沉淀（意图：{intent}，{len(nodes)} 子任务），可在画布中编辑后发布复用"
-                fid = StudioRepo(conn).create_agent_flow(
-                    name, desc, json.dumps(nodes, ensure_ascii=False),
-                    json.dumps(edges, ensure_ascii=False), version="v1", status="draft", source="planner_auto")
-                conn.commit()  # BaseRepo.execute 不自动提交，需显式 commit 持久化
-                return fid
-            finally:
-                conn.close()
-        except Exception:
-            return None
-
-    # ── B4-7：复用匹配的「泛词」判定 ────────────────────────────────────
-    # 这些 bigram 在**几乎任何** MBSE 请求里都会出现（"生成/分析/输出/给出/帮我/请…"），
-    # 用它们判"是不是同一个流程"等于没判。
-    # ⚠️ 刻意**不用数量阈值**而用"命中是否全是泛词"—— 首版按数量/占比把关，
-    #   结果把真请求（"为卫星…生成 SysML V2 结构视图模型代码并校验"）也挡住了。
-    #   根因是 bigram 计数随文本长度两边同时爆炸，**任何单一阈值都会在
-    #   "挡住泛词"与"保住真请求"之间来回摆**。判据的**性质**才稳定。
-    _REUSE_GENERIC_WORDS = (
-        "生成", "结果", "分析", "输出", "给出", "帮我", "请问", "一下",
-        "一个", "一份", "一段", "需求", "方案", "设计", "文档", "模型",
-        "代码", "视图", "建模", "先做", "再做", "然后", "以及", "进行",
-        "架构", "自动", "编排", "沉淀", "意图", "流程", "工程", "系统",
-    )
-
-    @classmethod
-    def _reuse_generic_set(cls) -> frozenset:
-        """泛词 bigram 集（**程序化生成**，不手写 —— 手打过一次，出了两个乱码项）。
-
-        `_flow_tokens` 产出的是**字符 bigram**（长 2 的子串），所以泛词表也必须
-        是同一形态：用 `_bigrams("生成")` 生成，而不是把「生成」两个字直接塞进去。
-        """
-        out = set()
-        for w in cls._REUSE_GENERIC_WORDS:
-            out |= cls._bigrams(w)
-        return frozenset(out)
-
-    @classmethod
-    def _bigrams(cls, s: str) -> set:
-        t = str(s or "").lower()
-        return {t[i:i + 2] for i in range(len(t) - 1)}
-
-    @classmethod
-    def _reuse_generic_only(cls, hit_name: set, hit_desc: set) -> bool:
-        """命中的 bigram **是否全部**为泛词。
-
-        返回 True ⇒ 只是碰巧含有泛词，判为"不同流程"，不进复用候选。
-        ⚠️ **空命中返回 False**（"没命中任何东西"不该被当成"全是泛词"）——
-           否则它会被 `score >= 2` 之外的路径误收；这里只管"命中了但都是泛词"。
-        """
-        hits = {t for t in (hit_name or set()) | (hit_desc or set())}
-        if not hits:
-            return False
-        return hits.issubset(cls._reuse_generic_set())
-
-    def _try_reuse_planner_flow(self, user_input: str, intent: str) -> dict | None:
-        """复用已发布（published）的 planner_auto 沉淀流程：词法+语义匹配 → FlowExecutor 执行。
-
-        命中返回 {"content","plan","degraded","flow_id","flow_name"}；未命中/异常返回 None
-        （调用方回落原 LLM 规划路径）。输入经 {{payload.input}} 模板注入子任务。
-        """
-        try:
-            from database import get_db
-            conn = get_db()
-            try:
-                rows = conn.execute(
-                    "SELECT id, name, description, nodes, edges FROM agent_flows "
-                    "WHERE source='planner_auto' AND status='published' ORDER BY id DESC LIMIT 50").fetchall()
-            finally:
-                conn.close()
-            if not rows:
-                return None
-            # 词法分级加权 + 语义精排（对齐 _match_flows：词法主序，语义微调）
-            q_tokens = self._flow_tokens(user_input)
-            if not q_tokens:
-                return None
-            lex_scored = []
-            for r in rows:
-                name = r["name"] or ""
-                desc = r["description"] or ""
-                qn = q_tokens & self._flow_tokens(name)
-                qd = q_tokens & self._flow_tokens(desc)
-                score = len(qn) * 3 + len(qd) * 2
-                if name and name in user_input:
-                    score += 5
-                # ★ B4-7（2026-10-14 真实前端验证抓到）：**绝对阈值 2 太松，
-                #   一个泛词就足以劫持整条编排**。实测（flow 234「先做需求分析再生成方案设计」）：
-                #     「生成一份报告」/「帮我生成设计文档」/「请输出这份需求的影响分析」
-                #     全部命中（词法分 3~6）⇒ 8 个探针里 6 个被劫持。
-                #   根因：`_flow_tokens` 是**字符 bigram**，`_flow_tokens(name)` 只有 12 个 bigram，
-                #   长输入与它的交集**天然只有 1~3 个** ⇒ 门槛等于"有一个泛词就算命中"。
-                #
-                # ⚠️ 下面这套判据是**试了 4 轮才收敛的**，中间 3 版都被实测否掉，
-                #   **别再走回头路**（每一条都有实测反例，见 tools/verify 里同名门禁）：
-                #   ① 命中数量/覆盖度 → 挡住真请求（真请求只命中 1~3 个）
-                #   ② 命中占比（命中数÷模板 bigram 数）→ 两边同时爆炸，仍挡真请求
-                #   ③ 「命中是否全为泛词」→ **真请求命中的恰好就是泛词**，仍被挡
-                #      （实测 `{'生成'}`、`{'生成','需求'}∪{'建模'}` 都 ⊆ 泛词集）
-                #   ④ 语义相似度阈值 → **无语中区分力**：
-                #      「帮我生成设计文档」0.6636 **>** 「为卫星…生成 SysML V2 结构视图模型并校验」0.5233
-                #      ⇒ 泛词请求分**更高**（embedding 是 bigram 降级态，同样不可靠）
-                #   ⑤ 阶段结构判据（节点 label 命中 ≥2）→ 模板 label 是
-                #      「需求分析/方案设计」，而用户说「架构设计」⇒ 只命中 1 ⇒ 也挡掉真命中
-                #
-                # ⇒ **收敛到的判据只有两条实测站得住的**：
-                #   A. **模板名整体出现在输入里**（`name in user_input`）—— 强、唯一可靠；
-                #   B. **命中 bigram 里有非泛词的** —— 能挡住"只因泛词而命中"。
-                #   ⇒ 二者取或。词法分只用于**排序**，不用于准入。
-                #
-                # ⚠️ 这仍**不是完美的判据**：一个既说「生成一份报告」又恰好提到
-                #   「需求」的输入仍可能被劫持。**根因是「按文本相似度复用流程」
-                #   这个机制本身就不精确** —— 真正的收口是**不要随手发布流程模板**
-                #   （本仓当前只有 1 个已发布模板，且是自动沉淀的 2 节点流程）。
-                # ⚠️ **必须去掉「自动编排·」这类前缀再比**（实测踩到）：
-                #   自动沉淀的模板名 = `自动编排·先做需求分析再生成方案设计`，
-                #   用户输入里绝不会出现全名 ⇒ `name in user_input` **恒为假**
-                #   ⇒ 这条判据在自动沉淀的模板上**从未生效过**
-                #   （典型的「判据看起来在起作用，实测恒假」）。
-                #   正确做法：`core = name.split('·', 1)[-1]`，比对 core。
-                _name_core = (name.split("·", 1)[-1] if "·" in name else name).strip()
-                _name_exact = bool(_name_core) and (_name_core in user_input)
-                _all_generic = (not _name_exact) and self._reuse_generic_only(qn, qd)
-                if score >= 2 and not _all_generic:
-                    lex_scored.append((score, r))
-            if best is None:
-                return None
-            try:
-                nodes = json.loads(best["nodes"] or "[]")
-                edges = json.loads(best["edges"] or "[]")
-            except Exception:
-                return None
-            if not nodes:
-                return None
-            # 复用 FlowExecutor 执行（agent 节点 → AgentPipeline，payload.input 注入查询）
-            from workflows import FlowExecutor
-            import time as _t
-            t0 = _t.time()
-            result = FlowExecutor().run(nodes, edges, payload={"input": user_input},
-                                        persist=False, flow_id=best["id"], flow_name=best["name"])
-            results = result.get("results") or {}
-            done_items = []
-            for n in nodes:
-                nid = n.get("id")
-                out = results.get(nid) or {}
-                if out.get("status") == "done":
-                    done_items.append({"task_key": nid, "title": n.get("label") or nid,
-                                       "agent_id": (n.get("config") or {}).get("agent", ""),
-                                       "result": out.get("content") or "", "status": "done"})
-            if not done_items:
-                return None
-            # LLM 汇总（≥2 子任务时；否则拼接）
-            if len(done_items) >= 2:
-                content = FlowExecutor()._summarize_plan(done_items, nodes, None)
-            else:
-                content = "\n\n".join(f"## {it['title']}\n{(it['result'] or '').strip()}" for it in done_items)
-            plan_meta = [{"key": it["task_key"], "title": it["title"],
-                          "agent": it["agent_id"], "status": "done"} for it in done_items]
-            return {"content": content, "plan": plan_meta, "degraded": False,
-                    "flow_id": best["id"], "flow_name": best["name"],
-                    "latency_ms": int((_t.time() - t0) * 1000),
-                    "errors": result.get("errors") or []}
-        except Exception:
-            return None
-
-    # ── P0-3：Agent 长期记忆接入主管线 ──
+    # ★ 2026-11-05：`_save_planner_flow` / `_try_reuse_planner_flow` 及复用匹配辅助
+    #   （`_REUSE_GENERIC_WORDS` / `_reuse_generic_set` / `_bigrams` / `_reuse_generic_only`）
+    #   随画布工作流一并移除 —— 它们读写的是 `agent_flows`（画布流程定义），
+    #   而画布已明确舍弃。编排主链路本身（`_planner_core` / `_run_task` / TaskQueue）
+    #   **完全不依赖这些函数**：回落原 LLM 规划路径，行为与"复用未命中"时一致。

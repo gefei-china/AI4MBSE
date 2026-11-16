@@ -175,3 +175,108 @@ async function memExport() {
     toast(`已导出 ${d.count || 0} 条记忆`);
   } catch (e) { toast.error('导出失败：' + (e.message || e)); }
 }
+
+// ── 离线对账（Dreaming，2026-11-12）─────────────────────────────────────
+// 端点：/api/memory/dream/{preview,apply,persist,ab-report}
+// 纪律（与后端一致，别在前端抹平）：
+//   · preview **只读**；只有显式勾选 + 点「应用所选」才写状态；
+//   · apply 只改 verify_state / evidence_ref，**不改正文**；
+//   · needs_review 是"规则法判不准、交人工"的中间态 —— 只展示，
+//     不提供批量批准，也不把它混进 contradicted 的可勾选项；
+//   · fingerprint + note_limit 必须原样回传（后端按同一窗口重算指纹）。
+let _memDreamPkg = null;
+
+async function memDreamPreview() {
+  const box = document.getElementById('mem-dream-cands');
+  const sum = document.getElementById('mem-dream-summary');
+  if (!box) return;
+  box.innerHTML = '<div class="loading">正在对账（只读）…</div>';
+  try {
+    const d = await api('/api/memory/dream/preview?note_limit=300');
+    if (d && d.error) { toast.error('预览失败：' + d.error); return; }
+    _memDreamPkg = d;
+    const s = d.stats || {};
+    const strong = (d.candidates || []).filter(c => c.state === 'contradicted');
+    const review = (d.candidates || []).filter(c => c.state === 'needs_review');
+    const ok = (d.candidates || []).filter(c => c.state === 'verified');
+    sum.innerHTML = `扫描 <b>${s.notes_scanned || 0}</b> 条记忆 ｜ `
+      + `<span style="color:var(--bad,#c55)">疑似证伪 ${strong.length}</span> ｜ `
+      + `流水支持 ${ok.length} ｜ <b>需人工 ${review.length}</b> ｜ `
+      + `重复合并 ${s.merge || 0} ｜ 层级建议 ${s.tier || 0}<br>`
+      + `<span style="font-size:11.5px;">需人工项只列出标题，不提供批量批准；`
+      + `「疑似证伪」需逐条看证据引用后再勾选。</span>`;
+    document.getElementById('mem-dream-fp').textContent =
+      '指纹 ' + String(d.fingerprint || '').slice(0, 12) + ' · 窗口 ' + d.note_limit;
+    let html = '';
+    if (strong.length === 0) {
+      html += '<div style="font-size:12px;color:var(--mut);padding:6px 0;">'
+        + '本次没有强信号（同一数值被流水紧邻否定）的候选。'
+        + '这是正常的：判据刻意保守，避免误排除真实记忆。</div>';
+    } else {
+      html += strong.map(c => `<label style="display:block;padding:6px 4px;border-bottom:1px solid var(--line);cursor:pointer;font-size:12px;">
+        <input type="checkbox" class="mem-dream-pick" value="${c.memory_id}">
+        <b>#${c.memory_id}</b> ${esc(c.claim || '')}<br>
+        <span style="color:var(--mut);">证据 ${esc(c.evidence_ref || '—')} ｜ ${esc(c.reason || '')}</span>
+      </label>`).join('');
+    }
+    if (review.length) {
+      html += `<details style="margin-top:8px;font-size:11.5px;color:var(--mut);">
+        <summary>需人工判定 ${review.length} 条（展开查看，不提供勾选）</summary>`
+        + review.slice(0, 30).map(c => `<div style="padding:3px 0;">#${c.memory_id} ${esc((c.claim || '').slice(0, 52))} — ${esc((c.reason || '').slice(0, 60))}</div>`).join('')
+        + '</details>';
+    }
+    box.innerHTML = html;
+    const btn = document.getElementById('mem-dream-apply-btn');
+    if (btn) btn.disabled = strong.length === 0;
+    toast('预览完成（未修改任何记忆）');
+  } catch (e) { box.innerHTML = ''; toast.error('预览失败：' + (e.message || e)); }
+}
+
+async function memDreamApply() {
+  if (!_memDreamPkg) { toast.error('请先生成预览'); return; }
+  const ids = [...document.querySelectorAll('.mem-dream-pick:checked')]
+    .map(x => Number(x.value)).filter(Boolean);
+  if (!ids.length) { toast.error('请至少勾选一条候选'); return; }
+  if (!(await confirmDialog(
+    `将对 ${ids.length} 条记忆写入校验状态（编号 ${ids.join(', ')}）。\n\n`
+    + '只改 verify_state / 证据引用，不删除也不改写正文；被证伪项将不再进入召回。',
+    { title: '应用离线对账结果', okText: '应用所选' }))) return;
+  try {
+    const d = await api('/api/memory/dream/apply', {
+      method: 'POST',
+      body: JSON.stringify({ fingerprint: _memDreamPkg.fingerprint,
+                             note_limit: _memDreamPkg.note_limit,
+                             memory_ids: ids, approved_by: '设置页人工审批' }),
+    });
+    if (d && d.error) { toast.error('应用失败：' + d.error + (d.hint ? '（' + d.hint + '）' : '')); return; }
+    toast(`已应用 ${d.applied || 0} 条（仅状态，正文未改）`);
+    _memDreamPkg = null;
+    document.getElementById('mem-dream-apply-btn').disabled = true;
+    memDreamPreview();
+    loadMemories();
+  } catch (e) { toast.error('应用失败：' + (e.message || e)); }
+}
+
+async function memDreamPersist() {
+  try {
+    const d = await api('/api/memory/dream/persist', { method: 'POST' });
+    if (d && d.error) { toast.error('落盘失败：' + d.error); return; }
+    toast(`wiki 已落盘 ${d.written || 0} 页（data/memory_wiki/）`);
+  } catch (e) { toast.error('落盘失败：' + (e.message || e)); }
+}
+
+async function memDreamAB() {
+  try {
+    const d = await api('/api/memory/dream/ab-report');
+    if (!d.measured) { toast('尚未实测：请先运行 tools/eval/eval_memory_dream_ab.py'); return; }
+    const a = d.arm_a_baseline || {}, b = d.arm_b_shadow_hypothetical || {};
+    const box = document.getElementById('mem-dream-summary');
+    box.innerHTML = `<b>双臂影子评测</b>（${esc(d.measured_at || '')}）<br>`
+      + `A 现状：命中率 ${a.memory_hit_rate} / 每问题注入 ${a.tokens_per_question} 字符<br>`
+      + `B 影子（假设全部批准）：命中率 ${b.memory_hit_rate} / ${b.tokens_per_question} 字符<br>`
+      + `差值 ${JSON.stringify(d.delta)} ｜ 影子状态 ${d.shadow_states} 条`
+      + `（证伪 ${d.shadow_contradicted} / 需人工 ${d.shadow_needs_review}）<br>`
+      + `真库零写入：${d.db_untouched === true ? '✅ 已核验（状态指纹前后一致）' : '⚠️ 未核验/异常，请勿采用本组数字'}<br>`
+      + `<span style="font-size:11.5px;">${esc(a.unit_note || '')} ｜ B 臂只在数据库副本里发生，是假设值，不是已发生的事实。</span>`;
+  } catch (e) { toast.error('读取效果报告失败：' + (e.message || e)); }
+}

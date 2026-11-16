@@ -51,7 +51,8 @@ MATCH_MCP_WRITE = "mcp_write"
 MATCH_READ = "read"
 
 
-def classify_action(name: str, side_effect: str = "") -> dict:
+def classify_action(name: str, side_effect: str = "", se_source: str = "",
+                    is_mcp: bool = False) -> dict:
     """★ 执行侧写类判定（**双源**）—— 写前确认闸的唯一判据入口。
 
     返回 `{"match_key", "kind", "source"}`：
@@ -65,27 +66,49 @@ def classify_action(name: str, side_effect: str = "") -> dict:
     **全部被当成只读放行**（零人工确认直接执行）。
     ⇒ 必须叠加 MCP 侧的动词族判据（`mcp_effect_level`）。
 
-    ## 为什么本地优先
-    本地工具的 `side_effect` 是**人工维护的权威标注**（用户在管理页配的），
-    比动词族推断更可靠 ⇒ 本地命中时以它为准，MCP 判据只作为**兜底**。
+    ## 为什么本地优先 —— **仅当本地是人工标注时**（2026-11-07 修正）
+    原注释的理由是「本地 side_effect 是**人工维护的权威标注**」。这个前提在
+    2026-11-06 的 P0 之后对 MCP 工具**不再成立**：71 个 MCP 工具的副作用是
+    **自动派生**后落库的（`side_effect_source='auto'`）。
+
+    若仍无条件本地优先，则 31 个可逆写 MCP 工具会从策略表的
+    `mcp_write`=**notify**（灰度第 1 档：只留痕）掉进 `write`=**confirm**（逐条要人点）
+    ⇒ 灰度第 1 档被无声架空，且确认疲劳（OWASP 点名的 approval fatigue）会让人闭眼点通过。
+    门禁 `verify_hil_write_gate` 的 B 项（可逆写 ⇒ 放行）就是这条的判据。
+
+    ⇒ 现行规则（**只收紧、不放宽**）：
+      · `se_source='manual'` ⇒ 本地优先（人工裁决最高，尊重管理页配置）
+      · `se_source='auto'` + MCP ⇒ 走 MCP 动词族取**家族档**，
+        但若派生档比动词族更严，取更严的（例如派生出 destructive 而动词族只判 write）
+      · 其余（本地工具/HTTP 工具、无来源信息）⇒ 仍按本地 side_effect
     """
     nm = str(name or "")
     se = str(side_effect or "")
-    if se == "destructive":
-        return {"match_key": MATCH_LOCAL_DESTRUCTIVE, "kind": "destructive",
-                "source": "tools.side_effect"}
-    if se == "write":
-        return {"match_key": MATCH_LOCAL_WRITE, "kind": "write", "source": "tools.side_effect"}
-    # ── MCP 侧兜底 ──
+    _local_ok = not (se_source == "auto" and is_mcp)
+    if _local_ok:
+        if se == "destructive":
+            return {"match_key": MATCH_LOCAL_DESTRUCTIVE, "kind": "destructive",
+                    "source": "tools.side_effect"}
+        if se == "write":
+            return {"match_key": MATCH_LOCAL_WRITE, "kind": "write", "source": "tools.side_effect"}
+    # ── MCP 侧兜底（也是 auto 派生 + MCP 的主路径）──
     try:
         from agent.mcp_tool_meta import mcp_effect_level as _mel
         lvl = _mel(nm)
     except Exception:
         lvl = "read"
+    # 只收紧：派生档若更严，取更严
+    _rank = {"read": 0, "write": 1, "destructive": 2}
+    if _rank.get(se, 0) > _rank.get(lvl, 0):
+        lvl = se
+        _bumped = True
+    else:
+        _bumped = False
     if lvl == "destructive":
         return {"match_key": MATCH_MCP_DESTRUCTIVE, "kind": "destructive", "source": "mcp_verb"}
     if lvl == "write":
-        return {"match_key": MATCH_MCP_WRITE, "kind": "write", "source": "mcp_verb"}
+        return {"match_key": MATCH_MCP_WRITE, "kind": "write",
+                "source": "mcp_verb+derived" if _bumped else "mcp_verb"}
     return {"match_key": MATCH_READ, "kind": "read", "source": "default_read"}
 
 
@@ -580,6 +603,28 @@ def execute_confirmation(conn, conf: dict, user=None) -> dict:
                 "status": "already_executed", "result": str(done.get("result") or ""),
                 "message": "该确认单此前已执行过（幂等命中），本次未重复执行"}
     # ② 统一执行器
+    # ★ 2026-11-07（P2）：**元能力分支**必须放在最前 —— `cap_*` 是配置动作，
+    #   不是工具调用，不能进 `_exec_tool_call`（那里会按工具名再查一次 tools 表，
+    #   而 `cap_agent_create` 这样的动作名并不是工具名 ⇒ 必然报"未知工具"）。
+    #   这也是"提案 ≠ 批准"落地的位置：模型只能 propose，真正的执行到这里，
+    #   由用户在会话里点批准才发生 ⇒ 模型无法自批。
+    if action.startswith("cap_"):
+        try:
+            from services import capability_admin as _CA
+            _r = _CA.execute(payload, user=user)
+        except Exception as _ce:
+            _r = {"ok": False, "result": "元能力执行异常：%s: %s"
+                                        % (type(_ce).__name__, str(_ce)[:300])}
+        _ok = bool(_r.get("ok"))
+        _txt = str(_r.get("result") or "")
+        try:
+            HILService.mark_executed(conn, cid, _ok, _txt)
+        except Exception:
+            pass
+        return {"ok": _ok, "executed": True,
+                "status": "executed" if _ok else "failed", "result": _txt,
+                "message": ("能力变更「%s」已执行成功" % action) if _ok
+                           else ("能力变更「%s」执行失败" % action)}
     #   ★ 2026-10-28（真机清库实测修 X1）：**批次合并的每一项都必须执行**。
     #   初版只执行主确认单的 `payload`（= 合并进来的第 1 笔）⇒ 合并的第 2..N 笔
     #   **永远不会被执行**，而用户以为"批准了 N 项" ⇒ 静默少做（数据丢失型）。

@@ -21,6 +21,19 @@ logger = _logging.getLogger(__name__)
 #: ⚠️ 只豁免"改自己刚生成的代码"的工具，**不含任何入库/删改类工具**。
 _REPAIR_WRITE_EXEMPT = {"sysml_v2_autofix"}
 
+#: ★ 2026-11-07（P2）：**提案型工具**豁免写前确认闸。
+#:
+#: `capability_apply` 的"执行"就是**写一张确认单**（`services/capability_admin.propose`），
+#: 它本身不改任何配置。若再让它过写前确认闸，会变成**双重确认**：
+#:   闸拦下 → 确认单 A(action=capability_apply) → 批准 → 重放工具 → 内部又 propose
+#:   → 确认单 B(action=cap_xxx_create) → 还得再批一次
+#: 实测正是如此（确认单 #65 的 action 是 `capability_apply`，批准后只会再生成一张单）。
+#:
+#: 豁免的**安全性依据**：真正的变更仍然只有人点批准才会发生（在 `cap_*` 分支里），
+#: 且提案一定入队（`propose()` 里 `queue_confirmation` 是硬路径，没有"直接执行"分支）。
+#: 这与 `sysml_v2_autofix` 的豁免同族：**工具名描述的动作不等于它真正产生的副作用**。
+_PROPOSE_WRITE_EXEMPT = {"capability_apply"}
+
 #: ★ 2026-10-17（米爸三轮反馈的收口件）：**AI 主动澄清工具**（human-in-the-loop）。
 #: 背景：米爸要求「基于实际上下文、基于 AI 真的需要澄清的内容输出确认清单」，
 #: 而旧机制只有两道**路由层**澄清（阶段 1.4 意图确认 / 1.5 内容级探测）——
@@ -153,6 +166,45 @@ def _impact_preview(name: str, arguments: dict) -> str:
         if _pat in _n:
             _verb = _w
             break
+    # ★ 2026-11-07（P1a）：技能脚本的**专属摘要**。
+    #   实测问题：`skill_script_run(skill=智源MCP工具手册, script=scripts/lookup.py,
+    #   argv=[导出 SysML v2 源码])` 走通用推导 ⇒ 摘要渲染成
+    #   「运行「（未命名对象）」」—— 因为参数键是 skill/script/argv，
+    #   既不在 name/title 族，也不在 dataId/id 族。
+    #   用户面对这样的确认卡只能盲签，而"只给看不懂的摘要让人批 = 没让人批"
+    #   正是 `_impact_preview` 存在的理由（本函数自己的 docstring 第一句）。
+    if str(name or "") == "skill_script_run":
+        _sk = str(args.get("skill") or "").strip() or "（未指定技能）"
+        _sc = str(args.get("script") or "").strip() or "scripts/main.py"
+        _sc = _sc.replace("\\", "/").rsplit("/", 1)[-1]
+        _pv = ["运行脚本 %s（技能：%s）" % (_sc, _sk)]
+        _argv = args.get("argv")
+        if isinstance(_argv, (list, tuple)) and _argv:
+            _pv.append("命令行参数：%s" % " ".join(str(x) for x in _argv[:6]))
+        _kv = args.get("args")
+        if isinstance(_kv, dict) and _kv:
+            _kv_txt = ", ".join("%s=%s" % (k, str(v)[:40]) for k, v in list(_kv.items())[:5])
+            _pv.append("入参：%s" % _kv_txt)
+        # 明确说清风险边界：脚本是受信脚本，有文件/网络能力
+        _pv.append("脚本在本机执行，具备文件与网络能力")
+        return "；".join(_pv)
+
+    # ★ 2026-11-07（P2）：元能力提案的专属摘要。
+    #   实测问题：`capability_apply(kind=capability, action=create, spec={...})`
+    #   走通用推导 ⇒ 摘要渲染成「应用变更「（未命名对象）」」。用户面对这张卡
+    #   完全不知道要批什么（kind/action/spec 三个键都不在 name/id 族里）。
+    #   而"只给看不懂的摘要让人批 = 没让人批"正是本函数存在的理由。
+    if str(name or "") in ("capability_apply",):
+        try:
+            from services.capability_admin import preview as _capv
+            _pv = _capv(str(args.get("kind") or ""), str(args.get("action") or ""),
+                        args.get("spec") or {})
+            _why = str(args.get("reason") or "").strip()
+            return _pv + (("；理由：%s" % _why[:120]) if _why else "")
+        except Exception:
+            return "能力资产变更：kind=%s action=%s（摘要生成失败，请看原始参数）" % (
+                args.get("kind"), args.get("action"))
+
     _parts = ["%s「%s」" % (_verb, _target or "（未命名对象）")]
     if _container:
         _parts.append("容器 %s" % _container)
@@ -189,7 +241,30 @@ BUILTIN_DESC = {
     # ★ 2026-10-17（米爸需求）：联网搜索/网页抓取（定义见 web_tools.py）
     "web_search": "联网搜索互联网最新消息（参数 query:str, max_results:int 可选；时效性问题——最新/今天/新闻/发布——必用本工具，不要凭训练记忆回答时效问题）",
     "web_fetch": "抓取指定网页的正文文本（参数 url:str, max_chars:int 可选；配合 web_search 结果链接深读）",
+    # ★ 2026-11-06（P0：把"有实现但没接线"的能力接上）
+    #   ⚠️ 必须登记在这里：`_build_tools_def` 用它做 `if name in BUILTIN_DESC` 判定，
+    #   漏登记 = 绑定了也不注入（历史上 save_artifact 就踩过这个坑）。
+    "code_exec": "在隔离沙箱执行 Python/JS 代码并返回 _out 字典（参数 code:str, language:python|js, inputs:object, timeout:number≤30；无文件/网络/子进程，仅可 import json/math/re 等）",
+    "doc_parse": "提取 PDF/Word .docx/Excel .xlsx/CSV 的正文与表格文本（参数 path:str, max_chars:int, pages:如'1-5', sheets:str, max_rows:int；纯文本请用 file_read）",
+    # ★ 2026-11-07（P1）：技能脚本执行（定义见 skill_tools.py）
+    #   技能正文写「⚙ 脚本（需要时执行）」时用本工具真正跑起来；脚本是平台受信脚本，
+    #   有文件/网络能力 ⇒ side_effect=write（会被写前确认闸覆盖）。
+    "skill_script_run": "执行技能包自带的脚本（参数 skill:技能名, script:默认scripts/main.py, args:object 传给run(**args), argv:字符串数组当命令行参数, timeout:秒≤120；脚本只允许技能manifest声明过的路径）",
+    # ★ 2026-11-07（P2）：元能力（定义见 meta_tools.py）
+    "capability_query": "查询平台能力资产：Agent/技能/工具/AI自注册能力的清单、详情、绑定差异（参数 kind:agent|skill|tool|capability, action:list|get|diff, target, keyword；只读）",
+    "capability_apply": "新增/修改/绑定/解绑/启停/删除能力资产（参数 kind, action:create|update|bind|unbind|enable|disable|delete, target, spec:object, reason；**全部走人工确认，批准前不改动任何东西**）",
+    # ★ 2026-11-07（P0-1）：需求条目化 / 需求条目入库
+    #   ⚠️ 这两个名字**不带任何既有前缀**，且 `requirement_itemize_tools.py` 此前
+    #   **没有被任何分发点 import**（2026-11-07 实测：46 次真实调用全部返回「未知工具」，
+    #   而 tools 表里有行、技能正文还在教模型调用它 —— 「注册了没接线」的第三次同型事故）。
+    #   读/写分离：itemize 只读（每轮都跑），commit 落库（写 ⇒ 走写前确认闸）。
+    "requirement_itemize": "把自然语言需求按句切分为可验证条目（分类 functional/performance/interface/constraint，标 reqId 与来源），不可验证句归入 gaps 并说明原因，同时生成 SysML v2 需求视图骨架代码（参数 text:整段原文, domain:str, source_ref:str, project:标识符；只读，不落库）",
+    "requirement_commit": "把需求条目写入需求实体库（参数 items:条目数组 或 text:原文由本工具先条目化, gaps:数组, project:工程标识, version_id:int, source_ref:str；**幂等**：同文重复提交只更新不新增；写操作，需人工确认）",
 }
+
+#: 需求工具名集合与执行器（双链路必须同序同语义）
+from requirement_itemize_tools import REQ_TOOL_NAMES as _REQ_TOOL_NAMES  # noqa: E402
+from requirement_itemize_tools import exec_tool as exec_req_tool  # noqa: E402
 
 
 class ToolMixin:
@@ -266,6 +341,27 @@ class ToolMixin:
         #:   旁挂字典是零侵入方案，且与"过滤逻辑与 schema 无关"这个事实相符。
         _schema_by_name = {}
         builtin_desc = BUILTIN_DESC
+        # ★ 2026-11-10（P0-2，需求优化）：**工具状态必须参与注入判据**。
+        #   实测：`tools` 表 12 个 status='disabled' 的工具里，有 3 个
+        #   （`entity_create` / `impact_analyze` / `validate`）仍在 `BUILTIN_DESC` 里，
+        #   而下面那条内置工具注入路径**只看 `agent_def.tools` 绑定、不看 tools.status**
+        #   ⇒ 它们会被注入给模型，模型调用时却落到"工具已下线"分支。
+        #   后果比"少一个工具"严重：模型会**如实回答"该工具不可用"**，
+        #   用户以为能力不存在，而真相是"配置把它关了但绑定没同步"。
+        #   另一侧（走 DB 自定义路径的 9 个 disabled 工具）SQL 里**已有** `t.status='active'`，
+        #   所以只需补这一条路径 —— 修之前先用真库核对过两侧的实际行为，不靠推测。
+        #   口径：状态查询失败 ⇒ 空集合（宁可多给工具，也不要因观测设施故障把工具全砍掉）。
+        _disabled_tools = set()
+        try:
+            from database import get_db as _gdb_t
+            _c_t = _gdb_t()
+            try:
+                _disabled_tools = {r[0] for r in _c_t.execute(
+                    "SELECT name FROM tools WHERE status='disabled'").fetchall()}
+            finally:
+                _c_t.close()
+        except Exception:
+            _disabled_tools = set()
         candidates = []  # (name, desc, type, server_name_or_None)
 
         def _absorb_schema(name: str, raw) -> None:
@@ -422,6 +518,15 @@ class ToolMixin:
         # 内置工具（仅 Agent 声明过的）
         agent_def = self.registry.get(intent)
         for name in agent_def.tools:
+            # ★ 2026-11-10：已下线的工具**不注入**（否则"看得见调不到"会诱导模型说"不可用"）。
+            #   跳过时留痕，供观测面板与门禁核对（不静默丢弃 —— 本仓既有纪律）。
+            if name in _disabled_tools:
+                try:
+                    self._dropped_disabled = list(
+                        getattr(self, "_dropped_disabled", []) or []) + [name]
+                except Exception:
+                    pass
+                continue
             if name in builtin_desc and not any(c[0] == name for c in candidates):
                 candidates.append((name, builtin_desc[name], "builtin", ""))
         # TR-P3：DB 注册表自定义工具（Agent 通过绑定面板绑定的 type=tool 本地工具——
@@ -584,6 +689,72 @@ class ToolMixin:
             if "save_artifact" in _sk_wl and not any(c[0] == "save_artifact" for c in candidates):
                 candidates.append(("save_artifact", builtin_desc.get("save_artifact", ""),
                                    "builtin", ""))
+            # ★ 2026-11-07（P1）：skill_script_run 同通道补入。
+            #   授权来源不是人工维护的 allowed_tools，而是**技能是否声明了 scripts**
+            #   （`skills.py::_build_skill_prompt` 检测到 res_scr 时自动加入 `_skill_allowed_tools`）
+            #   —— 与"不能手工标注"的原则一致：数据变了，授权跟着变。
+            #   ⚠️ 它在 tools 表里 side_effect='write'，若不补入候选则写意图闸会把它挡掉；
+            #     补入是**技能命中这个显式授权**的结果，与 file_*/save_artifact 同语义。
+            if "skill_script_run" in _sk_wl and not any(
+                    c[0] == "skill_script_run" for c in candidates):
+                candidates.append(("skill_script_run",
+                                   builtin_desc.get("skill_script_run", ""),
+                                   "builtin", ""))
+            # ★ 2026-11-07（P2）：元能力同通道补入。
+            #   真机教训（会话 990509）：用户说「查一下平台有哪些 skill」被判进
+            #   knowledge_qa，那个 Agent 没绑 capability_* ⇒ 模型只能调 sys_query_* 然后反问。
+            #   ⇒ 让「能力资产管理」技能命中时把两个工具带进候选，**不依赖 Agent 是否被绑**。
+            #   `capability_apply` 是 write，若不补入会被写意图闸挡掉（问"有哪些工具"不含写意图词）。
+            for _mn in ("capability_query", "capability_apply"):
+                if _mn in _sk_wl and not any(c[0] == _mn for c in candidates):
+                    candidates.append((_mn, builtin_desc.get(_mn, ""), "builtin", ""))
+        # ★ 2026-11-07（P2）：**点名即注入** —— 用户在话里明确提到某个自注册能力的名字时，
+        #   即使它没绑到本轮接单的那个 Agent，也把它补进候选。
+        #
+        #   真机实证（会话 990513）：用户说「用 live_bmi_calc 算 BMI」，
+        #   而本轮路由到「通用问答Agent」，该能力只绑给了「知识问答Agent」⇒
+        #   模型如实回答"我这边调不了"（没有撒谎，处理是对的），然后改用 code_exec 算。
+        #   但用户体验是"我刚加的能力，说了名字还是用不了"⇒ 断点在**可见性跟着 Agent 走**。
+        #
+        #   语义依据与 `_sk_wl`（技能命中即授权）同源：**用户点名 = 显式授权**，
+        #   比"按语义猜"可靠得多。判据从严：名字须作为**独立 token** 出现在原话里
+        #   （前后不能紧贴字母数字），避免 `calc` 命中 `calculate` 这类误触发。
+        try:
+            from capability_runtime import list_capabilities as _lcaps
+            _u = str(user_input or "").lower()
+            if _u:
+                for _cn in _lcaps():
+                    if any(c[0] == _cn for c in candidates):
+                        continue
+                    _low = _cn.lower()
+                    _pos = _u.find(_low)
+                    if _pos < 0:
+                        continue
+                    _bad = False
+                    if _pos > 0 and (_u[_pos - 1].isalnum() or _u[_pos - 1] == "_"):
+                        _bad = True
+                    _end = _pos + len(_low)
+                    if not _bad and _end < len(_u) and (_u[_end].isalnum() or _u[_end] == "_"):
+                        _bad = True
+                    if _bad:
+                        continue
+                    try:
+                        from database import get_db as _cdb
+                        _cc = _cdb()
+                        try:
+                            _cr = _cc.execute(
+                                "SELECT description, side_effect FROM tools "
+                                "WHERE name=? AND status='active'", (_cn,)).fetchone()
+                        finally:
+                            _cc.close()
+                    except Exception:
+                        _cr = None
+                    if not _cr:
+                        continue
+                    candidates.append((_cn, _cr["description"] or "AI 自注册能力",
+                                       "capability", ""))
+        except Exception:
+            pass
         # P0-3：委派最小权限——本次调用指定的工具白名单（Worker ⊆ Supervisor），
         # 白名单模式下不做「读类核心工具保底」，避免突破最小权限
         _wl = getattr(self, "_tool_whitelist", None)
@@ -977,6 +1148,30 @@ class ToolMixin:
         if getattr(self, "_orch_result_offloads", None):
             from agent.pipeline_parts import tool_offload as _toff2
             _toff2.ensure_fetch_tool(tools, getattr(self, "_tool_whitelist", None))
+        # ── P1-1（2026-11-11）：记忆索引的取回端 ──
+        # 注入层只在 prompt 里放 ≤3 行 `[topic] #id (state, cred)`；模型看到 #id
+        # 却没有取回工具 ⇒ 「目录 → 仓库」的链路只走了一半（深度读不通）。
+        # 常驻注入的理由：它只读、无副作用、参数单一，与 tool_result_fetch 同族；
+        # 不按"本轮有没有记忆命中"做条件注入，避免跨模块状态耦合
+        # （注入块在 prompt 侧、工具清单在 tools 侧，两者构造时机不同）。
+        if not any((t.get("function") or {}).get("name") == "memory_fetch" for t in tools):
+            tools.append({
+                "type": "function",
+                "function": {
+                    "name": "memory_fetch",
+                    "description": ("按编号读取一条长期记忆的完整正文。"
+                                    "当上下文里的【记忆目录】给出 `#编号` 且需要细节时使用。"
+                                    "记忆仅供对齐，不得作为事实来源引用。"),
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "id": {"type": "integer",
+                                   "description": "记忆编号（见【记忆目录】里的 #N）"},
+                        },
+                        "required": ["id"],
+                    },
+                },
+            })
         # ★ P0-6（2026-10-26）：MCP 暴露情况归因 ⇒ "暴露了多少 / 裁掉了多少"可观测。
         #   这三个数字是判断 `mcp_min_keep` 该设多少的唯一依据（靠猜会重演
         #   "JIT 裁太狠 ⇒ 工程列表查不到"的事故）。
@@ -1039,6 +1234,88 @@ class ToolMixin:
         return val or "read"
 
     # ══════════════════════════════════════════════════════════════════════
+    # ★ 2026-11-13：写类判定的**唯一入口**（暂存分支与确认闸共用）
+    # ══════════════════════════════════════════════════════════════════════
+    def _classify_write(self, name: str) -> dict:
+        """执行侧写类判定 —— **双源**，返回 `{match_key, kind, source}`。
+
+        ## 为什么必须抽成一个方法（这是本轮的真因）
+        此前**两处各写一份判定**，对同一个工具给出相反结论：
+          · 编排子任务暂存分支（`tools.py` 的 `_orch_subtask` 段）用
+            `HILService.is_write_tool(name)` —— 读的是**硬编码 5 个名字**
+            （`entity_create/relation_create/entity_update/entity_delete/relation_delete`，
+            其中 `entity_create` 在 tools 表里还是 `disabled`）
+            ⇒ `is_write_tool('save_artifact') = False` ⇒ **跳过暂存**；
+          · 统一确认闸用 `classify_action(name, side_effect)` —— 双源判定
+            ⇒ `save_artifact` 的 `tools.side_effect='write'` ⇒ 命中 `write`=confirm
+            ⇒ 入队 + 中断本轮。
+        结果（真机 conv 990727 / run 990225）：**代码生成成功**（确认单里有 77 行完整代码），
+        但子任务被确认闸打断、`subtask_artifacts` 为空、`sysml_views` 为空
+        ⇒ 汇总报告写"t1、t2 尚未体现实质性完成结果" ⇒ 用户看到"生成用例视图失败"。
+        ⇒ 认定：**同一语义在两处各写一份判定，必然错位**。抽成本方法后只有一个判据。
+
+        ## 双源口径（详见 `hil_service.classify_action`）
+        · `tools.side_effect`（本地/HTTP 工具；`se_source='manual'` 时人工裁决最高）
+        · MCP 动词族（`mcp_effect_level`；`auto` 派生 + MCP 时回到家族灰度档）
+        """
+        try:
+            from hil_service import classify_action as _ca
+            _meta = self._tool_se_meta(name)
+            _ca_kw = {}
+            if _meta.get("se_source") == "manual":
+                _ca_kw = {"se_source": "manual"}
+            elif _meta.get("is_mcp"):
+                _ca_kw = {"se_source": "auto", "is_mcp": True}
+            return _ca(name, self._tool_side_effect(name), **_ca_kw)
+        except TypeError:
+            try:
+                from hil_service import classify_action as _ca2
+                return _ca2(name, self._tool_side_effect(name))       # 老签名兜底
+            except Exception:
+                return {"kind": "read", "match_key": "", "source": "fallback"}
+        except Exception:
+            # 判定失败一律按 read（= 不暂存、不拦），与既有确认闸的 fail-open 方向一致：
+            # 误判成 write 会把正常工具锁死，代价远高于"漏拦一次"（后者仍有 MCP 侧兜底）。
+            return {"kind": "read", "match_key": "", "source": "fallback"}
+
+    def _tool_se_meta(self, name: str) -> dict:
+        """★ 2026-11-07：副作用**连同来源**一起取（`{side_effect, se_source, is_mcp}`）。
+
+        ## 为什么需要来源
+
+        `hil_service.classify_action` 的设计前提是「本地 side_effect 是**人工维护的权威标注**
+        ⇒ 直接按本地档位判」。但 2026-11-06 的 P0 把 71 个 MCP 工具的副作用**自动派生**后
+        落进了 `tools` 表（`side_effect_source='auto'`）⇒ 那个前提不再成立：
+          · 派生结果 write ⇒ `match_key='write'` ⇒ 策略 `write`=**confirm**（逐条要人点）
+          · 而 MCP 家族策略 `mcp_write`=**notify**（灰度第 1 档：只留痕）
+        ⇒ 31 个可逆写 MCP 工具从"只留痕"变成"逐条确认"，**灰度第 1 档被无声架空**。
+        门禁 `verify_hil_write_gate` 的 B 项就是这么红的（不是我这次改坏的，是前一轮
+        P0 的连带效果，本轮才发现）。
+
+        判据修正（只收紧、不放宽）：
+          · `se_source='manual'` ⇒ 仍然本地优先（人工裁决最高）
+          · `se_source='auto'` 且属于 MCP ⇒ 回到 MCP 动词族取档（灰度设计生效），
+            但若派生档比动词族**更严**，取更严的那个
+        """
+        try:
+            from database import get_db
+            conn = get_db()
+            try:
+                row = conn.execute(
+                    "SELECT side_effect, COALESCE(side_effect_source,'auto') AS src, "
+                    "       COALESCE(mcp_server_id,0) AS mid "
+                    "FROM tools WHERE name=? AND status='active'", (name,)).fetchone()
+            finally:
+                conn.close()
+            if not row:
+                return {"side_effect": "", "se_source": "auto", "is_mcp": False}
+            return {"side_effect": (row["side_effect"] or ""),
+                    "se_source": (row["src"] or "auto"),
+                    "is_mcp": bool(row["mid"])}
+        except Exception:
+            return {"side_effect": "", "se_source": "auto", "is_mcp": False}
+
+    # ══════════════════════════════════════════════════════════════════════
     # ★ 2026-10-28（写前确认 HITL）统一人工确认闸
     # ══════════════════════════════════════════════════════════════════════
     def _hil_gate(self, name: str, arguments: dict, agent_ctx: dict,
@@ -1084,11 +1361,16 @@ class ToolMixin:
         #      绝不扩大：真正的平台写入（create/import/delete）仍必须人工确认。
         if str(name) in _REPAIR_WRITE_EXEMPT:
             return None
-        try:
-            from hil_service import classify_action as _ca
-            _cls = _ca(name, self._tool_side_effect(name))
-        except Exception:
+        # ★ 2026-11-07（P2）：提案型工具豁免 —— 它的"执行"就是写一张确认单，
+        #   本身零副作用；再拦一次会变成双重确认（真机实测：确认单 #65 的
+        #   action 是 `capability_apply`，批准后只会再生成一张 `cap_xxx_create` 单）。
+        #   真正的变更仍在 `hil_service.execute_confirmation` 的 `cap_*` 分支里，需人批准。
+        if str(name) in _PROPOSE_WRITE_EXEMPT:
             return None
+        # ★ 2026-11-13：改用**唯一判定入口** `_classify_write`（与编排暂存分支同源）。
+        #   此前这里内联了一份 `_tool_se_meta` + `classify_action` 的组装逻辑，
+        #   与暂存分支的 `HILService.is_write_tool` 各自独立 ⇒ 同一工具两处结论相反。
+        _cls = self._classify_write(name)
         if _cls.get("kind") == "read":
             return None
 
@@ -1452,6 +1734,38 @@ class ToolMixin:
             #   （offload 落库在 tool_result_offloads 表、已随会话隔离），
             #   它是**框架内建的重读通道**，不是外部数据源 ⇒ 不该受用户角色权限约束。
             #   ⚠️ 仍然只读、仍限本会话（fetch_offload 按 conversation_id 校验）。
+            if name == "memory_fetch":
+                # P1-1（2026-11-11）：记忆索引的取回端。与 tool_result_fetch 同族 ——
+                # 读的是**本系统自己沉淀的记忆**（agent_memory 表，已按作用域过滤），
+                # 不是外部数据源，且只读、无副作用 ⇒ 与它一样放在白名单/RBAC 之前。
+                # ⚠️ 必须显式提示"不得作为事实来源"：记忆是模型自己写的，可能过期或错误，
+                #    Dreaming 的 contradicted 项已在检索侧排除，但 verified 也不等于事实。
+                _mid = int((arguments or {}).get("id") or 0)
+                from core.memory_dream import memory_fetch as _mfetch
+                try:
+                    from database import get_db as _gdb
+                    _c = _gdb()
+                    try:
+                        _m = _mfetch(_c, _mid)
+                    finally:
+                        _c.close()
+                except Exception:
+                    _m = {}
+                if _m:
+                    result = {"ok": True,
+                              "id": _mid,
+                              "mem_type": _m.get("mem_type"),
+                              "topic": _m.get("mem_topic"),
+                              "verify_state": _m.get("verify_state"),
+                              "source": _m.get("source"),
+                              "content": (_m.get("content") or "")[:4000],
+                              "note": "长期记忆仅供对齐，不得作为事实来源引用"}
+                else:
+                    result = {"ok": False,
+                              "result": f"记忆 #{_mid} 不存在或已归档。编号只能从【记忆目录】"
+                                        f"里的 `#N` 原文读取，不要按顺序猜"}
+                self._log_tool_call(name, tool_type, arguments, result, intent_ctx, agent_ctx, conv_ctx, t0)
+                return result
             if name == "tool_result_fetch":
                 _oid = int((arguments or {}).get("id") or 0)
                 from agent.pipeline_parts import tool_offload as _to
@@ -1486,9 +1800,15 @@ class ToolMixin:
                 #   状态迁移一律走 agent_todo.transition() ⇒ 非法迁移如实报错不静默。
                 _a = arguments or {}
                 _conv = int(getattr(self, "_tool_conv_ctx", 0) or 0)
+                # ★ 2026-11-10（run 维度下沉）：把批次坐标传进待办链。
+                #   此前 `agent_todos.run_id` 恒 0（列在、判据拿不到），于是
+                #   `machine_evidence` 只能按会话查回执 ⇒ 上一轮的工具调用能给这一轮的
+                #   待办背书（假 machine）。口径与 `_log_tool_call` 同源：`_tool_run_ctx`。
+                _rid = int(getattr(self, "_tool_run_ctx", 0) or 0)
+                _tkey = str(getattr(self, "_tool_task_key", "") or "")
                 try:
                     from agent.todo_store import handle_todo_write as _tw
-                    result = _tw(_a, _conv)
+                    result = _tw(_a, _conv, run_id=_rid, task_key=_tkey)
                 except Exception as e:
                     result = {"ok": False, "result": "todo_write 执行异常：%r" % (e,)}
                 self._log_tool_call(name, tool_type, arguments, result, intent_ctx, agent_ctx, conv_ctx, t0)
@@ -1683,9 +2003,23 @@ class ToolMixin:
                 self._hook_warn = _hk.get("message") or f"工具「{name}」触发钩子提示（{_hk.get('name') or '-'}）"
             # T8：编排子任务写操作受控——不即时执行、不即时入队，暂存到 subtask_artifacts，
             # 由编排汇总段批量挂人工确认队列（确认归属该编排 run/task_key）
+            #
+            # ★★ 2026-11-13（真机 conv 990727 / run 990225 归因）：判定改用 `_classify_write`
+            #   ——**与下方统一确认闸同源**。修前这里用 `HILService.is_write_tool(name)`
+            #   （硬编码 5 个旧工具名），对 `save_artifact` 返回 False ⇒ 跳过暂存
+            #   ⇒ 继续下落命中统一闸 ⇒ **每个子任务各自被中断**，设计上的
+            #   "暂存→汇总统一确认"对 save_artifact 从未生效（subtask_artifacts 实测为空）。
+            #
+            # ⚠️ 必须同步应用两道豁免，否则会**反向引入**新缺陷：
+            #   `sysml_v2_autofix` 的 side_effect 也是 'write'（实测），旧实现因为
+            #   不在硬编码集合里而"自然放行"；换成同源判定后若不豁免，
+            #   它就会被暂存 ⇒ 模型调修复工具拿到"已暂存"回执 ⇒ **校验-修复闭环被卡死**
+            #   （正是 `_REPAIR_WRITE_EXEMPT` 注释里记的那个坑）。
+            #   豁免集合与确认闸共用同一对常量，语义天然一致。
             if getattr(self, "_orch_subtask", False):
-                from hil_service import HILService
-                if HILService.is_write_tool(name):
+                if (str(name) not in _REPAIR_WRITE_EXEMPT
+                        and str(name) not in _PROPOSE_WRITE_EXEMPT
+                        and self._classify_write(name).get("kind") != "read"):
                     from database import get_db
                     from services.artifact_materializer import store_write_request
                     _w_run_id = int(getattr(self, "_tool_run_ctx", 0) or 0)
@@ -1908,11 +2242,70 @@ class ToolMixin:
                 result = _at2.exec_tool(name, arguments or {}, conversation_id=conv_ctx)
                 self._log_tool_call(name, tool_type, arguments, result, intent_ctx, agent_ctx, conv_ctx, t0)
                 return result
+            # ── ★ 2026-11-07（P0-1）：需求条目化 / 需求条目入库 ──
+            #   此前 `requirement_itemize_tools.py` 是一个**孤儿模块**：tools 表有行（status=disabled）、
+            #   agent_tools 有绑定（agent 635 需求结构化Agent）、技能正文写着"先调 requirement_itemize"，
+            #   但两套分发点都没有 import 它 ⇒ 46 次真实调用**全部**落到兜底返回「未知工具」。
+            #   ⇒ 这与 `code_exec` / `save_artifact` 是同一类事故：**注册了 ≠ 接线了**。
+            if name in _REQ_TOOL_NAMES:
+                _creator = ""
+                try:
+                    from core.audit import audit_user as _au_req
+                    _creator = _au_req(getattr(self, "_tool_user", None)) or ""
+                except Exception:
+                    pass
+                result = exec_req_tool(name, arguments or {},
+                                       conversation_id=int(conv_ctx or 0),
+                                       created_by=_creator)
+                self._log_tool_call(name, tool_type, arguments, result, intent_ctx, agent_ctx, conv_ctx, t0)
+                return result
             # 基础通用报告导出工具（report_export：内容→md/docx/pdf，双链路共用 report_tools.exec_report_tool）
             if name in _REPORT_TOOL_NAMES:
                 result = exec_report_tool(name, arguments or {})
                 self._log_tool_call(name, tool_type, arguments, result, intent_ctx, agent_ctx, conv_ctx, t0)
                 return result
+            # ── ★ 2026-11-06（P0）：code_exec（沙箱执行）/ doc_parse（文档提取）──
+            #   必须与 `workflows/tools.py` 的两处分支**同序同语义**：
+            #   两套分发各自存在，漏一边的后果是"直接调能跑、模型侧说没执行器"。
+            if name in _CODE_TOOL_NAMES:
+                result = exec_code_tool(name, arguments or {})
+                self._log_tool_call(name, tool_type, arguments, result, intent_ctx, agent_ctx, conv_ctx, t0)
+                return result
+            if name in _DOC_TOOL_NAMES:
+                result = exec_doc_tool(name, arguments or {})
+                self._log_tool_call(name, tool_type, arguments, result, intent_ctx, agent_ctx, conv_ctx, t0)
+                return result
+            # ── ★ 2026-11-07（P1）：skill_script_run（技能自带脚本的受信执行）──
+            #   同样必须与 `workflows/tools.py` 的分支同序同语义（两套独立分发）。
+            if name in _SKILL_TOOL_NAMES:
+                result = exec_skill_tool(name, arguments or {})
+                self._log_tool_call(name, tool_type, arguments, result, intent_ctx, agent_ctx, conv_ctx, t0)
+                return result
+            # ── ★ 2026-11-07（P2）：元能力（查 / 提案）──
+            #   `capability_query` 直读；`capability_apply` 只入确认队列（到此为止，
+            #   真正的执行在 `hil_service.execute_confirmation` 的 cap_ 分支，
+            #   由用户点批准触发 —— 模型无法自己批自己）。
+            if name in _META_QUERY_NAMES or name in _META_APPLY_NAMES:
+                result = exec_capability_tool(name, arguments or {}, ctx={
+                    "agent": str((agent_ctx or {}).get("agent") or ""),
+                    "conversation_id": int(conv_ctx or 0),
+                    "run_id": int((agent_ctx or {}).get("run_id") or 0),
+                    "task_key": str((agent_ctx or {}).get("task_key") or ""),
+                    "user": getattr(self, "_tool_user", None),
+                })
+                self._log_tool_call(name, tool_type, arguments, result, intent_ctx, agent_ctx, conv_ctx, t0)
+                return result
+            # ── ★ 2026-11-07（P2）：自注册能力（source='capability'）──
+            #   ⚠️ 这是闭环最后一环：没有它，注册进 tools 表的行模型看得到、调不到。
+            #   判定必须**兜底到最前**（在 sys_query_/graph_db_ 等前缀分支之前），
+            #   因为能力名由模型自己起，不受任何前缀约定约束。
+            try:
+                if _is_capability(name):
+                    result = _exec_capability(name, arguments or {})
+                    self._log_tool_call(name, tool_type, arguments, result, intent_ctx, agent_ctx, conv_ctx, t0)
+                    return result
+            except Exception:
+                pass
             # 系统管理域只读查询工具（2026-08-31 P0-4：对话式系统管理——用户/角色/权限/审计/监控/会话，只读安全）
             if name.startswith("sys_query_"):
                 from sysadmin_tools import exec_tool as _exec_sysadmin
@@ -2028,7 +2421,17 @@ class ToolMixin:
             # 内置工具 handler
             if name == "graph_retrieve":
                 q = (arguments or {}).get("query", "")
-                r = self.rag.retrieve(q)
+                # ★ 2026-11-14（胶水 ①）：工具路径必须带上本轮的 kb_scope。
+                #   此前 `self.rag.retrieve(q)` 只传 query ⇒ Agent 的 kb_scope.docs
+                #   标准文档白名单被绕过，退化成全局检索（标准切换形同虚设）。
+                #   scope 由主链路在 _resolve_req_scope 之后算好挂到实例上，
+                #   这里只透传、不重复解析（避免两处取值链漂移）。
+                try:
+                    from services.requirement_checks import scope_for_tools as _sft
+                    _scope = _sft(self)
+                except Exception:
+                    _scope = None
+                r = self.rag.retrieve(q, kb_scope=_scope) if _scope else self.rag.retrieve(q)
                 _chunk_hits = r.get("chunk_hits") or []
                 hits = _chunk_hits or r.get("entities") or []
                 # ★ 2026-10-28（用户报「知识库明明有 OMG 规范讲 perform action，
@@ -2060,22 +2463,55 @@ class ToolMixin:
                     #   现改为给 top 4 条的**完整切片内容**（每条约 300 字）并标注来源，
                     #   让模型能真正引用规范原文。
                     _top = [h for h in _chunk_hits[:4] if isinstance(h, dict)]
+                    # ★ 2026-11-15：工具命中的片段**也进引用登记簿**。
+                    #   为什么要（真机 conv 999999033 / msg 6603 实证）：
+                    #     · Skill 硬门槛要求"必须先调 graph_retrieve" ⇒ **主路径就是工具检索**；
+                    #     · 但工具命中从不回写 retrieval ⇒ citations（前端可点条目）为空；
+                    #     · 而工具输出文本自带**另一套**【来源 1】~【来源 4】编号
+                    #       ⇒ 模型照着那套写 [1]~[5]，而 citations 里根本没有这些编号
+                    #       ⇒ **正文里的引用编号全部越界、点不动**（真机：5 个 [n] 全越界）。
+                    #   ⇒ 现在工具输出用**登记簿的全局编号**，与提示词注入的编号同一本账，
+                    #     编号 ⇔ citations 严格对齐；工具输出里再自带一句引用规则
+                    #     （提示词是**只组装一次**的，工具检索发生在其后的 ReAct 轮里，
+                    #       指望提示词里的"编号对照表"覆盖工具命中是不可能的）。
+                    _reg = getattr(self, "_citation_registry", None)
+                    if _reg is None:
+                        _reg = []
+                        self._citation_registry = _reg
+                    try:
+                        from core import config as _cfg_tc
+                        _inj_k = int(_cfg_tc.get("rag", "inject_k", 3) or 3)
+                        _tool_k = int(_cfg_tc.get("rag", "tool_citation_max", 5) or 5)
+                    except Exception:
+                        _inj_k, _tool_k = 3, 5
+                    _entries = register_citations(_reg, _top, limit=4,
+                                                  max_total=max(_inj_k, 1) + max(_tool_k, 1))
                     _lines = [
                         f"知识库检索到 {len(_chunk_hits)} 条相关片段"
                         f"（最高向量相似度 {_ev['max_vec']:.3f}，"
                         f"最高 BM25 {_ev['max_bm25']:.1f}）。"
                         f"以下为原文摘录，回答时请引用具体条文："
                     ]
-                    for _i, _h in enumerate(_top, 1):
-                        _src = _h.get("source_doc") or "（未知来源）"
-                        _sec = str(_h.get("section") or "").strip()
-                        _sec = f" · {_sec}" if _sec else ""
+                    for _e in _entries:
+                        _h = _e.get("chunk") or {}
+                        _src = _e.get("doc") or _h.get("source_doc") or "（未知来源）"
+                        _anchor = _e.get("anchor") or source_anchor(_h)
                         _conf = _h.get("confidence_level") or "-"
+                        _num = _e.get("n")
+                        _head = (f"\n【来源 {_num}】{_src} · {_anchor}"
+                                 if _num else f"\n【补充材料 · 未分配引用序号】{_src} · {_anchor}")
                         _lines.append(
-                            f"\n【来源 {_i}】{_src}{_sec}"
+                            f"{_head}"
                             f"（相似度 {float(_h.get('vec_score') or 0):.3f}，置信度 {_conf}）\n"
                             f"{str(_h.get('content') or '').strip()}"
                         )
+                    _numbered = [e.get("n") for e in _entries if e.get("numbered")]
+                    if _numbered:
+                        _lines.append(
+                            "\n（引用规则：以上带【来源 n】的片段可用编号 %s；"
+                            "正文引用时请紧跟该编号，写成 `§5.2.5 [3]` 这种样式；"
+                            "**未分配序号的补充材料不要编号**。）"
+                            % ("、".join(str(x) for x in _numbered)))
                     result = {"ok": True, "result": "\n".join(_lines),
                               "relevance": _rel, "hit_count": len(_chunk_hits)}
                 self._log_tool_call(name, tool_type, arguments, result, intent_ctx, agent_ctx, conv_ctx, t0)

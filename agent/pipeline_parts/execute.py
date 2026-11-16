@@ -12,7 +12,7 @@
     （改的就是本文件，流式主路径完全未生效 —— 已由 P1-26 收敛为单一真源根治，见 docs §24/§25）。
   ⇒ 已知与主路径的功能差异（**若将来启用非流式 API，需先补齐**，逐项核实于 P1-26 审计）：
     `_deposit_session_memory`（会话记忆沉淀）、`_ensure_sysml_blocks`（SysML 代码块补全）、
-    `_record_skill_feedback`（技能反馈）、`_save_planner_flow`（编排留痕）、
+    `_record_skill_feedback`（技能反馈）、
     `_is_continuation_input`（续作输入判定）、`_archive_impact_analysis`（影响分析产物落库）；
     编排入口亦为两套实现（本文件 `_try_orchestrate`/`_finish_orchestrated`
     vs 主路径 `_stream_orchestrated_flow`）。
@@ -47,7 +47,7 @@ def _repair_tool_subset(tools_def):
 class ExecuteMixin:
     """主执行入口 execute（非流式全流程）。"""
 
-    def execute(self, user_input, conversation_id, branch="dev", provider_id=None, attachments=None, dry_run=False, forced_intent=None, skill_name=None, user=None, tools_whitelist=None, team=None, scope_id=None, scope_ids=None, scope=None, overrides=None, max_tool_rounds=None):
+    def execute(self, user_input, conversation_id, branch="dev", provider_id=None, attachments=None, dry_run=False, forced_intent=None, skill_name=None, user=None, tools_whitelist=None, team=None, scope_id=None, scope_ids=None, scope=None, overrides=None, max_tool_rounds=None, ui_intent_override: str = ""):
         """Execute the full agent pipeline.
 
         attachments: V2.3 会话窗口富输入——[{url, filename, size, is_image}]，落库 user 消息 attachments JSON。
@@ -159,6 +159,17 @@ class ExecuteMixin:
             _detected = self.router.detect(user_input, prev_intent=dst["intent"] or None,
                                            history=_hist)
         intent = forced_intent or _detected
+        # 2026-11-07 P0-2：非流式路径同样做「用户改选 → 样本回流」，
+        # 与 stream.py 同口径（显式标记，不混用编排内部 forced_intent）。
+        if ui_intent_override:
+            try:
+                from services.intent_override_feedback import record_override as _rec_ov
+                _im = self.router.get_last_meta() or {}
+                _rec_ov(user_input, ui_intent_override, detected=_detected or "",
+                        route=str(_im.get("route") or ""),
+                        conf=float(_im.get("confidence") or 0))
+            except Exception:
+                pass
         # P0-4（2026-09-19）：显式定向覆盖语义识别结果时不静默（非流式路径无 SSE，故写日志留痕）
         if forced_intent and _detected and forced_intent != _detected:
             try:
@@ -265,6 +276,20 @@ class ExecuteMixin:
         _kb_query_tags = [t for t in kb_tags if t not in ("工程数据", "知识库")]
         kb_hint = f" + {' + '.join('#' + t for t in _kb_query_tags)}" if _kb_query_tags else ""
         req_scope, scope_att, effective_kb_scope = self._resolve_req_scope(scope_ids, scope_id, scope, agent_def)
+        # ★ 2026-11-14（胶水 ④⑤）：需求校验类意图加载标准档案。
+        #   档案（generate_rules.requirement_standard_profile）= 标准文档集 + Skill 集 + 类别子集，
+        #   全部是配置数据；这里只做「配置 → 运行时 kb_scope」的映射，不含任何业务规则。
+        _req_profile = {}
+        try:
+            from services import requirement_checks as _rc
+            with db_conn() as _pc:
+                _req_profile = _rc.load_profile(_pc)
+            if _req_profile and _rc.is_check_intent(intent):
+                effective_kb_scope = _rc.merge_scope(effective_kb_scope, _req_profile)
+            # 挂到实例：工具路径的 graph_retrieve 从这里取 scope（胶水 ①）
+            self._effective_kb_scope = effective_kb_scope
+        except Exception:
+            self._effective_kb_scope = effective_kb_scope or {}
         # P0-1 会话入口自动编排：复杂任务 → Planner-Executor（简单任务回落单 Agent）
         # 附件透传判定：带附件时仅规则信号可触发编排（附件为核心依据，优先单 Agent 直行）
         _orch = None
@@ -352,7 +377,6 @@ class ExecuteMixin:
             att_parsed_info["vision"] = att_vision   # 留痕：这次图片到底进没进模型、为什么
 
         # 闭环：基于用户内容匹配已保存工作流（名称/描述/节点标签）
-        matched_flows = self._match_flows(user_input + (" " + att_text[:500] if att_text else ""))
 
         # SP-R：报告类型预识别（模型分析/变更影响/预评审/自定义大纲）——用于强制检索与模板选择
         report_type = None
@@ -365,8 +389,24 @@ class ExecuteMixin:
 
         # Step 2: GraphRAG retrieval——按需检索：#标签主动引用 / Agent kb_required 配置 / 类型化报告素材 触发
         # V3：上传附件不再默认触发知识库检索（附件仍作「优先依据」注入 prompt；需查库时加 #知识库 标签）
+        # ★ 2026-11-14（胶水 ⑤ 硬门槛 · 无开关）：需求校验意图 + 标准档案存在 ⇒ **必须**检索。
+        #   米爸拍板 D9-A：删掉原来的布尔开关。理由（实测）：
+        #     ① 那个开关名义管"是否必须检索"，实际同时管「要不要检索」「要不要产出结构化结果」
+        #        「没检索到怎么判」——一个开关三种语义；
+        #     ② 它的原始用途（不干扰没配档案的普通问答）已由 `_req_profile` 空判覆盖；
+        #     ③ 真机还读不到它（调用未传 conn ⇒ 死配置），同族 `requirement_check_enabled`
+        #        更是全仓零消费点。⇒ 少一个配置项就少一个死配置，直接删。
+        #   想放宽判据的正确做法是改档案/类别清单（配置），而不是加一个能静默关掉整条链的开关。
+        #   ⚠️ 独立导入而**不复用**上面 try 里的 `_rc`：那个导入若失败，这里是 NameError，
+        #      而本处异常会把整轮请求带崩 —— 宁可判据 fail-closed（不硬门槛），也不能炸链路。
+        try:
+            from services import requirement_checks as _rc2
+            _req_hard_gate = bool(_req_profile) and _rc2.is_check_intent(intent)
+        except Exception:
+            _req_hard_gate = False
         should_retrieve = (bool(req_scope and req_scope.get('ok')) or bool(kb_tags) or bool(agent_def.kb_required)
-                           or (intent == "report_generation" and report_type in ("impact", "review")))
+                           or (intent == "report_generation" and report_type in ("impact", "review"))
+                           or _req_hard_gate)
         if should_retrieve:
             retrieve_query = user_input + kb_hint
             # P1：结构化拆解的实体并入检索词（提升图谱/向量召回）
@@ -379,8 +419,15 @@ class ExecuteMixin:
             # 项目/意图由 pipeline 侧算好传入（检索侧不重复解析，避免两处取值链漂移）。
             effective_kb_scope = dict(effective_kb_scope or {})
             effective_kb_scope.update(self._memory_recall_scope(intent, user))
+            # ★ 2026-11-15：**引用登记簿**（与 stream.py 同构）——
+            #   【来源n】与前端 citations 的唯一真源；初始检索与工具检索登记到同一本账。
+            self._citation_registry = []
             retrieval = self.rag.retrieve(retrieve_query, branch, attachment_text=(retrieval_att + ('\n\n' + scope_att if scope_att else '')) or None,
-                                          kb_scope=effective_kb_scope)
+                                          kb_scope=effective_kb_scope,
+                                          # ★ 2026-11-08：原话单独送检索侧（仅用于落 trace）。
+                                          #   `retrieve_query` 已被拼上 kb_hint/槽位/附件片段，
+                                          #   拿它当"用户原话"会让标注员看到一段不是用户写的文本。
+                                          query_raw=user_input)
         else:
             retrieval = {"source": "none", "route": "none", "route_reason": "kb_optional",
                          "confidence": 0, "entities": [], "relations": [], "vector_docs": [],
@@ -433,7 +480,14 @@ class ExecuteMixin:
         #   `skill_body_fetch` 取回时 id对不上 ⇒ 多视图连续调用时产出互相串扰
         #   （实测 usecase 与 activity 产出 md5 完全相同、ibd 与 sequence 同样）。
         #   ⇒ 会话上下文必须**先于**任何 prompt 装配建立。
-        self._tool_conv_ctx = conversation_id
+        # ★ 2026-11-13（编排子任务归属）：**子任务调用本方法时 conversation_id=0**
+        #   （子任务消息不落库，这是既有语义），若无兜底，工具留痕与确认单会被记到
+        #   「会话 0」⇒ 真机实测确认单 #104 conversation_id=0，用户在界面里看不到。
+        #   `_orch_conv_id` 由 `workflows/planner.py::_run_task` 在**调用本方法之前**设好
+        #   （父会话 id）；会话直答路径不设它 ⇒ `conversation_id` 优先，行为完全不变。
+        #   ⚠️ 不要把 `_orch_conv_id` 加进 `reset_request_state` 的清零清单 ——
+        #      本方法的入口就要重置状态，清了就读不到（顺序反了）。
+        self._tool_conv_ctx = int(conversation_id or getattr(self, "_orch_conv_id", 0) or 0)
         # P1-29（2026-10-02）：状态起点统一 —— 每轮**无条件清零**。
         # 对话走全局单例（`routers/conversations.py:14`），只"有技能时才赋值"会让上一轮的
         # 白名单残留到本轮。
@@ -663,6 +717,9 @@ class ExecuteMixin:
             _ac_deadline = ((time.time() + _ac_cfg["deadline_s"])
                             if (_ac_cfg["enabled"] and _ac_cfg["deadline_s"] > 0) else None)
             _ac_full = ""             # 跨轮全量产出（非流式路径，收口并回 llm_content）
+            # ★ 2026-11-15：**上一轮正文**（正文级空转闸用，与 stream.py 同构）。
+            #   判据在 auto_continue.is_content_repeating（只写一份），这里只喂数据。
+            _ac_prev_content = ""
             # ★ P0-2（2026-10-28）harness 强制闸的连续阻断计数（循环外，跨轮累积）。
             #   与 stream.py 同构：计数必须在 while 外，否则每轮从 0 数 ⇒ 永不触顶。
             _harness_blocks = 0
@@ -938,8 +995,11 @@ class ExecuteMixin:
                 if (_ac_cfg["enabled"] and not dry_run and (_ac_tool_n > 0 or _cont_input)
                         and not _clarify_req and _auto_continues < _ac_cfg["max"]):
                     # 本轮产出并进全量（收口/落库用全量；评估器只看本轮+工具史）
+                    # ★ 2026-11-15：改走 `_ac.merge_round_content` —— 原先这里是**直接拼接**，
+                    #   而 stream.py 走去重 ⇒ 同一件事两条路径两个口径（模型每轮重写整份时，
+                    #   非流式路径会把同一份答案堆 N 遍）。判据统一收口到 auto_continue 一份。
                     if llm_content:
-                        _ac_full = ((_ac_full + "\n\n" + llm_content) if _ac_full else llm_content)
+                        _ac_full = _ac.merge_round_content(_ac_full, llm_content)
                     _verdict = self._evaluate_completion(
                         user_input=user_input, exec_tools=_ac_tools_hist, answer=llm_content,
                         provider_id=effective_provider, agent_name=agent_def.name,
@@ -968,7 +1028,9 @@ class ExecuteMixin:
                         budget_left=_guard.budget_left(),
                         budget_ratio=_guard.budget_ratio(),
                         degrade_ratio=_degrade_ratio,
-                        hard_stop_ratio=_hard_stop_ratio)
+                        hard_stop_ratio=_hard_stop_ratio,
+                        # ★ 2026-11-15 正文级空转闸（判据在 auto_continue 一份）
+                        content_prev=_ac_prev_content, content_cur=llm_content)
                     # ★ P1-1（2026-10-28）降级收尾：与 stream.py 同构
                     if (not _cont) and ("降级收尾" in str(_why)):
                         try:
@@ -983,6 +1045,8 @@ class ExecuteMixin:
                     if _cont:
                         _auto_continues += 1
                         _ac_seen_steps.append(str(_verdict.get("next_step") or ""))
+                        # ★ 2026-11-15：记下本轮正文，供下一轮空转闸比对（与 stream 同构）
+                        _ac_prev_content = llm_content or ""
                         # 续跑 = 崭新一轮 ReAct：本轮答复 + 续跑指令并进 messages。
                         # ⚠️ assistant 消息必须带 content（部分 provider 拒绝空 content）。
                         messages.append({"role": "assistant", "content": llm_content})
@@ -1023,8 +1087,9 @@ class ExecuteMixin:
                     _harness_prev_rem = list(_hgate.get("remaining") or [])
                     _harness_stall = int(_hgate.get("stall_streak") or 0)
                     if llm_content:
-                        _ac_full = ((_ac_full + "\n\n" + llm_content)
-                                    if _ac_full else llm_content)
+                        # ★ 2026-11-15：与 stream.py 同构 —— 走 merge 去重，
+                        #   口径统一（原先这里直接拼接，与 stream 不一致）。
+                        _ac_full = _ac.merge_round_content(_ac_full, llm_content)
                     messages.append({"role": "assistant", "content": llm_content})
                     messages.append({"role": "user", "content": _hgate.get("feedback") or ""})
                     llm_response = llm_client.chat(messages, provider_id=effective_provider,
@@ -1104,7 +1169,7 @@ class ExecuteMixin:
                     "vector_count": retrieval["vector_count"],
                     "used_mock": llm_info["used_mock"],
                     "provider": llm_info["provider"],
-                    "citations": _citations_payload(retrieval.get("chunk_hits")),  # 问答可解释性：[n] 引用来源
+                    "citations": citations_for_card(self, retrieval),  # 问答可解释性：[n] 引用来源
                     "sysml_views": sysml_views,
                     "submitted_by": audit_user(user) if isinstance(user, dict) else "会话发起人",
                     **self._build_rich_card(intent, retrieval, branch, user_input, provider_id),
@@ -1154,7 +1219,7 @@ class ExecuteMixin:
             "intent": intent, "agent": agent_def.name, "hil_level": hil_level,
             "source": retrieval["source"], "confidence": retrieval["confidence"],
             "graph_count": retrieval["graph_count"], "vector_count": retrieval["vector_count"],
-            "citations": _citations_payload(retrieval.get("chunk_hits")),
+            "citations": citations_for_card(self, retrieval),
         }, ensure_ascii=False)
         # 通用报告服务：结构化 Report（前端可下载/复用；SP-R 透传报告类型）
         report = None
@@ -1164,6 +1229,36 @@ class ExecuteMixin:
                 report = _rg.structure(user_input[:80], llm_content, report_type=report_type)
             except Exception:
                 report = None
+        # ★ 2026-11-14（胶水 ③）：需求校验结果 → quality_report / card_data 通用通道。
+        #   前端 13-reports.js 折叠块与 06-cards.js 冲突卡现成可用，**零前端改动**。
+        #   parse 失败 / 未检索 / 类别漏检 / anchored=0 一律判 insufficient，绝不伪造结论。
+        _req_assembled = None
+        # D9-A：无开关 —— 有档案 + 需求校验意图即产出结构化结果（硬门槛恒生效）
+        if _req_hard_gate:
+            try:
+                from services import requirement_checks as _rc3
+                _configured = []
+                with db_conn() as _cc:
+                    _configured = _rc3.configured_categories(
+                        _cc, "requirement_rule_categories" if intent == "requirement_rule_check"
+                        else "requirement_completeness_categories")
+                _req_assembled = _rc3.assemble_result(
+                    llm_content, retrieval=retrieval,
+                    configured=_configured if intent in
+                    ("requirement_rule_check", "requirement_completeness_check") else None)
+                if _req_assembled.get("quality_report"):
+                    quality_report = _req_assembled["quality_report"]
+                _cd = json.loads(card_data) if isinstance(card_data, str) else dict(card_data or {})
+                _cd.update(_req_assembled.get("card_patch") or {})
+                card_data = json.dumps(_cd, ensure_ascii=False)
+                # ⚠️ card_data 在上方已随消息 INSERT 落库；这里补 UPDATE，
+                #   否则「刷新后还原」看到的仍是未带结构化结果的旧卡（两条渲染路径不一致）。
+                if not dry_run and msg_id:
+                    with db_conn() as _uc:
+                        _uc.execute("UPDATE messages SET card_data=? WHERE id=?",
+                                    (card_data, msg_id))
+            except Exception:
+                _req_assembled = None
         # P0-2 DST：回写会话级意图状态（非 dry_run 验证运行；供下轮无信号继承与槽位合并）
         if not dry_run:
             self._save_conversation_dst(conversation_id, intent, slots)
@@ -1195,11 +1290,14 @@ class ExecuteMixin:
                 #   **全文注入**（_load_attachment_text → att_text，不走 hit 通道）
                 #   ⇒ 实测附件内容被模型逐字引用（📎标注）时该字段仍 False，误导排查。
                 "attachment_used": bool(retrieval.get("attachment_hits")) or (att_parsed_info.get("parsed", 0) > 0),
-                "citations": _citations_payload(retrieval.get("chunk_hits")),  # 问答可解释性：[n] 引用来源
+                "citations": citations_for_card(self, retrieval),  # 问答可解释性：[n] 引用来源
             },
             "attachments_info": {**att_parsed_info, "consumed": len(retrieval.get("attachment_hits") or [])},
-            "matched_flows": matched_flows,
+            "matched_flows": [],   # 画布流程已移除，字段保留为空（前端不消费）
             "quality_report": quality_report,
+            # ★ 2026-11-14：配置化需求校验的可观测结果（门禁/验收直接读这两个字段）
+            "requirement_check_verdict": (_req_assembled or {}).get("verdict"),
+            "requirement_check_reasons": (_req_assembled or {}).get("reasons") or [],
             # ★ harness 持续工作：本次请求自主续跑次数（0=一次跑完未续）
             "auto_continues": _auto_continues,
         }

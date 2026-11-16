@@ -241,13 +241,16 @@ from core import orch_supervisor as sup            # noqa: E402
 
 conn, path = fixture()
 try:
-    seed(conn, 821, phase="interrupted", conv_id=9101,           # 会话不存在
+    seed(conn, 821, phase="executing", conv_id=9101,            # 会话不存在
          tasks=[("t1", "failed", "interrupted")])
     conv(conn, 9102)
-    seed(conn, 822, phase="interrupted", conv_id=9102, age_s=10 * 86400,   # 会话在但太老
+    seed(conn, 822, phase="executing", conv_id=9102, age_s=10 * 86400,   # 会话在但太老
          tasks=[("t1", "failed", "interrupted")])
     conv(conn, 9103)
-    seed(conn, 823, phase="interrupted", conv_id=9103,           # 正常：会话在 + 未超龄
+    seed(conn, 823, phase="executing", conv_id=9103,             # 正常：会话在 + 未超龄
+         tasks=[("t1", "failed", "interrupted")])
+    conv(conn, 9104)
+    seed(conn, 824, phase="interrupted", conv_id=9104,           # 用户主动停下（2026-11-10 事故）
          tasks=[("t1", "failed", "interrupted")])
 
     res = sup.scan_once(conn, max_runs=0)        # 0 = 纯预演，一个都不触发
@@ -261,6 +264,12 @@ try:
           823 in elig and not (res.get("resumed") or []), "elig=%s resumed=%s" % (sorted(elig), res.get("resumed")))
     check("D4 预演不产生当日预算消耗", int(res.get("resumed_today") or 0) == 0,
           "resumed_today=%s" % res.get("resumed_today"))
+    # ★ 2026-11-10 事故固化（run 990223）：人工点停止 3 分钟后守护把批次自动重投了。
+    #   守护与人工路径对 interrupted 的需求相反 ⇒ 守护必须**看不见**它，
+    #   连 unrecoverable 都不该出现（它不是"不能恢复"，是"不归我管"）。
+    check("D5 用户主动中断的批次 ⇒ 守护既不投也不记账（不进候选）",
+          824 not in elig and 824 not in unr,
+          "elig=%s unr=%s" % (sorted(elig), unr))
 finally:
     conn.close()
     os.remove(path)

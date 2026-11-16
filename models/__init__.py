@@ -7,7 +7,7 @@ from .config import StaticConfigIn, RuntimeConfigIn
 from .llm import ProviderIn, ProviderKeyIn
 from .monitor import AlertRuleIn
 from .reports import ReportExportIn, ReportSaveIn
-from .conversation import ConvIn, ChatIn, ConvProjectIn, RenameIn, FlowRunIn
+from .conversation import ConvIn, ChatIn, ConvProjectIn, RenameIn
 from .meta import DocMetaIn
 from .glossary import GlossaryIn, DomainReviewIn
 from .knowledge import (
@@ -43,7 +43,7 @@ __all__ = [
     "ProviderIn", "ProviderKeyIn",
     "AlertRuleIn",
     "ReportExportIn", "ReportSaveIn",
-    "ConvIn", "ChatIn", "RenameIn", "FlowRunIn",
+    "ConvIn", "ChatIn", "RenameIn",
     "DocMetaIn",
     "GlossaryIn", "DomainReviewIn",
     "EntityIn", "BatchReviewIn", "GraphNodeIn", "GraphEdgeIn", "OntologyTypeIn",
