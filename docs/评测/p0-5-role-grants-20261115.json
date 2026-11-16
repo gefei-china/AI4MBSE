@@ -1,0 +1,39 @@
+{
+  "schema": "p0/config-role-grants@1",
+  "applied_at_utc": "2026-11-15 16:03:27",
+  "domain": "system_config",
+  "ops": [
+    "read",
+    "write"
+  ],
+  "before_source": "mbse.db.bak-before-p0-4-memory-20261115_235529.db",
+  "already_granted_at_start": true,
+  "reason": "D3：启用配置写权限门前先给 preset 补位，避免真库 17 个设计师账号全员 403",
+  "why_not_admin_domain": "require_permission 把 admin 非空视为超级用户；补 admin 会放行全站管理操作",
+  "rows": [
+    {
+      "id": 80,
+      "name": "设计师",
+      "old": "{\"ai_chat\": [\"view\", \"generate\", \"confirm\", \"reject\"], \"ai_studio\": [\"view\", \"edit_prompt\", \"edit_skill\", \"config_mcp\", \"publish\", \"market_admin\"], \"kb_browse\": [\"view\", \"edit_request\"], \"kb_ontology\": [\"view\"], \"kb_review\": [\"view\", \"confirm\", \"modify\", \"merge\"], \"branch_dev\": [\"create\", \"switch\", \"merge_request\", \"delete\"], \"branch_release\": [\"view\"], \"report\": [\"view\", \"export\"], \"admin\": [], \"audit\": [\"view\"], \"agent_tool\": [\"read\", \"write\"], \"hil\": [\"view\", \"approve\"], \"memory\": [\"view\", \"manage\"]}",
+      "new": "{\"ai_chat\": [\"view\", \"generate\", \"confirm\", \"reject\"], \"ai_studio\": [\"view\", \"edit_prompt\", \"edit_skill\", \"config_mcp\", \"publish\", \"market_admin\"], \"kb_browse\": [\"view\", \"edit_request\"], \"kb_ontology\": [\"view\"], \"kb_review\": [\"view\", \"confirm\", \"modify\", \"merge\"], \"branch_dev\": [\"create\", \"switch\", \"merge_request\", \"delete\"], \"branch_release\": [\"view\"], \"report\": [\"view\", \"export\"], \"admin\": [], \"audit\": [\"view\"], \"agent_tool\": [\"read\", \"write\"], \"hil\": [\"view\", \"approve\"], \"memory\": [\"view\", \"manage\"], \"system_config\": [\"read\", \"write\"]}"
+    },
+    {
+      "id": 81,
+      "name": "知识工程师",
+      "old": "{\"ai_chat\": [\"view\", \"generate\", \"confirm\", \"reject\"], \"ai_studio\": [\"view\", \"edit_prompt\", \"edit_skill\", \"config_mcp\", \"publish\", \"market_admin\"], \"kb_browse\": [\"view\", \"edit_request\"], \"kb_ontology\": [\"view\", \"edit\", \"profile_io\"], \"kb_review\": [\"view\", \"confirm\", \"modify\", \"merge\"], \"branch_dev\": [\"create\", \"switch\", \"merge_request\", \"delete\"], \"branch_release\": [\"view\", \"review_merge\", \"rollback\"], \"report\": [\"view\", \"export\"], \"admin\": [], \"audit\": [\"view\"], \"agent_tool\": [\"read\", \"write\"], \"hil\": [\"view\", \"approve\"], \"memory\": [\"view\", \"manage\"]}",
+      "new": "{\"ai_chat\": [\"view\", \"generate\", \"confirm\", \"reject\"], \"ai_studio\": [\"view\", \"edit_prompt\", \"edit_skill\", \"config_mcp\", \"publish\", \"market_admin\"], \"kb_browse\": [\"view\", \"edit_request\"], \"kb_ontology\": [\"view\", \"edit\", \"profile_io\"], \"kb_review\": [\"view\", \"confirm\", \"modify\", \"merge\"], \"branch_dev\": [\"create\", \"switch\", \"merge_request\", \"delete\"], \"branch_release\": [\"view\", \"review_merge\", \"rollback\"], \"report\": [\"view\", \"export\"], \"admin\": [], \"audit\": [\"view\"], \"agent_tool\": [\"read\", \"write\"], \"hil\": [\"view\", \"approve\"], \"memory\": [\"view\", \"manage\"], \"system_config\": [\"read\", \"write\"]}"
+    },
+    {
+      "id": 82,
+      "name": "系统管理员",
+      "old": "{\"ai_chat\": [], \"ai_studio\": [], \"kb_browse\": [], \"kb_ontology\": [], \"kb_review\": [], \"branch_dev\": [], \"branch_release\": [], \"report\": [], \"admin\": [\"user_manage\", \"role_manage\", \"audit_view\", \"integration_config\", \"ops_manage\"], \"agent_tool\": [\"read\", \"write\"], \"hil\": [\"view\", \"approve\"], \"memory\": [\"view\", \"manage\"]}",
+      "new": "{\"ai_chat\": [], \"ai_studio\": [], \"kb_browse\": [], \"kb_ontology\": [], \"kb_review\": [], \"branch_dev\": [], \"branch_release\": [], \"report\": [], \"admin\": [\"user_manage\", \"role_manage\", \"audit_view\", \"integration_config\", \"ops_manage\"], \"agent_tool\": [\"read\", \"write\"], \"hil\": [\"view\", \"approve\"], \"memory\": [\"view\", \"manage\"], \"system_config\": [\"read\", \"write\"]}"
+    }
+  ],
+  "rollback_sql": [
+    "UPDATE roles SET permissions='{\"ai_chat\": [\"view\", \"generate\", \"confirm\", \"reject\"], \"ai_studio\": [\"view\", \"edit_prompt\", \"edit_skill\", \"config_mcp\", \"publish\", \"market_admin\"], \"kb_browse\": [\"view\", \"edit_request\"], \"kb_ontology\": [\"view\"], \"kb_review\": [\"view\", \"confirm\", \"modify\", \"merge\"], \"branch_dev\": [\"create\", \"switch\", \"merge_request\", \"delete\"], \"branch_release\": [\"view\"], \"report\": [\"view\", \"export\"], \"admin\": [], \"audit\": [\"view\"], \"agent_tool\": [\"read\", \"write\"], \"hil\": [\"view\", \"approve\"], \"memory\": [\"view\", \"manage\"]}' WHERE id=80;",
+    "UPDATE roles SET permissions='{\"ai_chat\": [\"view\", \"generate\", \"confirm\", \"reject\"], \"ai_studio\": [\"view\", \"edit_prompt\", \"edit_skill\", \"config_mcp\", \"publish\", \"market_admin\"], \"kb_browse\": [\"view\", \"edit_request\"], \"kb_ontology\": [\"view\", \"edit\", \"profile_io\"], \"kb_review\": [\"view\", \"confirm\", \"modify\", \"merge\"], \"branch_dev\": [\"create\", \"switch\", \"merge_request\", \"delete\"], \"branch_release\": [\"view\", \"review_merge\", \"rollback\"], \"report\": [\"view\", \"export\"], \"admin\": [], \"audit\": [\"view\"], \"agent_tool\": [\"read\", \"write\"], \"hil\": [\"view\", \"approve\"], \"memory\": [\"view\", \"manage\"]}' WHERE id=81;",
+    "UPDATE roles SET permissions='{\"ai_chat\": [], \"ai_studio\": [], \"kb_browse\": [], \"kb_ontology\": [], \"kb_review\": [], \"branch_dev\": [], \"branch_release\": [], \"report\": [], \"admin\": [\"user_manage\", \"role_manage\", \"audit_view\", \"integration_config\", \"ops_manage\"], \"agent_tool\": [\"read\", \"write\"], \"hil\": [\"view\", \"approve\"], \"memory\": [\"view\", \"manage\"]}' WHERE id=82;"
+  ],
+  "caveat": "匿名在 enforce_login=False 下仍按既有兼容态放行；闭合需独立把 enforce_login 置 True"
+}

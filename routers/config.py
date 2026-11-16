@@ -17,14 +17,62 @@ from fastapi.responses import JSONResponse
 
 from core import config
 from core.audit import audit
-from core.deps import current_user, db_session
+from core.deps import current_user, db_session, require_permission
 from models import StaticConfigIn, RuntimeConfigIn
 
 router = APIRouter()
 
+# ── P0-5（2026-11-15）：配置读写权限门 + 变更留痕 ────────────────────────
+# 权限域刻意**不放在 admin 域**：`require_permission` 把「admin 列表非空」视为超级用户，
+# 给设计师补一个 admin 权限就等于放行全站所有管理操作。故新建独立域 system_config。
+# 真库现状（2026-11-15）：17 个用户全是设计师 preset、且没有任何 role_id=82 的账号
+# ⇒ 若不给 preset 补授权位，启用门的当天就是全员 403（D3 明确要求避免）。
+# 匿名在 auth.enforce_login=False 下仍按既有兼容态放行；验收**不得**用匿名判门。
+CFG_READ = require_permission("system_config", "read")
+CFG_WRITE = require_permission("system_config", "write")
+
+
+def _who(user) -> str:
+    """留痕操作者；匿名不编造人名。"""
+    if not user:
+        return "未登录"
+    return str(user.get("username") or user.get("display_name")
+               or user.get("id") or "未登录")
+
+
+def _mask(dotted: str, value) -> str:
+    """secret 类配置的 before/after 一律脱敏，台账里绝不落明文密钥。"""
+    sec, _, key = str(dotted).partition(".")
+    meta = config.CONFIG_SCHEMA.get(sec, {}).get(key) or {}
+    if str(meta.get("type") or "") == "secret":
+        return "****"
+    return "" if value is None else str(value)
+
+
+def _log_changes(conn, entries, source: str, user, note: str) -> list:
+    """逐键落 config_history（before / after / 操作者）。
+
+    entries: [(section, key, old, new, applied)]；old/new 必须已由 _mask 脱敏。
+    skipped_masked 之类的「未真正写入」用 applied=0 留痕，台账不撒谎。
+    """
+    from core.config_promotion import _insert_history
+    ids = []
+    for sec, key, old, new, applied in entries:
+        ids.append(_insert_history(conn, sec, key, old, new, source, 0,
+                                   _who(user), note, applied=bool(applied)))
+    return ids
+
+
+def _audit_best_effort(user, event: str, detail: str, conn) -> None:
+    """审计旁路：审计失败不阻断配置写入，但必须留痕（兜底 except 不许静默）。"""
+    try:
+        audit(_who(user), event, detail, conn=conn)
+    except Exception as e:
+        print("[config] 审计写入失败（不阻断配置变更）：%s" % e)
+
 
 @router.get("/api/system/config")
-def get_system_config(conn=Depends(db_session)):
+def get_system_config(conn=Depends(db_session), user=Depends(CFG_READ)):
     """当前生效配置：静态（脱敏）+ 动态（settings）+ 配置来源说明。"""
     return {
         "ok": True,
@@ -37,7 +85,7 @@ def get_system_config(conn=Depends(db_session)):
 
 
 @router.get("/api/system/config/schema")
-def get_config_schema():
+def get_config_schema(user=Depends(CFG_READ)):
     """配置项元数据（前端渲染配置表单用）。"""
     return {"ok": True, "schema": config.schema()}
 
@@ -61,11 +109,29 @@ def get_budget_policy():
 
 
 @router.put("/api/system/config/static")
-def update_static_config(body: StaticConfigIn):
-    """修改静态配置：校验 → 落盘系统级配置文件 → 即时 reload。"""
+def update_static_config(body: StaticConfigIn, conn=Depends(db_session),
+                         user=Depends(CFG_WRITE)):
+    """修改静态配置：校验 → 落盘 → 即时 reload → **逐键落 config_history**。
+
+    P0-5：before 在写之前取（不是事后补算），secret 类前后都记 ****，
+    被掩码护栏跳过的键记 applied=0，台账与真实落盘状态一致。
+    """
+    keys = [str(k) for k in (body.updates or {})]
+    before = {d: _mask(d, config.get(*d.split(".", 1))) if "." in d else ""
+              for d in keys}
     try:
         result = config.save_override(body.updates)
-        return {"ok": True, **result,
+        skipped = set(result.get("skipped_masked") or [])
+        entries = []
+        for d in keys:
+            sec, _, key = d.partition(".")
+            entries.append((sec, key, before.get(d, ""),
+                            _mask(d, config.get(sec, key)), d not in skipped))
+        ids = _log_changes(conn, entries, "api:static", user,
+                           "PUT /api/system/config/static；共 %d 项" % len(entries))
+        _audit_best_effort(user, "config_static_update",
+                           "静态配置变更 %d 项：%s" % (len(entries), ",".join(keys[:20])), conn)
+        return {"ok": True, **result, "history_ids": ids,
                 "static": config.dump(mask_secrets=True),
                 "note": "已即时生效；host/port/database.path 需重启服务完全生效"}
     except ValueError as e:
@@ -75,7 +141,7 @@ def update_static_config(body: StaticConfigIn):
 
 
 @router.get("/api/system/config/think-suggest")
-def get_think_suggestions():
+def get_think_suggestions(user=Depends(CFG_READ)):
     """任务级思考：按真库实测数据给出「建议关思考」的意图清单（**只读，不改任何配置**）。
 
     ★ 为什么要这个接口（而不是让用户自己查 SQL）：
@@ -107,24 +173,41 @@ def get_think_suggestions():
 
 
 @router.put("/api/system/config/runtime")
-def update_runtime_config(body: RuntimeConfigIn, conn=Depends(db_session)):
-    """修改动态配置（settings 表，界面可调参数）。"""
+def update_runtime_config(body: RuntimeConfigIn, conn=Depends(db_session),
+                          user=Depends(CFG_WRITE)):
+    """修改动态配置（settings 表，界面可调参数）→ 逐键落 config_history。"""
+    keys = [str(k) for k in (body.updates or {})]
+    before = config.runtime_settings(conn)
     try:
         result = config.update_runtime_settings(body.updates, conn)
-        return {"ok": True, **result, "runtime": config.runtime_settings(conn)}
+        after = config.runtime_settings(conn)
+        entries = [("__settings__", k,
+                    str((before.get(k) or {}).get("value", "")),
+                    str((after.get(k) or {}).get("value", "")), True)
+                   for k in keys]
+        ids = _log_changes(conn, entries, "api:runtime", user,
+                           "PUT /api/system/config/runtime；共 %d 项" % len(entries))
+        _audit_best_effort(user, "config_runtime_update",
+                           "动态配置变更 %d 项：%s" % (len(entries), ",".join(keys[:20])), conn)
+        return {"ok": True, **result, "history_ids": ids,
+                "runtime": config.runtime_settings(conn)}
     except ValueError as e:
-        # 白名单拒绝（未知/无消费点键）—— 不是"更新失败"，是"不允许写"
+        # 白名单拒绝（未知/无消费点键）—— 不是「更新失败」，是「不允许写」
         return JSONResponse({"ok": False, "error": str(e)}, 400)
     except Exception as e:
         return JSONResponse({"ok": False, "error": f"更新动态配置失败: {str(e)[:200]}"}, 400)
 
 
 @router.post("/api/system/config/reload")
-def reload_config():
-    """手动重载静态配置（编辑配置文件后无需重启）。"""
+def reload_config(conn=Depends(db_session), user=Depends(CFG_WRITE)):
+    """手动重载静态配置；重载本身也是一次配置动作，同样留痕。"""
     try:
         config.reload()
-        return {"ok": True, "static": config.dump(mask_secrets=True)}
+        ids = _log_changes(conn, [("__system__", "reload", "", "ok", True)],
+                           "api:reload", user, "POST /api/system/config/reload")
+        _audit_best_effort(user, "config_reload", "手动重载静态配置", conn)
+        return {"ok": True, "history_ids": ids,
+                "static": config.dump(mask_secrets=True)}
     except Exception as e:
         return JSONResponse({"ok": False, "error": f"重载配置失败: {str(e)[:200]}"}, 500)
 

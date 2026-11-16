@@ -23,7 +23,9 @@ def _seed(conn):
         "branch_dev": ["create", "switch", "merge_request", "delete"],
         "branch_release": ["view"],
         "report": ["view", "export"],
-        "admin": []
+        "admin": [],
+        # P0-5 / D3（2026-11-15）：配置读写门。独立域，不进 admin（进 admin = 超级用户）。
+        "system_config": ["read", "write"]
     })
     knowledge_perms = json.dumps({
         "ai_chat": ["view", "generate", "confirm", "reject"],
@@ -34,12 +36,14 @@ def _seed(conn):
         "branch_dev": ["create", "switch", "merge_request", "delete"],
         "branch_release": ["view", "review_merge", "rollback"],
         "report": ["view", "export"],
-        "admin": []
+        "admin": [],
+        "system_config": ["read", "write"]
     })
     admin_perms = json.dumps({
         "ai_chat": [], "ai_studio": [], "kb_browse": [], "kb_ontology": [],
         "kb_review": [], "branch_dev": [], "branch_release": [], "report": [],
-        "admin": ["user_manage", "role_manage", "audit_view", "integration_config", "ops_manage"]
+        "admin": ["user_manage", "role_manage", "audit_view", "integration_config", "ops_manage"],
+        "system_config": ["read", "write"]
     })
 
     for name, rtype, perms in [
