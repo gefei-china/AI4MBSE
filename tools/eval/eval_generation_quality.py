@@ -27,14 +27,25 @@ RAG 三件套（检索→生成→引用）里，前两环有指标，第三环�
 - 引用编号【来源n】与 citations 数组 1 基对齐（`agent/utils._citations_payload`），
   正文 [n] 标引即"这条声称指向哪块证据"的机器可读信号。
 
-## 指标设计（四项，实测基线见文件末）
+## 指标设计（五项，实测基线见文件末）
 
 | 指标 | 语义 | 门禁？ |
 |---|---|---|
 | `citation_valid_rate` | 正文 [n] 全部落在 citations 范围内（编号不错位） | 是（=1.0） |
 | `citation_usage_rate` | 带引用的答案里实际用了 [n] 的比例（软约束可见化） | 是（≥0.25） |
+| `citation_contiguity_rate` | 实际用的编号去重后是否 `1..K` 连续（**断号就判不连续**） | **否**（见下） |
 | `no_citation_factual_rate` | 无引用答案中含可核查实体的比例（无据声称密度） | 是（≤0.30） |
 | `grounded_entity_rate` | 答案实体在引用块并集中的比例（faithfulness 信号） | **否**（见下） |
+
+**为什么 `citation_contiguity_rate` 不门禁**（2026-11-16 新增，原因与 grounded 不同，
+必须分开说清）：它是 `citation_valid_rate` 的**补盲**指标 —— 后者只判
+`1 <= n <= N`（在范围内），**断号完全看不见**：实测 msg 6674 用 `[1][2][3][5]`
+配 5 条引用 ⇒ valid=1.0 全绿，而用户看到的是「显示 5 条、页面只有 1,2,3,5」。
+不门禁是因为**模型选择性引用是正常行为**，断号率不是缺陷率：它同时是
+「检索到但没用上的片段」（精度信号）与「前端重映射的负载」。
+设阈值只会要么恒绿（假绿）要么天天红（狼来了）⇒ 先算出来、进 eval_metrics 看趋势。
+当前基线：valid **1.000** / contiguity **0.542**（24 条里 11 条断号），
+这个落差就是盲区的实际大小。
 
 **为什么 grounded 不门禁**（这是本工具最重要的纪律，写在这里免得后来人
 误以为是漏配）：实测 RAG 纯问答域 32 条答案只含 **2 个**可核查实体
@@ -166,6 +177,35 @@ def evaluate_answers(answers):
     citation_valid_rate = (valid_marks / total_marks) if total_marks else None
     citation_usage_rate = (answers_using / len(with_cit)) if with_cit else None
 
+    # ── citation_contiguity_rate：编号是否连续（1..K 无断号）─────────────
+    #
+    # ★ 2026-11-16（真实 bug 暴露的指标盲区）：`citation_valid_rate` 只判
+    #   `1 <= n <= N`（在范围内），因此 **断号完全看不见**。实测 msg 6674：
+    #   body 用 [1][2][3][5]、citations 5 条 ⇒ 全部在范围内 ⇒ valid_rate=1.0
+    #   全绿，而用户看到的是「显示 5 条、页面只有 1,2,3,5」——正是这条盲区
+    #   让它上线以来一直"没问题"。
+    #
+    #   语义：正文实际使用的编号去重后是否恰好构成 1..K（K=去重后条数）。
+    #   断号意味着两件事，都值得看趋势：
+    #     · 读者视角：编号不连续，找不到被跳过的那条（本次修的显示问题根因）；
+    #     · 检索视角：被跳过的编号 = **检索到但没用上**的片段（精度信号）。
+    #   ⚠️ 刻意**不设门禁阈值**（与 grounded_entity_rate 同一处置）：模型选择性
+    #      引用是正常行为，断号率不是"缺陷率"。设阈值只会要么恒绿（假绿）
+    #      要么天天红（狼来了）—— 先算出来、进 eval_metrics 看趋势，
+    #      等分布稳定后再决定是否升级为门禁。
+    #   ⚠️ K=1 时恒真（单条引用不可能断号）⇒ 该样本对指标无信息量，但计入
+    #      分母不影响正确性；真正的信息量来自 K>=2 的样本（见 fixture F1c）。
+    contig_n = contig_ok = 0
+    for a in with_cit:
+        marks = _citation_markers(a.get("body"))
+        if not marks:
+            continue
+        used = sorted(set(marks))
+        contig_n += 1
+        if used == list(range(1, len(used) + 1)):
+            contig_ok += 1
+    citation_contiguity_rate = (contig_ok / contig_n) if contig_n else None
+
     # ── grounded_entity_rate：答案实体在"自己的"引用并集里的比例 ──
     # ── no_citation_factual_rate：无引用答案中含可核查实体的比例 ──
     total_ent = grounded_ent = 0
@@ -177,11 +217,17 @@ def evaluate_answers(answers):
         total_ent += len(ents)
         grounded_ent += g
         if ents or _citation_markers(a.get("body")):
+            _marks = _citation_markers(a.get("body"))
+            _used = sorted(set(_marks))
             per_answer.append({
                 "id": a.get("id"), "kind": "with_citations",
                 "n_entities": len(ents), "n_grounded": g,
                 "ungrounded": sorted(e for e in ents if e not in ctx),
-                "n_markers": len(_citation_markers(a.get("body"))),
+                "n_markers": len(_marks),
+                # ★ 2026-11-16：断号可直接从这两列算出来（used ⊂ 1..retrieved）
+                "n_used": len(_used), "n_retrieved": len(a.get("citations") or []),
+                "numbers_used": _used,
+                "skipped_numbers": [i for i in range(1, len(_used) + 1) if i not in _used],
             })
     grounded_entity_rate = (grounded_ent / total_ent) if total_ent else None
 
@@ -227,6 +273,8 @@ def evaluate_answers(answers):
         "n_without_citations": len(without_cit),
         "citation_valid_rate": citation_valid_rate,
         "citation_usage_rate": citation_usage_rate,
+        "citation_contiguity_rate": citation_contiguity_rate,
+        "citation_contiguity_n": contig_n,
         "grounded_entity_rate": grounded_entity_rate,
         "no_citation_factual_rate": no_citation_factual_rate,
         "total_markers": total_marks,
@@ -453,17 +501,31 @@ def _fixture_answers():
     cits_b = [{"content": "MG-1 是模型生成质量条款。", "source_doc": "d.md"}]
     return [
         # F1a：两个标记都在范围内 ⇒ valid=1.0
+        # ★ 2026-11-16：F1a 同时是**指标盲区的活证据** ——
+        #   编号 {1,3}（跳过 2）⇒ valid_rate=1.0（都在范围内）但
+        #   contiguity_rate=0.0（K=2 应为 {1,2}）。两个指标各测一件事，
+        #   合规于「旧指标看不见断号」这一事实，机器可验。
         {"id": "F1a", "body": "见 [1] 与 [3] 的规定。",
          "citations": cits_a, "expect": {"citation_valid_rate": 1.0,
                                           "citation_usage_rate": 1.0,
+                                          "citation_contiguity_rate": 0.0,
                                           "grounded_entity_rate": None,
                                           "no_citation_factual_rate": None}},
         # F1b：[4] 越界（只有 3 条引用）⇒ valid=0.5
+        #   编号 {1,4} 去重后 K=2 应为 {1,2} ⇒ contiguity=0.0（越界也应算不连续）
         {"id": "F1b", "body": "见 [1] 与越界的 [4]。",
          "citations": cits_a, "expect": {"citation_valid_rate": 0.5,
                                           "citation_usage_rate": 1.0,
+                                          "citation_contiguity_rate": 0.0,
                                           "grounded_entity_rate": None,
                                           "no_citation_factual_rate": None}},
+        # F1c：**连续正例** —— 没有它，"新指标恒返回 0" 也会让 F1a/F1b 通过
+        #   （那是恒红型假绿）。用 citations 前 2 条 + 编号 [1][2]。
+        {"id": "F1c", "body": "见 [1] 与 [2] 的规定。",
+         "citations": cits_a[:2], "expect": {"citation_valid_rate": 1.0,
+                                             "citation_contiguity_rate": 1.0,
+                                             "grounded_entity_rate": None,
+                                             "no_citation_factual_rate": None}},
         # F2：实体 REQ-1 在自己的引用里、REQ-9 不在 ⇒ grounded=0.5
         {"id": "F2", "body": "REQ-1 已规定，REQ-9 待确认。",
          "citations": cits_a, "expect": {"grounded_entity_rate": 0.5,
@@ -495,6 +557,10 @@ def _fixture_answers():
 def run_fixture():
     """跑黄金样本自证。返回 (ok, cases)。"""
     fx = _fixture_answers()
+    # ★ 2026-11-16：夹具一律按 **id** 取，不按下标。
+    #   本轮在中间插入 F1c 时，下面所有 "[fx[N]]" 整体错位一格，
+    #   F2/F3/F4 当场全判红（自测抓到）。用 id 取从根上消掉这类错位。
+    _F = {f["id"]: f for f in fx}
     # F1a/F1b/F2/F4/F5 单独成组算率；F3/F3b 合成一组算 no_citation 率
     cases = []
 
@@ -509,20 +575,25 @@ def run_fixture():
         cases.append({"case": cid, "metric": key, "expect": exp,
                       "got": got, "ok": ok})
 
-    _case("F1a", [fx[0]], "citation_valid_rate")
-    _case("F1b", [fx[1]], "citation_valid_rate")
-    _case("F2", [fx[2]], "grounded_entity_rate")
-    _case("F3", [fx[3], fx[4]], "no_citation_factual_rate")
-    _case("F4", [fx[5]], "grounded_entity_rate")
-    _case("F5", [fx[6]], "grounded_entity_rate")
+    _case("F1a", [_F["F1a"]], "citation_valid_rate")
+    # ★ 盲区自证：同一条 F1a 的编号 {1,3} ⇒ valid=1.0 而 contiguity=0.0。
+    #   两个断言并列写在这里，就是「旧指标看不见断号」的机器证据。
+    _case("F1a", [_F["F1a"]], "citation_contiguity_rate")
+    _case("F1b", [_F["F1b"]], "citation_valid_rate")
+    _case("F1b", [_F["F1b"]], "citation_contiguity_rate")
+    _case("F1c", [_F["F1c"]], "citation_contiguity_rate")
+    _case("F2", [_F["F2"]], "grounded_entity_rate")
+    _case("F3", [_F["F3"], _F["F3b"]], "no_citation_factual_rate")
+    _case("F4", [_F["F4"]], "grounded_entity_rate")
+    _case("F5", [_F["F5"]], "grounded_entity_rate")
     # F4/F5 合起来：真实 2/2=1.0，池化（互为对方的引用）0/2=0.0 ⇒ 可判别
-    r = evaluate_answers([fx[5], fx[6]])
+    r = evaluate_answers([_F["F4"], _F["F5"]])
     exp_disc = True
     got_disc = bool(r["control"]["discriminates"])
     cases.append({"case": "F4F5", "metric": "control.discriminates",
                   "expect": exp_disc, "got": got_disc, "ok": got_disc == exp_disc})
     # 用法率：F4/F5 无 [n] 标记 ⇒ 0.0
-    r2 = evaluate_answers([fx[5], fx[6]])
+    r2 = evaluate_answers([_F["F4"], _F["F5"]])
     cases.append({"case": "F4F5", "metric": "citation_usage_rate",
                   "expect": 0.0, "got": r2["citation_usage_rate"],
                   "ok": abs(r2["citation_usage_rate"] - 0.0) < 1e-9})
@@ -799,9 +870,22 @@ def main():
         return 2
     print("\n=== 指标（n=%d 条 RAG 问答）===" % r["n_answers"])
     for k in ("citation_valid_rate", "citation_usage_rate",
-              "grounded_entity_rate", "no_citation_factual_rate"):
+              "citation_contiguity_rate", "grounded_entity_rate",
+              "no_citation_factual_rate"):
         v = r.get(k)
         print("  %-26s %s" % (k, "n/a（分母为 0）" if v is None else "%.3f" % v))
+    # ★ 2026-11-16：断号明细直接打出来 —— valid=1.000 与 contiguity<1 的落差
+    #   就是「编号在范围内但不连续」的证据，不给个数读者无法判断严重程度。
+    _bn = [a for a in r["per_answer"] if a.get("skipped_numbers")]
+    if r.get("citation_contiguity_n"):
+        print("  %-26s %d / %d 条连续；%d 条断号"
+              % ("contiguity 明细", round((r["citation_contiguity_rate"] or 0)
+                                        * r["citation_contiguity_n"]),
+                 r["citation_contiguity_n"], len(_bn)))
+        for a in _bn[:5]:
+            print("    msg=%-6s used=%s / retrieved=%s ⇒ 跳过 %s"
+                  % (a["id"], a.get("numbers_used"), a.get("n_retrieved"),
+                     a.get("skipped_numbers")))
     print("  %-26s %d / %d（有效标记/总标记）"
           % ("markers", r["valid_markers"], r["total_markers"]))
     print("  %-26s %d / %d（接地实体/可核查实体）"
@@ -857,6 +941,7 @@ def main():
         "summary": {k: r[k] for k in (
             "n_answers", "n_with_citations", "n_without_citations",
             "citation_valid_rate", "citation_usage_rate",
+            "citation_contiguity_rate", "citation_contiguity_n",
             "grounded_entity_rate", "no_citation_factual_rate",
             "total_markers", "valid_markers", "answers_using_citations",
             "citations_without_content",
@@ -912,6 +997,9 @@ def _save(report):
         write_metric_rows(conn, cur.lastrowid, "generation_quality", {
             "gen_citation_valid_rate": s["citation_valid_rate"],
             "gen_citation_usage_rate": s["citation_usage_rate"],
+            # ★ 2026-11-16 新增：编号连续性（进趋势，**不设门禁**，理由见
+            #   evaluate_answers 里的注释）。eval_metrics 是扩展通道，无需改表。
+            "gen_citation_contiguity_rate": s.get("citation_contiguity_rate"),
             "gen_grounded_entity_rate": s["grounded_entity_rate"],
             "gen_no_citation_factual_rate": s["no_citation_factual_rate"],
             "gen_faithful_rate": j.get("faithful_rate") if j.get("enabled") else None,

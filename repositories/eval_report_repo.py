@@ -69,6 +69,14 @@ KIND_METRIC_COLUMNS = {
     "generation_quality": [
         ("gen_citation_valid_rate", "引用编号有效率", "high", "generation_min_citation_valid"),
         ("gen_citation_usage_rate", "引用使用率", "high", "generation_min_citation_usage"),
+        # ★ 2026-11-16 新增：编号连续性（正文实际用的编号去重后是否 1..K 连续）。
+        #   它补的是 gen_citation_valid_rate 的**盲区** —— 后者只判 1<=n<=N（在范围内），
+        #   断号完全看不见：实测 msg 6674 用 [1][2][3][5]、5 条引用 ⇒ valid=1.0 全绿，
+        #   而用户看到「显示 5 条、页面只有 1,2,3,5」。生产实测 valid=1.000 而
+        #   contiguity=0.542（24 条里 11 条断号）——这个落差就是盲区的大小。
+        #   刻意**不配阈值**（同 gen_grounded_entity_rate 的处置）：模型选择性引用
+        #   是正常行为，断号率不是缺陷率，先看趋势再决定是否升级为门禁。
+        ("gen_citation_contiguity_rate", "引用编号连续性", "high", None),
         ("gen_no_citation_factual_rate", "无据声称密度", "low", "generation_max_no_citation_factual"),
         # gen_grounded_entity_rate 刻意**不配阈值**：当前样本仅 2 个可核查实体，
         # 负对照拉不开差距 ⇒ 不具判别力（详见 eval_generation_quality.py 文件头）。
