@@ -213,32 +213,45 @@ def duplicate_groups(conn, limit: int = 50, verify_bytes: bool = False) -> list:
       · `same_content` —— content_sha256 相同的文档（真重复，删掉多余的零风险）
       · `same_name`    —— 同 filename 多份（可能是版本迭代，**必须人工判断**）
     返回 [{kind, key, count, docs:[{doc_id,filename,file_size,chunk_count,created_at}]}]
+
+    ★ 2026-11-16：**排除已下架（deprecated）的文档**。
+      此前没有这个过滤 ⇒ 用软删（deprecated + chunks 同步）处理掉一份重复后，
+      盘点仍把它算作重复组，清单里永远挂着一条「待删」：既误导人（以为没清理干净），
+      又让清理脚本的「保留哪一份」建立在脏集合上（实测 doc 852 已下架，脚本仍建议
+      「保留 #852 ← 删除 #800」，而 800 有 23 次历史引用、852 只有 1 次
+      ⇒ 照做会造成 23 条断链）。已下架 = 不参与检索
+      （rag.py:399/1275 与 graph_provenance.py:120 都过滤），也就不该再参与「重复」讨论。
     """
     out = []
+    LIVE = "COALESCE(lifecycle_status,'stored')!='deprecated'"
     try:
         rows = conn.execute(
             "SELECT content_sha256 AS k, COUNT(*) AS n, SUM(chunk_count) AS ck, "
             "       SUM(file_size) AS sz FROM documents "
-            "WHERE COALESCE(content_sha256,'')<>'' GROUP BY content_sha256 "
+            "WHERE COALESCE(content_sha256,'')<>'' AND " + LIVE + " "
+            "GROUP BY content_sha256 "
             "HAVING COUNT(*)>1 ORDER BY n DESC LIMIT ?", (int(limit),)).fetchall()
         for r in rows:
             d = dict(r) if hasattr(r, "keys") else {"k": r[0], "n": r[1]}
             docs = [dict(x) for x in conn.execute(
                 "SELECT id AS doc_id, filename, file_size, chunk_count, created_at "
-                "FROM documents WHERE content_sha256=? ORDER BY id", (d["k"],)).fetchall()]
+                "FROM documents WHERE content_sha256=? AND " + LIVE + " ORDER BY id",
+                (d["k"],)).fetchall()]
             out.append({"kind": "same_content", "key": str(d["k"])[:16],
                         "count": int(d["n"] or 0), "chunks": int(d.get("ck") or 0),
                         "bytes": int(d.get("sz") or 0), "docs": docs})
         rows = conn.execute(
             "SELECT filename AS k, COUNT(*) AS n, SUM(chunk_count) AS ck, "
             "       SUM(file_size) AS sz FROM documents "
-            "WHERE COALESCE(filename,'')<>'' GROUP BY filename "
+            "WHERE COALESCE(filename,'')<>'' AND " + LIVE + " "
+            "GROUP BY filename "
             "HAVING COUNT(*)>1 ORDER BY n DESC LIMIT ?", (int(limit),)).fetchall()
         for r in rows:
             d = dict(r) if hasattr(r, "keys") else {"k": r[0], "n": r[1]}
             docs = [dict(x) for x in conn.execute(
                 "SELECT id AS doc_id, filename, file_size, chunk_count, created_at "
-                "FROM documents WHERE filename=? ORDER BY id", (d["k"],)).fetchall()]
+                "FROM documents WHERE filename=? AND " + LIVE + " ORDER BY id",
+                (d["k"],)).fetchall()]
             grp = {"kind": "same_name", "key": str(d["k"]),
                    "count": int(d["n"] or 0), "chunks": int(d.get("ck") or 0),
                    "bytes": int(d.get("sz") or 0), "docs": docs}

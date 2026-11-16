@@ -28,6 +28,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sqlite3
 import sys
@@ -46,8 +47,43 @@ def _copy_sha(doc_id, filename):
     return source_copy_sha(doc_id, filename)
 
 
-def _plan(groups, kinds):
-    """算出"该删哪些 id"：每组保留最新一份，其余待删。"""
+def _cite_counts(conn):
+    """每个 document_id 被历史 citations 引用的次数（只读）。
+
+    ★ 2026-11-16 为什么需要它：原策略「保留最新一份」在本库**实测会选错** ——
+      doc 800（2026-09-19）与 doc 852（2026-11-09）内容逐字节相同，
+      按"最新"会保留 852、删除 800；但 800 被历史 citations 引用 **23 次**
+      （消息 4762/5685/5725/5727/5729/5733/5889/5928…），852 只被引用 **1 次**。
+      删 800 ⇒ 那 23 条历史引用的来源链接全部指向被删文档 ⇒
+      **修一个冗余，制造 23 个断链**。
+      ⇒ 正确判据：优先保留**被引用最多**的（被消费过=还在服役）；
+        引用数并列时保留**最早**的（原始件；副本通常是后来的导出重传）。
+    """
+    out = {}
+    try:
+        for r in conn.execute("SELECT card_data FROM messages "
+                              "WHERE card_data LIKE '%\"citations\"%'"):
+            try:
+                cd = json.loads((r[0] if not hasattr(r, "keys") else r["card_data"]) or "{}")
+            except Exception:
+                continue
+            for x in (cd.get("citations") or []):
+                d = x.get("document_id")
+                if d:
+                    out[int(d)] = out.get(int(d), 0) + 1
+    except Exception:
+        return {}
+    return out
+
+
+def _plan(groups, kinds, cites=None):
+    """算出「该删哪些 id」。
+
+    保留优先级（2026-11-16 修正，原为「保留最新」）：
+      ① 被历史 citations 引用更多者优先（在服役的那份）
+      ② 并列时取 doc_id 最小者（最早创建的原始件）
+    """
+    cites = cites or {}
     plan = []
     for g in groups:
         if g["kind"] not in kinds:
@@ -55,7 +91,8 @@ def _plan(groups, kinds):
         docs = sorted(g["docs"], key=lambda d: int(d["doc_id"]))
         if len(docs) < 2:
             continue
-        keep, drop = docs[-1], docs[:-1]
+        keep = max(docs, key=lambda d: (cites.get(int(d["doc_id"]), 0), -int(d["doc_id"])))
+        drop = [d for d in docs if int(d["doc_id"]) != int(keep["doc_id"])]
         plan.append({"kind": g["kind"], "key": g["key"], "keep": keep, "drop": drop,
                      "reclaim_chunks": sum(int(d.get("chunk_count") or 0) for d in drop)})
     return plan
@@ -98,14 +135,20 @@ def main():
             if same:
                 g["_sha_verified"] = True
 
-    plan = _plan(groups, kinds)
+    cites = _cite_counts(conn)
+    plan = _plan(groups, kinds, cites)
     total = sum(p["reclaim_chunks"] for p in plan)
-    print("\n计划：保留每组最新一份，待删 %d 份，可回收 %d 个 chunk"
+    print("\n计划：保留「被引用最多、并列取最早」的一份，待删 %d 份，可回收 %d 个 chunk"
           % (sum(len(p["drop"]) for p in plan), total))
     for p in plan:
-        print("  · [%s] 保留 #%s ← 删除 %s"
-              % (p["kind"], p["keep"]["doc_id"],
-                 ", ".join("#%s" % d["doc_id"] for d in p["drop"])))
+        kd = int(p["keep"]["doc_id"])
+        print("  · [%s] 保留 #%s（引用 %d 次）← 删除 %s"
+              % (p["kind"], kd, cites.get(kd, 0),
+                 ", ".join("#%s(引用%d次)" % (d["doc_id"], cites.get(int(d["doc_id"]), 0))
+                           for d in p["drop"])))
+    if plan:
+        print("  ⚠ 删除前请确认「保留项」不是引用更少的那个 —— 删掉被引用多的会"
+              "制造历史引用断链。本脚本已按引用次数排序，但版本迭代场景仍需人工判断。")
 
     if not a.apply:
         print("\n（只读模式，未删除任何东西。要真删加 --apply，建议先备份 mbse.db）")

@@ -1,0 +1,96 @@
+{
+ "schema": "kb/sha-backfill@1",
+ "applied_at_utc": "2026-11-16 05:46:27",
+ "backup": "backups/mbse.db.bak-before-kb-sha-20261116_134623.db",
+ "single_source": "knowledge_pipeline.dedup.source_copy_sha（读 data/uploads 源副本原始字节）",
+ "before_empty": 14,
+ "plan": [
+  {
+   "id": 793,
+   "filename": "Guide to writing Requirements.pdf",
+   "sha": "d8dfcbff50bce2d3b286e1ecb103e0c5fd26410fec320d6ba5683bca00609c74",
+   "lc": "stored"
+  },
+  {
+   "id": 798,
+   "filename": "Kernel Modeling Language™ (KerML™).pdf",
+   "sha": "d6421f20566a270e8ad38fd626e2c35c96b1dee34c1c4b798b2b500cdd5ae229",
+   "lc": "stored"
+  },
+  {
+   "id": 799,
+   "filename": "OMG Systems Modeling Language™ V2 (1).pdf",
+   "sha": "1f7e9ef5c1fa14c2fab8b028d16e1ca09ff0ba15a416bc4ecd362fed2d510834",
+   "lc": "stored"
+  },
+  {
+   "id": 800,
+   "filename": "SysML-v2-AI建模知识文档.md",
+   "sha": "5f7a571faa2351351bcdb6722916ada8e1d806bf3b2eac9bef78dbb4c84f02d3",
+   "lc": "stored"
+  },
+  {
+   "id": 812,
+   "filename": "广汽方法论-260813.docx",
+   "sha": "8633fef4dbf27466ed82bc138e4b3da0b6f2269c1afe6de51d34aca6be21a2a6",
+   "lc": "stored"
+  },
+  {
+   "id": 813,
+   "filename": "1 纯电汽车热管理建模场景专业知识库.md",
+   "sha": "30113597c2bde8adeec4d18c9a4e3fc51b0cd1b059f80744784a0c23a19dc09d",
+   "lc": "stored"
+  },
+  {
+   "id": 814,
+   "filename": "2 混合动力汽车动力经济性仿真场景专业知识库.md",
+   "sha": "ff6e35ee747713ccbe88a919842419107564440248b0b3125592ce0c700fdd61",
+   "lc": "stored"
+  },
+  {
+   "id": 815,
+   "filename": "3 座舱空气调节仿真场景专业知识库.md",
+   "sha": "a7a19115a5547dad7654dac38a5ecf255ce711e2f7d635da0ff34d90e8bcce7d",
+   "lc": "stored"
+  },
+  {
+   "id": 816,
+   "filename": "SysML_v2_常见语法错误与修正(1).md",
+   "sha": "3f0ffb4b92af948bd32a3fd4c4a218210f3a461a84093830eb0085426a4fbec7",
+   "lc": "stored"
+  },
+  {
+   "id": 817,
+   "filename": "知识库_运行视角_视图规范元素要求(1).md",
+   "sha": "f95472032a51a78f00a1b90cd49eed554aaebeb5114b8a2f58661b345cd0daa8",
+   "lc": "stored"
+  },
+  {
+   "id": 818,
+   "filename": "知识库_运行视角_视图间关联关系(1).md",
+   "sha": "45a1e4789398dc23dc0e7da2e4a9b51ff78b4738eef769e02e4d29d04b1d6248",
+   "lc": "stored"
+  },
+  {
+   "id": 846,
+   "filename": "ISO 29148-2011 Requirements Engineering.pdf",
+   "sha": "3443cc3c5c6610ea541de68337c0d59561afe30910d488e5dbddc3f2da5da733",
+   "lc": "stored"
+  },
+  {
+   "id": 848,
+   "filename": "Print_面向网络总体的AI赋能MBSE系统设计技术研究项目技术要求.pdf",
+   "sha": "c99cc5d0aebea3b3f8cbe8ef2ed4c5f432fa48c1a87ae18682962c89f59dbdf3",
+   "lc": "deprecated"
+  },
+  {
+   "id": 852,
+   "filename": "1_800_SysML-v2-AI建模知识文档.md",
+   "sha": "5f7a571faa2351351bcdb6722916ada8e1d806bf3b2eac9bef78dbb4c84f02d3",
+   "lc": "stored"
+  }
+ ],
+ "after_empty": 0,
+ "why": "content_sha256 全空 ⇒ check_duplicate 的 same_content 判据失效 ⇒ duplicate_groups 看不见重复 ⇒ _dedupe_documents.py 盘点报「0 组」⇒ 2026-11-10 写的清理脚本无东西可删，重复持续留在库里",
+ "caveat": "源副本不可取的文档保持空 sha，不编造；由常驻门禁持续盯空 sha 数"
+}
