@@ -660,6 +660,16 @@ jobs:
         if: ${{ !cancelled() }}
         run: python tools/verify/verify_memory_evidence_chain.py
 
+      # ── 2026-11-16 新增：prompt 块词表的**运行期**守卫 ──────────────────
+      #   `context_audit.block_name` 的读路径（validate_event）遇到词表外类型会抛
+      #   UnknownEventError ⇒ 会话回放失败。而写路径此前从不校验 ⇒ 漏登记只在
+      #   很久之后以"回放失败"暴露。
+      #   同一形态实测发生三次（artifact_facts / output_contract / artifact_baseline），
+      #   根因是"加块"与"登记词表"两个动作无强耦合 ⇒ 改成写入那一刻就上报观测。
+      - name: Guard prompt 块词表运行期守卫（12 项，含变异自证）
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_prompt_block_vocab_guard.py
+
       # ── 2026-11-15 新增：SHACL 独立校验交叉验证 ────────────────────────
       # 本工程所有实例校验都靠自研实现；若自研有 bug，**没有任何人能发现**。
       # 接 pySHACL（W3C SHACL 参考实现之一）做独立校验，与自研逐维度比对：
