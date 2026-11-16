@@ -1,9 +1,9 @@
 {
   "schema": "p0/config-audit@1",
-  "generated_at_utc": "2026-11-15 15:46:22",
+  "generated_at_utc": "2026-11-16 06:47:59",
   "scope": {
-    "business_files": 454,
-    "whole_repo_files": 1314,
+    "business_files": 456,
+    "whole_repo_files": 1335,
     "gen_dirs_excluded": [
       ".git",
       ".venv",
@@ -37,8 +37,8 @@
       ".js",
       ".html"
     ],
-    "schema_keys": 536,
-    "default_keys": 503
+    "schema_keys": 538,
+    "default_keys": 505
   },
   "definition": {
     "schema_only": "CONFIG_SCHEMA 有、DEFAULT_CONFIG 无 ⇒ get() 返回 None；只能由 override 提供",
@@ -50,7 +50,7 @@
     "schema_only": 33,
     "no_business_consumer": 39,
     "dead_config_suspect": 6,
-    "suspect": 247
+    "suspect": 248
   },
   "schema_only": [
     "agent.ask_user_enabled",
@@ -309,6 +309,7 @@
     "orchestration.auto_resume_daily_budget",
     "orchestration.auto_resume_enabled",
     "orchestration.auto_resume_max_age_s",
+    "rag.bilingual_expansion",
     "rag.dedupe_exact",
     "rag.drop_metadata_blocks",
     "rag.memory_cross_domain_penalty",

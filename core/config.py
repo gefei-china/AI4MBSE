@@ -1168,6 +1168,12 @@ DEFAULT_CONFIG = {
         #   风险控制：每条 content 注入前已截断（约 300 字），多 2 条 ≈ +400 token。
         "inject_k": 5,               # 最终注入 prompt 的片段条数（消费侧 chunk_hits[:inject_k]）
         "fallback_top_k": 5,         # 混合检索异常时 search_chunks 兜底条数
+        # ★ 2026-11-16 跨语言补召回（中英术语桥接）：中文查询 → 英文术语独立跑第二路
+        #   → RRF 与主路融合。解决「中文问 port/连接器 却命中不到英文规范」的术语鸿沟。
+        #   实测依据：纯中文查询命中英文文档 recall@1=0.50 / recall@5=0.917；
+        #   而混合语言查询反而更差 ⇒ 只生成独立第二路，不改写原查询。
+        "bilingual_expansion": True,
+        "bilingual_min_terms": 2,    # 至少命中几个中文术语才生成第二路（宁少不错）
         # ★ 2026-11-01（P0-a）检索结果去重：同一份文件被导入两次时，
         #   两份副本会**各占 per_doc_max 的槽位**（配额按 source_doc 字符串计数，
         #   而副本的 source_doc 形态不同 → 被当成两个独立文档）。
@@ -2354,6 +2360,8 @@ CONFIG_SCHEMA = {
         "top_k":                 {"type": "int",   "desc": "RRF 融合后保留的候选池（送 LLM 重排）"},
         "inject_k":              {"type": "int",   "desc": "最终注入 prompt 的片段条数"},
         "fallback_top_k":        {"type": "int",   "desc": "混合检索异常时 search_chunks 兜底条数"},
+        "bilingual_expansion":   {"type": "bool",  "desc": "跨语言补召回：中文查询用领域术语表生成英文第二路，与主路 RRF 融合（解决中文术语问英文规范的鸿沟；置 false 回到单路）"},
+        "bilingual_min_terms":   {"type": "int",   "desc": "至少命中几个中文术语才生成英文第二路（宁少不错，避免单词噪声查询）"},
         "dedupe_exact":          {"type": "bool",  "desc": "检索结果去重：正文逐字相同且 document_id 不同 ⇒ 判为重复副本丢弃（防同一份文件两份副本各占配额槽）"},
         "dedupe_min_chars":      {"type": "int",   "desc": "去重最小正文长度，短于此不参与（避免误合并套话短片段）"},
         "zero_hit_retry":        {"type": "bool",  "desc": "零召回关键词重试：命中为空时用实词关键词重查一次（bigram 降级态救长问句）"},

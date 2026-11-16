@@ -16,7 +16,7 @@
 
 生成命令：./.venv/Scripts/python.exe -X utf8 tools/_p0_config_audit.py --apply
 """
-GENERATED_AT = '2026-11-15 15:46:22'
+GENERATED_AT = '2026-11-16 06:47:59'
 
 SCHEMA_ONLY_KEYS = (
     'agent.ask_user_enabled',
@@ -278,6 +278,7 @@ SUSPECT_KEYS = (
     'orchestration.auto_resume_daily_budget',
     'orchestration.auto_resume_enabled',
     'orchestration.auto_resume_max_age_s',
+    'rag.bilingual_expansion',
     'rag.dedupe_exact',
     'rag.drop_metadata_blocks',
     'rag.memory_cross_domain_penalty',

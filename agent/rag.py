@@ -320,6 +320,41 @@ class GraphRAG:
                               glossary_boost=boost, doc_names=scope_docs or None,
                               include_deprecated=_inc_dep)
                 chunk_hits = _hy["hits"]
+                # ── 2026-11-16 跨语言补召回：中文术语密集查询 → 英文术语独立跑第二路 ──
+                # 为什么是"独立一路"而不是"改写原查询"（实测，反直觉）：
+                #   把英文词混进中文 query（`端口 port 和连接器 connector …`）**更差**
+                #   —— 混合串向量落在两种语言之间，两路都变弱，实测仍 miss；
+                #   而纯英文 query 同一问题上 rank 1、12 条命中。
+                # ⇒ 只在**中文查询**上生成第二路（纯英文查询本已最优，不扩）。
+                # 融合用 RRF：两路 `score` 是各自的 RRF 融合分，跨查询不可比，
+                #   只能按排名融合（`fuse_rrf` 的 docstring 有说明）。
+                # 开关 rag.bilingual_expansion（默认 True；置 False 回到改动前逐字行为）。
+                _xl_info = None
+                try:
+                    from core import config as _cfg_xl
+                    if _cfg_xl.as_bool("rag", "bilingual_expansion", True):
+                        from agent.retrieval_bilingual import (expand_to_english as _xl_exp,
+                                                               fuse_rrf as _fuse)
+                        # min_terms 必须真的消费配置 —— 否则该键是死配置
+                        # （新门禁 verify_p0_config_audit 会把它标成 DEAD_SUSPECT，
+                        #  实测本轮就被抓到过一次，所以这里显式取值传入）
+                        _xl_min = int(_cfg_xl.get("rag", "bilingual_min_terms", 2) or 2)
+                        _xl_q = _xl_exp(query, min_terms=_xl_min)
+                        if _xl_q:
+                            _hy2 = _hybrid(conn, _xl_q, top_k=_rag_top_k, branches=None,
+                                           domain=force_domain if force_domain and force_domain != "unknown" else None,
+                                           glossary_boost=None, doc_names=scope_docs or None,
+                                           include_deprecated=_inc_dep)
+                            _sec = _hy2.get("hits") or []
+                            if _sec:
+                                _before = len(chunk_hits)
+                                chunk_hits = _fuse(chunk_hits, _sec, k=60,
+                                                   cap=max(_rag_top_k, _before))
+                                _xl_info = {"query_en": _xl_q, "secondary_hits": len(_sec),
+                                            "before": _before, "after": len(chunk_hits),
+                                            "added": max(0, len(chunk_hits) - _before)}
+                except Exception:
+                    _xl_info = None   # 补召回失败绝不阻断主检索（退化为单路，比丢结果安全）
                 # ── P1-7（2026-10-16）检索侧 Corrective：域约束致零召回 ⇒ 撤域重查一次 ──
                 # 实测根因（69 例评测集 doc 43 例）：4 例金标在召回池位次 1~4、confidence_level「高」，
                 # 但 retrieve() 返回 chunk_hits=0 —— **不是召回差，是被 domain 过滤整个掉**。
