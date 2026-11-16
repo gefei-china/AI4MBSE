@@ -863,9 +863,9 @@
   },
   {
    "script": "verify_generation_quality_gate.py",
-   "tier": "backlog",
+   "tier": "local",
    "timeout": 180,
-   "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+   "reason": "2026-11-16 逐条定性完成（原 backlog「盘点未覆盖」）：实测该门禁**从未产出过真判决** ——变异 M9 直接下标 r[\"llm_judge\"][\"control\"]，而未启用 LLM 评判时报告只有 {enabled:false}⇒ KeyError 崩溃，永远 rc=1。已修：M7/M9 先构造「评判已跑且忠实率正常」的基线再变异单点（原 M7 只设 faithful_rate，G7 因 enabled=false 走 SKIP ⇒ 变异恒红）。修后常态 6 PASS/0 FAIL/2 SKIP（G6 负对照拉不开、G7 未启用语义层，均按设计判 SKIP）、变异 10/10 全绿。tier=local 而非 pr：需读本机 tmp/p21 评测报告（干净 checkout 没有），且评测本身要连生产库。只读报告、不调 LLM、不写库。"
   },
   {
    "script": "verify_glossary_normalize_idempotent.py",
