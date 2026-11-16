@@ -2502,6 +2502,12 @@
    "tier": "local",
    "timeout": 180,
    "reason": "引用视图一致性门禁：守「引用条数 == 正文可点数 == 列表条数」且编号连续。既有三条引用门禁守注入侧/锚点/注册表，都不查「模型只引用其中一部分」这种输出侧情况（用户实测：显示 5 条、页面只见 1,2,3,5、缺第 4 条）。node 跑 05-markdown.js 真函数：V1 真机连续无断号、V1b 列表==视图、V1c 双数标题、V2 全引用不重排、V3 无标记退回全量、V4 越界留纯文本、V5 表格内引用也可点；S1~S4 静态接线（_msgCites 存视图后 list / _citeSub 单一真源 / 表格传参）；M1~M3 变异自证。需 node 与真库（均可 SKIP 并写明），不调 LLM、不写库。2026-11-16 新增"
+  },
+  {
+   "script": "verify_kb_hygiene.py",
+   "tier": "local",
+   "timeout": 300,
+   "reason": "知识库卫生门禁：守「去重机制不失效」这件事本身。实证因果链：documents.content_sha256 14/14 全空 ⇒ check_duplicate 的 same_content 失效 ⇒ duplicate_groups 看不见重复 ⇒ _dedupe_documents.py 盘点报 0 组 ⇒ 重复文档躺了 7 天 ⇒ 检索时同一段话占两个槽位（per_doc_max 按 document_id 算配额）。既有 verify_upload_dedup.py 测的是上传路径判重逻辑（逻辑对但假设 sha 有值），守不住存量数据卫生。判据：H1 非下架文档 sha 非空；H2a 无相同 sha；H2b chunk 内容签名兜底（sha 缺失也能抓漏）；H3 deprecated 文档无残留 stored chunk；H4 在役文档有 chunk。M1~M7 变异自证（含「sha 置空」「sha 缺失但内容相同」两个真实缺陷路径）。已用修复前备份库实测：H1+H2b 判红，修复后全绿 —— 证明判据有牙齿。需连真库、只读、不调 LLM、不写库；干净 checkout 全部 SKIP。2026-11-16 新增"
   }
  ]
 }
