@@ -99,7 +99,11 @@ function main() {
     const mFold = core.match(/const USER_FOLD_LINES\s*=\s*\d+/);
     let code = (mFold ? mFold[0] + ';\n' : '') + parts.join('\n');
     // renderMessage 依赖 renderMarkdown / _intentBriefBody 等；给最小桩
+    // ★ 2026-11-16：renderMessage 新增了 _citeView 依赖（引用视图重映射）。
+    //   本门禁测的是**用户输入折叠**，与 citations 无关 ⇒ 给恒等桩，
+    //   保证被测语义（折叠行数/容器）逐字节不变。
     code = 'function renderMarkdown(t){return String(t||"");}\n'
+         + 'function _citeView(al, bd){al=al||[];return {list:al,renum:{},k:al.length,n:al.length,trimmed:false};}\n'
          + 'function _procDetailBtn(){return "";}\n'
          + 'function _userFoldStub(){}\n' + code;
     try { vm.runInContext(code, sb, { timeout: 10000 }); } catch (e) {

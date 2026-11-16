@@ -2496,6 +2496,12 @@
    "tier": "local",
    "timeout": 180,
    "reason": "P1-3 常驻门禁：8 个视图生成 Agent 已从**插件库**移除（D1 只清了 agents 表与资产快照）。R 组查 plugins.status=removed + capability_registry=disabled/deprecated + agents 无残留；C 组查承接方 9 个 Skill 仍 published 且挂在 view_expansion；M 组按 plugin_system/store/queries 的真实 where 子句复算市场可见性（含负对照防空转）；X1~X7 变异自证判据有牙齿——特别是「误用 disabled 会让市场重新可见」这一陷阱。需连真库 mbse.db，干净 checkout 降级为 X 组并打印 DEGRADED；只读、不调 LLM、不写库。2026-11-16 新增"
+  },
+  {
+   "script": "verify_citation_view_consistency.py",
+   "tier": "local",
+   "timeout": 180,
+   "reason": "引用视图一致性门禁：守「引用条数 == 正文可点数 == 列表条数」且编号连续。既有三条引用门禁守注入侧/锚点/注册表，都不查「模型只引用其中一部分」这种输出侧情况（用户实测：显示 5 条、页面只见 1,2,3,5、缺第 4 条）。node 跑 05-markdown.js 真函数：V1 真机连续无断号、V1b 列表==视图、V1c 双数标题、V2 全引用不重排、V3 无标记退回全量、V4 越界留纯文本、V5 表格内引用也可点；S1~S4 静态接线（_msgCites 存视图后 list / _citeSub 单一真源 / 表格传参）；M1~M3 变异自证。需 node 与真库（均可 SKIP 并写明），不调 LLM、不写库。2026-11-16 新增"
   }
  ]
 }

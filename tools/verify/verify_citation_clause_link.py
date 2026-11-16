@@ -145,13 +145,15 @@ def real_sample():
 def group_a_behavior(node):
     """A 组：用 node 跑 05-markdown.js 的**真函数体**。"""
     src = open(MD, encoding="utf-8").read()
-    parts = [grab_fn(src, n) for n in ("escMd", "_citeClauseIndex", "inlineMd")]
+    # 2026-11-16：inlineMd 的引用替换已抽到 _citeSub（单一真源，表格共用）⇒ 必须一并注入
+    _NEED_A = ("escMd", "_citeClauseIndex", "_citeSub", "inlineMd")
+    parts = [grab_fn(src, n) for n in _NEED_A]
     if any(p is None for p in parts):
         # ⚠️ 抽不到函数 ⇒ 必须 FAIL，不能"没断言就通过"（那是空转）
-        chk("A0 从 05-markdown.js 抽到 escMd/_citeClauseIndex/inlineMd",
-            False, "缺: %s" % [n for n, p in zip(("escMd", "_citeClauseIndex", "inlineMd"), parts) if p is None])
+        chk("A0 从 05-markdown.js 抽到 escMd/_citeClauseIndex/_citeSub/inlineMd",
+            False, "缺: %s" % [n for n, p in zip(_NEED_A, parts) if p is None])
         return
-    chk("A0 从 05-markdown.js 抽到 escMd/_citeClauseIndex/inlineMd", True)
+    chk("A0 从 05-markdown.js 抽到 escMd/_citeClauseIndex/_citeSub/inlineMd", True)
 
     fx = real_sample()
     # 兜底夹具：真库不可用时也要能验行为（不依赖真库）
@@ -193,6 +195,22 @@ CITES.forEach((c,k)=>{
 });
 out.dup = _dup;
 out.a5idx = out.idx;
+/* ★ 2026-11-16：A5/A7 需要「同条款多片段」的样本，但真机样本**不保证**有
+   （实测 msg 6674 只有 §8.3.26.2:[1] / §7.26.2:[3] 各一条 ⇒ A5 空转通过、
+   A7 变异抓不到）。改用确定性夹具，判据不再依赖运气。 */
+const DUP_FIX = [
+  {anchor:'§5.2.5 Characteristics of', content:'a'},
+  {anchor:'§5.2.6 Verifiable',       content:'b'},
+  {anchor:'§5.2.5 Characteristics of', content:'c'},
+];
+const _dup2 = {};
+DUP_FIX.forEach((c,k)=>{
+  const m = String(c.anchor||'').match(/§\s*(\d+(?:\.\d+){1,4})/);
+  if(!m) return;
+  (_dup2[m[1]] = _dup2[m[1]] || []).push(k+1);
+});
+out.dupDet = _dup2;
+out.a5idxDet = _citeClauseIndex(DUP_FIX);
 // A6：无 cites / 空 anchor
 out.a6a = inlineMd('依据 §' + _k + ' 条款', null);
 out.a6b = inlineMd('依据 §' + _k + ' 条款', [{content:'x'}]);
@@ -234,18 +252,19 @@ console.log(JSON.stringify(out));
         "cite-sec" in d["a4"] and "[1]" in d["a4"] and 'data-i="1"' in d["a4"],
         d["a4"][:200])
 
-    # A5 —— 同条款多片段取最小号
-    dup_ok = True
+    # A5 —— 同条款多片段取最小号（**确定性夹具**，不依赖真机样本）
+    det = d.get("dupDet") or {}
+    dup_ok = bool(det) and any(len(v) > 1 for v in det.values())
     dup_detail = []
-    for key, nums in (d["dup"] or {}).items():
+    for key, nums in det.items():
         if len(nums) > 1:
-            got = d["a5idx"].get(key)
+            got = (d.get("a5idxDet") or {}).get(key)
             if got != min(nums):
                 dup_ok = False
                 dup_detail.append("%s: 编号%s 期望 %d 实得 %s" % (key, nums, min(nums), got))
-    chk("A5 同条款多片段 ⇒ 取最小编号（不让编号乱跳）",
-        dup_ok, "; ".join(dup_detail) or "（样本里无重复条款，判据空转）"
-        if not dup_detail else "; ".join(dup_detail))
+    chk("A5 同条款多片段 ⇒ 取最小编号（确定性夹具，不让编号乱跳）",
+        dup_ok,
+        "; ".join(dup_detail) or ("夹具本身无重复条款 ⇒ 判据无意义" if not det else "ok"))
 
     # A6
     chk("A6 无 cites / 无 anchor ⇒ 原样返回（不报错、不改文本）",
@@ -272,16 +291,22 @@ console.log(JSON.stringify(out));
         "if(idx[m[1]] === undefined) idx[m[1]] = k + 1;",
         "idx[m[1]] = k + 1;")          # 去掉"只在未设置时赋值" ⇒ 变成取最大值
     if mut_src != "\n".join(parts):
+        # ★ 2026-11-16：变异必须跑**确定性夹具**（同上，真机样本可能无重复条款）
         js_mut = mut_src + """
-console.log(JSON.stringify(_citeClauseIndex(%s)));
-""" % json.dumps(cites, ensure_ascii=False)
+const DUP_FIX = [
+  {anchor:'§5.2.5 Characteristics of', content:'a'},
+  {anchor:'§5.2.6 Verifiable',       content:'b'},
+  {anchor:'§5.2.5 Characteristics of', content:'c'},
+];
+console.log(JSON.stringify(_citeClauseIndex(DUP_FIX)));
+"""
         rc2, out2, _ = run_node(node, js_mut)
         mutated_max = False
         if rc2 == 0 and out2.strip():
             try:
                 midx = json.loads(out2.strip().splitlines()[-1])
                 mutated_max = any(len(v) > 1 and midx.get(kk) == max(v)
-                                  for kk, v in (d["dup"] or {}).items() if len(v) > 1)
+                                  for kk, v in (d.get("dupDet") or {}).items() if len(v) > 1)
             except Exception:
                 mutated_max = False
         chk("A7 变异自证：改成「取最大编号」后 A5 判据必须翻红",
@@ -321,8 +346,15 @@ console.log(JSON.stringify(inlineMd('依据 §' + %s + ' 条款 [1]', %s)));
 def group_b_wiring():
     """B 组：源码级接线（防两个路径/顺序被改坏）。"""
     md = open(MD, encoding="utf-8").read()
-    chk("B1 inlineMd 仍接收 cites 参数（签名未被改坏）",
-        "function inlineMd(s, cites)" in md, "")
+    # ★ 2026-11-16：inlineMd 合法新增**可选**第 3 参 `renum`（引用视图重映射）。
+    #   判据不放松、反而更精确：cites 仍是**第 2 个**参数（防"参数被挪位/删掉"
+    #   导致引用全失效），且第 3 参若存在**只允许**是 renum（防塞进别的语义）。
+    #   老调用 `inlineMd(x, cites)` 仍成立 —— renum 为 undefined 时走原范围判据。
+    _sig = re.search(r"function\s+inlineMd\s*\(\s*s\s*,\s*cites\s*(,\s*renum\s*)?\)", md)
+    chk("B1 inlineMd 仍接收 cites 作第 2 参（第 3 参只允许可选的 renum）",
+        bool(_sig), "签名形如 (s, cites[, renum])；实测: %s"
+        % (md[md.find("function inlineMd"):md.find("function inlineMd") + 46]
+           if "function inlineMd" in md else "未找到"))
 
     # B2：条款号替换必须在 [n] 替换之前
     i_sec = md.find("_citeClauseIndex(cites)")
@@ -389,8 +421,12 @@ def group_c_real(fx, node):
         skip("C4 代码块内的 § 不链接（那里是待复制的原文）", "环境无 node")
         return
     src = open(MD, encoding="utf-8").read()
-    need = ("escMd", "_mdCells", "renderTable", "renderMdLine",
-            "inlineMd", "_citeClauseIndex", "renderMarkdown")
+    # ★ 2026-11-16：renderMarkdown 现在先跑 _citeView（引用视图重映射）⇒ 必须一并注入，
+    #   否则夹具报 "_citeView is not defined"（门禁自身缺口，非产品 bug）。
+    # 2026-11-16：renderTable 现在也走 _citeSub（表格内引用可点），
+    # 且 renderMarkdown 先跑 _citeView ⇒ 两者都必须注入。
+    need = ("escMd", "_mdCells", "_citeSub", "renderTable", "renderMdLine",
+            "inlineMd", "_citeClauseIndex", "_citeView", "renderMarkdown")
     parts = [grab_fn(src, n) for n in need]
     if any(p is None for p in parts):
         chk("C2 真机正文渲染后 anchor 覆盖的条款号确实被链接", False,
@@ -448,11 +484,21 @@ console.log(JSON.stringify({
     chk("C3 真机正文渲染后无越界条款号被链接（逐条核对 anchor 集合）",
         not stray, "越界号=%s" % stray)
     # C4：代码块内的 § 必须**不链接**（那里是给用户复制的原文）
-    chk("C4 代码块内的 § 不链接（代码块要能原样复制，不能塞 HTML 标签）",
-        d.get("htmlHasCodeFold") and (d.get("secInFence") or 0) > 0
-        and len(linked) <= (d.get("secOutFence") or 0) + 1,
-        "块内 §=%s、块外 §=%s、实际链接=%d"
-        % (d.get("secInFence"), d.get("secOutFence"), len(linked)))
+    #
+    # ★ 2026-11-16：本判据原本把「块内 § 数 > 0」写成**必要条件**，
+    #   于是当最新样本恰好没有代码块内 § 时就判红 —— 那是**样本不具备被测特征**，
+    #   不是产品缺陷（原样 FAIL 会把没测到说成测坏了）。
+    #   改为：块内 § = 0 ⇒ SKIP 并写明；> 0 才真正断言不链接。
+    _sif, _sof = (d.get("secInFence") or 0), (d.get("secOutFence") or 0)
+    if not d.get("htmlHasCodeFold"):
+        skip("C4 代码块内的 § 不链接", "样本无代码块")
+    elif _sif == 0:
+        skip("C4 代码块内的 § 不链接",
+             "样本代码块内无 §（msg %s）；块外 %d 处均正常链接" % (fx["id"], _sof))
+    else:
+        chk("C4 代码块内的 § 不链接（代码块要能原样复制，不能塞 HTML 标签）",
+            len(linked) <= _sof + 1,
+            "块内 §=%s、块外 §=%s、实际链接=%d" % (_sif, _sof, len(linked)))
     outside = sorted(set(allsecs) - set(idx))
     print("      [info] msg %s：正文 §x.y 共 %d 个不同号，可链 %d 个，"
           "**无片段** %d 个（保持纯文本）：%s"
