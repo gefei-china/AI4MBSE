@@ -2442,6 +2442,12 @@
    "timeout": 300
   },
   {
+   "script": "verify_memory_embed_freshness.py",
+   "tier": "local",
+   "timeout": 300,
+   "reason": "需真实 embedding 服务（192.168.100.202:8004）+ 真库：断言库内记忆向量与当前模型同源（自洽余弦>=0.9）。服务不可用时整组 SKIP（测不了不等于没问题）。2026-11-16 新增：该判据抓到的『换模型后旧向量没重算』使记忆评测命中率 27.3%->63.6%"
+  },
+  {
    "script": "verify_ontology_export_formats.py",
    "tier": "nightly",
    "timeout": 180,
