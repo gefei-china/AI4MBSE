@@ -2437,6 +2437,11 @@
    "timeout": 180
   },
   {
+   "script": "verify_memory_eval_reanchor.py",
+   "tier": "pr",
+   "timeout": 300
+  },
+  {
    "script": "verify_ontology_export_formats.py",
    "tier": "nightly",
    "timeout": 180,

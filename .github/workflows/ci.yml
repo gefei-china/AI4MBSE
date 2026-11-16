@@ -641,6 +641,15 @@ jobs:
         if: ${{ !cancelled() }}
         run: python tools/verify/verify_view_intent_extraction.py
 
+      # ── 2026-11-16 新增：记忆评测集重锚判据自洽 ──────────────────────
+      #   评测集硬锚 2026-10-07 的 id 快照，库涨到 295 条（97 条 forgotten）后
+      #   实跑 28.6%，一度被误读成"记忆召回退化"。
+      #   逐条诊断：5 个用例的期望记忆已遗忘/删除且无等价 alive ⇒ 应 SKIP，
+      #   不是 FAIL。重锚表让"有等价就评、没有就显式 SKIP"，SKIP 计数落报告。
+      - name: Guard 记忆评测集重锚判据（8 项，含变异自证；干净库 SKIP）
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_memory_eval_reanchor.py
+
       # ── 2026-11-15 新增：SHACL 独立校验交叉验证 ────────────────────────
       # 本工程所有实例校验都靠自研实现；若自研有 bug，**没有任何人能发现**。
       # 接 pySHACL（W3C SHACL 参考实现之一）做独立校验，与自研逐维度比对：
