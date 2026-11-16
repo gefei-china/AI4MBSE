@@ -81,15 +81,27 @@ def main() -> int:
     rec("B2", not cov["stale_mapping"], "无指向已停用 Agent 的陈旧映射")
     rec("B3", not cov["member_mismatch"], "映射与成员表一致")
 
-    # 视图生成：8 个已停用 Agent 由 9 个 published 技能承接（米爸第 1 问的事实核对）
-    disabled_views = [r[0] for r in conn.execute(
-        "SELECT name FROM agents WHERE id BETWEEN 165 AND 172 AND status='disabled'")]
+    # 视图生成：D1（2026-11-15）把「已停用」推进到「永久移除」——判据同步升级且更严：
+    #   ① 8 个名字在 agents 表 0 命中；② 快照 tables.agents / relations 也 0 命中
+    #      （只查库不够：快照残留会让 init_db() 走 INSERT 分支、以 status='active' 复活）；
+    #   ③ 能力承接方 9 个 published 技能仍在。旧判据「8 个 disabled」已于 D1 作废。
+    from database.bootstrap_assets import load_snapshot as _load_snap
+    _view_names = ("需求视图生成", "结构视图生成", "交互视图（IBD）生成", "用例视图生成",
+                   "活动图生成", "状态机视图生成", "参数视图生成", "顺序视图（时序图）生成")
+    _vph = ",".join("?" * len(_view_names))
+    _live_views = [r[0] for r in conn.execute(
+        "SELECT name FROM agents WHERE name IN (%s)" % _vph, _view_names)]
     view_skills = [r[0] for r in conn.execute(
         "SELECT name FROM skills WHERE name LIKE 'sysml_view_generation_%' "
         "AND status='published'")]
-    rec("B4", len(disabled_views) == 8 and len(view_skills) == 9,
-        "8 个视图生成 Agent 已停用，9 个视图技能 published 承接（已停用 %d / 技能 %d）"
-        % (len(disabled_views), len(view_skills)))
+    _snap = _load_snap() or {}
+    _snap_agents = [r.get("name") for r in (_snap.get("tables") or {}).get("agents") or []]
+    _snap_rel = json.dumps(_snap.get("relations") or {}, ensure_ascii=False)
+    _snap_hits = [n for n in _view_names
+                  if n in _snap_agents or ('"%s"' % n) in _snap_rel]
+    rec("B4", not _live_views and not _snap_hits and len(view_skills) == 9,
+        "8 个视图 Agent 已永久移除（库命中 %d / 快照命中 %d），9 个视图技能 published 承接（技能 %d）"
+        % (len(_live_views), len(_snap_hits), len(view_skills)))
     pipeline = [r[0] for r in conn.execute(
         "SELECT name FROM agents WHERE id BETWEEN 634 AND 641 AND status='active'")]
     rec("B5", len(pipeline) == 8,
