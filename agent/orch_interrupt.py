@@ -75,16 +75,34 @@ def request_interrupt(conn, run_id: int, *, instruction: str = "", reason: str =
     conv_id = int(ck.get("conversation_id") or 0)
 
     # ① 协作式停止：把**未终态**任务置 cancelled（worker 探针会看到并自行收敛）
+    #    ★ 2026-11-15 P0-6：取消也是终态，必须写 error_class —— 真库实测「用户中断」
+    #      类文案此前全部无归因。归因取 services.failure_class.classify_terminal 单一真源。
     n = 0
+    _msg = "用户中断：%s" % (reason or "已请求停止")[:200]
+    _cls = "interrupted"  # cancelled 的归因只由 status 决定；分类器不可用时的确定兜底
+    try:
+        from services.failure_class import classify_terminal as _ct
+        _cls = _ct("cancelled", _msg)
+    except Exception:
+        pass
     try:
         n = int(conn.execute(
-            "UPDATE agent_tasks SET status='cancelled', error=?, "
+            "UPDATE agent_tasks SET status='cancelled', error=?, error_class=?, "
             "updated_at=CURRENT_TIMESTAMP WHERE run_id=? "
             "AND status NOT IN ('done','failed','cancelled','canceled')",
-            ("用户中断：%s" % (reason or "已请求停止")[:200], rid)).rowcount or 0)
+            (_msg, _cls, rid)).rowcount or 0)
         conn.commit()
-    except Exception as e:
-        logger.warning("中断时停止任务失败（不阻断台账写入）: %s", e)
+    except Exception:
+        # 极老库可能尚无 error_class 列 ⇒ 退回不分类的写入，保证中断仍生效
+        try:
+            n = int(conn.execute(
+                "UPDATE agent_tasks SET status='cancelled', error=?, "
+                "updated_at=CURRENT_TIMESTAMP WHERE run_id=? "
+                "AND status NOT IN ('done','failed','cancelled','canceled')",
+                (_msg, rid)).rowcount or 0)
+            conn.commit()
+        except Exception as e:
+            logger.warning("中断时停止任务失败（不阻断台账写入）: %s", e)
 
     # ② checkpoint 置 interrupted —— 主循环据此停派发、resume 据此放行重排。
     #   ⚠️ 这里**不同于** `mark_interrupted`（孤儿回收，刻意不刷 updated_at）：

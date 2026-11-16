@@ -118,7 +118,8 @@ def _protocol_digest(sm) -> str:
 def build_subtask_context(tk: dict, goal: str, done_items: list = None,
                           artifact_digest: str = "",
                           offload_map: dict = None, plan: list = None,
-                          digest_cap: int | None = None) -> str:
+                          digest_cap: int | None = None,
+                          include_rules: bool = True) -> str:
     """T7 子任务上下文快照：任务定义 + 前置结果摘要 + 会话既有产物 + 交付规范（最小充分上下文）。
 
     供 _run_task 与 _stream_orchestrated_flow 复用，保证会话编排/画布路径行为一致。
@@ -136,6 +137,12 @@ def build_subtask_context(tk: dict, goal: str, done_items: list = None,
     （实测：t3 快照里 grep 不到 t1 的结论）。多阶段任务的末段恰恰最需要开头的需求约束 ——
     「需求分析、方案设计、代码校验」这类多意图输入必然产生长链，全链断头等于把多意图做废。
     plan=None ⇒ 退化为直接依赖（逐字节兼容旧行为）。
+
+    include_rules（★ 2026-11-15 P0-6）：是否拼入 `core/subtask_rules.render_rules()`
+    的「必含规则」段。默认 True —— 方案要求把不可违反的规则**显式**下发给每个子任务；
+    置 False ⇒ **逐字节回到改动前**（回退/对照开关，由常驻门禁断言）。
+    ⚠️ 不重复 `stream.py` 已有的【交付格式】契约，这里只补跨 Golden Set 12 例的通用红线。
+    ⚠️ 规则模块不可用时静默不加段，但绝不让上下文构建失败。
     """
     cfg = tk.get("config") or {}
     if isinstance(cfg, str):
@@ -202,6 +209,14 @@ def build_subtask_context(tk: dict, goal: str, done_items: list = None,
                         f"调用工具 tool_result_fetch（参数 {{\"id\": {_oid_v}}}）取全文，"
                         f"不要凭摘要猜测上游结论。")
     parts.append("- 交付规范：输出需自包含；仅基于给定上下文，禁止虚构；风险/待确认项需显式标注")
+    # ★ 2026-11-15 P0-6：必含规则单一真源。插在「交付规范」之后、artifact_digest 之前，
+    #   刻意不改下面 `if artifact_digest:` 两行（verify_multiturn_context.py 的 M2 变异锚点）。
+    if include_rules:
+        try:
+            from core.subtask_rules import render_rules as _rr
+            parts.append(_rr())
+        except Exception:
+            pass
     if artifact_digest:
         parts.append(str(artifact_digest))
     return "\n".join(parts)

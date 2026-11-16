@@ -210,9 +210,16 @@ def rerun_tasks(run_id: int, body: dict = None, conn=Depends(db_session),
     cleared = 0
     for r in rows:
         if str(r["task_key"]) in rerun_keys:
-            conn.execute(
-                "UPDATE agent_tasks SET status='ready', result='', summary_json=NULL, "
-                "error='', updated_at=CURRENT_TIMESTAMP WHERE id=?", (r["id"],))
+            # ★ 2026-11-15 P0-6：重跑必须清 error_class，否则上一轮失败标签污染新一轮
+            #   （orch_checkpoint.apply_resume 早已这么写，此处补齐口径一致性）。
+            try:
+                conn.execute(
+                    "UPDATE agent_tasks SET status='ready', result='', summary_json=NULL, "
+                    "error='', error_class='', updated_at=CURRENT_TIMESTAMP WHERE id=?", (r["id"],))
+            except Exception:
+                conn.execute(
+                    "UPDATE agent_tasks SET status='ready', result='', summary_json=NULL, "
+                    "error='', updated_at=CURRENT_TIMESTAMP WHERE id=?", (r["id"],))
             cleared += 1
     # 终态检查点回退：done/failed ⇒ executing，attempt 清零（用户显式动作给全新额度）
     ck_reset = False

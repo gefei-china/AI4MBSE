@@ -462,22 +462,40 @@ class TaskQueue:
         ⚠️ **幂等**：对已 cancelled 的再调返回 False（不报错、不重复改）。
         ⚠️ **不碰终态**：done/failed 的任务**取消不了** —— 否则"取消"会变成
           "把已完成的事改成没做"，那比不做更危险。
+        ★ 2026-11-15 P0-6：取消也是**终态**，必须写 error_class，否则
+          「失败/取消任务」里有一整类永远没有归因（真库实测 30 行全空）。
+          归因取 services.failure_class.classify_terminal（单一真源）。
         """
+        _msg = (reason or "用户取消")[:500]
+        _cls = "interrupted"  # cancelled 的归因只由 status 决定；分类器不可用时的确定兜底
         try:
-            _ph = ",".join("?" * len(TaskQueue.TERMINAL_STATUSES))
+            from services.failure_class import classify_terminal as _ct
+            _cls = _ct("cancelled", _msg)
+        except Exception:
+            pass
+        _ph = ",".join("?" * len(TaskQueue.TERMINAL_STATUSES))
+        try:
             cur = conn.execute(
-                "UPDATE agent_tasks SET status='cancelled', error=?, "
+                "UPDATE agent_tasks SET status='cancelled', error=?, error_class=?, "
                 "updated_at=CURRENT_TIMESTAMP WHERE id=? AND status NOT IN (%s)" % _ph,
-                ((reason or "用户取消")[:500], task_id) + TaskQueue.TERMINAL_STATUSES)
+                (_msg, _cls, task_id) + TaskQueue.TERMINAL_STATUSES)
             conn.commit()
             return bool(cur.rowcount)
         except Exception:
-            # 极老库可能没有对应列/表结构 ⇒ 降级为"取消失败但不影响其他任务"
+            # 极老库可能尚无 error_class 列 ⇒ 退回不分类的写入，保证取消仍生效
             try:
+                cur = conn.execute(
+                    "UPDATE agent_tasks SET status='cancelled', error=?, "
+                    "updated_at=CURRENT_TIMESTAMP WHERE id=? AND status NOT IN (%s)" % _ph,
+                    (_msg, task_id) + TaskQueue.TERMINAL_STATUSES)
                 conn.commit()
+                return bool(cur.rowcount)
             except Exception:
-                pass
-            return False
+                try:
+                    conn.commit()
+                except Exception:
+                    pass
+                return False
 
     @staticmethod
     def cancel_run(conn, run_id: int, reason: str = "") -> int:
@@ -488,20 +506,36 @@ class TaskQueue:
         ⇒ 同时把 checkpoint 标成 `cancelled`，让该 run 不再出现在"可恢复"清单里
           （否则下次进来它又会被人看到并重试）。
         """
+        _msg = (reason or "用户取消整批")[:500]
+        _cls = "interrupted"  # 同上：cancelled 的归因只由 status 决定
+        try:
+            from services.failure_class import classify_terminal as _ct
+            _cls = _ct("cancelled", _msg)
+        except Exception:
+            pass
         _ph = ",".join("?" * len(TaskQueue.TERMINAL_STATUSES))
         try:
             cur = conn.execute(
-                "UPDATE agent_tasks SET status='cancelled', error=?, "
+                "UPDATE agent_tasks SET status='cancelled', error=?, error_class=?, "
                 "updated_at=CURRENT_TIMESTAMP WHERE run_id=? AND status NOT IN (%s)" % _ph,
-                ((reason or "用户取消整批")[:500], run_id) + TaskQueue.TERMINAL_STATUSES)
+                (_msg, _cls, run_id) + TaskQueue.TERMINAL_STATUSES)
             n = int(cur.rowcount or 0)
             conn.commit()
         except Exception:
+            # 极老库降级：不分类也要把整批取消成功
             try:
+                cur = conn.execute(
+                    "UPDATE agent_tasks SET status='cancelled', error=?, "
+                    "updated_at=CURRENT_TIMESTAMP WHERE run_id=? AND status NOT IN (%s)" % _ph,
+                    (_msg, run_id) + TaskQueue.TERMINAL_STATUSES)
+                n = int(cur.rowcount or 0)
                 conn.commit()
             except Exception:
-                pass
-            n = 0
+                try:
+                    conn.commit()
+                except Exception:
+                    pass
+                n = 0
         # 同步 checkpoint（失败不影响任务取消结果 —— 任务已收，checkpoint 只是可见性）
         try:
             conn.execute(
@@ -555,9 +589,16 @@ class TaskQueue:
     @staticmethod
     def retry(conn, task_id: int) -> None:
         """P2 人工重试：blocked/failed → ready（重新进入执行队列，清错误）。"""
-        conn.execute(
-            "UPDATE agent_tasks SET status='ready', error='', updated_at=CURRENT_TIMESTAMP WHERE id=?",
-            (task_id,))
+        # ★ 2026-11-15 P0-6：重排队必须清掉上一轮的 error_class，
+        #   否则旧失败标签会污染新一轮（orch_checkpoint.apply_resume 早已这么写）。
+        try:
+            conn.execute(
+                "UPDATE agent_tasks SET status='ready', error='', error_class='', "
+                "updated_at=CURRENT_TIMESTAMP WHERE id=?", (task_id,))
+        except Exception:
+            conn.execute(
+                "UPDATE agent_tasks SET status='ready', error='', "
+                "updated_at=CURRENT_TIMESTAMP WHERE id=?", (task_id,))
         conn.commit()
 
     @staticmethod
