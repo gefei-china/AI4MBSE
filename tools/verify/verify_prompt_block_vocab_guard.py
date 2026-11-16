@@ -85,6 +85,25 @@ def main():
     chk("A3 守卫调用在 _enabled() 之后（审计关闭时不产生噪音）",
         i_enabled >= 0 and i_call > i_enabled, "enabled@%s call@%s" % (i_enabled, i_call))
 
+    # ── A4（★ 纯代码级判据，不依赖生产数据）────────────────────────────────
+    #   `PROMPT_BLOCK_ORDER` 里的每个 key 都必须在词表内。
+    #
+    #   为什么必须有这条：既有的"生产库覆盖"判据（`verify_universal_agent_core` 与本文件 C1）
+    #   **只查生产库里出现过什么** ⇒ 查不出「代码里有、但功能还没被用到」的块。
+    #   实测（2026-11-16）：`PROMPT_BLOCK_ORDER` 有 24 项，词表只有 21 项，
+    #   差的 3 项（`project_memory` / `template` / `skill_block`）恰恰是
+    #   功能还没启用的 —— 一旦启用就会写入词表外名字 ⇒ 回放失败。
+    #   ⇒ 判据必须建立在**代码事实**上：代码里有几个块，词表就得有几个。
+    try:
+        from agent.pipeline_parts.common import PROMPT_BLOCK_ORDER
+        missing = sorted(set(PROMPT_BLOCK_ORDER) - set(KNOWN_EVENT_TYPES))
+        chk("A4 PROMPT_BLOCK_ORDER ⊆ 词表（代码级判据，覆盖「有块但功能未启用」的情形）",
+            not missing, "词表缺: %s" % missing)
+        print("      PROMPT_BLOCK_ORDER %d 项 ｜ 词表 %d 项"
+              % (len(PROMPT_BLOCK_ORDER), len(KNOWN_EVENT_TYPES)))
+    except Exception as e:
+        chk("A4 PROMPT_BLOCK_ORDER ⊆ 词表", False, repr(e))
+
     print("\n--- GROUP_B ---")
     CA._VOCAB_UNKNOWN_SEEN.clear()
     r = CA._audit_block_vocab({"memory": "x", "retrieval": "y", "role": "z",
