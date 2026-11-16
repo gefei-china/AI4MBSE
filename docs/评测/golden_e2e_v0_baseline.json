@@ -1,0 +1,346 @@
+{
+  "schema": "p0/golden-e2e-report@1",
+  "eval_kind": "golden_e2e",
+  "mode": "offline_replay",
+  "dataset_id": "eb245949e0d84ed1",
+  "dataset_version": "v0",
+  "case_count": 12,
+  "passed_cases": 12,
+  "pass_rate": 1.0,
+  "mean_score": 1.0,
+  "by_chain": {
+    "model_and_validate": {
+      "n": 4,
+      "passed": 4
+    },
+    "orchestrated": {
+      "n": 4,
+      "passed": 4
+    },
+    "single_agent": {
+      "n": 4,
+      "passed": 4
+    }
+  },
+  "rows": [
+    {
+      "case_id": "G01",
+      "chain": "single_agent",
+      "intent": "design",
+      "conv_id": 990712,
+      "source_conv_id": 990712,
+      "passed": true,
+      "score": 1.0,
+      "checks": [
+        {
+          "type": "artifact_kind_present",
+          "passed": true,
+          "evidence": "artifacts(kind=sysml)=2"
+        },
+        {
+          "type": "sysml_code_nonempty",
+          "passed": true,
+          "evidence": "sysml_versions.code_text=1 / artifacts(code)=1"
+        },
+        {
+          "type": "assistant_answer_nonempty",
+          "passed": true,
+          "evidence": "assistant_nonempty=1"
+        }
+      ]
+    },
+    {
+      "case_id": "G02",
+      "chain": "single_agent",
+      "intent": "design",
+      "conv_id": 990713,
+      "source_conv_id": 990713,
+      "passed": true,
+      "score": 1.0,
+      "checks": [
+        {
+          "type": "artifact_kind_present",
+          "passed": true,
+          "evidence": "artifacts(kind=sysml)=1"
+        },
+        {
+          "type": "sysml_code_nonempty",
+          "passed": true,
+          "evidence": "sysml_versions.code_text=1 / artifacts(code)=1"
+        },
+        {
+          "type": "assistant_answer_nonempty",
+          "passed": true,
+          "evidence": "assistant_nonempty=1"
+        }
+      ]
+    },
+    {
+      "case_id": "G03",
+      "chain": "single_agent",
+      "intent": "design",
+      "conv_id": 990717,
+      "source_conv_id": 990717,
+      "passed": true,
+      "score": 1.0,
+      "checks": [
+        {
+          "type": "artifact_kind_present",
+          "passed": true,
+          "evidence": "artifacts(kind=sysml)=1"
+        },
+        {
+          "type": "sysml_code_nonempty",
+          "passed": true,
+          "evidence": "sysml_versions.code_text=1 / artifacts(code)=1"
+        },
+        {
+          "type": "assistant_answer_nonempty",
+          "passed": true,
+          "evidence": "assistant_nonempty=1"
+        }
+      ]
+    },
+    {
+      "case_id": "G04",
+      "chain": "single_agent",
+      "intent": "design",
+      "conv_id": 990719,
+      "source_conv_id": 990719,
+      "passed": true,
+      "score": 1.0,
+      "checks": [
+        {
+          "type": "artifact_kind_present",
+          "passed": true,
+          "evidence": "artifacts(kind=sysml)=2"
+        },
+        {
+          "type": "sysml_code_nonempty",
+          "passed": true,
+          "evidence": "sysml_versions.code_text=1 / artifacts(code)=1"
+        },
+        {
+          "type": "check_verdict_in",
+          "passed": true,
+          "evidence": "verdicts=['pass'] allowed=['pass', 'report'] hit=['pass']"
+        },
+        {
+          "type": "assistant_answer_nonempty",
+          "passed": true,
+          "evidence": "assistant_nonempty=1"
+        }
+      ]
+    },
+    {
+      "case_id": "G05",
+      "chain": "orchestrated",
+      "intent": "design",
+      "conv_id": 514,
+      "source_conv_id": 514,
+      "passed": true,
+      "score": 1.0,
+      "checks": [
+        {
+          "type": "orchestration_done_rate_min",
+          "passed": true,
+          "evidence": "done=18/18 rate=1.000 min=0.80"
+        },
+        {
+          "type": "artifact_kind_present",
+          "passed": true,
+          "evidence": "artifacts(kind=sysml)=25"
+        },
+        {
+          "type": "assistant_answer_nonempty",
+          "passed": true,
+          "evidence": "assistant_nonempty=21"
+        }
+      ]
+    },
+    {
+      "case_id": "G06",
+      "chain": "orchestrated",
+      "intent": "requirement_analysis",
+      "conv_id": 9360,
+      "source_conv_id": 9360,
+      "passed": true,
+      "score": 1.0,
+      "checks": [
+        {
+          "type": "orchestration_done_rate_min",
+          "passed": true,
+          "evidence": "done=8/8 rate=1.000 min=0.80"
+        },
+        {
+          "type": "artifact_kind_present",
+          "passed": true,
+          "evidence": "artifacts(kind=sysml)=13"
+        },
+        {
+          "type": "assistant_answer_nonempty",
+          "passed": true,
+          "evidence": "assistant_nonempty=13"
+        }
+      ]
+    },
+    {
+      "case_id": "G07",
+      "chain": "orchestrated",
+      "intent": "knowledge_qa",
+      "conv_id": 9565,
+      "source_conv_id": 9565,
+      "passed": true,
+      "score": 1.0,
+      "checks": [
+        {
+          "type": "orchestration_done_rate_min",
+          "passed": true,
+          "evidence": "done=8/8 rate=1.000 min=0.80"
+        },
+        {
+          "type": "artifact_kind_present",
+          "passed": true,
+          "evidence": "artifacts(kind=sysml)=6"
+        },
+        {
+          "type": "assistant_answer_nonempty",
+          "passed": true,
+          "evidence": "assistant_nonempty=5"
+        }
+      ]
+    },
+    {
+      "case_id": "G08",
+      "chain": "orchestrated",
+      "intent": "report_generation",
+      "conv_id": 9571,
+      "source_conv_id": 9571,
+      "passed": true,
+      "score": 1.0,
+      "checks": [
+        {
+          "type": "orchestration_done_rate_min",
+          "passed": true,
+          "evidence": "done=5/6 rate=0.833 min=0.50"
+        },
+        {
+          "type": "artifact_kind_present",
+          "passed": true,
+          "evidence": "artifacts(kind=report)=1"
+        },
+        {
+          "type": "assistant_answer_nonempty",
+          "passed": true,
+          "evidence": "assistant_nonempty=14"
+        }
+      ]
+    },
+    {
+      "case_id": "G09",
+      "chain": "model_and_validate",
+      "intent": "view_expansion",
+      "conv_id": 9610,
+      "source_conv_id": 9610,
+      "passed": true,
+      "score": 1.0,
+      "checks": [
+        {
+          "type": "artifact_kind_present",
+          "passed": true,
+          "evidence": "artifacts(kind=sysml)=1"
+        },
+        {
+          "type": "check_verdict_in",
+          "passed": true,
+          "evidence": "verdicts=['pass'] allowed=['pass', 'report'] hit=['pass']"
+        },
+        {
+          "type": "assistant_answer_nonempty",
+          "passed": true,
+          "evidence": "assistant_nonempty=1"
+        }
+      ]
+    },
+    {
+      "case_id": "G10",
+      "chain": "model_and_validate",
+      "intent": "view_expansion",
+      "conv_id": 9586,
+      "source_conv_id": 9586,
+      "passed": true,
+      "score": 1.0,
+      "checks": [
+        {
+          "type": "artifact_kind_present",
+          "passed": true,
+          "evidence": "artifacts(kind=sysml)=17"
+        },
+        {
+          "type": "sysml_code_nonempty",
+          "passed": true,
+          "evidence": "sysml_versions.code_text=6 / artifacts(code)=6"
+        },
+        {
+          "type": "assistant_answer_nonempty",
+          "passed": true,
+          "evidence": "assistant_nonempty=8"
+        }
+      ]
+    },
+    {
+      "case_id": "G11",
+      "chain": "model_and_validate",
+      "intent": "chat",
+      "conv_id": 9999,
+      "source_conv_id": 9999,
+      "passed": true,
+      "score": 1.0,
+      "checks": [
+        {
+          "type": "artifact_kind_present",
+          "passed": true,
+          "evidence": "artifacts(kind=sysml)=5"
+        },
+        {
+          "type": "assistant_answer_nonempty",
+          "passed": true,
+          "evidence": "assistant_nonempty=1"
+        }
+      ]
+    },
+    {
+      "case_id": "G12",
+      "chain": "model_and_validate",
+      "intent": "requirement_analysis",
+      "conv_id": 9004,
+      "source_conv_id": 9004,
+      "passed": true,
+      "score": 1.0,
+      "checks": [
+        {
+          "type": "artifact_kind_present",
+          "passed": true,
+          "evidence": "artifacts(kind=sysml)=2"
+        },
+        {
+          "type": "sysml_code_nonempty",
+          "passed": true,
+          "evidence": "sysml_versions.code_text=1 / artifacts(code)=1"
+        },
+        {
+          "type": "assistant_answer_nonempty",
+          "passed": true,
+          "evidence": "assistant_nonempty=2"
+        }
+      ]
+    }
+  ],
+  "limitations": [
+    "offline_replay 不重新调用 LLM：结果是历史交付物的回放基线，不代表当前架构的实时表现",
+    "判据只覆盖交付物存在性/结构/校验结论/编排完成率，不覆盖内容语义质量与事实正确性",
+    "用例从真库派生（固定 conv_id），语料演进时 dataset_id 会变化，须重建基线后再比",
+    "逐任务「原本成功→失败」的回归清单由 run_arch_ab.py compare 产出，本评分器不判"
+  ],
+  "generated_at_utc": "2026-11-15 15:21:45"
+}
