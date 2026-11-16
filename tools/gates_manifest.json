@@ -2448,6 +2448,48 @@
    "tier": "pr",
    "timeout": 240,
    "reason": "pySHACL 0.40.1 与自研校验器逐维度交叉一致（数据类型/必填/枚举/唯一）+ 好样本不误报 + 变异自证 + 真库形状连通性。夹具驱动（内存库），不依赖真库数据与 8000 服务；缺 pyshacl 时 SKIP(rc=2)。2026-11-15 新增：射程内抓到自研 SHACL 导出漏发 sh:in（枚举约束对实例永不生效）"
+  },
+  {
+   "script": "verify_arch_ab.py",
+   "tier": "local",
+   "timeout": 180,
+   "reason": "P0-1/P0-2 常驻门禁：端到端 Golden Set v0 语料指纹与三条链路覆盖 + 架构级 A/B 跑批器的单变量/重跑/逐任务回归清单守卫（含 3 项变异自证）。需连真库 mbse.db 重算语料指纹，干净 checkout 无该库故不进 PR；不调用 LLM、不写库。2026-11-15 新增"
+  },
+  {
+   "script": "verify_eval_freshness.py",
+   "tier": "local",
+   "timeout": 120,
+   "reason": "P0-3 评测常态化新鲜度门禁：eval_reports 停更天数 / is_golden 报告存在 / online_eval_queue pending 清零 / Golden Set 基线未漂移；nightly 本机跑批器陈旧只告警不阻断。需连真库 mbse.db，干净 checkout 无该库故不进 PR；只读、不调 LLM、写 checked-in 快照供 PR 消费。2026-11-15 新增"
+  },
+  {
+   "script": "verify_p0_config_audit.py",
+   "tier": "local",
+   "timeout": 120,
+   "reason": "P0-4 配置审计防漂移门禁：重扫四组清单与 core/config_audit.py + 清单 JSON 逐项对拍，守 audit_flags 注入生效、schema()/save_override/前端零回归、importlib 独立加载降级不崩（含 9 项变异自证）。静态扫描 + 只读，不调 LLM、不写库；需仓库全量源码故归 local，不占用 broken/backlog 预算。2026-11-15 新增"
+  },
+  {
+   "script": "verify_config_write_gate.py",
+   "tier": "local",
+   "timeout": 300,
+   "reason": "P0-5 配置读写端点权限门 + 变更留痕常驻门禁：AST 守 6 个 /api/system/config* 端点挂门、3 个写端点调用 _log_changes、secret 脱敏判据；真库事实守 3 个 preset 角色的 system_config:read/write 授权位且 admin 域未被污染；在 MBSE_DB_PATH 全库副本 + MBSE_CONFIG_PATH 临时文件上跑 TestClient 四档身份（匿名/设计师/custom 低权限/系统管理员）与三类来源留痕逐项核对，含 M1~M5 五组变异自证，并逐项对拍真库与用户级配置文件零污染。需连真库做副本且启 lifespan（后台线程/迁移），故归 local、不进 PR；不调 LLM、不写真库。2026-11-15 新增"
+  },
+  {
+   "script": "verify_p0_6_failure_attribution.py",
+   "tier": "local",
+   "timeout": 180,
+   "reason": "P0-6 失败归因 + 子任务必含规则常驻门禁：AST 守 4 个终态写入点写 error_class、3 个重排队出口清旧标签、老库降级分支仍在；临时库夹具跑 cancel/cancel_run/fail/retry 并用改动前孪生体证明 include_rules=False 逐字节零回归；真库断言失败/取消任务error_class 非空率 ≥95% 且取值合法、cancelled 一律 interrupted；必含规则与 Golden Set v0 12 例逐例对齐（数据集不改）；T 组量化落库列与运行时快照口径差异，守「不能用 agent_tasks.context 断言交接极薄」的勘误；含 M1~M9 九组变异自证。需连真库 mbse.db 与仓库全量源码，故归 local、不进 PR；不调 LLM、不写库。2026-11-15 新增"
+  },
+  {
+   "script": "verify_d1_view_agents_removed.py",
+   "tier": "pr",
+   "timeout": 300,
+   "reason": "P0/D1 常驻门禁：8 个视图生成 Agent 已永久移除且不被资产自举复活。真跑 init_db() 到隔离空库证明不复活；污染快照变异自证（残留 ⇒ 以 status='active' 复活，判据必须判红）；快照 tables/relations 与库双向 0 命中；9 个视图技能承接方仍在。无真库时 R 组降级并高声标注，B/S/M/D 组照跑。"
+  },
+  {
+   "script": "verify_p1_prerequisite.py",
+   "tier": "pr",
+   "timeout": 300,
+   "reason": "P1 前置常驻门禁：把方案 §6「P1 合并必须等 P0 跑出基线」从文档文字变成判据。P 组验证前置机制健全（数据集指纹/12 例三链路/_live_case 断流守卫/golden_e2e 拒伪造 live 报告/live-preflight 桩自检全绿）；S 组如实报告真库 live 基线数（当前 0 ⇒ p1_release=blocked，属状态不判红）；H 组禁止任何 ready 声明指不到合格 live 基线；M1~M4 变异自证判据有牙齿。零真实 LLM/零服务/零临时文件；无真库时 P7 与 S 组降级并打印 DEGRADED。2026-11-16 新增"
   }
  ]
 }
