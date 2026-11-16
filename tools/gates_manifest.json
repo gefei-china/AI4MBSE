@@ -2508,6 +2508,12 @@
    "tier": "local",
    "timeout": 300,
    "reason": "知识库卫生门禁：守「去重机制不失效」这件事本身。实证因果链：documents.content_sha256 14/14 全空 ⇒ check_duplicate 的 same_content 失效 ⇒ duplicate_groups 看不见重复 ⇒ _dedupe_documents.py 盘点报 0 组 ⇒ 重复文档躺了 7 天 ⇒ 检索时同一段话占两个槽位（per_doc_max 按 document_id 算配额）。既有 verify_upload_dedup.py 测的是上传路径判重逻辑（逻辑对但假设 sha 有值），守不住存量数据卫生。判据：H1 非下架文档 sha 非空；H2a 无相同 sha；H2b chunk 内容签名兜底（sha 缺失也能抓漏）；H3 deprecated 文档无残留 stored chunk；H4 在役文档有 chunk。M1~M7 变异自证（含「sha 置空」「sha 缺失但内容相同」两个真实缺陷路径）。已用修复前备份库实测：H1+H2b 判红，修复后全绿 —— 证明判据有牙齿。需连真库、只读、不调 LLM、不写库；干净 checkout 全部 SKIP。2026-11-16 新增"
+  },
+  {
+   "script": "verify_xling_retrieval.py",
+   "tier": "local",
+   "timeout": 180,
+   "reason": "跨语言检索门禁：守「中文问英文规范」这条路。该能力此前是隐式的（靠 embedding 自带多语对齐 + retrieval_relevance 的相关度修正），两者都没有门禁，任何改动都可能悄悄弄坏，而症状是「库里明明有、AI 说没有」，最难归因。T1~T5 术语扩展方向性与边界（纯英文不扩 / 无关中文不扩 / min_terms / 长词覆盖短词）；F1~F5 RRF 融合（两路共同项排第一 / 无重复 / cap / 不改入参 / 缺 id 兜底）；S1~S7 源码接线（配置真被消费防死配置）+ 词表完整性；R1 真机：纯中文查询能召回 doc 798 KerML（需 DB+embedding，不可用则 SKIP）；M1~M4 变异自证。零写库、不调 LLM。2026-11-16 新增"
   }
  ]
 }
