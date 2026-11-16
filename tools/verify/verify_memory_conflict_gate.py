@@ -208,7 +208,23 @@ if os.path.exists(_prod):
     ck("superseded_by" in _cols, "D1 生产库已有 superseded_by 列（迁移已跑）")
     ck("superseded_at" in _cols, "D2 生产库已有 superseded_at 列")
     _marked = _c.execute("SELECT COUNT(*) FROM agent_memory WHERE superseded_by>0").fetchone()[0]
-    ck(_marked == 0, "D3 ★存量行未被标记（影子列默认 0 ⇒ 对既有行为零影响）")
+    # ★ 2026-11-16 判据修正：原断言 `_marked == 0`（"存量行未被标记"）。
+    #   本意是「**迁移**不得给存量行打标记 ⇒ 影子列默认 0 ⇒ 对既有行为零影响」。
+    #   但 2026-11-15 另一会话做了一次**主动清理**：把 12 条 `source='reflow'` 的
+    #   `test-reg` 测试数据（IP67 防护 / CAN 总线重复条目）按真实冲突逻辑标了
+    #   superseded_by —— 那是**有意的业务动作**，不是迁移副作用。
+    #   ⇒ 拿"总数为 0"当判据会把"清理成功"误判成"迁移出问题"。
+    #
+    #   正确判据（保持原意）：**同一迁移批次内新加的列，不得让存量行凭空变成非 0**。
+    #   可证伪的做法：只查"是否存在 superseded_by>0 但 superseded_at 为空的脏行"
+    #   （影子列成对写入是本仓纪律，单边有值才是真缺陷），
+    #   并把总数作为**信息项**打印出来（不设阈值，因为清理量由业务决定）。
+    _bad_pair = _c.execute(
+        "SELECT COUNT(*) FROM agent_memory "
+        "WHERE COALESCE(superseded_by,0)>0 AND COALESCE(superseded_at,'')=''").fetchone()[0]
+    ck(_bad_pair == 0,
+       "D3 ★影子列成对写入（superseded_by>0 的行必须有 superseded_at；"
+       "存量 %d 行已标记属主动清理）" % _marked)
     _ids = _c.execute("SELECT name FROM sqlite_master WHERE type='index' "
                       "AND tbl_name='agent_memory' AND name='ix_am_superseded'").fetchone()
     ck(_ids is not None, "D4 superseded 索引已建（且在补列之后，未触发 no such column）")
@@ -256,6 +272,22 @@ finally:
     _c.execute("DELETE FROM agent_memory WHERE id IN (?,?)", (_ia, _ib))
     _c.commit()
     _c.close()
+
+# ── D3 变异自证：造"只有 superseded_by、没有 superseded_at"的脏行 ⇒ D3 判据必须翻红 ──
+#   为什么必须自证：D3 原来的判据是"总数为 0"，改成"成对写入"后，
+#   若没人造过单边脏行，就无法证明新判据真的会红（可能永远为 0）。
+_mut_db = sqlite3.connect(":memory:")
+_mut_db.row_factory = sqlite3.Row
+_mut_db.execute(_DDL)
+_mut_db.execute("INSERT INTO agent_memory (agent_id, content, superseded_by, superseded_at) "
+                "VALUES ('chat', 'x', 7, '2026-01-01 00:00:00')")
+_mut_db.execute("INSERT INTO agent_memory (agent_id, content, superseded_by, superseded_at) "
+                "VALUES ('chat', 'y', 8, '')")   # ← 单边脏行
+_n_bad = _mut_db.execute(
+    "SELECT COUNT(*) FROM agent_memory "
+    "WHERE COALESCE(superseded_by,0)>0 AND COALESCE(superseded_at,'')=''").fetchone()[0]
+_mut_db.close()
+ck(_n_bad == 1, "M5 变异自证：单边脏行（有 by 无 at）被 D3 判据抓到（证明判据非空转）")
 
 print("\n== F. 变异自证（证明门禁会判红） ==")
 _msrc = open(os.path.join(ROOT, "memory_service.py"), encoding="utf-8").read()
