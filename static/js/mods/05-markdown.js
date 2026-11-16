@@ -32,10 +32,70 @@ function _citeClauseIndex(cites){
   });
   return idx;
 }
-function inlineMd(s, cites){
-  let o = escMd(s);
-  o = o.replace(/`([^`]+)`/g, '<code class="md-ic">$1</code>');
-  o = o.replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+/* ★ 2026-11-16（用户报「最新会话显示引用了 5 条，页面只找到 4 条，1,2,3,5，第 4 条没看到」）：
+   **引用编号必须与"正文实际引用到的来源"一一对应，且连续无断号。**
+
+   根因（node 跑真函数实测 msg 6674）：
+     `citations` 是**检索命中**的 N 条（按 score 降序编号 1..N），而模型只引用其中
+     一部分（该条 N=5，正文只标了 [1][2][3][5]）。原实现把 `[n]` 直接当 citations
+     下标渲染、折叠区标题又用 `cites.length` ⇒ 「标题说 5 条」与「正文只 4 个编号」
+     永久对不上，并且出现断号 [4]。
+
+   这一层做「**引用视图**」，是纯函数（无副作用、可被门禁直接断言）：
+     · 收集口径 = 正文 `[n]` 标记 ∪ 正文 `§x.y` 命中 anchor 的原编号
+       （后者必须算 —— `§x.y` 会渲染成可点的 cite-sec，漏算会让它指向被裁掉的条目）；
+     · 保留被引用到的来源，**按原编号升序**重编号 1..K
+       （按原编号排序 = 保持 score 相关度顺序，用户看到的排序语义不变）；
+     · K==N 时原样返回（不做无谓重排，历史消息渲染逐字节不变）；
+     · 正文一个标记都没有 ⇒ 退回全量（此时没有编号可依据，裁掉会让
+       「检索到了什么」彻底不可见 —— 与 msg 6614 那种"正文没标 [n]"的情况对应）。
+
+   返回 {list, renum, k, n, trimmed}：
+     list   引用视图后的 citations 子集（openCitation 用它，`data-i-1` 索引）
+     renum  原编号(1-based) → 新编号(1-based)
+     k/n    引用条数 / 本次检索条数（标题两个数都报，不掩盖检索面） */
+function _citeView(cites, body){
+  const n = (cites && cites.length) || 0;
+  if(!n) return {list: [], renum: {}, k: 0, n: 0, trimmed: false};
+  const txt = String(body || '');
+  const want = [];                                   // 原编号（1-based）
+  const add = x => { if(x >= 1 && x <= n && want.indexOf(x) < 0) want.push(x); };
+  let mm;
+  const reN = /\[(\d+(?:[,，]\s*\d+)*)\]/g;
+  while((mm = reN.exec(txt))){
+    mm[1].split(/[,，]\s*/).forEach(x => { const v = parseInt(x, 10); if(!isNaN(v)) add(v); });
+  }
+  // §x.y 命中的 anchor 原编号（_citeClauseIndex 返回的是 citations 的 1-based 下标）
+  const _ci = _citeClauseIndex(cites);
+  Object.keys(_ci).forEach(key => {
+    const reS = new RegExp('§\\s*' + key.replace(/\./g, '\\.') + '(?![\\d.])');
+    if(reS.test(txt)) add(_ci[key]);
+  });
+  if(!want.length){
+    return {list: cites.slice(), renum: {}, k: n, n: n, trimmed: false};
+  }
+  want.sort((a, b) => a - b);                        // 保持原相关度顺序
+  const renum = {};
+  want.forEach((old, i) => { renum[old] = i + 1; });
+  return {
+    list: want.map(x => cites[x - 1]),
+    renum: renum,
+    k: want.length,
+    n: n,
+    trimmed: want.length < n,
+  };
+}
+/* ★ 2026-11-16：引用替换（§ 条款号 + [n] 编号）的**单一真源**。
+
+   为什么抽出来：`renderTable` 原先只用 `escMd` ⇒ 表格单元格里的 `§8.3.26.2 [1]`
+   全是纯文本、点不动（实测 msg 6674：正文 8 个引用标记在表格内，用户"数"不到）。
+   两套实现必然漂移，故 inlineMd 与 renderTable 共用这一处。
+
+   契约：入参 `o` 是**已 escMd 过**的字符串（可含 `<code>`/`<a>` 标签），
+   出参仍安全（只替换 § 与 [n] 两种模式，不引入 bold/italic）。
+   顺序敏感：必须在 link 替换之后 —— 否则 `[x](url)` 的方括号会被 [n] 误伤。 */
+function _citeSub(o, cites, renum){
+  if(!cites || !cites.length) return o;
   // ① 条款号自动链接（先做：它不产生方括号数字，不会被 ② 误伤）
   if(cites && cites.length){
     const _ci = _citeClauseIndex(cites);
@@ -60,20 +120,39 @@ function inlineMd(s, cites){
   // ② [n] / [n,m] 引用标注 → 可点击来源链接（需 message 附带 citations 数据）
   if(cites && cites.length){
     o = o.replace(/\[(\d+(?:[,，]\s*\d+)*)\]/g, (mm, idxs)=>{
-      const nums = idxs.split(/[,，]\s*/).map(n=>parseInt(n,10)).filter(n=>n>=1 && n<=cites.length);
+      // ★ 2026-11-16：编号解析**只认一个口径**，避免两套范围判断打架。
+      //   ⚠️ 第一版此处写成 `.filter(n=>n<=cites.length)` 再 map —— 但 `cites` 此时已是
+      //      **视图后的 list（K 条）**，而 `[n]` 里写的是**原编号（1..N）**：
+      //      真机 msg6674 的 `[5]` 因 5 > K=4 被误滤掉，R1 只剩 [1][2][3]（自测抓出）。
+      //   现口径：有 renum 就以 renum 为准 —— 命中即映射为新编号；
+      //   不在 renum 里 ⇒ 必是越界编号（renum 由同一份正文收集而来，
+      //   正文里出现的合法编号不可能缺席）⇒ 丢弃，原样留成纯文本。
+      //   我们手里没有越界编号的片段，链过去只会打开空内容 —— 与 §x.y 只链真 anchor 同口径。
+      const _pickCite = n => (renum ? (renum[n] || 0) : ((n >= 1 && n <= cites.length) ? n : 0));
+      const nums = idxs.split(/[,，]\s*/).map(n=>parseInt(n,10))
+        .map(_pickCite)
+        .filter(n=>n > 0);
       if(!nums.length) return mm;
       return nums.map(n=>`<sup class="cite" data-i="${n}" onclick="openCitation(this)" title="查看引用来源 [${n}]">[${n}]</sup>`).join('');
     });
   }
+  return o;
+}
+function inlineMd(s, cites, renum){
+  let o = escMd(s);
+  o = o.replace(/`([^`]+)`/g, '<code class="md-ic">$1</code>');
+  o = o.replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+  // 引用替换（§ 条款号 + [n] 编号）走单一真源，见 _citeSub
+  o = _citeSub(o, cites, renum);
   o = o.replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>');
   o = o.replace(/(^|[^*])\*([^*\n]+)\*(?!\*)/g, '$1<i>$2</i>');
   return o;
 }
-function renderMdLine(line, cites){
+function renderMdLine(line, cites, renum){
   const t = line.trim();
   if(!t) return '';
   const hm = t.match(/^(#{1,6})\s+(.*)$/);
-  if(hm){ const lv = Math.min(hm[1].length,4); return `<h${lv} class="md-h">${inlineMd(hm[2], cites)}</h${lv}>`; }
+  if(hm){ const lv = Math.min(hm[1].length,4); return `<h${lv} class="md-h">${inlineMd(hm[2], cites, renum)}</h${lv}>`; }
   if(t.startsWith('>')){
     const qt = t.replace(/^>\s?/,'');
     // 提示块（GitHub Alerts 风格）：[!信息]/[!警告]/[!注意]/[!错误]/[!成功]
@@ -82,29 +161,40 @@ function renderMdLine(line, cites){
       const k = am[1].toUpperCase();
       const clsMap = {INFO:'qi',NOTE:'qi',信息:'qi',警告:'qw',注意:'qw',WARNING:'qw',错误:'qe',DANGER:'qe',成功:'qo',SUCCESS:'qo'};
       const icoMap = {INFO:'ℹ️',NOTE:'📝',信息:'ℹ️',注意:'📌',警告:'⚠️',WARNING:'⚠️',错误:'🚫',DANGER:'🚫',成功:'✅',SUCCESS:'✅'};
-      return `<blockquote class="md-q ${clsMap[k]||''}"><b>${icoMap[k]||'ℹ️'} ${esc(am[1])}：</b>${inlineMd(am[2], cites)}</blockquote>`;
+      return `<blockquote class="md-q ${clsMap[k]||''}"><b>${icoMap[k]||'ℹ️'} ${esc(am[1])}：</b>${inlineMd(am[2], cites, renum)}</blockquote>`;
     }
-    return `<blockquote class="md-q">${inlineMd(qt, cites)}</blockquote>`;
+    return `<blockquote class="md-q">${inlineMd(qt, cites, renum)}</blockquote>`;
   }
   if(/^(-{3,}|\*{3,})$/.test(t)) return '<hr class="md-hr">';
-  if(/^[-*•]\s+/.test(t)) return `<div class="md-li">• ${inlineMd(t.replace(/^[-*•]\s+/,''), cites)}</div>`;
-  if(/^\d+[.、)]\s+/.test(t)) return `<div class="md-li">${t.match(/^\d+/)[0]}. ${inlineMd(t.replace(/^\d+[.、)]\s+/,''), cites)}</div>`;
-  return `<p class="md-p">${inlineMd(t, cites)}</p>`;
+  if(/^[-*•]\s+/.test(t)) return `<div class="md-li">• ${inlineMd(t.replace(/^[-*•]\s+/,''), cites, renum)}</div>`;
+  if(/^\d+[.、)]\s+/.test(t)) return `<div class="md-li">${t.match(/^\d+/)[0]}. ${inlineMd(t.replace(/^\d+[.、)]\s+/,''), cites, renum)}</div>`;
+  return `<p class="md-p">${inlineMd(t, cites, renum)}</p>`;
 }
 function _mdCells(line){ return line.trim().replace(/^\|/,'').replace(/\|$/,'').split('|').map(c=>c.trim()); }
 // 2026-09-29（用户反馈）：移除表格下方「📊 柱状图」切换按钮——数字表格自动配图表入口
 // 属于过度设计（多数工程表格的"数字列"是编号/严重程度，画柱状图毫无意义），预览页共用同一
 // 渲染函数一并生效。svgBarChart / toggleMdChart / _findNumericColumn 已随之删除（无其他调用者）。
-function renderTable(rows){
+/* ★ 2026-11-16：cites/renum 可选 —— 传了就做 § 与 [n] 替换（与正文同一真源），
+   不传保持原样（04-artifacts.js 的报告表格没有引用上下文，行为不变）。
+   刻意**只**做引用替换：表格里的 bold/italic 仍按原样不渲染，
+   避免"有的格子渲染有的不渲染"造成新的不一致。 */
+function renderTable(rows, cites, renum){
+  const cell = c => (cites && cites.length) ? _citeSub(escMd(c), cites, renum) : escMd(c);
   const head = rows[0]||[];
   const data = rows.slice(2).filter(r=>r.some(c=>c!==''));
-  let t = '<div class="md-table-wrap"><table class="md-table"><thead><tr>'+head.map(c=>`<th>${escMd(c)}</th>`).join('')+'</tr></thead><tbody>';
-  t += data.map(r=>'<tr>'+r.map(c=>`<td>${escMd(c)}</td>`).join('')+'</tr>').join('');
+  let t = '<div class="md-table-wrap"><table class="md-table"><thead><tr>'+head.map(c=>`<th>${cell(c)}</th>`).join('')+'</tr></thead><tbody>';
+  t += data.map(r=>'<tr>'+r.map(c=>`<td>${cell(c)}</td>`).join('')+'</tr>').join('');
   t += '</tbody></table></div>';
   return t;
 }
-function renderMarkdown(text, cites){
+function renderMarkdown(text, cites, view){
   if(!text) return '';
+  // ★ 2026-11-16：引用视图（只留有被引用的来源 + 连续重编号）。
+  //   调用方（renderMessage）已算过就复用，避免同一份纯函数重复跑；
+  //   没传则现算 —— 单测/其它入口直接调 renderMarkdown 也不会漏掉这一步。
+  const _cv = view || _citeView(cites, text);
+  cites = _cv.list;
+  const _renum = _cv.renum;
   // V2.6 代码块折叠卡：默认展开（2026-10-27 用户要求；头部=语言+行数+复制，点击可收起）
   function _codeFold(lines){
     const lang = (lines[0]||'').match(/^```(\w+)/);
@@ -171,9 +261,9 @@ function renderMarkdown(text, cites){
     if(/^\s*\|/.test(line) && i+1<lines.length && /^\s*\|[\s:|-]+\|?\s*$/.test(lines[i+1]) && lines[i+1].includes('-')){
       const rows=[];
       while(i<lines.length && /^\s*\|/.test(lines[i])){ rows.push(_mdCells(lines[i])); i++; }
-      if(rows.length>=2){ html += renderTable(rows); continue; }
+      if(rows.length>=2){ html += renderTable(rows, cites, _renum); continue; }
     }
-    html += renderMdLine(line, cites);
+    html += renderMdLine(line, cites, _renum);
     i++;
   }
   if(inCode) html += _codeFold(codeBuf);
@@ -286,14 +376,18 @@ function renderMessage(m) {
   // AI 消息 → markdown 渲染（标题/表格/代码块/列表/图表）；user 消息保持原样（调用方已转义）
   // 问答可解释性：card_data.citations → 答案内 [n] 引用链接（按消息 id 缓存供 openCitation 跳转）
   let cites = (cd && Array.isArray(cd.citations)) ? cd.citations : [];
-  if(m.role==='assistant' && m.id && cites.length) {
-    (window._msgCites = window._msgCites || {})[m.id] = cites;
-  }
   // 建模输出（含 sysml_views）：正文剥离代码块（代码收敛到下方「代码/视图」整合卡 tab 内，聚焦同步查看）
   const hasViews = !!(cd && cd.sysml_views && cd.sysml_views.views && Object.keys(cd.sysml_views.views).length);
   const codeFound = (hasViews && m.role==='assistant') ? extractSysmlCode(m.content||'') : null;
   const bodySrc = codeFound ? stripFencedCode(m.content||'') : (m.content||'');
-  const contentHtml = m.role==='assistant' ? renderMarkdown(bodySrc, cites) : bodySrc;
+  /* ★ 2026-11-16：引用视图必须在**正文确定之后**算（要扫正文里的 [n]），
+     并且 `_msgCites` 必须存**视图后的 list** —— `openCitation` 用 `data-i-1` 索引它，
+     存原始 cites 会让新编号指向错误条目（视图第 4 条应打开原始第 5 条，不是原始第 4 条）。 */
+  const _cv = (m.role==='assistant') ? _citeView(cites, bodySrc) : null;
+  if(m.role==='assistant' && m.id && cites.length) {
+    (window._msgCites = window._msgCites || {})[m.id] = _cv ? _cv.list : cites;
+  }
+  const contentHtml = m.role==='assistant' ? renderMarkdown(bodySrc, cites, _cv) : bodySrc;
   let html = `<div class="msg ${cls}"${m.id?` id="msg-${m.id}" data-mid="${m.id}"`:''}><span class="who">${who}</span><div class="msg-inner">`;
 
   /* ★ 2026-10-28（用户反馈「用户输入内容较多，直接都展示出来，导致页面拉的很长，
@@ -400,7 +494,10 @@ function renderMessage(m) {
   if(cd) {
       // V2.6 参考来源折叠区：citations 存在即展示（不依赖正文 [n] 标注），点击条目打开 chunk 详情
       if(m.role==='assistant' && cites.length){
-        const items = cites.map((c,i)=>`<div class="cite-row" data-i="${i+1}" onclick="openCitation(this)" style="cursor:pointer;padding:5px 8px;border-top:1px solid var(--line,#e5e8ee);font-size:12.5px;"
+        // ★ 2026-11-16：列表只列**被正文引用到**的来源（与正文编号一一对应，连续 1..K）。
+        //   标题同时报「引用 K 条 / 本次检索 N 条」—— 不把检索面藏起来，也不让两个数打架。
+        const _clist = (_cv && _cv.list && _cv.list.length) ? _cv.list : cites;
+        const items = _clist.map((c,i)=>`<div class="cite-row" data-i="${i+1}" onclick="openCitation(this)" style="cursor:pointer;padding:5px 8px;border-top:1px solid var(--line,#e5e8ee);font-size:12.5px;"
           onmouseover="this.style.background='#f4f8ff'" onmouseout="this.style.background=''">
           <b style="color:var(--blue-d,#3478f6);">[${i+1}]</b> ${esc(c.source_doc||'')}${c.section?` · ${esc(c.section)}`:''}
           <span style="color:var(--mut);font-size:12px;">· 相关度 ${c.score}${c.confidence_level?`（${esc(c.confidence_level)}）`:''}${c.reranked?' · LLM重排':''}</span>
@@ -413,7 +510,7 @@ function renderMessage(m) {
         //   white-space:normal（同 app.css:294 .nr-inline / chat.css:245 .art-card 先例）。
         html += `<div style="margin-top:8px;border:1px solid var(--line,#e5e8ee);border-radius:8px;overflow:hidden;white-space:normal;">
           <div style="display:flex;align-items:center;gap:6px;padding:5px 10px;background:#fafbfc;font-size:12.5px;color:var(--mut);cursor:pointer;user-select:none;" onclick="citeSrcToggle(this)">
-          <span class="chev" style="font-size:11.5px;">▸</span>📚 检索引用（${cites.length} 条 chunk，回答中标注的来源；点击条目查看详情）</div>
+          <span class="chev" style="font-size:11.5px;">▸</span>📚 检索引用（${(_cv && _cv.trimmed) ? `引用 ${_cv.k} 条 / 本次检索 ${_cv.n} 条` : `${_clist.length} 条 chunk`}，回答中标注的来源；点击条目查看详情）</div>
           <div class="cite-src-body" style="display:none;max-height:280px;overflow:auto;background:#fff;">${items}</div></div>`;
       }
       if(cd.intent) {
