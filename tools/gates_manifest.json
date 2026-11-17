@@ -1,6 +1,6 @@
 {
  "version": 1,
- "generated_at": "2026-11-17 16:02:45",
+ "generated_at": "2026-11-17 16:41:07",
  "doc": "门禁清单唯一真源。由 tools/gate_runner.py 执行、tools/verify/verify_gate_manifest.py 守卫。分层依据：工具 2026-11-04 的双环境实测（真库 + 干净库）。",
  "budget": {
   "broken": 38,
@@ -784,6 +784,12 @@
    "reason": "真库绿但慢（26s > 15s）"
   },
   {
+   "script": "verify_expected_output_backstop.py",
+   "tier": "local",
+   "timeout": 120,
+   "reason": "expected_output（完成标准）落库兜底：prompt 口径一致 + create_plan 唯一收口兜底 + config 判空防误覆盖。★ 归 local：C 组读真库 11 月失败率口径（空20% vs 非空6.1%，干净库无数据必红）。实测 0.4s"
+  },
+  {
    "script": "verify_fact_inference.py",
    "tier": "broken",
    "timeout": 240,
@@ -1146,6 +1152,12 @@
    "tier": "broken",
    "timeout": 240,
    "reason": "两库都红 [FAIL] [FAIL] D4 ★真库 'design' 使用证据非零（agent_tasks 按 name join 生效）  ← got=(13, 0)"
+  },
+  {
+   "script": "verify_live_eval_resilience.py",
+   "tier": "local",
+   "timeout": 120,
+   "reason": "live 跑批抗 429：Retry-After 退避复用会话 + 单例异常隔离 + partial 增量落盘。实现是纯内存夹具（0.5s），但脚本名含 live_ 触发清单 G8 的「pr 层不得依赖服务」启发式，且 pr 层还须同步改 ci.yml（G6a）⇒ 登记 local，避免为一条快门禁改 CI 面"
   },
   {
    "script": "verify_llm_circuit_breaker.py",

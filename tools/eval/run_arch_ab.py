@@ -37,6 +37,7 @@ import json
 import os
 import sqlite3
 import sys
+import urllib.error
 import urllib.request
 from datetime import datetime, timezone
 
@@ -49,6 +50,14 @@ import golden_e2e as G  # noqa: E402
 
 RUN_SCHEMA = "p0/arch-ab-run@1"
 CMP_SCHEMA = "p0/arch-ab-compare@1"
+
+#: live 跑批遇到 HTTP 429 的重试上限（2026-11-17 真机事故驱动）。
+#: 服务 chat 桶默认 5 次/分钟（core/rate_limit.py），而 eval 客户端**匿名**请求
+#: 与真人聊天共用 `anon` 桶 —— 一次长跑批中途撞上别人的聊天就 429。
+#: 原实现让 HTTPError 直接冒出 main ⇒ **3 小时进度、全部用例一起丢**（实测
+#: 15 个会话后全灭，且产物只在最后一次性写）。尊重 Retry-After 退避重试。
+MAX_429_RETRY = 3
+
 DEFAULT_SET = G.DEFAULT_SET
 DB = os.path.join(ROOT, "mbse.db")
 MIN_REPEAT = 3
@@ -113,18 +122,36 @@ def _live_case(opener, base_url, case, timeout_s):
         data=json.dumps({"message": _case_input(case)}, ensure_ascii=False).encode("utf-8"),
         headers={"Content-Type": "application/json"}, method="POST")
     done = False
-    with opener.open(req, timeout=timeout_s) as resp:
-        for raw in resp:
-            line = raw.decode("utf-8", "replace").strip()
-            if not line.startswith("data: "):
-                continue
+    # ★ 2026-11-17：429 退避重试。**复用同一个会话**（会话已建好、评分也按 cid），
+    #    不要重新建会话 —— 那会污染 conv_map 的"每例一个新会话"判据。
+    #    Retry-After 由服务端给出（core/rate_limit.py 的标准响应头），
+    #    取不到时按 5/10/15 秒递增，上限 120 秒（不让退避本身变成卡死）。
+    _retry = 0
+    while True:
+        try:
+            with opener.open(req, timeout=timeout_s) as resp:
+                for raw in resp:
+                    line = raw.decode("utf-8", "replace").strip()
+                    if not line.startswith("data: "):
+                        continue
+                    try:
+                        ev = json.loads(line[6:])
+                    except Exception:
+                        continue
+                    if ev.get("event") == "done" or ev.get("type") == "done":
+                        done = True
+                        break
+            break
+        except urllib.error.HTTPError as _he:
+            if int(getattr(_he, "code", 0)) != 429 or _retry >= MAX_429_RETRY:
+                raise
+            _retry += 1
             try:
-                ev = json.loads(line[6:])
+                _wait = max(1, min(120, int(_he.headers.get("Retry-After") or 0)
+                                   or (5 * _retry)))
             except Exception:
-                continue
-            if ev.get("event") == "done" or ev.get("type") == "done":
-                done = True
-                break
+                _wait = 5 * _retry
+            time.sleep(_wait)
     c = _ro_conn()
     try:
         res = G.score_case(c, case, cid)
@@ -152,30 +179,79 @@ def _live_case(opener, base_url, case, timeout_s):
     return res
 
 
+def _write_partial(out_path: str, all_runs: list, conv_hist: dict, *,
+                   variant: str, label: str, mode: str, dataset: dict,
+                   total_cases: int) -> None:
+    """每跑完一例就增量落盘 `<out>.partial`（2026-11-17 事故驱动）。
+
+    为什么必须增量：原实现只在**全部**用例跑完后写一次 out —— 实测第 15 例撞 429
+    后 main 抛栈退出，3 小时进度 + 15 个真实会话的评分**全部丢失**，
+    连"跑到哪、哪些 conv 已换新"都无法追溯。partial 不是正式报告
+    （不能拿去宣称基线），只是**可恢复的进度快照**。
+    """
+    if not out_path or mode != "live":
+        return
+    try:
+        cmap = {}
+        for cid, hist in conv_hist.items():
+            picked = [x for x in hist if x[1]] or hist
+            if picked:
+                cmap[cid] = picked[-1][0]
+        payload = {"phase": "running", "schema": RUN_SCHEMA + "-partial",
+                   "variant": variant, "label": label, "mode": mode,
+                   "dataset_id": dataset.get("dataset_id", ""),
+                   "completed_cases": sum(len(x["cases"]) for x in all_runs),
+                   "total_cases": int(total_cases), "conv_map": cmap,
+                   "runs": all_runs, "generated_at_utc": _utc()}
+        with open(str(out_path) + ".partial", "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False, indent=1)
+    except Exception:
+        pass        # 观测设施故障不得变成业务故障（与本仓门禁同一纪律）
+
+
 def run_batch(dataset, variant, label, repeat, mode, cfg_overrides,
-             opener=None, base_url="", timeout_s=900):
+             opener=None, base_url="", timeout_s=900, out_path: str = ""):
     c = _ro_conn()
     conv_hist = {}  # case_id -> [(conv_id, passed), ...]；live 下据此生成 conv_map
+    all_runs = []
     try:
-        all_runs = []
+        _total = repeat * len(dataset.get("cases") or [])
         for rep in range(1, repeat + 1):
             cases = []
             for case in dataset["cases"]:
-                if mode == "live":
-                    r = _live_case(opener, base_url, case, timeout_s)
-                    if r.get("conv_id"):
-                        conv_hist.setdefault(case["id"], []).append(
-                            (int(r["conv_id"]), bool(r.get("passed"))))
-                else:
-                    r = G.score_case(c, case)
-                    # offline 是确定性回放：不编延迟/token，也不假装是独立采样
-                    r["latency_ms"] = None
-                    r["tokens"] = None
+                try:
+                    if mode == "live":
+                        r = _live_case(opener, base_url, case, timeout_s)
+                        if r.get("conv_id"):
+                            conv_hist.setdefault(case["id"], []).append(
+                                (int(r["conv_id"]), bool(r.get("passed"))))
+                    else:
+                        r = G.score_case(c, case)
+                        # offline 是确定性回放：不编延迟/token，也不假装是独立采样
+                        r["latency_ms"] = None
+                        r["tokens"] = None
+                except Exception as _e:
+                    # ★ live 单例失败**不得炸掉整批**：与 `_run_verify` 同纪律 ——
+                    #   失败只是一种"不通过"，不是崩溃。写成同形错误行继续跑，
+                    #   分数 0 / passed=False 如实计入，不编造 latency/token。
+                    if mode != "live":
+                        raise
+                    r = {"case_id": case["id"], "score": 0.0, "passed": False,
+                         "latency_ms": None, "tokens": None, "sse_done": False,
+                         "invalid_reason": "live_error",
+                         "error": "%s: %s" % (type(_e).__name__, str(_e)[:200]),
+                         "checks": []}
                 r["repeat_index"] = rep
                 cases.append(r)
+                _write_partial(out_path, all_runs + [{"repeat_index": rep, "cases": cases}],
+                               conv_hist, variant=variant, label=label, mode=mode,
+                               dataset=dataset, total_cases=_total)
             all_runs.append({"repeat_index": rep, "cases": cases})
     finally:
         c.close()
+    _write_partial(out_path, all_runs, conv_hist,
+                   variant=variant, label=label, mode=mode,
+                   dataset=dataset, total_cases=_total)
     flat = [x for run in all_runs for x in run["cases"]]
     per_case = {}
     for case in dataset["cases"]:
@@ -652,7 +728,8 @@ def main():
         ds = G.load_dataset(args.set)
         opener = _no_proxy_opener() if args.mode == "live" else None
         rep = run_batch(ds, args.variant, args.label or ("变体 %s" % args.variant),
-                        args.repeat, args.mode, cfg, opener, args.base_url, args.timeout)
+                        args.repeat, args.mode, cfg, opener, args.base_url, args.timeout,
+                        out_path=args.out)
         os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)
         with open(args.out, "w", encoding="utf-8", newline="\n") as f:
             json.dump(rep, f, ensure_ascii=False, indent=2)

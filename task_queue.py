@@ -176,18 +176,38 @@ class TaskQueue:
                     "（无任何工具），产出看似成功实则未调用工具。"
                     "请改用当前在役的 Agent 名后重试。" % "、".join(_unresolved))
         plan_keys = {t.get("key") for t in plan}
-        # ★ 2026-11-09（P0-1 兜底留痕）：缺 `expected_output` 的任务必须**可见**。
-        #   背景：planner 的 prompt 少列该字段时，下面写入的恒为空且**不报错** ——
-        #   团队模式连续 8 个 run 实测 0%（普通编排同期 100%）才被发现，
-        #   见 `agent/pipeline_parts/stream.py` 团队分支模板处注释。
-        #   放在本函数（**所有**建计划入口的唯一收口）而不是各调用点：
-        #   同一判据若在多处各写一份，迟早错位（本仓反复踩过）。
-        #   缺失**不阻断**：验收标准的缺失是质量问题，不是非法计划（非法由 validate_plan 管）。
-        _noexp = [str(t.get("key") or "?") for t in plan
-                  if not str(t.get("expected_output") or "").strip()]
+        # ★ 2026-11-09（P0-1 兜底留痕）→ 2026-11-17 升级为**确定性兜底**：
+        #   缺 `expected_output` 的任务必须**可见**，且**不再静默落空**。
+        #   为什么从"只警告"升级：prompt 里「每个任务都要写 expected_output」早就在
+        #   （planner.py:619），但 11 月真库仍有 24.2% 空 —— 且空置任务失败率 11.1%
+        #   vs 非空 2.1%（**5.3 倍**，n=186）。原因有二：
+        #     ① prompt **自相矛盾**：示例行写「(可空)」、要求行写「必填」——
+        #        同一字段两处口径不一致（本仓反复踩过的形态），模型按"可空"省略；
+        #     ② 落库只警告不修 ⇒ 静默省略一路穿透到子任务（build_subtask_context
+        #        对空值**整行不输出**"- 期望产出"）⇒ 子任务在无验收依据下裸跑。
+        #   兜底在本函数（**所有**建计划入口的唯一收口）：缺失不阻断（质量问题非非法计划），
+        #   但从 title 推导一条最小可核查的完成标准，保证子任务至少"知道要交付成什么样"。
+        #   ⚠️ 判空必须**同时看 config**：委派协议字段可能被上游收进 config
+        #      （planner.py「收进 config，随任务落库透传」），只看顶层会把"config 有、
+        #      顶层无"误判成缺 ⇒ 兜底文本覆盖真实完成标准，反而**劣化**注入
+        #      （子任务注入处 `tk.get() or cfg.get()` 列优先）。
+        _noexp = []
+        for t in plan:
+            _cfg_eo = ""
+            try:
+                _cfg_eo = str((t.get("config") or {}).get("expected_output") or "").strip()
+            except Exception:
+                _cfg_eo = ""
+            if not (str(t.get("expected_output") or "").strip() or _cfg_eo):
+                _noexp.append(str(t.get("key") or "?"))
+                _title = str(t.get("title") or "").strip() or str(t.get("key") or "未命名任务")
+                t["expected_output"] = (
+                    "完成标准（planner 缺省，落库时兜底生成）："
+                    "完成「%.60s」并交付可独立核查的结果；"
+                    "若存在无法完成的部分，显式说明缺口与原因，不得静默略过。" % _title)
         if _noexp:
             logging.getLogger("mbse.planner").warning(
-                "计划质量：%d/%d 个子任务缺 expected_output（无验收依据）：%s",
+                "计划质量：%d/%d 个子任务缺 expected_output，已兜底生成最小完成标准：%s",
                 len(_noexp), len(plan), ",".join(_noexp[:8]))
         n = 0
         for t in plan:

@@ -607,7 +607,7 @@ class FlowPlannerMixin:
             '{{"tasks": [{{"key": "t1", "title": "子任务描述", "agent": "Agent 名",'
             ' "deps": ["前置任务key列表，无则[]"], "task_type": "agent",'
             ' "context": "子任务必需上下文(精简事实，不复制用户全文，可空)",'
-            ' "expected_output": "完成标准/期望输出格式(可空)",'
+            ' "expected_output": "完成标准/期望输出格式(必填：写清**可核查**的验收判据，如「validate 返回 n_hard=0」或「输出包含 5 个用例视图」)",'
             ' "config": {{"required": true}},'
             ' "tools": ["允许的工具白名单(可空，空=继承该 Agent 默认绑定)"],'
             ' "skills": ["指定技能(可空)"]}}]}}\n'
