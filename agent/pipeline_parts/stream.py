@@ -3845,6 +3845,22 @@ class StreamMixin:
         except Exception:
             pass
 
+        # 4.9) P1（2026-11-17）编排收口「待办验收如实告知」（纯 parse、零执行、不拦）
+        #   为什么是"告知"而不是闸：见 `autopilot.build_orch_todo_notice` 顶部注释 ——
+        #   子任务按会话/run 自闸都会因兄弟子任务的待办互撞（同批共享 run_id），
+        #   父收口拦住重跑又与编排自身的 resume/attempt 语义重复。
+        #   与 P0-7「不许无条件说 N 个完成」同一条纪律：不许把没做完的说成做完了。
+        #   ⚠️ 必须在 step 5 流式推送**之前**并入 orch_content：
+        #      流式之后追加要走 6.1 的"增量补吐"形态，且会被
+        #      `_ensure_sysml_blocks` / 视图投影 / 卡片 / 落库各读一次，
+        #      "告知放哪一段"的口径一旦分裂就是"同一语义两处各写一份"。
+        if not degraded and int(conversation_id or 0):
+            try:
+                _tn_text, _tn_stats = self.build_orch_todo_notice(int(run_id or 0))
+            except Exception:
+                _tn_text, _tn_stats = "", None
+            if _tn_text:
+                orch_content = orch_content + _tn_text
         # 5) 汇总内容流式推送
         #    P0-3（2026-09-17）：原 `range(0, len, 24)` 无节流切片 → 几十毫秒内把整段灌给前端，
         #    前端表现为「突然一大段」。改用 iter_stream_chunks 按 45 字符/秒 的类人节奏产出。

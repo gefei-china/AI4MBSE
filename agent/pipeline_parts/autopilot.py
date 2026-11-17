@@ -205,6 +205,92 @@ class AutoPilotMixin:
                     st["guarded"] += 1     # 曾被判成 tool 但被护栏挡下（=修好了的隐患）
         return st
 
+    # ── P1（2026-11-17）编排收口「待办验收如实告知」 ──────────────
+    # 为什么不是闸（三个方案都否掉之后剩下的唯一正解）：
+    #   ① 子任务按会话自闸 ⇒ 查 0 号会话（已修成 mode='subtask' 不适用）；
+    #   ② 子任务按父会话自闸 ⇒ 会因**兄弟子任务**的待办被拦（同批互撞、空转烧额度）；
+    #   ③ 子任务按 run 自闸 ⇒ 编排批次里**所有子任务共享同一个 run_id**
+    #      （实测 conv 999999002 的 17 条待办全是 run=990231）⇒ 与 ② 同病。
+    #   ④ 父收口处拦住重跑 ⇒ 与编排自身的 resume/attempt_count 语义重复。
+    # ⇒ 折中：收口时对**本批次**（run 维度，`todo_store.run_todos`）的待办做一次
+    #   纯 parse 统计（**零执行、不拦**），有未过验收的就在汇总正文**如实告知**。
+    #   与 P0-7「不许无条件说 N 个完成」、B1-5「phase 由任务状态推导」同一条纪律：
+    #   不许把没做完的说成做完了。
+    def build_orch_todo_notice(self, run_id: int) -> tuple:
+        """构造编排收口的待办告知文本。
+
+        :returns: ``(notice, stats)``；notice 为空串 = 本批次待办全部完成（或没建过待办）。
+        ⚠️ 纯 parse：只统计"会不会被自动验收"，**不执行任何工具、不拦任何流程**。
+        """
+        if not int(run_id or 0):
+            return "", None
+        try:
+            from agent.todo_store import run_todos as _rt
+            with db_conn() as conn:
+                rows = _rt(conn, int(run_id))
+        except Exception as e:
+            # 读失败不得把编排主流程带崩，也不得编一条"全部完成"的假话 ⇒ 静默跳过
+            logger.warning("[autopilot] 编排待办统计失败（跳过告知）：%r", e)
+            return "", None
+        if not rows:
+            return "", None
+        from agent import harness_gate as _hg
+        st = {"total": len(rows), "done": 0, "pending": 0,
+              "manual": 0, "autoready": 0, "guarded": 0, "tools": {}}
+        auto_items, manual_items = [], []
+        for r in rows:
+            if str(r.get("status") or "") == "completed":
+                st["done"] += 1
+                continue
+            st["pending"] += 1
+            sp = _hg.parse_verify_spec(r.get("verify") or "",
+                                       r.get("verify_tool"), r.get("verify_args"))
+            if sp["kind"] == "tool":
+                st["autoready"] += 1
+                st["tools"][sp["tool"]] = st["tools"].get(sp["tool"], 0) + 1
+                auto_items.append(r)
+            else:
+                st["manual"] += 1
+                if sp.get("blocked_reason"):
+                    st["guarded"] += 1
+                manual_items.append(r)
+        if not st["pending"]:
+            # 全部完成 ⇒ 正文不打扰，但**统计仍落台账**（否则"编排批次收口验收全过率"
+            # 这条趋势只有失败样本，分母缺失 ⇒ 指标失真，与本仓"四个环节各写一个数字"同族）
+            self._orch_notice_observe(st)
+            return "", st
+        _lines = ["", "---", "**待办验收未全过（如实告知）**：本批次共 %d 条待办，%d 条未完成验收。"
+                  % (st["total"], st["pending"])]
+        for r in auto_items[:3]:
+            _lines.append("- 待自动验收：「%s」（%s）" % ((r.get("subject") or "?")[:40],
+                                                      r.get("verify_tool") or "?"))
+        for r in manual_items[:3]:
+            _lines.append("- 需人工确认：「%s」" % (r.get("subject") or "?")[:40])
+        if len(auto_items) + len(manual_items) > 6:
+            _lines.append("- ……其余 %d 条略" % (len(auto_items) + len(manual_items) - 6))
+        _lines.append("（这些待办未阻塞本次交付；如需补跑请在编排卡使用「重跑子任务」）")
+        # 台账：让"编排批次收口时还有多少没过验收"可统计（与 shadow/subtask 同一张表）
+        self._orch_notice_observe(st)
+        return "\n".join(_lines), st
+
+    def _orch_notice_observe(self, st: dict) -> None:
+        """把编排收口的待办统计写入 `harness_decisions`（mode='orch_notice'）。
+
+        ⚠️ 观测设施故障不得变成业务故障（与 `_harness_observe` 同纪律）。
+        """
+        try:
+            self._harness_observe(0, "orch_notice",
+                                  {"reason": "编排收口：本批次 %d/%d 条待办未过验收"
+                                             % (int((st or {}).get("pending") or 0),
+                                                int((st or {}).get("total") or 0))},
+                                  False, {"pending": (st or {}).get("pending") or 0,
+                                          "manual": (st or {}).get("manual") or 0,
+                                          "autoready": (st or {}).get("autoready") or 0,
+                                          "guarded": (st or {}).get("guarded") or 0,
+                                          "tools": (st or {}).get("tools") or {}})
+        except Exception:
+            pass
+
     def _harness_observe(self, conversation_id: int, mode: str, decision: dict,
                          would_block: bool, stats: dict, extra: dict = None) -> None:
         """把一次 harness 判定写入 `harness_decisions`（观测设施故障**不得**变成业务故障）。"""

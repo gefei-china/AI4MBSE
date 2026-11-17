@@ -24,6 +24,7 @@ __all__ = [
     "load_todo_items",
     "todo_gate_for_conv",
     "upsert_todo",
+    "run_todos",
 ]
 
 
@@ -191,14 +192,43 @@ def list_todos(conn, conversation_id: int, include_deleted: bool = False) -> lis
     return out
 
 
+def run_todos(conn, run_id: int) -> list:
+    """读**一个编排批次**（run 维度）建过的全部待办。
+
+    为什么按 run 而不按 conversation：编排批次里**所有子任务共享同一个
+    编排批次号**（`stream.py` 的 run_id，子任务不覆盖父值），待办全部落在
+    父会话下 ⇒ 会话维度会把「上一轮/上一批」的待办也混进来，无法回答
+    「**这一批**建了多少、完成了多少」。这也是编排收口「如实告知」
+    （`AutoPilotMixin.build_orch_todo_notice`）的数据源。
+
+    :returns: list[dict]（含 subject/status/verify/verify_tool/verify_args）；
+              run_id 为 0 或表异常时返回 []（调用方按"无待办"处理）。
+    """
+    if not run_id:
+        return []
+    try:
+        rows = conn.execute(
+            "SELECT id, subject, status, verify, verify_tool, verify_args "
+            "FROM agent_todos WHERE run_id=? AND status != 'deleted' "
+            "ORDER BY COALESCE(seq, id), id", (int(run_id),)).fetchall()
+    except Exception:
+        return []
+    out = []
+    for r in rows:
+        out.append({
+            "id": r[0], "subject": r[1] or "", "status": r[2] or "",
+            "verify": r[3] or "", "verify_tool": r[4] or "", "verify_args": r[5] or "",
+        })
+    return out
+
+
 def load_todo_items(conn, conversation_id: int, include_deleted: bool = False):
     """读清单并转成 `agent_todo.TodoItem`（供 `todo_gate()` 消费）。"""
     from agent import agent_todo as _at
     rows = list_todos(conn, conversation_id, include_deleted)
     return [_at.TodoItem(subject=r["subject"], status=r["status"],
                          verify=r["verify"], verify_result=r["verify_result"],
-                         blocked_by=r["blocked_by"], note=r["note"])
-            for r in rows]
+                         blocked_by=r["blocked_by"], note=r["note"])            for r in rows]
 
 
 def todo_gate_for_conv(conn, conversation_id: int) -> dict:
