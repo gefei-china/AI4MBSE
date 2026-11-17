@@ -670,6 +670,15 @@ jobs:
         if: ${{ !cancelled() }}
         run: python tools/verify/verify_prompt_block_vocab_guard.py
 
+      # ── 2026-11-17 新增：检索底座不得有孤儿 chunk ──────────────────────
+      #   检索是 `SELECT * FROM document_chunks WHERE content != ''`，**不 join documents**
+      #   ⇒ doc_id 悬空的片段会被正常检索到并注入 prompt，但用户点引用溯源时
+      #   documents 里找不到 ⇒ 给了**无法核实的证据**（比少召回几条严重得多）。
+      #   实测存量 2 条（2026-10-30 上传测试残留），来自更早的删除路径。
+      - name: Guard 检索底座无孤儿 chunk（6 项，含删除路径接线判据）
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_orphan_chunks.py
+
       # ── 2026-11-15 新增：SHACL 独立校验交叉验证 ────────────────────────
       # 本工程所有实例校验都靠自研实现；若自研有 bug，**没有任何人能发现**。
       # 接 pySHACL（W3C SHACL 参考实现之一）做独立校验，与自研逐维度比对：
