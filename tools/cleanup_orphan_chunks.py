@@ -54,6 +54,24 @@ def find_orphans(conn):
         "ORDER BY dc.id").fetchall()
 
 
+def find_orphan_metadata(conn):
+    """document_id 非空但 documents 里没有对应行的 doc_metadata。
+
+    ★ 2026-11-17 扩展：`MetaRepo.delete_document` 此前也漏删这张表
+      （见该函数 docstring）。chunk 会造成"引用点不开"，元数据会造成
+      "列表 join 出幽灵行"，同属派生数据悬挂。
+    """
+    try:
+        return conn.execute(
+            "SELECT dm.id, dm.document_id, dm.title, dm.source, dm.created_at "
+            "FROM doc_metadata dm "
+            "WHERE dm.document_id IS NOT NULL "
+            "  AND NOT EXISTS (SELECT 1 FROM documents d WHERE d.id = dm.document_id) "
+            "ORDER BY dm.document_id").fetchall()
+    except Exception:
+        return []      # 老库无该表 ⇒ 视为无孤儿
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--db", default=os.path.join(ROOT, "mbse.db"))
@@ -69,31 +87,40 @@ def main():
 
     total = conn.execute("select count(*) from document_chunks").fetchone()[0]
     orphans = find_orphans(conn)
+    orphan_meta = find_orphan_metadata(conn)
     print("=" * 74)
-    print("孤儿 chunk 治理 · %s" % ("APPLY" if args.apply else "DRY-RUN（不写库）"))
+    print("孤儿派生数据治理 · %s" % ("APPLY" if args.apply else "DRY-RUN（不写库）"))
     print("=" * 74)
     print("document_chunks 共 %d 条｜孤儿(doc_id 悬空) %d 条" % (total, len(orphans)))
+    print("doc_metadata     孤儿(doc_id 悬空) %d 条" % len(orphan_meta))
 
     null_doc = conn.execute(
         "select count(*) from document_chunks where document_id is null").fetchone()[0]
     if null_doc:
-        print("  ⚠️ 另有 %d 条 document_id 为 NULL（**本工具不动**：语义不明，需人工判断）"
+        print("  ⚠️ 另有 %d 条 chunk 的 document_id 为 NULL（**本工具不动**：语义不明，需人工判断）"
               % null_doc)
 
-    if not orphans:
-        print("\n✓ 没有孤儿 chunk。")
+    if not orphans and not orphan_meta:
+        print("\n✓ 没有孤儿数据。")
         conn.close()
         return 0
 
-    print("\n清单:")
-    for r in orphans:
-        print("  chunk#%-7s doc_id=%-6s %-30s idx=%-4s %r"
-              % (r["id"], r["document_id"], str(r["source_doc"])[:30],
-                 r["chunk_index"], str(r["snippet"])[:46].replace("\n", " ")))
+    if orphans:
+        print("\nchunk 清单:")
+        for r in orphans:
+            print("  chunk#%-7s doc_id=%-6s %-30s idx=%-4s %r"
+                  % (r["id"], r["document_id"], str(r["source_doc"])[:30],
+                     r["chunk_index"], str(r["snippet"])[:46].replace("\n", " ")))
+    if orphan_meta:
+        print("\ndoc_metadata 清单:")
+        for r in orphan_meta:
+            print("  meta#%-6s doc_id=%-6s %-36s src=%-8s %s"
+                  % (r["id"], r["document_id"], repr(str(r["title"]))[:36],
+                     str(r["source"])[:8], str(r["created_at"])[:19]))
 
     if not args.apply:
         print("\n（dry-run：未删除。加 --apply 才真删）")
-        _write_report(args, orphans, total, applied=False)
+        _write_report(args, orphans, orphan_meta, total, applied=False)
         conn.close()
         return 0
 
@@ -102,8 +129,12 @@ def main():
     try:
         for r in orphans:
             conn.execute("DELETE FROM document_chunks WHERE id=?", (r["id"],))
-            deleted.append(r["id"])
+            deleted.append(("chunk", r["id"]))
             print("  已删 chunk#%s" % r["id"])
+        for r in orphan_meta:
+            conn.execute("DELETE FROM doc_metadata WHERE id=?", (r["id"],))
+            deleted.append(("meta", r["id"]))
+            print("  已删 meta#%s" % r["id"])
         conn.commit()
     except Exception as e:
         conn.rollback()
@@ -112,8 +143,12 @@ def main():
         return 1
 
     left = len(find_orphans(conn))
-    print("\n结果：删除 %d 条｜剩余孤儿 %d 条" % (len(deleted), left))
-    if left:
+    left_meta = len(find_orphan_metadata(conn))
+    print("\n结果：删除 %d 条（chunk %d / meta %d）｜剩余孤儿 chunk %d / meta %d"
+          % (len(deleted),
+             sum(1 for t, _ in deleted if t == "chunk"),
+             sum(1 for t, _ in deleted if t == "meta"), left, left_meta))
+    if left or left_meta:
         print("  ⚠️ 仍有剩余（可能期间又有文档被删，重跑本脚本即可）")
     # 向量索引缓存失效（否则内存里还留着被删的向量）
     try:
@@ -123,12 +158,12 @@ def main():
     except Exception as e:
         print("  （ChunkVectorIndex 失效跳过：%r）" % (e,))
 
-    _write_report(args, orphans, total, applied=True)
+    _write_report(args, orphans, orphan_meta, total, applied=True)
     conn.close()
     return 0
 
 
-def _write_report(args, orphans, total, applied):
+def _write_report(args, orphans, orphan_meta, total, applied):
     path = args.report or os.path.join(
         ROOT, "tmp", "_orphan_chunks_%s_%s.json"
         % ("applied" if applied else "preview", time.strftime("%Y%m%d_%H%M%S")))
@@ -137,8 +172,11 @@ def _write_report(args, orphans, total, applied):
         with open(path, "w", encoding="utf-8") as f:
             json.dump({"generated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
                        "db": args.db, "dry_run": not applied,
-                       "total_chunks": total, "orphan_count": len(orphans),
-                       "rows": [dict(r) for r in orphans]},
+                       "total_chunks": total,
+                       "orphan_chunks": len(orphans),
+                       "orphan_metadata": len(orphan_meta),
+                       "chunk_rows": [dict(r) for r in orphans],
+                       "metadata_rows": [dict(r) for r in orphan_meta]},
                       f, ensure_ascii=False, indent=1)
         print("\n清单已写: %s" % path)
     except Exception as e:

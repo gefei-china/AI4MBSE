@@ -12,6 +12,26 @@
     是 call_kind='skill'（result 明写"未独立执行"），把它当回执 =
     用"看了说明书"证明"做过了"。
 
+## ⚠️ 2026-11-17 隔离方式重写：从 `BEGIN/rollback` 改为**在副本上跑**
+
+原实现在真库上 `conn.execute("BEGIN")` + `finally: conn.rollback()`，
+以为能隔离测试数据（固定会话 C=990999801 + 先 DELETE 再 INSERT）。
+
+**这个假设不成立**：被测函数 `todo_store.upsert_todo` / `handle_todo_write`
+内部**自己调 `conn.commit()`**（`todo_store.py:327` 与 `:492` 那两处）。
+显式 BEGIN 被它提交掉 ⇒ finally 的 `rollback()` 是**空操作** ⇒
+测试数据**永久落库**。
+
+后果（实测 2026-11-17）：该门禁在**全量连跑**时红、**单跑**绿 ——
+因为连跑时前面的门禁触发了这条污染路径，留下的 `agent_todos` 行
+让后续断言的前提不成立；而单跑时前面没跑，库里干净。
+这与 `eval_memory_dream_ab.py`（2026-11-12）踩的坑**完全同族**
+（那里是 `record_access()` 的 commit 把 BEGIN 提交了）。
+
+修法（沿用那边的成熟方案）：整个评测在 `sqlite3.backup()` 出的**副本**上跑。
+被测函数想怎么 commit 都行 —— 它 commit 的是副本。
+真库连接全程只读。
+
 运行：<venv>/python.exe -X utf8 tools/verify/verify_todo_evidence.py
 """
 import json
@@ -47,13 +67,32 @@ def add_log(conn, conv, tool, ok=1, kind="tool"):
          conv, "2026-11-09 10:00:00", kind, "", 0, ""))
 
 
-conn = sqlite3.connect(cfg.DB_PATH)
+# ★ 2026-11-17：**在副本上跑**（原因见模块 docstring「隔离方式重写」）。
+#   被测函数内部会 commit，BEGIN/rollback 挡不住它 ⇒ 只能用副本隔离。
+import shutil as _sh
+import tempfile as _tf
+
+_TD = _tf.mkdtemp(prefix="todo_ev_")
+_DB = os.path.join(_TD, "copy.db")
+try:
+    _src = sqlite3.connect(cfg.DB_PATH)
+    _dst = sqlite3.connect(_DB)
+    _src.backup(_dst)
+    _dst.close()
+    _src.close()
+except Exception as _e:
+    print("✗ 无法建立副本（干净库？）:", repr(_e))
+    _sh.rmtree(_TD, ignore_errors=True)
+    sys.exit(2)
+
+conn = sqlite3.connect(_DB)
 conn.row_factory = sqlite3.Row
 C = 990999801
 try:
-    conn.execute("BEGIN")
+    # 副本是自己的，不需要 BEGIN（保持 DELETE 清理语义即可）
     conn.execute("DELETE FROM tool_call_logs WHERE conversation_id=?", (C,))
     conn.execute("DELETE FROM agent_todos WHERE conversation_id=?", (C,))
+    conn.commit()
 
     print("[1] machine_evidence 三态")
     chk("无 verify_tool → claim",
@@ -118,8 +157,30 @@ try:
     chk("in_progress 的 evidence 仍为空", e3 == "", repr(e3))
 
 finally:
-    conn.rollback()
-    conn.close()
+    # 副本用完即弃：不 rollback（被测函数可能已 commit，rollback 无意义），
+    # 直接关连接 + 删副本目录。真库全程只被 backup() 读过。
+    try:
+        conn.close()
+    except Exception:
+        pass
+    _sh.rmtree(_TD, ignore_errors=True)
+
+# ── 自检：**真库必须零污染**（防将来有人改回 BEGIN/rollback 模式）──
+#   为什么必须自检：这个门禁的被测函数会 commit，用真库 + BEGIN 隔离是**无效**的
+#   （实测 2026-11-17：全量连跑红、单跑绿，因为污染留在了库里）。
+#   只看"断言全过"抓不到这件事 —— 必须直接查真库有没有留下测试会话的行。
+try:
+    _chk = sqlite3.connect(f"file:{cfg.DB_PATH}?mode=ro", uri=True)
+    _n_t = _chk.execute("select count(*) from agent_todos where conversation_id=?",
+                        (C,)).fetchone()[0]
+    _n_l = _chk.execute("select count(*) from tool_call_logs where conversation_id=?",
+                        (C,)).fetchone()[0]
+    _chk.close()
+    chk("真库零污染（测试会话 %d 的数据未落库）" % C, _n_t == 0 and _n_l == 0,
+        "残留 agent_todos=%d tool_call_logs=%d ⇒ 隔离失效（是否改回了 BEGIN/rollback？）"
+        % (_n_t, _n_l))
+except Exception as e:
+    chk("真库零污染自检", False, repr(e))
 
 print("\n" + "=" * 62)
 if fails:

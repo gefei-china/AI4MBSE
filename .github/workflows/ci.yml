@@ -679,6 +679,15 @@ jobs:
         if: ${{ !cancelled() }}
         run: python tools/verify/verify_orphan_chunks.py
 
+      # ── 2026-11-17 新增：documents.chunk_count 必须与实际 chunk 数一致 ──
+      #   chunk_count 是**展示值**（列表里"这份文档切了多少块"），document_chunks 是**事实**。
+      #   不一致时：显示 855 实际 800 ⇒ 用户以为搜得到其实搜不到；
+      #   做"按 chunk 数排序/筛选"时结果全错。
+      #   判据不设容差（整数计数，任何偏差都是真错误：写入漏了或删除没同步）。
+      - name: Guard chunk_count 与实际一致（6 项，含变异自证）
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_chunk_count_coherence.py
+
       # ── 2026-11-15 新增：SHACL 独立校验交叉验证 ────────────────────────
       # 本工程所有实例校验都靠自研实现；若自研有 bug，**没有任何人能发现**。
       # 接 pySHACL（W3C SHACL 参考实现之一）做独立校验，与自研逐维度比对：

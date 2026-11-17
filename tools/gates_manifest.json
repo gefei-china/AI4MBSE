@@ -2442,6 +2442,11 @@
    "timeout": 300
   },
   {
+   "script": "verify_chunk_count_coherence.py",
+   "tier": "pr",
+   "timeout": 120
+  },
+  {
    "script": "verify_orphan_chunks.py",
    "tier": "pr",
    "timeout": 120

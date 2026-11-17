@@ -87,40 +87,81 @@ def main():
             n_null = conn.execute(
                 "select count(*) from document_chunks where document_id is null").fetchone()[0]
             total = conn.execute("select count(*) from document_chunks").fetchone()[0]
+            # ★ 2026-11-17：doc_metadata 同属派生数据，一并查悬挂。
+            #   chunk 悬挂的后果是"引用点不开"，metadata 悬挂是"列表 join 出幽灵行"。
+            try:
+                meta_rows = conn.execute(
+                    "SELECT dm.id, dm.document_id, dm.title FROM doc_metadata dm "
+                    "WHERE dm.document_id IS NOT NULL "
+                    "  AND NOT EXISTS (SELECT 1 FROM documents d WHERE d.id = dm.document_id) "
+                    "ORDER BY dm.document_id").fetchall()
+            except Exception:
+                meta_rows = []
             conn.close()
             chk("A1 孤儿 chunk 数为 0（doc_id 悬空的片段会被检索到却无法溯源）",
                 not rows,
                 "%d 条: %s" % (len(rows),
                                [(r["id"], r["document_id"], r["source_doc"]) for r in rows[:5]]))
+            chk("A1b 孤儿 doc_metadata 数为 0（防列表 join 出幽灵行）",
+                not meta_rows,
+                "%d 条: %s" % (len(meta_rows),
+                               [(r["id"], r["document_id"], str(r["title"])[:20])
+                                for r in meta_rows[:5]]))
             print("      document_chunks 共 %d 条；document_id 为 NULL 的 %d 条（不判红，交人工）"
                   % (total, n_null))
-            if rows:
+            if rows or meta_rows:
                 print("      修复：python tools/cleanup_orphan_chunks.py --apply")
 
     print("\n--- GROUP_B ---")
-    # 删除路径必须清 chunk（防有人删掉那行 DELETE，导致孤儿持续产生）
-    cands = [
-        os.path.join(ROOT, "knowledge_pipeline", "search.py"),
-        os.path.join(ROOT, "repositories", "meta_repo.py"),
-    ]
-    found_del, found_key = False, False
-    hit_files = []
-    for p in cands:
-        if not os.path.isfile(p):
-            continue
-        src = open(p, encoding="utf-8").read()
-        for m in re.finditer(r"DELETE\s+FROM\s+document_chunks\s+WHERE\s+([^\n\"']+)", src, re.I):
-            found_del = True
-            hit_files.append((os.path.basename(p), m.group(1).strip()[:40]))
-            if "document_id" in m.group(1):
-                found_key = True
-    chk("B1 删除路径里有清 chunk 的语句（防孤儿持续产生）",
-        found_del, "未在 %s 中找到 DELETE FROM document_chunks"
-                   % [os.path.basename(x) for x in cands])
-    chk("B2 该语句按 document_id 删（不是按 source_doc 之类易错的键）",
-        found_key, str(hit_files))
-    if hit_files:
-        print("      命中: %s" % hit_files)
+    # ★★ 2026-11-17 判据重写（首版搜错了地方，是个假判据）
+    #
+    #   首版 B1/B2 是在 `knowledge_pipeline/search.py` 与 `repositories/meta_repo.py`
+    #   里搜 `DELETE FROM document_chunks` 字符串 —— 搜到了 `search.py:243` 就判 PASS。
+    #   但那条其实在 **`retry_document`**（重新解析时清旧 chunk）里，**不是删除路径**。
+    #   真正的删除路径是 `MetaRepo.delete_document`，它当时**只删
+    #   `domain_review_queue` + `documents`，完全没碰 chunks** ⇒
+    #   孤儿 chunk 会持续产生，而判据一片绿。
+    #
+    #   ⇒ 正确做法：**直接解析 `delete_document` 函数体**，检查它删了哪几张表。
+    #     这是"查函数事实"而不是"全仓搜字符串"，后者会被无关代码蒙过。
+    import ast
+    meta_path = os.path.join(ROOT, "repositories", "meta_repo.py")
+    deleted_tables = set()
+    fn_found = False
+    try:
+        src = open(meta_path, encoding="utf-8").read()
+        tree = ast.parse(src)
+        for node in ast.walk(tree):
+            if isinstance(node, ast.FunctionDef) and node.name == "delete_document":
+                fn_found = True
+                # 只在这个函数体内找 execute("DELETE FROM <table> ...")
+                seg = ast.get_source_segment(src, node) or ""
+                for m in re.finditer(r"DELETE\s+FROM\s+(\w+)", seg, re.I):
+                    deleted_tables.add(m.group(1).lower())
+    except Exception as e:
+        chk("B1 能解析 MetaRepo.delete_document", False, repr(e))
+        deleted_tables, fn_found = set(), False
+
+    if not fn_found:
+        chk("B1 MetaRepo.delete_document 存在", False, meta_path)
+        chk("B2 删除路径清理 document_chunks", False, "")
+        chk("B2b 删除路径清理 doc_metadata", False, "")
+    else:
+        chk("B1 删除路径清理 document_chunks（否则孤儿会持续产生）",
+            "document_chunks" in deleted_tables,
+            "delete_document 实际删的表: %s" % sorted(deleted_tables))
+        chk("B2 删除路径清理 doc_metadata（防元数据悬挂）",
+            "doc_metadata" in deleted_tables,
+            "delete_document 实际删的表: %s" % sorted(deleted_tables))
+        chk("B2b 删除路径清理 documents 与 domain_review_queue（原有职责不退化）",
+            {"documents", "domain_review_queue"} <= deleted_tables,
+            sorted(deleted_tables))
+        print("      delete_document 删除的表: %s" % sorted(deleted_tables))
+        # 附带信息：审计表**不应**在此删除（审计链）
+        print("      %s document_lifecycle_log %s"
+              % ("⚠️" if "document_lifecycle_log" in deleted_tables else "ok",
+                 "被删了（审计链会断！）" if "document_lifecycle_log" in deleted_tables
+                 else "保留（审计痕迹，正确）"))
 
     print("\n--- GROUP_C ---")
     chk("C1 孤儿清理工具存在", os.path.isfile(TOOL), TOOL)
