@@ -746,6 +746,12 @@ jobs:
         if: ${{ !cancelled() }}
         run: python tools/verify/verify_llm_circuit_breaker.py
 
+      # 2026-11-17 生产事故：流式请求占 HALF_OPEN 探针位却因 `not stream`
+      # 不结算，导致整个 LLM 链路永久卡死 7 分钟以上（36 个 live eval 全灭）。
+      - name: Guard 流式熔断探针结算
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_circuit_stream_settlement.py
+
       - name: Guard 记忆冲突门禁
         if: ${{ !cancelled() }}
         run: python tools/verify/verify_memory_conflict_gate.py

@@ -1,6 +1,6 @@
 {
  "version": 1,
- "generated_at": "2026-11-17 16:41:07",
+ "generated_at": "2026-11-17 16:56:59",
  "doc": "门禁清单唯一真源。由 tools/gate_runner.py 执行、tools/verify/verify_gate_manifest.py 守卫。分层依据：工具 2026-11-04 的双环境实测（真库 + 干净库）。",
  "budget": {
   "broken": 38,
@@ -449,6 +449,12 @@
    "script": "verify_ci_comment_consistency.py",
    "tier": "pr",
    "timeout": 120
+  },
+  {
+   "script": "verify_circuit_stream_settlement.py",
+   "tier": "pr",
+   "timeout": 60,
+   "reason": "流式熔断探针结算：必须占/拒/归还闭环（4 项代码级 + 7 项真实状态机），纯内存零服务依赖，实测 0.3s；已同步进 ci.yml"
   },
   {
    "script": "verify_citation_alignment.py",
