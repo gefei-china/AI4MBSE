@@ -41,6 +41,22 @@ LIMITATIONS = [
 ]
 
 
+def limitations_for(mode: str) -> list:
+    """按 mode 给出**如实**的限制说明。
+
+    ★ 2026-11-17：原实现无论 mode 都套 `LIMITATIONS` 的 offline 条目，
+      于是**合格 live 基线（id=34）的报告里仍写着"offline_replay 不重新调用 LLM"**
+      —— 读报告的人会误以为刚跑的 36 次真实 LLM 调用是回放，直接毁掉"live"的可信度。
+      live 的限制不是"没调 LLM"，而是"单次采样有波动、语义质量不在判据内"。
+    """
+    if str(mode or "") == "live":
+        return ([
+            "live 模式按 conv-map 评**新建会话**（每例 conv_id 均不同于派生源会话）；"
+            "单次结果为采样，回归判断须看 repeat≥3 的逐任务清单",
+        ] + list(LIMITATIONS[1:]))
+    return list(LIMITATIONS)
+
+
 def load_dataset(path=DEFAULT_SET):
     with open(path, encoding="utf-8") as f:
         d = json.load(f)
@@ -148,7 +164,7 @@ def score_dataset(c, dataset, mode="offline_replay", conv_id_map=None):
         "by_chain": {ch: {"n": sum(1 for r in rows if r["chain"] == ch),
                           "passed": sum(1 for r in rows if r["chain"] == ch and r["passed"])}
                      for ch in sorted({r["chain"] for r in rows})},
-        "rows": rows, "limitations": LIMITATIONS,
+        "rows": rows, "limitations": limitations_for(mode),
         "generated_at_utc": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
     }
 

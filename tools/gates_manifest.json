@@ -1,6 +1,6 @@
 {
  "version": 1,
- "generated_at": "2026-11-17 16:56:59",
+ "generated_at": "2026-11-17 21:43:00",
  "doc": "门禁清单唯一真源。由 tools/gate_runner.py 执行、tools/verify/verify_gate_manifest.py 守卫。分层依据：工具 2026-11-04 的双环境实测（真库 + 干净库）。",
  "budget": {
   "broken": 38,
@@ -899,6 +899,12 @@
    "script": "verify_glossary_term_boundary.py",
    "tier": "pr",
    "timeout": 120
+  },
+  {
+   "script": "verify_golden_live_limitations.py",
+   "tier": "local",
+   "timeout": 120,
+   "reason": "live 报告不得套 offline 限制说明（id=34 曾误写『offline_replay 不调用 LLM』）；纯函数 6 项 + 真库 2 项，实测 0.4s。B 组读生产 eval_reports ⇒ local"
   },
   {
    "script": "verify_graph_breaker.py",
