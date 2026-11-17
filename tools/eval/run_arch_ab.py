@@ -94,10 +94,35 @@ def _no_proxy_opener():
     return urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
 
+def _eval_headers() -> dict:
+    """给 eval 请求一个**独立限流桶**，避免与真人聊天抢 5 次/分钟的 anon 桶。
+
+    2026-11-17 真机事故：长跑批第 15 例撞 429 的根因就是 `core.rate_limit._identity`
+    对无凭据请求一律归 `anon`，而 eval 客户端从不带身份头 —— 真人正在聊天时
+    eval 就被挤爆。这里用 `X-User-Id: 0` 只做**分桶**：
+      · `rate_limit._identity` 取 uid ⇒ 落到 `u:0`，与 `anon`/真实用户彻底分开；
+      · `deps.current_user` 查 uid=0 查不到任何用户 ⇒ **仍是匿名**，
+        当前 `auth.enforce_login=False` 下与不带头的行为逐字节一致（不提权）。
+    ⚠️ 若将来开启强制登录，则**不带头**并明示告警 —— 那时 eval 必须走正式
+       登录凭据，而不是继续用一个不存在的 uid 冒充（严格优先级：认证 > 分桶）。
+    """
+    try:
+        from core import config as _c
+        if _c.as_bool("auth", "enforce_login", False):
+            print("!! auth.enforce_login=True：eval 不使用匿名分桶头；"
+                  "请先配置正式凭据，否则本次跑批可能与真人共用限流桶")
+            return {}
+    except Exception:
+        return {}
+    return {"X-User-Id": "0"}
+
+
 def _http_json(opener, url, payload, timeout=60):
+    _headers = {"Content-Type": "application/json"}
+    _headers.update(_eval_headers())
     req = urllib.request.Request(
         url, data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
-        headers={"Content-Type": "application/json"}, method="POST")
+        headers=_headers, method="POST")
     with opener.open(req, timeout=timeout) as resp:
         return json.loads(resp.read().decode("utf-8", "replace"))
 
@@ -117,10 +142,12 @@ def _live_case(opener, base_url, case, timeout_s):
         id_base = c0.execute("SELECT COALESCE(MAX(id),0) FROM llm_usage_stats").fetchone()[0]
     finally:
         c0.close()
+    _headers = {"Content-Type": "application/json"}
+    _headers.update(_eval_headers())
     req = urllib.request.Request(
         base_url + "/api/conversations/%d/chat/stream" % cid,
         data=json.dumps({"message": _case_input(case)}, ensure_ascii=False).encode("utf-8"),
-        headers={"Content-Type": "application/json"}, method="POST")
+        headers=_headers, method="POST")
     done = False
     # ★ 2026-11-17：429 退避重试。**复用同一个会话**（会话已建好、评分也按 cid），
     #    不要重新建会话 —— 那会污染 conv_map 的"每例一个新会话"判据。

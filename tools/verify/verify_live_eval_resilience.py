@@ -92,10 +92,12 @@ class _Opener:
         self.calls = 0
         self.fail_times = fail_times
         self.urls = []
+        self.headers = []
 
     def open(self, req, timeout=None):
         self.calls += 1
         self.urls.append(req.full_url)
+        self.headers.append(dict(req.headers))
         if self.calls <= self.fail_times:
             raise urllib.error.HTTPError(
                 req.full_url, 429, "Too Many Requests",
@@ -151,6 +153,11 @@ def case_code() -> None:
     check("A6 CLI 把 out_path 传进 run_batch", "out_path=args.out" in src, "未传")
     check("A7 错误行不编 latency/token",
           '"latency_ms": None, "tokens": None' in src, "编了数字")
+    check("A8 ★ eval 有独立限流身份（不再与真人共用 anon 桶）",
+          "def _eval_headers()" in src and '"X-User-Id": "0"' in src
+          and "_headers.update(_eval_headers())" in src, "未分桶")
+    check("A9 强制登录开启时不伪造身份（认证优先于分桶）",
+          '_c.as_bool("auth", "enforce_login", False)' in src, "无保护")
 
 
 def case_retry() -> None:
@@ -167,7 +174,10 @@ def case_retry() -> None:
         check("B3 ★ 重试复用同一会话 URL（不新建会话污染 conv_map）",
               len(set(op.urls)) == 1 and "/chat/stream" in op.urls[0], str(op.urls))
         check("B4 重试成功后本例正常通过（不因曾 429 误判失败）", r.get("passed") is True,
-              str(r.get("passed")))  # retry 成功后本例正常通过（桩 score_case=1.0）
+              str(r.get("passed")))
+        check("B6 ★ 建会话与 chat 两个请求都带 eval 分桶头",
+              len(op.headers) == 2 and all(h.get("X-user-id") == "0" for h in op.headers),
+              str(op.headers))  # retry 成功后本例正常通过（桩 score_case=1.0）
 
         op2 = _Opener(fail_times=99)
         try:
