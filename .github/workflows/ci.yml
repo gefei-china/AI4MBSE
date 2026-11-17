@@ -688,6 +688,17 @@ jobs:
         if: ${{ !cancelled() }}
         run: python tools/verify/verify_chunk_count_coherence.py
 
+      # ── 2026-11-17 新增：SysML 诊断三路分类真的在分类 ──────────────────
+      #   米爸报「检验逻辑要细化结果，不能统一标记为词法错误」。
+      #   根因：`sysml_v2_check.py::_LEX_DEFAULT` 在 cf33d3e 被改成 `r""`
+      #   （**提交说明里完全没提**），而 `re.compile("").search(x)` 恒为真
+      #   ⇒ classify() 第一句永远命中 ⇒ 20 条 ERROR 全归「词法」，
+      #   语法 2 / 语义 18 全部消失（与基线差 4 项、verify_sysml_check_gate 16 项红）。
+      #   A/B 组是纯函数（不需要 java/jar），CI 可全套跑；C 组无校验器时 SKIP。
+      - name: Guard SysML 诊断三路分类（12 项，含变异自证）
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_sysml_classify.py
+
       # ── 2026-11-15 新增：SHACL 独立校验交叉验证 ────────────────────────
       # 本工程所有实例校验都靠自研实现；若自研有 bug，**没有任何人能发现**。
       # 接 pySHACL（W3C SHACL 参考实现之一）做独立校验，与自研逐维度比对：
