@@ -1,23 +1,23 @@
 {
  "schema": "dataset-manifest@1",
- "dataset_id": "3293342db856",
- "built_at": "2026-11-15T16:56:21",
+ "dataset_id": "e40da64476d9",
+ "built_at": "2026-11-17T08:21:53",
  "generator": {
   "build_evalset": "1",
   "trace2dataset": "p1-1/trace-evalset@1"
  },
  "evalset": {
   "file": "evalset.json",
-  "n_doc": 54,
+  "n_doc": 48,
   "n_graph": 18,
   "n_neg": 30,
   "fingerprint": {
-   "documents": 14,
-   "document_chunks": 7394,
+   "documents": 12,
+   "document_chunks": 7067,
    "entities": 184,
    "relations": 249,
    "release_entity_names_sha1": "77e0c39603cded89",
-   "chunk_sections_sha1": "d7b41722d9554887",
+   "chunk_sections_sha1": "d377c5302f87de8a",
    "schema_version": 2
   }
  },
@@ -47,16 +47,16 @@
    }
   },
   "fingerprint": {
-   "conversations": 372,
-   "messages": 1232,
+   "conversations": 370,
+   "messages": 1231,
    "feedback": 9,
-   "llm_usage_stats": 27791,
+   "llm_usage_stats": 28148,
    "hil_confirmations": 46,
    "flow_runs": 11,
-   "intent_samples": 568,
+   "intent_samples": 570,
    "bad_cases": 6,
-   "tool_call_logs": 8862,
-   "messages_content_sha1": "e53eb32a066aa175",
+   "tool_call_logs": 9022,
+   "messages_content_sha1": "c1693b65e2b809c9",
    "confirmed_intent_texts_sha1": "66571ebcec5ad12e",
    "hil_previews_sha1": "3922dbe1377595e6",
    "flow_runs_sha1": "50d152607182717a",

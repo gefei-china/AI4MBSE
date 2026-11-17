@@ -1,17 +1,17 @@
 {
  "schema": "p1-1/trace-evalset@1",
- "built_at": "2026-11-15 16:56:21",
+ "built_at": "2026-11-17 08:21:53",
  "fingerprint": {
-  "conversations": 372,
-  "messages": 1232,
+  "conversations": 370,
+  "messages": 1231,
   "feedback": 9,
-  "llm_usage_stats": 27791,
+  "llm_usage_stats": 28148,
   "hil_confirmations": 46,
   "flow_runs": 11,
-  "intent_samples": 568,
+  "intent_samples": 570,
   "bad_cases": 6,
-  "tool_call_logs": 8862,
-  "messages_content_sha1": "e53eb32a066aa175",
+  "tool_call_logs": 9022,
+  "messages_content_sha1": "c1693b65e2b809c9",
   "confirmed_intent_texts_sha1": "66571ebcec5ad12e",
   "hil_previews_sha1": "3922dbe1377595e6",
   "flow_runs_sha1": "50d152607182717a",
@@ -51,7 +51,7 @@
   }
  },
  "summary": {
-  "window_cutoff": "2026-08-17 16:56:21",
+  "window_cutoff": "2026-08-19 08:21:53",
   "by_extractor": {
    "intent_confirmed": 46,
    "intent_rejected": 13,
@@ -76,7 +76,7 @@
   "skipped_mock": 0,
   "skipped_window": 1,
   "skipped_short": 15,
-  "skipped_dup": 60,
+  "skipped_dup": 59,
   "skipped_extractors": {}
  },
  "cases": [
@@ -1380,6 +1380,21 @@
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
+   "query": "sysml v2代码中expose的实现逻辑，输出规则",
+   "response": "# SysML v2 中 `expose` 的实现逻辑与输出规则\n\n## 一、结论先行\n\n`expose` 在 SysML v2 中**不是普通的 import**，而是一种**专门用于 ViewUsage 的受控导入**：它把成员导入到视图使用中，作为该视图要呈现的元素集合，并且**始终忽略可见性、始终导入全部元素**。因此，写 `expose` 时有三条硬性规则：**宿主必须是视图使用、可见性固定为 protected、不能靠可见性做筛选** [1]。\n\n---\n\n## 二、实现逻辑（语义机制）\n\n### 1. `expose` 的本质：一种 Import\n\n规范把 `Expose` 定义为 `Import` 的一个子类，其作用是把 `Membership` 导入到 `ViewUsage` 中，从而提供“要纳入视图的元素” [1]。也就是说，`expose` 走的是**导入通道**，而不是“画一条线”式的图形关系；它决定的是**视图的内容集合**，而不是视图的布局。\n\n### 2. 视图产物的生成流程（`expose` 在其中的位置）\n\n规范给出的视图产物生成顺序是：**先按视图使用所拥有的 `expose` 关系导入被暴露的元素 → 再按视图使用拥有和继承的过滤条件对这些元素做筛选 → 最后按该视图使用指定的视图渲染方式生成渲染后的视图产物** [3]。\n\n这条链路说明了一个…[2518 chars]",
+   "gold": "",
+   "source_table": "conv",
+   "source_id": 6673,
+   "seen_at": "2026-11-16 03:21:49",
+   "meta": {
+    "conversation_id": 999999064
+   }
+  },
+  {
+   "id": "conv_clean-002",
+   "extractor": "conv_clean",
+   "kind": "regression",
+   "label": "weak",
    "query": "#知识库 按标准校验需求。请对下列需求逐条判定，并给出命中规则编号、判定依据与标准条款出处：\nREQ-001：系统应在 2 秒内完成上电自检。\nREQ-002：系统应该尽可能快地响应用户操作，体验要好。",
    "response": "**结论摘要**\n\n- 第 1 条（2 秒内完成上电自检）：句式符合结构化要求，判据带明确数值与单位，可量化、可验证，判定通过；仅“系统”主体偏泛指、缺来源与优先级属性，标待核实。\n- 第 2 条（尽可能快、体验要好）：命中模糊表述与不可验证硬伤——“尽可能快”“体验要好”无量化阈值，无法收集证据证明满足，判定不通过（高严重度）。\n- 第 2 条同时命中单一性规则：一句话含“响应速度”与“体验”两个要求，且用逗号拼接，应拆为独立条款（高严重度）。\n- 第 2 条情态动词用“应该”而非规范用“应”，属句式规范偏差（中严重度）。\n- 第 1、2 条均缺唯一标识以外的追溯属性（来源、优先级、风险），按“缺属性标待核实而非直接判错”的口径处理。\n- 依据：§5.2.5 的 Unambiguous/Complete/Singular/Verifiable 条款 [1,2,3]，以及 Guide 的 R18 单一思想句 [5,8]、R11 分句 [6]、R1 结构化句式 [7]。\n\n```json\n{\n  \"checks\": [\n    {\n      \"rule_id\": \"RC-04\",\n      \"category\": \"无歧义词与模糊表述\",\n      \"verdict\": \"fail\",\n      \"severity\": \"high\",\n      \"req_id\": \"REQ…[11241 chars]",
    "gold": "",
@@ -1391,7 +1406,7 @@
    }
   },
   {
-   "id": "conv_clean-002",
+   "id": "conv_clean-003",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -1406,7 +1421,7 @@
    }
   },
   {
-   "id": "conv_clean-003",
+   "id": "conv_clean-004",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -1421,7 +1436,7 @@
    }
   },
   {
-   "id": "conv_clean-004",
+   "id": "conv_clean-005",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -1436,7 +1451,7 @@
    }
   },
   {
-   "id": "conv_clean-005",
+   "id": "conv_clean-006",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -1451,7 +1466,7 @@
    }
   },
   {
-   "id": "conv_clean-006",
+   "id": "conv_clean-007",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -1466,7 +1481,7 @@
    }
   },
   {
-   "id": "conv_clean-007",
+   "id": "conv_clean-008",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -1481,7 +1496,7 @@
    }
   },
   {
-   "id": "conv_clean-008",
+   "id": "conv_clean-009",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -1496,7 +1511,7 @@
    }
   },
   {
-   "id": "conv_clean-009",
+   "id": "conv_clean-010",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -1511,7 +1526,7 @@
    }
   },
   {
-   "id": "conv_clean-010",
+   "id": "conv_clean-011",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -1526,7 +1541,7 @@
    }
   },
   {
-   "id": "conv_clean-011",
+   "id": "conv_clean-012",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -1541,7 +1556,7 @@
    }
   },
   {
-   "id": "conv_clean-012",
+   "id": "conv_clean-013",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -1556,7 +1571,7 @@
    }
   },
   {
-   "id": "conv_clean-013",
+   "id": "conv_clean-014",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -1571,7 +1586,7 @@
    }
   },
   {
-   "id": "conv_clean-014",
+   "id": "conv_clean-015",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -1586,7 +1601,7 @@
    }
   },
   {
-   "id": "conv_clean-015",
+   "id": "conv_clean-016",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -1601,7 +1616,7 @@
    }
   },
   {
-   "id": "conv_clean-016",
+   "id": "conv_clean-017",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -1616,7 +1631,7 @@
    }
   },
   {
-   "id": "conv_clean-017",
+   "id": "conv_clean-018",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -1631,7 +1646,7 @@
    }
   },
   {
-   "id": "conv_clean-018",
+   "id": "conv_clean-019",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -1646,7 +1661,7 @@
    }
   },
   {
-   "id": "conv_clean-019",
+   "id": "conv_clean-020",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -1661,7 +1676,7 @@
    }
   },
   {
-   "id": "conv_clean-020",
+   "id": "conv_clean-021",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -1676,7 +1691,7 @@
    }
   },
   {
-   "id": "conv_clean-021",
+   "id": "conv_clean-022",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -1691,7 +1706,7 @@
    }
   },
   {
-   "id": "conv_clean-022",
+   "id": "conv_clean-023",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -1706,7 +1721,7 @@
    }
   },
   {
-   "id": "conv_clean-023",
+   "id": "conv_clean-024",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -1721,7 +1736,7 @@
    }
   },
   {
-   "id": "conv_clean-024",
+   "id": "conv_clean-025",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -1736,7 +1751,7 @@
    }
   },
   {
-   "id": "conv_clean-025",
+   "id": "conv_clean-026",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -1751,7 +1766,7 @@
    }
   },
   {
-   "id": "conv_clean-026",
+   "id": "conv_clean-027",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -1766,7 +1781,7 @@
    }
   },
   {
-   "id": "conv_clean-027",
+   "id": "conv_clean-028",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -1781,7 +1796,7 @@
    }
   },
   {
-   "id": "conv_clean-028",
+   "id": "conv_clean-029",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -1796,7 +1811,7 @@
    }
   },
   {
-   "id": "conv_clean-029",
+   "id": "conv_clean-030",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -1811,7 +1826,7 @@
    }
   },
   {
-   "id": "conv_clean-030",
+   "id": "conv_clean-031",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -1826,7 +1841,7 @@
    }
   },
   {
-   "id": "conv_clean-031",
+   "id": "conv_clean-032",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -1841,7 +1856,7 @@
    }
   },
   {
-   "id": "conv_clean-032",
+   "id": "conv_clean-033",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -1856,7 +1871,7 @@
    }
   },
   {
-   "id": "conv_clean-033",
+   "id": "conv_clean-034",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -1871,7 +1886,7 @@
    }
   },
   {
-   "id": "conv_clean-034",
+   "id": "conv_clean-035",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -1886,7 +1901,7 @@
    }
   },
   {
-   "id": "conv_clean-035",
+   "id": "conv_clean-036",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -1901,7 +1916,7 @@
    }
   },
   {
-   "id": "conv_clean-036",
+   "id": "conv_clean-037",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -1916,7 +1931,7 @@
    }
   },
   {
-   "id": "conv_clean-037",
+   "id": "conv_clean-038",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -1931,7 +1946,7 @@
    }
   },
   {
-   "id": "conv_clean-038",
+   "id": "conv_clean-039",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -1946,7 +1961,7 @@
    }
   },
   {
-   "id": "conv_clean-039",
+   "id": "conv_clean-040",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -1961,7 +1976,7 @@
    }
   },
   {
-   "id": "conv_clean-040",
+   "id": "conv_clean-041",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -1976,7 +1991,7 @@
    }
   },
   {
-   "id": "conv_clean-041",
+   "id": "conv_clean-042",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -1991,7 +2006,7 @@
    }
   },
   {
-   "id": "conv_clean-042",
+   "id": "conv_clean-043",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -2006,7 +2021,7 @@
    }
   },
   {
-   "id": "conv_clean-043",
+   "id": "conv_clean-044",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -2021,7 +2036,7 @@
    }
   },
   {
-   "id": "conv_clean-044",
+   "id": "conv_clean-045",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -2036,7 +2051,7 @@
    }
   },
   {
-   "id": "conv_clean-045",
+   "id": "conv_clean-046",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -2051,7 +2066,7 @@
    }
   },
   {
-   "id": "conv_clean-046",
+   "id": "conv_clean-047",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -2066,7 +2081,7 @@
    }
   },
   {
-   "id": "conv_clean-047",
+   "id": "conv_clean-048",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -2081,7 +2096,7 @@
    }
   },
   {
-   "id": "conv_clean-048",
+   "id": "conv_clean-049",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -2096,7 +2111,7 @@
    }
   },
   {
-   "id": "conv_clean-049",
+   "id": "conv_clean-050",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -2111,7 +2126,7 @@
    }
   },
   {
-   "id": "conv_clean-050",
+   "id": "conv_clean-051",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -2126,7 +2141,7 @@
    }
   },
   {
-   "id": "conv_clean-051",
+   "id": "conv_clean-052",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -2141,7 +2156,7 @@
    }
   },
   {
-   "id": "conv_clean-052",
+   "id": "conv_clean-053",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -2156,7 +2171,7 @@
    }
   },
   {
-   "id": "conv_clean-053",
+   "id": "conv_clean-054",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -2171,7 +2186,7 @@
    }
   },
   {
-   "id": "conv_clean-054",
+   "id": "conv_clean-055",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -2186,7 +2201,7 @@
    }
   },
   {
-   "id": "conv_clean-055",
+   "id": "conv_clean-056",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -2201,7 +2216,7 @@
    }
   },
   {
-   "id": "conv_clean-056",
+   "id": "conv_clean-057",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -2216,7 +2231,7 @@
    }
   },
   {
-   "id": "conv_clean-057",
+   "id": "conv_clean-058",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -2231,7 +2246,7 @@
    }
   },
   {
-   "id": "conv_clean-058",
+   "id": "conv_clean-059",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -2246,7 +2261,7 @@
    }
   },
   {
-   "id": "conv_clean-059",
+   "id": "conv_clean-060",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -2261,7 +2276,7 @@
    }
   },
   {
-   "id": "conv_clean-060",
+   "id": "conv_clean-061",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -2276,7 +2291,7 @@
    }
   },
   {
-   "id": "conv_clean-061",
+   "id": "conv_clean-062",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -2291,7 +2306,7 @@
    }
   },
   {
-   "id": "conv_clean-062",
+   "id": "conv_clean-063",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -2306,7 +2321,7 @@
    }
   },
   {
-   "id": "conv_clean-063",
+   "id": "conv_clean-064",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -2321,7 +2336,7 @@
    }
   },
   {
-   "id": "conv_clean-064",
+   "id": "conv_clean-065",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -2336,7 +2351,7 @@
    }
   },
   {
-   "id": "conv_clean-065",
+   "id": "conv_clean-066",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -2351,7 +2366,7 @@
    }
   },
   {
-   "id": "conv_clean-066",
+   "id": "conv_clean-067",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -2366,7 +2381,7 @@
    }
   },
   {
-   "id": "conv_clean-067",
+   "id": "conv_clean-068",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -2381,7 +2396,7 @@
    }
   },
   {
-   "id": "conv_clean-068",
+   "id": "conv_clean-069",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -2396,7 +2411,7 @@
    }
   },
   {
-   "id": "conv_clean-069",
+   "id": "conv_clean-070",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -2411,7 +2426,7 @@
    }
   },
   {
-   "id": "conv_clean-070",
+   "id": "conv_clean-071",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -2426,7 +2441,7 @@
    }
   },
   {
-   "id": "conv_clean-071",
+   "id": "conv_clean-072",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -2441,7 +2456,7 @@
    }
   },
   {
-   "id": "conv_clean-072",
+   "id": "conv_clean-073",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -2456,7 +2471,7 @@
    }
   },
   {
-   "id": "conv_clean-073",
+   "id": "conv_clean-074",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -2471,7 +2486,7 @@
    }
   },
   {
-   "id": "conv_clean-074",
+   "id": "conv_clean-075",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -2486,7 +2501,7 @@
    }
   },
   {
-   "id": "conv_clean-075",
+   "id": "conv_clean-076",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -2501,7 +2516,7 @@
    }
   },
   {
-   "id": "conv_clean-076",
+   "id": "conv_clean-077",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -2516,7 +2531,7 @@
    }
   },
   {
-   "id": "conv_clean-077",
+   "id": "conv_clean-078",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -2531,7 +2546,7 @@
    }
   },
   {
-   "id": "conv_clean-078",
+   "id": "conv_clean-079",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -2546,67 +2561,7 @@
    }
   },
   {
-   "id": "conv_clean-079",
-   "extractor": "conv_clean",
-   "kind": "regression",
-   "label": "weak",
-   "query": "先做需求分析，再输出 SysML 视图",
-   "response": "**本轮未产出正文，已中止**\n\n**原因**：服务端没有发出结束信号（最后事件：tool），原因未记录\n\n**下一步**：回到本会话直接重发这条消息即可（无需重启服务）",
-   "gold": "",
-   "source_table": "conv",
-   "source_id": 6347,
-   "seen_at": "2026-11-10 02:25:46",
-   "meta": {
-    "conversation_id": 990650
-   }
-  },
-  {
    "id": "conv_clean-080",
-   "extractor": "conv_clean",
-   "kind": "regression",
-   "label": "weak",
-   "query": "先做需求分析，再输出 SysML 视图",
-   "response": "",
-   "gold": "",
-   "source_table": "conv",
-   "source_id": 6346,
-   "seen_at": "2026-11-10 02:19:35",
-   "meta": {
-    "conversation_id": 990649
-   }
-  },
-  {
-   "id": "conv_clean-081",
-   "extractor": "conv_clean",
-   "kind": "regression",
-   "label": "weak",
-   "query": "先做需求分析，再输出 SysML 视图",
-   "response": "（计划已执行，但无成功交付物）\n\n---\n**本次编排已被中断**（用户主动停止）。已完成的 0 个子任务结果已保留；未完成的 1 个子任务已停止，不会继续消耗额度。可调用「继续编排」接着跑（未完成任务会被重新排队）。",
-   "gold": "",
-   "source_table": "conv",
-   "source_id": 6345,
-   "seen_at": "2026-11-10 02:12:16",
-   "meta": {
-    "conversation_id": 990648
-   }
-  },
-  {
-   "id": "conv_clean-082",
-   "extractor": "conv_clean",
-   "kind": "regression",
-   "label": "weak",
-   "query": "先做需求分析，再输出 SysML 视图",
-   "response": "**本轮未产出正文，已中止**\n\n**原因**：服务端没有发出结束信号（最后事件：reasoning），原因未记录\n\n**下一步**：回到本会话直接重发这条消息即可（无需重启服务）",
-   "gold": "",
-   "source_table": "conv",
-   "source_id": 6343,
-   "seen_at": "2026-11-10 02:09:31",
-   "meta": {
-    "conversation_id": 990647
-   }
-  },
-  {
-   "id": "conv_clean-083",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -2621,7 +2576,7 @@
    }
   },
   {
-   "id": "conv_clean-084",
+   "id": "conv_clean-081",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -2636,7 +2591,7 @@
    }
   },
   {
-   "id": "conv_clean-085",
+   "id": "conv_clean-082",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -2651,7 +2606,7 @@
    }
   },
   {
-   "id": "conv_clean-086",
+   "id": "conv_clean-083",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -2666,7 +2621,7 @@
    }
   },
   {
-   "id": "conv_clean-087",
+   "id": "conv_clean-084",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -2681,7 +2636,7 @@
    }
   },
   {
-   "id": "conv_clean-088",
+   "id": "conv_clean-085",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -2696,7 +2651,7 @@
    }
   },
   {
-   "id": "conv_clean-089",
+   "id": "conv_clean-086",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -2711,7 +2666,7 @@
    }
   },
   {
-   "id": "conv_clean-090",
+   "id": "conv_clean-087",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -2726,7 +2681,7 @@
    }
   },
   {
-   "id": "conv_clean-091",
+   "id": "conv_clean-088",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -2741,7 +2696,7 @@
    }
   },
   {
-   "id": "conv_clean-092",
+   "id": "conv_clean-089",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -2756,7 +2711,7 @@
    }
   },
   {
-   "id": "conv_clean-093",
+   "id": "conv_clean-090",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -2771,7 +2726,7 @@
    }
   },
   {
-   "id": "conv_clean-094",
+   "id": "conv_clean-091",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -2786,7 +2741,7 @@
    }
   },
   {
-   "id": "conv_clean-095",
+   "id": "conv_clean-092",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -2801,7 +2756,7 @@
    }
   },
   {
-   "id": "conv_clean-096",
+   "id": "conv_clean-093",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -2816,7 +2771,7 @@
    }
   },
   {
-   "id": "conv_clean-097",
+   "id": "conv_clean-094",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -2831,7 +2786,7 @@
    }
   },
   {
-   "id": "conv_clean-098",
+   "id": "conv_clean-095",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -2846,7 +2801,7 @@
    }
   },
   {
-   "id": "conv_clean-099",
+   "id": "conv_clean-096",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -2861,7 +2816,7 @@
    }
   },
   {
-   "id": "conv_clean-100",
+   "id": "conv_clean-097",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -2876,7 +2831,7 @@
    }
   },
   {
-   "id": "conv_clean-101",
+   "id": "conv_clean-098",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -2891,7 +2846,7 @@
    }
   },
   {
-   "id": "conv_clean-102",
+   "id": "conv_clean-099",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -2906,7 +2861,7 @@
    }
   },
   {
-   "id": "conv_clean-103",
+   "id": "conv_clean-100",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -2921,7 +2876,7 @@
    }
   },
   {
-   "id": "conv_clean-104",
+   "id": "conv_clean-101",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -2936,7 +2891,7 @@
    }
   },
   {
-   "id": "conv_clean-105",
+   "id": "conv_clean-102",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -2951,7 +2906,7 @@
    }
   },
   {
-   "id": "conv_clean-106",
+   "id": "conv_clean-103",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -2966,7 +2921,7 @@
    }
   },
   {
-   "id": "conv_clean-107",
+   "id": "conv_clean-104",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -2981,7 +2936,7 @@
    }
   },
   {
-   "id": "conv_clean-108",
+   "id": "conv_clean-105",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -2996,7 +2951,7 @@
    }
   },
   {
-   "id": "conv_clean-109",
+   "id": "conv_clean-106",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -3011,7 +2966,7 @@
    }
   },
   {
-   "id": "conv_clean-110",
+   "id": "conv_clean-107",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -3026,7 +2981,7 @@
    }
   },
   {
-   "id": "conv_clean-111",
+   "id": "conv_clean-108",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -3041,7 +2996,7 @@
    }
   },
   {
-   "id": "conv_clean-112",
+   "id": "conv_clean-109",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -3056,7 +3011,7 @@
    }
   },
   {
-   "id": "conv_clean-113",
+   "id": "conv_clean-110",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -3071,7 +3026,7 @@
    }
   },
   {
-   "id": "conv_clean-114",
+   "id": "conv_clean-111",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -3086,7 +3041,7 @@
    }
   },
   {
-   "id": "conv_clean-115",
+   "id": "conv_clean-112",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -3101,7 +3056,7 @@
    }
   },
   {
-   "id": "conv_clean-116",
+   "id": "conv_clean-113",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -3116,7 +3071,7 @@
    }
   },
   {
-   "id": "conv_clean-117",
+   "id": "conv_clean-114",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -3131,7 +3086,7 @@
    }
   },
   {
-   "id": "conv_clean-118",
+   "id": "conv_clean-115",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -3146,7 +3101,7 @@
    }
   },
   {
-   "id": "conv_clean-119",
+   "id": "conv_clean-116",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -3161,7 +3116,7 @@
    }
   },
   {
-   "id": "conv_clean-120",
+   "id": "conv_clean-117",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -3176,7 +3131,7 @@
    }
   },
   {
-   "id": "conv_clean-121",
+   "id": "conv_clean-118",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -3191,7 +3146,7 @@
    }
   },
   {
-   "id": "conv_clean-122",
+   "id": "conv_clean-119",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -3206,7 +3161,7 @@
    }
   },
   {
-   "id": "conv_clean-123",
+   "id": "conv_clean-120",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -3221,7 +3176,7 @@
    }
   },
   {
-   "id": "conv_clean-124",
+   "id": "conv_clean-121",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -3236,7 +3191,7 @@
    }
   },
   {
-   "id": "conv_clean-125",
+   "id": "conv_clean-122",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -3251,7 +3206,7 @@
    }
   },
   {
-   "id": "conv_clean-126",
+   "id": "conv_clean-123",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -3266,7 +3221,7 @@
    }
   },
   {
-   "id": "conv_clean-127",
+   "id": "conv_clean-124",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -3281,7 +3236,7 @@
    }
   },
   {
-   "id": "conv_clean-128",
+   "id": "conv_clean-125",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -3296,7 +3251,7 @@
    }
   },
   {
-   "id": "conv_clean-129",
+   "id": "conv_clean-126",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -3311,7 +3266,7 @@
    }
   },
   {
-   "id": "conv_clean-130",
+   "id": "conv_clean-127",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -3326,7 +3281,7 @@
    }
   },
   {
-   "id": "conv_clean-131",
+   "id": "conv_clean-128",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -3341,7 +3296,7 @@
    }
   },
   {
-   "id": "conv_clean-132",
+   "id": "conv_clean-129",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -3356,7 +3311,7 @@
    }
   },
   {
-   "id": "conv_clean-133",
+   "id": "conv_clean-130",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -3371,7 +3326,7 @@
    }
   },
   {
-   "id": "conv_clean-134",
+   "id": "conv_clean-131",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -3386,7 +3341,7 @@
    }
   },
   {
-   "id": "conv_clean-135",
+   "id": "conv_clean-132",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -3401,7 +3356,7 @@
    }
   },
   {
-   "id": "conv_clean-136",
+   "id": "conv_clean-133",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -3416,7 +3371,7 @@
    }
   },
   {
-   "id": "conv_clean-137",
+   "id": "conv_clean-134",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -3431,7 +3386,7 @@
    }
   },
   {
-   "id": "conv_clean-138",
+   "id": "conv_clean-135",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -3446,7 +3401,7 @@
    }
   },
   {
-   "id": "conv_clean-139",
+   "id": "conv_clean-136",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -3461,7 +3416,7 @@
    }
   },
   {
-   "id": "conv_clean-140",
+   "id": "conv_clean-137",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -3476,7 +3431,7 @@
    }
   },
   {
-   "id": "conv_clean-141",
+   "id": "conv_clean-138",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -3491,7 +3446,7 @@
    }
   },
   {
-   "id": "conv_clean-142",
+   "id": "conv_clean-139",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -3506,7 +3461,7 @@
    }
   },
   {
-   "id": "conv_clean-143",
+   "id": "conv_clean-140",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -3521,7 +3476,7 @@
    }
   },
   {
-   "id": "conv_clean-144",
+   "id": "conv_clean-141",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -3536,7 +3491,7 @@
    }
   },
   {
-   "id": "conv_clean-145",
+   "id": "conv_clean-142",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -3551,7 +3506,7 @@
    }
   },
   {
-   "id": "conv_clean-146",
+   "id": "conv_clean-143",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -3566,7 +3521,7 @@
    }
   },
   {
-   "id": "conv_clean-147",
+   "id": "conv_clean-144",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -3581,7 +3536,7 @@
    }
   },
   {
-   "id": "conv_clean-148",
+   "id": "conv_clean-145",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -3596,7 +3551,7 @@
    }
   },
   {
-   "id": "conv_clean-149",
+   "id": "conv_clean-146",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -3611,7 +3566,7 @@
    }
   },
   {
-   "id": "conv_clean-150",
+   "id": "conv_clean-147",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -3626,7 +3581,7 @@
    }
   },
   {
-   "id": "conv_clean-151",
+   "id": "conv_clean-148",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -3641,7 +3596,7 @@
    }
   },
   {
-   "id": "conv_clean-152",
+   "id": "conv_clean-149",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -3656,7 +3611,7 @@
    }
   },
   {
-   "id": "conv_clean-153",
+   "id": "conv_clean-150",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -3671,7 +3626,7 @@
    }
   },
   {
-   "id": "conv_clean-154",
+   "id": "conv_clean-151",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -3686,7 +3641,7 @@
    }
   },
   {
-   "id": "conv_clean-155",
+   "id": "conv_clean-152",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -3701,7 +3656,7 @@
    }
   },
   {
-   "id": "conv_clean-156",
+   "id": "conv_clean-153",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -3716,7 +3671,7 @@
    }
   },
   {
-   "id": "conv_clean-157",
+   "id": "conv_clean-154",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -3731,7 +3686,7 @@
    }
   },
   {
-   "id": "conv_clean-158",
+   "id": "conv_clean-155",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -3746,7 +3701,7 @@
    }
   },
   {
-   "id": "conv_clean-159",
+   "id": "conv_clean-156",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -3761,7 +3716,7 @@
    }
   },
   {
-   "id": "conv_clean-160",
+   "id": "conv_clean-157",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -3776,7 +3731,7 @@
    }
   },
   {
-   "id": "conv_clean-161",
+   "id": "conv_clean-158",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -3791,7 +3746,7 @@
    }
   },
   {
-   "id": "conv_clean-162",
+   "id": "conv_clean-159",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -3806,7 +3761,7 @@
    }
   },
   {
-   "id": "conv_clean-163",
+   "id": "conv_clean-160",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -3821,7 +3776,7 @@
    }
   },
   {
-   "id": "conv_clean-164",
+   "id": "conv_clean-161",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -3836,7 +3791,7 @@
    }
   },
   {
-   "id": "conv_clean-165",
+   "id": "conv_clean-162",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -3851,7 +3806,7 @@
    }
   },
   {
-   "id": "conv_clean-166",
+   "id": "conv_clean-163",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -3866,7 +3821,7 @@
    }
   },
   {
-   "id": "conv_clean-167",
+   "id": "conv_clean-164",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -3881,7 +3836,7 @@
    }
   },
   {
-   "id": "conv_clean-168",
+   "id": "conv_clean-165",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -3896,7 +3851,7 @@
    }
   },
   {
-   "id": "conv_clean-169",
+   "id": "conv_clean-166",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -3911,7 +3866,7 @@
    }
   },
   {
-   "id": "conv_clean-170",
+   "id": "conv_clean-167",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -3926,7 +3881,7 @@
    }
   },
   {
-   "id": "conv_clean-171",
+   "id": "conv_clean-168",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -3941,7 +3896,7 @@
    }
   },
   {
-   "id": "conv_clean-172",
+   "id": "conv_clean-169",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -3956,7 +3911,7 @@
    }
   },
   {
-   "id": "conv_clean-173",
+   "id": "conv_clean-170",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -3971,7 +3926,7 @@
    }
   },
   {
-   "id": "conv_clean-174",
+   "id": "conv_clean-171",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -3986,7 +3941,7 @@
    }
   },
   {
-   "id": "conv_clean-175",
+   "id": "conv_clean-172",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -4001,7 +3956,7 @@
    }
   },
   {
-   "id": "conv_clean-176",
+   "id": "conv_clean-173",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -4016,7 +3971,7 @@
    }
   },
   {
-   "id": "conv_clean-177",
+   "id": "conv_clean-174",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -4031,7 +3986,7 @@
    }
   },
   {
-   "id": "conv_clean-178",
+   "id": "conv_clean-175",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -4046,7 +4001,7 @@
    }
   },
   {
-   "id": "conv_clean-179",
+   "id": "conv_clean-176",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -4061,7 +4016,7 @@
    }
   },
   {
-   "id": "conv_clean-180",
+   "id": "conv_clean-177",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -4076,7 +4031,7 @@
    }
   },
   {
-   "id": "conv_clean-181",
+   "id": "conv_clean-178",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -4091,7 +4046,7 @@
    }
   },
   {
-   "id": "conv_clean-182",
+   "id": "conv_clean-179",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -4106,7 +4061,7 @@
    }
   },
   {
-   "id": "conv_clean-183",
+   "id": "conv_clean-180",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -4121,7 +4076,7 @@
    }
   },
   {
-   "id": "conv_clean-184",
+   "id": "conv_clean-181",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -4136,7 +4091,7 @@
    }
   },
   {
-   "id": "conv_clean-185",
+   "id": "conv_clean-182",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -4151,7 +4106,7 @@
    }
   },
   {
-   "id": "conv_clean-186",
+   "id": "conv_clean-183",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -4166,7 +4121,7 @@
    }
   },
   {
-   "id": "conv_clean-187",
+   "id": "conv_clean-184",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -4181,7 +4136,7 @@
    }
   },
   {
-   "id": "conv_clean-188",
+   "id": "conv_clean-185",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -4196,7 +4151,7 @@
    }
   },
   {
-   "id": "conv_clean-189",
+   "id": "conv_clean-186",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -4211,7 +4166,7 @@
    }
   },
   {
-   "id": "conv_clean-190",
+   "id": "conv_clean-187",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -4226,7 +4181,7 @@
    }
   },
   {
-   "id": "conv_clean-191",
+   "id": "conv_clean-188",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -4241,7 +4196,7 @@
    }
   },
   {
-   "id": "conv_clean-192",
+   "id": "conv_clean-189",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -4256,7 +4211,7 @@
    }
   },
   {
-   "id": "conv_clean-193",
+   "id": "conv_clean-190",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -4271,7 +4226,7 @@
    }
   },
   {
-   "id": "conv_clean-194",
+   "id": "conv_clean-191",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -4286,7 +4241,7 @@
    }
   },
   {
-   "id": "conv_clean-195",
+   "id": "conv_clean-192",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -4301,7 +4256,7 @@
    }
   },
   {
-   "id": "conv_clean-196",
+   "id": "conv_clean-193",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -4316,7 +4271,7 @@
    }
   },
   {
-   "id": "conv_clean-197",
+   "id": "conv_clean-194",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -4331,7 +4286,7 @@
    }
   },
   {
-   "id": "conv_clean-198",
+   "id": "conv_clean-195",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -4346,7 +4301,7 @@
    }
   },
   {
-   "id": "conv_clean-199",
+   "id": "conv_clean-196",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -4361,7 +4316,7 @@
    }
   },
   {
-   "id": "conv_clean-200",
+   "id": "conv_clean-197",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -4376,7 +4331,7 @@
    }
   },
   {
-   "id": "conv_clean-201",
+   "id": "conv_clean-198",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -4391,7 +4346,7 @@
    }
   },
   {
-   "id": "conv_clean-202",
+   "id": "conv_clean-199",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -4406,7 +4361,7 @@
    }
   },
   {
-   "id": "conv_clean-203",
+   "id": "conv_clean-200",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -4421,7 +4376,7 @@
    }
   },
   {
-   "id": "conv_clean-204",
+   "id": "conv_clean-201",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -4436,7 +4391,7 @@
    }
   },
   {
-   "id": "conv_clean-205",
+   "id": "conv_clean-202",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -4451,7 +4406,7 @@
    }
   },
   {
-   "id": "conv_clean-206",
+   "id": "conv_clean-203",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -4466,7 +4421,7 @@
    }
   },
   {
-   "id": "conv_clean-207",
+   "id": "conv_clean-204",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -4481,7 +4436,7 @@
    }
   },
   {
-   "id": "conv_clean-208",
+   "id": "conv_clean-205",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -4496,7 +4451,7 @@
    }
   },
   {
-   "id": "conv_clean-209",
+   "id": "conv_clean-206",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -4511,7 +4466,7 @@
    }
   },
   {
-   "id": "conv_clean-210",
+   "id": "conv_clean-207",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -4526,7 +4481,7 @@
    }
   },
   {
-   "id": "conv_clean-211",
+   "id": "conv_clean-208",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -4541,7 +4496,7 @@
    }
   },
   {
-   "id": "conv_clean-212",
+   "id": "conv_clean-209",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -4556,7 +4511,7 @@
    }
   },
   {
-   "id": "conv_clean-213",
+   "id": "conv_clean-210",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -4571,7 +4526,7 @@
    }
   },
   {
-   "id": "conv_clean-214",
+   "id": "conv_clean-211",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -4586,7 +4541,7 @@
    }
   },
   {
-   "id": "conv_clean-215",
+   "id": "conv_clean-212",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -4601,7 +4556,7 @@
    }
   },
   {
-   "id": "conv_clean-216",
+   "id": "conv_clean-213",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -4616,7 +4571,7 @@
    }
   },
   {
-   "id": "conv_clean-217",
+   "id": "conv_clean-214",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -4631,7 +4586,7 @@
    }
   },
   {
-   "id": "conv_clean-218",
+   "id": "conv_clean-215",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -4646,7 +4601,7 @@
    }
   },
   {
-   "id": "conv_clean-219",
+   "id": "conv_clean-216",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -4661,7 +4616,7 @@
    }
   },
   {
-   "id": "conv_clean-220",
+   "id": "conv_clean-217",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -4676,7 +4631,7 @@
    }
   },
   {
-   "id": "conv_clean-221",
+   "id": "conv_clean-218",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -4691,7 +4646,7 @@
    }
   },
   {
-   "id": "conv_clean-222",
+   "id": "conv_clean-219",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -4706,7 +4661,7 @@
    }
   },
   {
-   "id": "conv_clean-223",
+   "id": "conv_clean-220",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -4721,7 +4676,7 @@
    }
   },
   {
-   "id": "conv_clean-224",
+   "id": "conv_clean-221",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -4736,7 +4691,7 @@
    }
   },
   {
-   "id": "conv_clean-225",
+   "id": "conv_clean-222",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -4751,7 +4706,7 @@
    }
   },
   {
-   "id": "conv_clean-226",
+   "id": "conv_clean-223",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -4766,7 +4721,7 @@
    }
   },
   {
-   "id": "conv_clean-227",
+   "id": "conv_clean-224",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -4781,7 +4736,7 @@
    }
   },
   {
-   "id": "conv_clean-228",
+   "id": "conv_clean-225",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -4796,7 +4751,7 @@
    }
   },
   {
-   "id": "conv_clean-229",
+   "id": "conv_clean-226",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -4811,7 +4766,7 @@
    }
   },
   {
-   "id": "conv_clean-230",
+   "id": "conv_clean-227",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -4826,7 +4781,7 @@
    }
   },
   {
-   "id": "conv_clean-231",
+   "id": "conv_clean-228",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -4841,7 +4796,7 @@
    }
   },
   {
-   "id": "conv_clean-232",
+   "id": "conv_clean-229",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -4856,7 +4811,7 @@
    }
   },
   {
-   "id": "conv_clean-233",
+   "id": "conv_clean-230",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -4871,7 +4826,7 @@
    }
   },
   {
-   "id": "conv_clean-234",
+   "id": "conv_clean-231",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -4886,7 +4841,7 @@
    }
   },
   {
-   "id": "conv_clean-235",
+   "id": "conv_clean-232",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -4901,7 +4856,7 @@
    }
   },
   {
-   "id": "conv_clean-236",
+   "id": "conv_clean-233",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -4916,7 +4871,7 @@
    }
   },
   {
-   "id": "conv_clean-237",
+   "id": "conv_clean-234",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -4931,7 +4886,7 @@
    }
   },
   {
-   "id": "conv_clean-238",
+   "id": "conv_clean-235",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -4946,7 +4901,7 @@
    }
   },
   {
-   "id": "conv_clean-239",
+   "id": "conv_clean-236",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -4961,7 +4916,7 @@
    }
   },
   {
-   "id": "conv_clean-240",
+   "id": "conv_clean-237",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -4976,7 +4931,7 @@
    }
   },
   {
-   "id": "conv_clean-241",
+   "id": "conv_clean-238",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -4991,7 +4946,7 @@
    }
   },
   {
-   "id": "conv_clean-242",
+   "id": "conv_clean-239",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -5006,7 +4961,7 @@
    }
   },
   {
-   "id": "conv_clean-243",
+   "id": "conv_clean-240",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -5021,7 +4976,7 @@
    }
   },
   {
-   "id": "conv_clean-244",
+   "id": "conv_clean-241",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -5036,7 +4991,7 @@
    }
   },
   {
-   "id": "conv_clean-245",
+   "id": "conv_clean-242",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -5051,7 +5006,7 @@
    }
   },
   {
-   "id": "conv_clean-246",
+   "id": "conv_clean-243",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -5066,7 +5021,7 @@
    }
   },
   {
-   "id": "conv_clean-247",
+   "id": "conv_clean-244",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -5081,7 +5036,7 @@
    }
   },
   {
-   "id": "conv_clean-248",
+   "id": "conv_clean-245",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -5096,7 +5051,7 @@
    }
   },
   {
-   "id": "conv_clean-249",
+   "id": "conv_clean-246",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -5111,7 +5066,7 @@
    }
   },
   {
-   "id": "conv_clean-250",
+   "id": "conv_clean-247",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -5126,7 +5081,7 @@
    }
   },
   {
-   "id": "conv_clean-251",
+   "id": "conv_clean-248",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -5141,7 +5096,7 @@
    }
   },
   {
-   "id": "conv_clean-252",
+   "id": "conv_clean-249",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -5156,7 +5111,7 @@
    }
   },
   {
-   "id": "conv_clean-253",
+   "id": "conv_clean-250",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -5171,7 +5126,7 @@
    }
   },
   {
-   "id": "conv_clean-254",
+   "id": "conv_clean-251",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -5186,7 +5141,7 @@
    }
   },
   {
-   "id": "conv_clean-255",
+   "id": "conv_clean-252",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -5201,7 +5156,7 @@
    }
   },
   {
-   "id": "conv_clean-256",
+   "id": "conv_clean-253",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -5216,7 +5171,7 @@
    }
   },
   {
-   "id": "conv_clean-257",
+   "id": "conv_clean-254",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -5231,7 +5186,7 @@
    }
   },
   {
-   "id": "conv_clean-258",
+   "id": "conv_clean-255",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -5246,7 +5201,7 @@
    }
   },
   {
-   "id": "conv_clean-259",
+   "id": "conv_clean-256",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -5261,7 +5216,7 @@
    }
   },
   {
-   "id": "conv_clean-260",
+   "id": "conv_clean-257",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -5276,7 +5231,7 @@
    }
   },
   {
-   "id": "conv_clean-261",
+   "id": "conv_clean-258",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -5291,7 +5246,7 @@
    }
   },
   {
-   "id": "conv_clean-262",
+   "id": "conv_clean-259",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -5306,7 +5261,7 @@
    }
   },
   {
-   "id": "conv_clean-263",
+   "id": "conv_clean-260",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -5321,7 +5276,7 @@
    }
   },
   {
-   "id": "conv_clean-264",
+   "id": "conv_clean-261",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -5336,7 +5291,7 @@
    }
   },
   {
-   "id": "conv_clean-265",
+   "id": "conv_clean-262",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -5351,7 +5306,7 @@
    }
   },
   {
-   "id": "conv_clean-266",
+   "id": "conv_clean-263",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -5366,7 +5321,7 @@
    }
   },
   {
-   "id": "conv_clean-267",
+   "id": "conv_clean-264",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -5381,7 +5336,7 @@
    }
   },
   {
-   "id": "conv_clean-268",
+   "id": "conv_clean-265",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -5396,7 +5351,7 @@
    }
   },
   {
-   "id": "conv_clean-269",
+   "id": "conv_clean-266",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -5411,7 +5366,7 @@
    }
   },
   {
-   "id": "conv_clean-270",
+   "id": "conv_clean-267",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -5426,7 +5381,7 @@
    }
   },
   {
-   "id": "conv_clean-271",
+   "id": "conv_clean-268",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -5441,7 +5396,7 @@
    }
   },
   {
-   "id": "conv_clean-272",
+   "id": "conv_clean-269",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -5456,7 +5411,7 @@
    }
   },
   {
-   "id": "conv_clean-273",
+   "id": "conv_clean-270",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -5471,7 +5426,7 @@
    }
   },
   {
-   "id": "conv_clean-274",
+   "id": "conv_clean-271",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -5486,7 +5441,7 @@
    }
   },
   {
-   "id": "conv_clean-275",
+   "id": "conv_clean-272",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -5501,7 +5456,7 @@
    }
   },
   {
-   "id": "conv_clean-276",
+   "id": "conv_clean-273",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -5516,7 +5471,7 @@
    }
   },
   {
-   "id": "conv_clean-277",
+   "id": "conv_clean-274",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -5531,7 +5486,7 @@
    }
   },
   {
-   "id": "conv_clean-278",
+   "id": "conv_clean-275",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -5546,7 +5501,7 @@
    }
   },
   {
-   "id": "conv_clean-279",
+   "id": "conv_clean-276",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -5561,7 +5516,7 @@
    }
   },
   {
-   "id": "conv_clean-280",
+   "id": "conv_clean-277",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -5576,7 +5531,7 @@
    }
   },
   {
-   "id": "conv_clean-281",
+   "id": "conv_clean-278",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -5591,7 +5546,7 @@
    }
   },
   {
-   "id": "conv_clean-282",
+   "id": "conv_clean-279",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -5606,7 +5561,7 @@
    }
   },
   {
-   "id": "conv_clean-283",
+   "id": "conv_clean-280",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -5621,7 +5576,7 @@
    }
   },
   {
-   "id": "conv_clean-284",
+   "id": "conv_clean-281",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -5636,7 +5591,7 @@
    }
   },
   {
-   "id": "conv_clean-285",
+   "id": "conv_clean-282",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -5651,7 +5606,7 @@
    }
   },
   {
-   "id": "conv_clean-286",
+   "id": "conv_clean-283",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -5666,7 +5621,7 @@
    }
   },
   {
-   "id": "conv_clean-287",
+   "id": "conv_clean-284",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -5681,7 +5636,7 @@
    }
   },
   {
-   "id": "conv_clean-288",
+   "id": "conv_clean-285",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -5696,7 +5651,7 @@
    }
   },
   {
-   "id": "conv_clean-289",
+   "id": "conv_clean-286",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -5711,7 +5666,7 @@
    }
   },
   {
-   "id": "conv_clean-290",
+   "id": "conv_clean-287",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -5726,7 +5681,7 @@
    }
   },
   {
-   "id": "conv_clean-291",
+   "id": "conv_clean-288",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -5741,7 +5696,7 @@
    }
   },
   {
-   "id": "conv_clean-292",
+   "id": "conv_clean-289",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -5756,7 +5711,7 @@
    }
   },
   {
-   "id": "conv_clean-293",
+   "id": "conv_clean-290",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -5771,7 +5726,7 @@
    }
   },
   {
-   "id": "conv_clean-294",
+   "id": "conv_clean-291",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -5786,7 +5741,7 @@
    }
   },
   {
-   "id": "conv_clean-295",
+   "id": "conv_clean-292",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -5801,7 +5756,7 @@
    }
   },
   {
-   "id": "conv_clean-296",
+   "id": "conv_clean-293",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -5816,7 +5771,7 @@
    }
   },
   {
-   "id": "conv_clean-297",
+   "id": "conv_clean-294",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -5831,7 +5786,7 @@
    }
   },
   {
-   "id": "conv_clean-298",
+   "id": "conv_clean-295",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -5846,7 +5801,7 @@
    }
   },
   {
-   "id": "conv_clean-299",
+   "id": "conv_clean-296",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -5861,7 +5816,7 @@
    }
   },
   {
-   "id": "conv_clean-300",
+   "id": "conv_clean-297",
    "extractor": "conv_clean",
    "kind": "regression",
    "label": "weak",
@@ -5871,6 +5826,51 @@
    "source_table": "conv",
    "source_id": 4927,
    "seen_at": "2026-10-27 07:22:31",
+   "meta": {
+    "conversation_id": 9629
+   }
+  },
+  {
+   "id": "conv_clean-298",
+   "extractor": "conv_clean",
+   "kind": "regression",
+   "label": "weak",
+   "query": "代码校验目前是个工具 还是skill,当前agent是怎么调用到的",
+   "response": "## 结论先说\n\n代码校验**两者都是，但性质不同**：它是一个**工具**（`sysml_v2_validate`，本地 checker.jar 做官方语义校验），同时有一份**技能**（「SysML v2 校验与修复」）规定“什么时候必须调、调完怎么按诊断修、最多几轮、不许伪造通过”。工具是能力，技能是纪律。当前 agent 之所以能调到它，靠的是**工具白名单 + 技能触发**这两层，而不是我“自己会写校验逻辑”。\n\n## 一、工具层：它确实是一个工具\n\n`sysml_v2_validate` 在我的可用工具清单里，参数是 `code`（传**完整**源码，不是片段），返回三路计数（词法/语法/语义）和按位置聚合的错误清单，判据分四档：`pass` / `report` / `block` / `unavailable`。\n\n关键点在于它的实现方式：**本地 `checker.jar`，官方语义**。也就是说校验不依赖智源平台在线，是本地跑官方校验器。这解释了上一轮的一个现象——我用中文标识符和英文标识符两版代码都能拿到 `ok`，因为本地校验器对非 ASCII 标识符是宽容的；而平台侧导入解析器可能不宽容，所以“本地校验通过”和“平台入库成功”是两件独立的事，不能互相替代。\n\n## 二、技能层：它规定了怎么用\n\n「SysML v2 校验与修复」这份技能被全局匹配触发了（摘要…[2235 chars]",
+   "gold": "",
+   "source_table": "conv",
+   "source_id": 4925,
+   "seen_at": "2026-10-27 07:16:09",
+   "meta": {
+    "conversation_id": 9629
+   }
+  },
+  {
+   "id": "conv_clean-299",
+   "extractor": "conv_clean",
+   "kind": "regression",
+   "label": "weak",
+   "query": "校验V2代码，如又问题修复后写入目标包",
+   "response": "## 结论：校验已做，但**写入未成功**——「测试D」包仍是空的\n\n米巴，这轮我把校验和写入都推了一遍，结果必须如实说：**代码校验通过了，但内容没有进模型**。回读「测试D」包的下层，返回的是空列表、总数为 0，说明包内没有任何元素。\n\n## 校验环节：通过\n\n我按技能要求把完整代码送进校验器，不是片段。第一版用中文标识符（包名、参与者名、用例名全中文），校验器返回 `ok`，没有词法或语法硬错。为排除中文标识符在某些解析路径上的隐性风险，我又用全英文标识符重写了一版再校验一次，同样 `ok`。两版都干净，说明这套结构本身是合法的——包、部件定义、用例定义三种结构组合，加上 `doc` 注释，没有踩到关键字或语法坑。\n\n需要说明的是：校验器返回的是「无词法/语法错」，语义层没有报出阻断项。但**校验通过不等于入库成功**，这两件事这轮被清楚地分开了。\n\n## 写入环节：失败\n\n我走的路径是先在「测试D」下建一个承载包，再往这个包里导入代码文本。承载包创建拿到了标识，但紧接着的文本导入没有把内容落进去，回读该包下层为空。也就是说，**承载包本身可能建成了，但里面一个用例、一个参与者都没有**。\n\n这里有个我必须点明的判断：我原本可以直接把用例和参与者逐个建在「测试D」下，不必套一层包。套包是我为了“用例视图”这个语义做的选择——视图通常需要一个容器。但既然导入没成，这层容器反而成…[3713 chars]",
+   "gold": "",
+   "source_table": "conv",
+   "source_id": 4923,
+   "seen_at": "2026-10-27 07:09:44",
+   "meta": {
+    "conversation_id": 9629
+   }
+  },
+  {
+   "id": "conv_clean-300",
+   "extractor": "conv_clean",
+   "kind": "regression",
+   "label": "weak",
+   "query": "分析系统V2代码，帮我生成通信子系统的用例视图V2代码，并写入”测试D“包中",
+   "response": "需要您确认建模信息后继续",
+   "gold": "",
+   "source_table": "conv",
+   "source_id": 4920,
+   "seen_at": "2026-10-27 07:05:38",
    "meta": {
     "conversation_id": 9629
    }
