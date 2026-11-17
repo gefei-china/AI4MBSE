@@ -226,6 +226,9 @@ def case_ab() -> None:
     _fb = str(d_en.get("feedback") or "")
     check("B6 回灌内容非空且含未通过明细（模型能据此修）",
           bool(_fb) and "校验状态机代码" in _fb, _fb[:200])
+    _wb1 = conn.execute("SELECT COUNT(*) FROM harness_decisions WHERE mode='enforce' "
+                        "AND would_block=1").fetchone()[0]
+    check("B6b ★ enforce 真拦时落台账（would_block=1）", _wb1 >= 1, "行数=%d" % _wb1)
 
     d_sh, h_sh = _gate(conn, "shadow")
     check("B7 shadow 下 block=False（不真拦）", d_sh.get("block") is False,
@@ -246,6 +249,10 @@ def case_ab() -> None:
           "block=%r reason=%r" % (d_ok.get("block"), d_ok.get("reason")))
     check("B12 全部通过时不再跑验收工具（省一次执行）", not h_ok.exec_calls,
           str(h_ok.exec_calls))
+    _wb0 = conn.execute("SELECT COUNT(*) FROM harness_decisions WHERE mode='enforce' "
+                        "AND would_block=0").fetchone()[0]
+    check("B12b ★ enforce『未拦截』也落台账（拦截率分母不缺）", _wb0 >= 1,
+          "行数=%d" % _wb0)
 
     # 用满上限 ⇒ 强制放行且**如实说明未完成**
     conn.execute("UPDATE agent_todos SET status='pending', verify_result='' "
@@ -345,7 +352,8 @@ def case_real_db() -> None:
               _post == 0, "新增 %d 条（>= %s）" % (_post, FIX_TS))
         _en = conn.execute("SELECT COUNT(*) FROM harness_decisions WHERE mode='enforce'"
                            ).fetchone()[0]
-        print("    真库 enforce 行：%d 条（首条会在下一次真实收口时出现）" % _en)
+        print("    真库 enforce 行：%d 条（当前运行进程仍是旧代码；重启后"
+              "未拦截回合也会落行，分母才完整）" % _en)
     finally:
         conn.close()
 

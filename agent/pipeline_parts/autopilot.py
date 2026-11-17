@@ -447,6 +447,12 @@ class AutoPilotMixin:
             # ⚠️ force_release 必须**透传** decision 的值 ——
             #   写死 False 会让"已达上限"这种情况被当成普通放行
             #   （真机 E2E 实测抓到：notice 里有「达到上限 8」但 force_release=False）。
+            # ★ 2026-11-17：enforce 的"未拦截"回合**也必须落台账**。
+            #   原实现只有真拦时才写行 ⇒ 台账里 enforce 行恒为 0，
+            #   "拦截率/误拦率"的分母永远缺失，无法回答"enforce 到底有没有在用"。
+            #   与 `orch_notice` 全完成也落台账是同一条纪律：分母不能缺。
+            self._harness_observe(conversation_id, "enforce", decision, False,
+                                  self._verify_stats(conversation_id))
             return {"block": False, "feedback": "",
                     "force_release": bool(decision.get("force_release")),
                     "notice": notice, "remaining": decision["remaining"],
@@ -489,6 +495,9 @@ class AutoPilotMixin:
                     notice = _hg.build_force_release_notice(
                         decision2["remaining"], decision2["blocks_used"],
                         decision2["max_blocks"])
+                # 同上：验收实际已过 ⇒ 这是"该拦但重判后放行"的样本，也是分母的一部分
+                self._harness_observe(conversation_id, "enforce", decision2, False,
+                                      self._verify_stats(conversation_id))
                 return {"block": False, "feedback": "",
                         "force_release": bool(decision2.get("force_release")),
                         "notice": notice, "remaining": decision2["remaining"],
