@@ -1,6 +1,6 @@
 {
  "version": 1,
- "generated_at": "2026-11-17 21:43:00",
+ "generated_at": "2026-11-17 23:03:32",
  "doc": "门禁清单唯一真源。由 tools/gate_runner.py 执行、tools/verify/verify_gate_manifest.py 守卫。分层依据：工具 2026-11-04 的双环境实测（真库 + 干净库）。",
  "budget": {
   "broken": 38,
@@ -2149,6 +2149,12 @@
    "script": "verify_stage_pipeline_agents.py",
    "tier": "pr",
    "timeout": 120
+  },
+  {
+   "script": "verify_stale_todo_cleanup.py",
+   "tier": "local",
+   "timeout": 120,
+   "reason": "陈旧待办清理：软删除/备份/回退/单一口径 16 项内存断言 + 真库 2 项（陈旧归零+deleted 留痕）。C 组读生产 agent_todos ⇒ local"
   },
   {
    "script": "verify_statemachine.py",

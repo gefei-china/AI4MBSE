@@ -100,6 +100,23 @@ def audit_stale_todos(conn) -> dict:
             "stale_pending": sum(r["n"] for r in rows if r["stale"])}
 
 
+def stale_todo_ids(conn, days: int = STALE_TODO_DAYS) -> list:
+    """待清理的 pending 待办 id —— **唯一口径**，盘点与清理都必须用它。
+
+    ★ 2026-11-17：清理工具若自己写一遍"7 天没活动"的 SQL，迟早与盘点
+      工具漂移（本仓同族：同一语义两处各写一份，最后对不上）。
+      这里直接消费 `audit_stale_todos` 的判定结果，只把会话级结论展开成行级 id。
+    """
+    info = audit_stale_todos(conn)
+    cids = [int(r["cid"]) for r in info["conversations"] if r["stale"]]
+    if not cids:
+        return []
+    ph = ",".join("?" * len(cids))
+    return [int(r[0]) for r in conn.execute(
+        "SELECT id FROM agent_todos WHERE status='pending' AND conversation_id IN (%s) "
+        "ORDER BY conversation_id, COALESCE(seq, id), id" % ph, cids).fetchall()]
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--json", default="", help="同时把结果写成 JSON 文件")
