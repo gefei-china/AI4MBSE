@@ -286,6 +286,49 @@ def case_resume() -> None:
             check("D5 指纹不一致 ⇒ 拒绝续跑", False, "竟然接受了")
         except ValueError as e:
             check("D5 指纹不一致 ⇒ 拒绝续跑", "dataset_id" in str(e), str(e))
+
+        # D6：中途快照的重复 run 段必须被去重（否则下一次 resume 会重复计分）
+        dup_path = os.path.join(tmpdir, "dup.json")
+        c1 = {"case_id": "G01", "repeat_index": 3, "sse_done": True,
+              "passed": True, "conv_id": 1, "score": 1.0, "checks": [],
+              "latency_ms": 1, "tokens": 1}
+        runs = [{"repeat_index": 3, "cases": [c1]},
+                {"repeat_index": 3, "cases": [c1]}]     # 模拟中途快照拼接
+        ra._write_partial(dup_path, runs, {}, variant="A", label="x",
+                          mode="live", dataset=DATASET, total_cases=12)
+        d = json.load(io.open(dup_path + ".partial", encoding="utf-8"))
+        keys = [(c.get("case_id"), c.get("repeat_index"))
+                for r in d.get("runs", []) for c in r.get("cases", [])]
+        check("D6 ★ 快照按 repeat 去重（防止下次续跑重复计分）",
+              len(keys) == len(set(keys)) == 1 and len(d.get("runs") or []) == 1,
+              str(d.get("runs")))
+
+        # D7：从含重复段的旧快照续跑，最终报告也必须只有一份
+        def _done(case_id, rep, cid):
+            return {"case_id": case_id, "repeat_index": rep, "sse_done": True,
+                    "passed": True, "conv_id": cid, "score": 1.0, "checks": [],
+                    "latency_ms": 1, "tokens": 1}
+        d7 = {"dataset_id": DATASET["dataset_id"], "mode": "live",
+              "runs": [{"repeat_index": 1, "cases": [_done("G01", 1, 1),
+                                                     _done("G02", 1, 2), _done("G03", 1, 3)]},
+                       {"repeat_index": 2, "cases": [_done("G01", 2, 4),
+                                                     _done("G02", 2, 5), _done("G03", 2, 6)]},
+                       {"repeat_index": 3, "cases": [c1]},
+                       {"repeat_index": 3, "cases": [c1]}]}   # 旧 runner 的重复段
+        calls2 = []
+        def _counted2(opener, base_url, case, timeout_s):
+            calls2.append((case["id"], 3))
+            return {"case_id": case["id"], "score": 1.0, "passed": True,
+                    "conv_id": 9000000 + len(calls2), "checks": [],
+                    "sse_done": True, "latency_ms": 1, "tokens": 1}
+        ra._live_case = _counted2
+        rep2 = ra.run_batch(DATASET, "A", "夹具", 3, "live", {}, None,
+                            "http://127.0.0.1:8000", 30, resume_state=d7)
+        k2 = [(c.get("case_id"), c.get("repeat_index"))
+              for r in rep2["runs"] for c in r["cases"]]
+        check("D7 ★ 从重复段快照续跑，最终 9 例各一份且只补 2 例",
+              len(k2) == len(set(k2)) == 9 and sorted(calls2) == [("G02", 3), ("G03", 3)],
+              str((len(k2), len(set(k2)), calls2)))
     finally:
         ctx.close()
 

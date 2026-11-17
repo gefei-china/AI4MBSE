@@ -224,12 +224,20 @@ def _write_partial(out_path: str, all_runs: list, conv_hist: dict, *,
             picked = [x for x in hist if x[1]] or hist
             if picked:
                 cmap[cid] = picked[-1][0]
+        # ★ 同一 repeat 只留一份：续跑时 `cases` 本就是 all_runs 里那个 list，
+        #   中途快照用 `all_runs + [temp]` 会产生两个 repeat=3 段；若下次再从
+        #   这份快照续跑，同一 (case_id, repeat) 会被算两次 ⇒ 基线样本重复。
+        #   最终报告写的是 all_runs（无重复），但快照必须同样干净。
+        _merged = {}
+        for _r in (all_runs or []):
+            _merged[int(_r.get("repeat_index") or 0)] = _r
+        _clean_runs = [_merged[k] for k in sorted(_merged)]
         payload = {"phase": "running", "schema": RUN_SCHEMA + "-partial",
                    "variant": variant, "label": label, "mode": mode,
                    "dataset_id": dataset.get("dataset_id", ""),
-                   "completed_cases": sum(len(x["cases"]) for x in all_runs),
+                   "completed_cases": sum(len(x["cases"]) for x in _clean_runs),
                    "total_cases": int(total_cases), "conv_map": cmap,
-                   "runs": all_runs, "generated_at_utc": _utc()}
+                   "runs": _clean_runs, "generated_at_utc": _utc()}
         with open(str(out_path) + ".partial", "w", encoding="utf-8") as f:
             json.dump(payload, f, ensure_ascii=False, indent=1)
     except Exception:
@@ -256,9 +264,17 @@ def run_batch(dataset, variant, label, repeat, mode, cfg_overrides,
             raise ValueError("resume 快照的 dataset_id 与当前数据集不一致（指纹漂移，拒绝续跑）")
         if str(resume_state.get("mode") or "") != str(mode):
             raise ValueError("resume 快照的 mode 与本次 mode 不一致")
+        # 按 repeat 合并：旧 runner 写出的中途快照可能含重复的 repeat 段，
+        # 加载时不去重 ⇒ 最终报告里同一 (case_id, repeat) 出现两次，
+        # per_case 分母被污染（本仓"同一语义两处各写一份"的同族）。
+        _by_rep = {}
         for _r in resume_state.get("runs") or []:
             _rep = int(_r.get("repeat_index") or 0)
-            _cases = []
+            # 快照可能来自 repeat=3 的旧批次；本次只跑 repeat=1 时不能把
+            # 第 2/3 轮的样本混进报告（否则总例数超预算、分母漂移）
+            if _rep < 1 or _rep > int(repeat):
+                continue
+            _slot = _by_rep.setdefault(_rep, [])
             for _case in _r.get("cases") or []:
                 if not _case.get("sse_done") or _case.get("invalid_reason"):
                     continue
@@ -266,11 +282,12 @@ def run_batch(dataset, variant, label, repeat, mode, cfg_overrides,
                 if _key in done_keys:
                     continue
                 done_keys.add(_key)
-                _cases.append(_case)
+                _slot.append(_case)
                 if _case.get("conv_id"):
                     conv_hist.setdefault(str(_case["case_id"]), []).append(
                         (int(_case["conv_id"]), bool(_case.get("passed"))))
-            all_runs.append({"repeat_index": _rep, "cases": _cases})
+        all_runs.extend({"repeat_index": _rep, "cases": cases}
+                        for _rep, cases in sorted(_by_rep.items()))
         print("RESUME 复用 %d 例（跳过已完成，作废样本重跑）" % len(done_keys))
     try:
         _total = repeat * len(dataset.get("cases") or [])
