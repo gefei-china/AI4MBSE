@@ -1065,7 +1065,7 @@ def _migrate_agent_todos(conn):
     c.execute("""CREATE TABLE IF NOT EXISTS harness_decisions (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         conversation_id INTEGER DEFAULT 0,
-        mode TEXT DEFAULT '',                   -- shadow | enforce
+        mode TEXT DEFAULT '',                   -- shadow | enforce | subtask（★ subtask=无会话归属，闸不适用）
         would_block INTEGER DEFAULT 0,          -- 判定"该拦"（shadow 下不真拦）
         force_release INTEGER DEFAULT 0,
         reason TEXT DEFAULT '',

@@ -345,10 +345,30 @@ def prepare_resume(conn, run_id: int, *, include_failed: bool = False,
         return {"ok": False, "reason": "no_checkpoint", "mode": "", "checkpoint": None,
                 "requeue_ids": [], "reuse_ids": [], "skip": [], "attempt": 0, "stale_s": -1.0}
     phase = ck.get("phase") or ""
+    # ── 终态闸（★ 2026-11-17 细化：failed 不再"一刀切"）──────────────────
+    # 原实现 `if phase in TERMINAL_PHASES: reject` 让下面**三层机制全部成为死代码**：
+    #   · 本模块 docstring 写「failed 需显式 include_failed=True」
+    #   · `policy_classify` 写 `if st == "failed": if include_failed: return "requeue"`
+    #   · `safe_requeue_classes()` 把 `interrupted`（进程死亡）列为可重跑
+    #   但批次级在这一行就返回了 ⇒ 上面三处**永远不会被调用到**。
+    # 实测代价（2026-11-17 核查 44 条 phase='failed'）：
+    #   22 条子任务**全 done**（只是收尾崩，summary 早已写）—— 根本不是失败；
+    #   13 条任务 `error_class='interrupted'`（进程死亡）—— 本可续跑；
+    #    5 条 internal/timeout（真失败）；4 条无子任务。
+    #   ⇒ 80% 被记成"不可恢复的失败"，而它们要么已交付、要么本可续跑。
+    # 口径（保持默认路径逐字节不变）：
+    #   · `done`  ⇒ 一律不重跑（幂等根本，任何参数都不例外）
+    #   · `failed` ⇒ **只有显式 include_failed=True 才继续往下**，交给任务级
+    #                `error_class` 白名单 + 幂等键去判"能不能、值不值得"；
+    #                默认（含 supervisor 的 auto_resume_include_failed=False）
+    #                仍返回同一个 `phase_terminal:failed`，行为与改动前一致。
     if phase in TERMINAL_PHASES:
-        return {"ok": False, "reason": "phase_terminal:%s" % phase, "mode": "", "checkpoint": ck,
-                "requeue_ids": [], "reuse_ids": [], "skip": [],
-                "attempt": int(ck.get("attempt_count") or 0), "stale_s": stale_seconds(conn, run_id)}
+        _allow_failed = (phase == PHASE_FAILED and bool(include_failed))
+        if not _allow_failed:
+            return {"ok": False, "reason": "phase_terminal:%s" % phase, "mode": "",
+                    "checkpoint": ck, "requeue_ids": [], "reuse_ids": [], "skip": [],
+                    "attempt": int(ck.get("attempt_count") or 0),
+                    "stale_s": stale_seconds(conn, run_id)}
     attempt = int(ck.get("attempt_count") or 0)
     if attempt >= int(max_attempts or _MAX_ATTEMPTS):
         return {"ok": False, "reason": "attempt_exhausted:%d" % attempt, "mode": "", "checkpoint": ck,

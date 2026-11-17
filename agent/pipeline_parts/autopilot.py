@@ -296,6 +296,31 @@ class AutoPilotMixin:
                     "reason": "harness 闸关闭（mode=off）", "failures": [],
                     "stall_streak": 0, "stalled": False,
                     "mode": "off", "shadow": False, "would_block": False}
+        # ── 无会话归属：闸**不适用**，且不得伪装成"跑过了、通过了" ────────
+        # 真机证据（2026-11-17 核查）：`harness_decisions` 202 条里有 36 条
+        #   `conversation_id=0`，reason 一律「无待办 ⇒ 无验收条件，不拦」；
+        #   而**同一时刻**父会话 999999002 正有 17 条 pending 待办
+        #   （15:09~15:13 建待办，15:11/15:12/15:13 的判定却记成 conv=0、pending=0）。
+        # 根因：编排子任务以 `execute_stream(query, 0, session_conv_id=父会话)` 嵌套调用，
+        #   `todo_write` 走 `_tool_conv_ctx`（= session_conv_id）把待办写进**父会话**，
+        #   而本闸拿的是裸 `conversation_id`(=0) ⇒ 查 0 号会话 ⇒ `list_todos` 首行即
+        #   `if not conversation_id: return []` ⇒ 恒空 ⇒ 恒"不拦"。
+        #   ⇒ 这与 `stream.py:5380` 注释里「不要再各处写 int(conversation_id or 0)」
+        #     是同一类错误（同一语义两个口径），只是漏在了闸这一处。
+        # ⚠️ 为什么不改成传 `session_conv_id or conversation_id`：那会让**子任务**
+        #   因**父会话**的待办被拦 —— 同一批 siblings 互相阻塞、反复空转烧额度，
+        #   语义也不对（子任务的"本轮"不含父会话待办）。
+        #   ⇒ 此处判"不适用"，拦截责任在**父会话收口处**（见 verify_harness_real_effect 的
+        #     D 组：编排主路径目前提前 return，尚未经过闸 —— 已知缺口，另行处理）。
+        if not int(conversation_id or 0):
+            _reason = "无会话归属（编排子任务/未传会话号）⇒ 闸不适用，不代表验收通过"
+            self._harness_observe(0, "subtask", {"reason": _reason}, False,
+                                  {"pending": 0, "manual": 0, "autoready": 0})
+            return {"block": False, "feedback": "", "force_release": False, "notice": "",
+                    "remaining": [], "blocks_used": int(blocks_used or 0),
+                    "reason": _reason, "failures": [],
+                    "stall_streak": 0, "stalled": False,
+                    "mode": "subtask", "shadow": False, "would_block": False}
         gate = self._todo_gate(conversation_id)
         # ★ 无进展：本轮 remaining 与上轮完全相同 ⇒ stall_streak + 1
         cur_rem = list((gate or {}).get("remaining") or [])

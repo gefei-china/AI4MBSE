@@ -1,10 +1,10 @@
 {
  "version": 1,
- "generated_at": "2026-11-12",
+ "generated_at": "2026-11-17 15:04:40",
  "doc": "门禁清单唯一真源。由 tools/gate_runner.py 执行、tools/verify/verify_gate_manifest.py 守卫。分层依据：工具 2026-11-04 的双环境实测（真库 + 干净库）。",
  "budget": {
   "broken": 38,
-  "backlog": 68,
+  "backlog": 65,
   "tolerated_steps": 39
  },
  "tiers": {
@@ -552,9 +552,9 @@
   },
   {
    "script": "verify_content_budget.py",
-   "tier": "backlog",
-   "timeout": 180,
-   "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+   "tier": "local",
+   "timeout": 300,
+   "reason": "真实知识库检索链路 + 向量索引，验「单条上限/注入总预算」两条判据与可关闭开关。需真实索引与真库文档 ⇒ 干净库无命中，归 local。实测 10s。★2026-11-17 由 backlog 提升为常驻"
   },
   {
    "script": "verify_context_audit.py",
@@ -790,6 +790,12 @@
    "reason": "两库都红 [FAIL] [FAIL] F1 记录到改动前基线（evidence 本就全空，basis 无从谈起）  真库已有 473 条带 basis ⇒ 基线描述需更新"
   },
   {
+   "script": "verify_failed_batch_resume.py",
+   "tier": "local",
+   "timeout": 120,
+   "reason": "failed 批次「为什么不能重投」：默认路径逐字节不变 + 显式 include_failed 的三类结局 + 真库 44 条现场复算。★ 归 local：C 组读生产真库的 orch_checkpoints/agent_tasks 存量（干净库无数据 ⇒ C1 必红）。实测 0.9s"
+  },
+  {
    "script": "verify_failed_round_budget.py",
    "tier": "nightly",
    "timeout": 240,
@@ -908,6 +914,12 @@
    "script": "verify_harness_gate_p02.py",
    "tier": "pr",
    "timeout": 120
+  },
+  {
+   "script": "verify_harness_real_effect.py",
+   "tier": "local",
+   "timeout": 120,
+   "reason": "harness 闸「真的会拦」：enforce/shadow 真机 A/B（唯一变量=mode）+ conv=0 不再假绿 + 真库台账证据。★ 归 local 而非 pr：A1 断言生产配置 harness_mode='enforce'，干净库/env 下取默认值会翻红 —— 它是「落地验收」而不是「代码回归」。实测 1.0s"
   },
   {
    "script": "verify_harness_verify_safety.py",
@@ -1697,9 +1709,9 @@
   },
   {
    "script": "verify_progress_guard.py",
-   "tier": "backlog",
+   "tier": "local",
    "timeout": 180,
-   "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+   "reason": "读生产真库的检索次数分布做事故回放（conv 86 次检索 → 23 次停，省 73%），并在真库 8~14 次会话上验「不误杀」。干净库上无历史会话 ⇒ B 组会成空断言，故归 local 而非 pr。实测 1.5s。★2026-11-17 由 backlog 提升为常驻"
   },
   {
    "script": "verify_projects_nav.py",
