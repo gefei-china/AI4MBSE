@@ -237,15 +237,53 @@ def _write_partial(out_path: str, all_runs: list, conv_hist: dict, *,
 
 
 def run_batch(dataset, variant, label, repeat, mode, cfg_overrides,
-             opener=None, base_url="", timeout_s=900, out_path: str = ""):
+             opener=None, base_url="", timeout_s=900, out_path: str = "",
+             resume_state: dict = None):
+    """跑一批；`resume_state` 为上次 `.partial` 的快照时**跳过已完成用例**。
+
+    ★ 2026-11-17：长跑批被服务重启/429 打断后，原实现只能从第 0 例重跑 ——
+      实测 10/36 例（约 50 分钟 + 大量 token）白烧。partial 里每例都带
+      `case_id`/`repeat_index`/`sse_done`/`invalid_reason`，足以精确恢复。
+      **只复用 sse_done 且无 invalid_reason 的样本**（作废样本必须重跑，
+      不能把"没收到 done 帧"的错误结果当基线）。
+    """
     c = _ro_conn()
     conv_hist = {}  # case_id -> [(conv_id, passed), ...]；live 下据此生成 conv_map
     all_runs = []
+    done_keys = set()
+    if resume_state:
+        if str(resume_state.get("dataset_id") or "") != str(dataset.get("dataset_id") or ""):
+            raise ValueError("resume 快照的 dataset_id 与当前数据集不一致（指纹漂移，拒绝续跑）")
+        if str(resume_state.get("mode") or "") != str(mode):
+            raise ValueError("resume 快照的 mode 与本次 mode 不一致")
+        for _r in resume_state.get("runs") or []:
+            _rep = int(_r.get("repeat_index") or 0)
+            _cases = []
+            for _case in _r.get("cases") or []:
+                if not _case.get("sse_done") or _case.get("invalid_reason"):
+                    continue
+                _key = (str(_case.get("case_id")), _rep)
+                if _key in done_keys:
+                    continue
+                done_keys.add(_key)
+                _cases.append(_case)
+                if _case.get("conv_id"):
+                    conv_hist.setdefault(str(_case["case_id"]), []).append(
+                        (int(_case["conv_id"]), bool(_case.get("passed"))))
+            all_runs.append({"repeat_index": _rep, "cases": _cases})
+        print("RESUME 复用 %d 例（跳过已完成，作废样本重跑）" % len(done_keys))
     try:
         _total = repeat * len(dataset.get("cases") or [])
         for rep in range(1, repeat + 1):
-            cases = []
+            # resume 时该轮可能已存在（含复用样本）—— 就地续填，别新建一份重复 run
+            cases = next((x["cases"] for x in all_runs
+                          if x["repeat_index"] == rep), None)
+            if cases is None:
+                cases = []
+                all_runs.append({"repeat_index": rep, "cases": cases})
             for case in dataset["cases"]:
+                if (str(case["id"]), rep) in done_keys:
+                    continue          # 已有效完成 ⇒ 不重跑（省 token、不换会话）
                 try:
                     if mode == "live":
                         r = _live_case(opener, base_url, case, timeout_s)
@@ -273,9 +311,9 @@ def run_batch(dataset, variant, label, repeat, mode, cfg_overrides,
                 _write_partial(out_path, all_runs + [{"repeat_index": rep, "cases": cases}],
                                conv_hist, variant=variant, label=label, mode=mode,
                                dataset=dataset, total_cases=_total)
-            all_runs.append({"repeat_index": rep, "cases": cases})
     finally:
         c.close()
+    all_runs.sort(key=lambda x: int(x.get("repeat_index") or 0))
     _write_partial(out_path, all_runs, conv_hist,
                    variant=variant, label=label, mode=mode,
                    dataset=dataset, total_cases=_total)
@@ -715,6 +753,9 @@ def main():
     p.add_argument("--out", required=True)
     p.add_argument("--emit-conv-map", default="",
                    help="live 下把 case_id→conv_id 写成 JSON，供 golden_e2e --conv-map 消费")
+    p.add_argument("--resume-from", default="",
+                   help="从上次 <out>.partial 续跑：跳过已有效完成的 (case_id, repeat)，"
+                        "作废样本重跑；数据集指纹不一致则拒绝")
     p.add_argument("--base-url", default="http://127.0.0.1:8000")
     p.add_argument("--timeout", type=int, default=900)
     p.add_argument("--cfg", action="append", default=[],
@@ -754,9 +795,15 @@ def main():
                 pass
         ds = G.load_dataset(args.set)
         opener = _no_proxy_opener() if args.mode == "live" else None
+        resume_state = None
+        if getattr(args, "resume_from", ""):
+            with open(args.resume_from, encoding="utf-8") as _rf:
+                resume_state = json.load(_rf)
+            if not isinstance(resume_state, dict):
+                raise ValueError("--resume-from 必须是 .partial 的 JSON 对象")
         rep = run_batch(ds, args.variant, args.label or ("变体 %s" % args.variant),
                         args.repeat, args.mode, cfg, opener, args.base_url, args.timeout,
-                        out_path=args.out)
+                        out_path=args.out, resume_state=resume_state)
         os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)
         with open(args.out, "w", encoding="utf-8", newline="\n") as f:
             json.dump(rep, f, ensure_ascii=False, indent=2)

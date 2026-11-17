@@ -236,12 +236,67 @@ def case_batch() -> None:
         ctx.close()
 
 
+
+def case_resume() -> None:
+    print("\nD. 行为级：从 .partial 续跑（不重烧已完成用例）")
+    ctx = _Ctx()
+    _stub_all(ctx)
+    tmpdir = tempfile.mkdtemp(prefix="ab_resume_")
+    out = os.path.join(tmpdir, "ab.json")
+    try:
+        state = {"dataset_id": DATASET["dataset_id"], "mode": "live",
+                 "runs": [{"repeat_index": 1, "cases": [
+                     {"case_id": "G01", "repeat_index": 1, "score": 1.0,
+                      "passed": True, "sse_done": True, "conv_id": 8888001,
+                      "checks": [], "latency_ms": 100, "tokens": 10},
+                     {"case_id": "G02", "repeat_index": 1, "score": 0.0,
+                      "passed": False, "sse_done": False,
+                      "invalid_reason": "sse_done_missing", "conv_id": 8888002,
+                      "checks": [], "latency_ms": None, "tokens": None},
+                 ]}]}
+        calls = []
+
+        def _counted(opener, base_url, case, timeout_s):
+            calls.append(case["id"])
+            return {"case_id": case["id"], "score": 1.0, "passed": True,
+                    "conv_id": 8888000 + len(calls), "checks": [],
+                    "sse_done": True, "latency_ms": 1, "tokens": 1}
+
+        ra._live_case = _counted
+        rep = ra.run_batch(DATASET, "A", "夹具续跑", 1, "live", {}, None,
+                           "http://127.0.0.1:8000", 30, out_path=out,
+                           resume_state=state)
+        check("D1 ★ 已完成用例不重跑（只补 2 例）",
+              sorted(calls) == ["G02", "G03"], str(calls))
+        cases = rep["runs"][0]["cases"]
+        check("D2 最终报告仍是完整 3 例（可交 golden_e2e）",
+              len(cases) == 3 and {c["case_id"] for c in cases} == {"G01", "G02", "G03"},
+              str([c["case_id"] for c in cases]))
+        check("D3 作废样本被重跑并换成有效结果",
+              [c for c in cases if c["case_id"] == "G02"][0]["sse_done"] is True,
+              str([c for c in cases if c["case_id"] == "G02"][0]))
+        check("D4 conv_map 包含续用的旧会话",
+              rep["conv_map"].get("G01") == 8888001, str(rep["conv_map"]))
+
+        # 指纹漂移必须拒绝（防止拿别的评测集合并成基线）
+        bad = dict(state, dataset_id="ffffffffffffffff")
+        try:
+            ra.run_batch(DATASET, "A", "夹具", 1, "live", {}, None,
+                         "http://127.0.0.1:8000", 30, resume_state=bad)
+            check("D5 指纹不一致 ⇒ 拒绝续跑", False, "竟然接受了")
+        except ValueError as e:
+            check("D5 指纹不一致 ⇒ 拒绝续跑", "dataset_id" in str(e), str(e))
+    finally:
+        ctx.close()
+
+
 def main() -> int:
     print("live 跑批抗 429 / 抗单例崩溃门禁")
     print("=" * 68)
     case_code()
     case_retry()
     case_batch()
+    case_resume()
     print("\n" + "=" * 68)
     if FAILS:
         print("结论：%d/%d 通过，%d 条失败：" % (N - len(FAILS), N, len(FAILS)))
