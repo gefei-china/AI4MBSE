@@ -3,7 +3,7 @@
  "generated_at": "2026-11-18 08:46:36",
  "doc": "门禁清单唯一真源。由 tools/gate_runner.py 执行、tools/verify/verify_gate_manifest.py 守卫。分层依据：工具 2026-11-04 的双环境实测（真库 + 干净库）。",
  "budget": {
-  "broken": 38,
+  "broken": 37,
   "backlog": 65,
   "tolerated_steps": 39
  },
@@ -2047,7 +2047,7 @@
    "script": "verify_s4_prompt.py",
    "tier": "broken",
    "timeout": 240,
-   "reason": "两库都红 [FAIL] FAIL  common.py 定义 _AGENT_ROLE_CAP = 1200"
+   "reason": "角色块上限与注入口径门禁（32 项）。2026-11-18 修复两处过期断言：_AGENT_ROLE_CAP 已从 common 单一真源读取（现 8000，2026-10-27 统一），execute.py 已与流式统一传 role_cap；干净环境代码断言 30/30，但 [4] 组需真库 prompts 表只读复核，干净 checkout 必红 ⇒ 保留 broken 记账，不进 CI。"
   },
   {
    "script": "verify_s4_toolname.py",
@@ -2303,9 +2303,9 @@
   },
   {
    "script": "verify_token_budget.py",
-   "tier": "broken",
+   "tier": "pr",
    "timeout": 240,
-   "reason": "两库都红 [FAIL] ~~~~^^^^^^^^^^^ | File \"<string>\", line 73, in <module> | NameError: name '_pg_stop_now' is not defined"
+   "reason": "S3 运行时 token 预算回归（39 项）：常量单一真源（CAP=8000）、回填封顶、只留最近一轮 tool、context_window 守卫。2026-11-18 修复夹具漂移（生产新增 _pg_stop_now 未喂进 exec 命名空间）并把断言改为从 common 读取，不再写死过期字面量；干净环境实测 39/39，零 DB/零 LLM/零网络，故从 broken 升 pr 并接线 CI。"
   },
   {
    "script": "verify_tool_arg_hint.py",

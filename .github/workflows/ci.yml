@@ -102,6 +102,10 @@ jobs:
         if: ${{ !cancelled() }}
         run: python tools/verify/verify_orch_summary_budget.py
 
+      - name: Guard S3 运行时 token 预算（39 项，零 DB）
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_token_budget.py
+
       - name: Guard S4 调用契约（采样参数优先级，48 项）
         if: ${{ !cancelled() }}
         run: python tools/verify/verify_s4_calls.py
