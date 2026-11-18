@@ -2639,6 +2639,12 @@
    "tier": "local",
    "timeout": 120,
    "reason": "B1 跨层 trace 覆盖门禁（2026-11-18）：T1 七表(audit_logs/graph_edit_logs/knowledge_commits/harness_decisions/orch_run_spans/query_trace/hil_confirmations)补 trace_id 列+索引；T2 已接线四表写入能力就绪；T3 audit_logs 哈希链仍 ok（trace 刻意不进哈希，避免存量 7001 行验不过）；T4 llm/tool trace 同源（共享 426 个）；M1/M2 变异自证。只读真库、零 LLM、不制造流量，非空率只作提示。15/15。"
+  },
+  {
+   "script": "verify_b2_permission_gate.py",
+   "tier": "local",
+   "timeout": 120,
+   "reason": "B2 权限门门禁（2026-11-18）：S1-S3 SPARQL 五端点挂 require_permission(kb_ontology view/edit)，匿名 401 与 enforce_login 无关；S4 五个早退内建工具在统一出口补授权门+回退开关；S5 SPARQL 白名单仍生效；S6 web_fetch 私网/环回/元数据拒绝+域名白名单（纯函数）；M1-M2 变异自证。只读源码、零 LLM、19/19。"
   }
  ]
 }

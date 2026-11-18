@@ -1538,6 +1538,26 @@ class ToolMixin:
           ── 作用域只在**编排子任务**内生效（run+task 标识）⇒ 那里才有
              "同一步被重试/续跑重跑"的语义；会话直答路径不纳入（见 core/idempotency.py）。
         """
+        # ★ B2-2（2026-11-18）：五个"框架内建"工具在 _exec_tool_call_impl 里
+        #   于 RBAC 闸（:1858）**之前** return（read_attachment_section/memory_fetch/
+        #   tool_result_fetch/todo_write/ask_user）⇒ 不受 agent_tool:read 约束。
+        #   本闸挂在**统一出口**而非逐分支（本仓纪律：出口唯一才不会漏），
+        #   仅覆盖这 5 个名字；其它工具仍走 impl 内原 RBAC 闸，行为不变。
+        #   开关 _tool_bypass_perm_gate_disabled 可逐字节回退。
+        _BYPASS_PERM_NAMES = frozenset(("read_attachment_section", "memory_fetch",
+                                        "tool_result_fetch", "todo_write", "ask_user"))
+        if name in _BYPASS_PERM_NAMES and not getattr(self, "_tool_bypass_perm_gate_disabled", False):
+            try:
+                from core.deps import check_tool_perm as _bp_check
+                _bp_ok, _bp_why = _bp_check(getattr(self, "_tool_user", None), name, "read")
+                if not _bp_ok:
+                    return {"ok": False, "permission_denied": True,
+                            "result": _bp_why, "gate": "bypass_tool_perm"}
+            except Exception as _bp_e:
+                return {"ok": False, "permission_error": True,
+                        "result": "权限校验异常，内建工具已按最小权限拒绝：%s" % str(_bp_e)[:120],
+                        "gate": "bypass_tool_perm"}
+
         # ── 幂等闸（P0-1）────────────────────────────────────────────────
         _idem_ctx = None
         try:

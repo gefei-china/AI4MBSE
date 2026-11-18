@@ -33,7 +33,47 @@ _TIMEOUT_S = 15
 _OPENER = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()))
 
 
+def is_allowed_url(url: str, allow_hosts=(), deny_private: bool = True) -> tuple[bool, str]:
+    """B2-3 网络白名单判据（纯函数，零 IO）。"""
+    try:
+        parsed = urllib.parse.urlparse(str(url or ""))
+        scheme = (parsed.scheme or "").lower()
+        if scheme not in ("http", "https"):
+            return False, "仅允许 http/https"
+        host = (parsed.hostname or "").lower()
+        if not host:
+            return False, "URL 无主机名"
+        if deny_private:
+            if host in ("localhost", "::1") or host.endswith(".localhost"):
+                return False, "拒绝环回地址"
+            ip = None
+            try:
+                import ipaddress as _ip
+                ip = _ip.ip_address(host)
+            except Exception:
+                pass
+            if ip is not None and (ip.is_loopback or ip.is_private or ip.is_link_local
+                                   or ip.is_reserved or ip.is_multicast):
+                return False, "拒绝私网/保留地址"
+        hosts = [str(x).strip().lower() for x in (allow_hosts or ()) if str(x).strip()]
+        if hosts and not any(host == h or (h.startswith("*.") and host.endswith(h[1:]))
+                             for h in hosts):
+            return False, "主机不在白名单"
+        return True, ""
+    except Exception as e:
+        return False, "URL 解析失败: %s" % str(e)[:80]
+
 def _get(url: str) -> str:
+    try:
+        from core import config as _cfg_nw
+        _allow = _cfg_nw.get("web_search", "allow_hosts", "") or ""
+        _deny_private = bool(_cfg_nw.get("web_search", "deny_private", True))
+    except Exception:
+        _allow, _deny_private = "", True
+    _hosts = [x for x in str(_allow).split(",") if x.strip()]
+    ok, why = is_allowed_url(url, _hosts, _deny_private)
+    if not ok:
+        raise ValueError("web_fetch 已拒绝：%s" % why)
     req = urllib.request.Request(url, headers=_HEADERS)
     return _OPENER.open(req, timeout=_TIMEOUT_S).read().decode("utf-8", "ignore")
 

@@ -333,6 +333,10 @@ DEFAULT_CONFIG = {
     #   稳定联网检索必须配正式 API：provider=tavily（国际，免费 1000 次/月）或 bocha（国内博查）。
     #   不配置时 web_search 仍可调用，但会走免费链并在不可达时**如实报告失败**（不编造）。
     "web_search": {
+        # ★ B2-3（2026-11-18）：联网工具网络边界。默认空=不按域名限制（兼容），
+        #   deny_private=True 拒环回/私网/保留地址（SSRF 基本面）。
+        "allow_hosts": "",
+        "deny_private": True,
         "provider": "",          # tavily | bocha（空=未配置，走免费抓取链）
         "api_key": "",           # 对应 provider 的 API key
     },
@@ -2812,6 +2816,8 @@ _EXTRA_SCHEMA = {
         "exempt_paths":            {"type": "list", "desc": "限流豁免路径前缀（健康检查/监控/静态资源等）"},
     },
     "web_search": {
+        "allow_hosts":     {"type": "str",  "desc": "web_fetch 域名白名单（逗号分隔，空=不限；支持 *.example.com）"},
+        "deny_private":    {"type": "bool", "desc": "web_fetch 拒绝环回/私网/保留地址（防 SSRF，默认开）"},
         "provider":                {"type": "str",  "desc": "联网搜索提供方（空=不启用）"},
         "api_key":                 {"type": "secret", "desc": "搜索服务密钥（脱敏显示；提交掩码值不会覆盖真值）"},
     },
