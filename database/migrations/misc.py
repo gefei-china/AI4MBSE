@@ -294,6 +294,9 @@ def _backfill_commit_baseline(conn):
             "SELECT 1 FROM knowledge_commits WHERE branch=? LIMIT 1", (branch,)).fetchone():
             continue  # 已有提交（含基线/后续提交）→ 跳过
         cur = c.execute(
+            # 基线提交由迁移在启动时生成，**不属于任何对话轮次** ⇒ 刻意不写 trace_id
+            # （列默认空串）。这不是漏接：给它编一个 trace 反而会让"按 trace 查这一轮
+            # 干了什么"多出与对话无关的行。（2026-11-18 接线时确认）
             "INSERT INTO knowledge_commits (branch, kind, message, changes, snapshot, created_by) "
             "VALUES (?, 'import', '基线提交（存量数据）', '{}', '{}', '系统')",
             (branch,))

@@ -122,6 +122,50 @@ def clear_trace() -> None:
     _trace_ctx.set({})
 
 
+# ── 通用落库助手：给任意审计类表补 trace_id（★ 2026-11-18，B1 收尾）──────
+#: 已确认「有 trace_id 列」的表缓存。键用 id(conn) 而非 conn 本身（sqlite3.Connection
+#: 可哈希但不同连接同一库会重复查 PRAGMA，代价很小；用 id 只是省一次往返）。
+_TRACE_COL_OK = {}
+
+
+def table_has_trace_col(conn, table: str) -> bool:
+    """表是否存在 trace_id 列（结果缓存，异常一律按"没有"处理）。
+
+    为什么必须判而不能直接写：`init_db` 会给七表补列，但**验证门禁的夹具库**
+    与老库不经过 `init_db`（实测 `verify_commit_hash` / `verify_trace_raw_query`
+    自建表且不含该列）⇒ 硬写会整条 INSERT 失败、连带业务写入丢失。
+    """
+    key = (id(conn), table)
+    if key in _TRACE_COL_OK:
+        return _TRACE_COL_OK[key]
+    ok = False
+    try:
+        cols = {r[1] for r in conn.execute('PRAGMA table_info("%s")' % table).fetchall()}
+        ok = "trace_id" in cols
+    except Exception:
+        ok = False
+    _TRACE_COL_OK[key] = ok
+    return ok
+
+
+def with_trace(conn, table: str, cols, vals):
+    """给 INSERT 的列名/值列表追加 trace_id（列不存在则原样返回）。
+
+    用法：
+        cols, vals = with_trace(conn, "graph_edit_logs", ["op","node_id"], [op, nid])
+        conn.execute("INSERT INTO graph_edit_logs (%s) VALUES (%s)"
+                     % (",".join(cols), ",".join("?" * len(cols))), tuple(vals))
+    """
+    cols = list(cols)
+    vals = list(vals)
+    if "trace_id" in cols:
+        return cols, vals
+    if table_has_trace_col(conn, table):
+        cols.append("trace_id")
+        vals.append(current_trace_id())
+    return cols, vals
+
+
 def submit_with_ctx(pool, fn, *args):
     """把 `fn` 提交到线程池，并**显式继承当前线程的链路上下文**。
 

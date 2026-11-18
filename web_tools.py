@@ -63,14 +63,30 @@ def is_allowed_url(url: str, allow_hosts=(), deny_private: bool = True) -> tuple
     except Exception as e:
         return False, "URL 解析失败: %s" % str(e)[:80]
 
-def _get(url: str) -> str:
+def _get(url: str, check_whitelist: bool = True) -> str:
+    """抓取网页。`check_whitelist` 区分「用户给定的 URL」与「固定引擎 URL」。
+
+    ★ 2026-11-18 修一个真实可用性缺陷（B2-3 引入）：白名单此前对**所有**出网
+    请求生效，而 `web_search` 的引擎地址（bing / ddg / baidu）同样经由本函数
+    ⇒ 一旦用户把 `allow_hosts` 设成自己要访问的域名，**搜索功能整体失效**
+    （实测五个引擎全部被「主机不在白名单」拒绝，症状是"搜什么都说失败"，
+    且报错指向白名单，不指向真实原因）。
+
+    判据：引擎 URL 由 `_engines()` 用 urlencode 拼装、目标主机写死在代码里，
+    不含任何用户可控的主机名 ⇒ 它不属于"白名单要约束的对象"。
+    白名单的语义是「这台机器只许访问这些外部主机」，管的是**用户/模型给定的
+    网址**；把内建检索源也纳进来只会自断通道。
+
+    `deny_private` 仍对两者都生效（引擎都是公网域名，不受影响；
+    但保留这条可防"有人把 base_url 配成本机"的配置漂移）。
+    """
     try:
         from core import config as _cfg_nw
         _allow = _cfg_nw.get("web_search", "allow_hosts", "") or ""
         _deny_private = bool(_cfg_nw.get("web_search", "deny_private", True))
     except Exception:
         _allow, _deny_private = "", True
-    _hosts = [x for x in str(_allow).split(",") if x.strip()]
+    _hosts = [x for x in str(_allow).split(",") if x.strip()] if check_whitelist else []
     ok, why = is_allowed_url(url, _hosts, _deny_private)
     if not ok:
         raise ValueError("web_fetch 已拒绝：%s" % why)
@@ -230,7 +246,8 @@ def web_search(args: dict) -> dict:
             if _round == 1 and name not in ("bing", "bing-cn"):
                 continue    # 第二轮只重试主引擎
             try:
-                html = _get(url)
+                # 引擎地址写死在 _engines() 里、不含用户可控主机 ⇒ 不受域名白名单约束
+                html = _get(url, check_whitelist=False)
                 items = parser(html, limit)
                 if not items:
                     _errs.append(f"{name}: 无结果")

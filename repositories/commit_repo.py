@@ -53,13 +53,22 @@ class CommitRepo(BaseRepo):
         """
         head = self.scalar("SELECT head_commit FROM branches WHERE name=?", (branch,), default=None)
         chash = self.content_hash_of(branch, head, kind, changes, snapshot)
-        cid = self.execute(
-            "INSERT INTO knowledge_commits (branch, parent_id, kind, message, changes, snapshot, "
-            "created_by, source_branch, source_head_commit, content_hash) VALUES (?,?,?,?,?,?,?,?,?,?)",
-            (branch, head, kind, message,
+        # ★ 2026-11-18：knowledge_commits 补 trace_id（列不存在自动降级）——
+        #   知识提交此前无法关联到"哪一轮对话/哪次工具调用产生的变更"，
+        #   追溯一个节点为何变成这样只能靠 created_at 猜（B1 门禁该表覆盖率恒 0 的原因）。
+        from core.audit import with_trace as _wt_kc
+        _kc_cols, _kc_vals = _wt_kc(
+            self.conn,
+            "knowledge_commits",
+            ["branch", "parent_id", "kind", "message", "changes", "snapshot",
+             "created_by", "source_branch", "source_head_commit", "content_hash"],
+            [branch, head, kind, message,
              json.dumps(changes or {}, ensure_ascii=False),
              json.dumps(snapshot or {}, ensure_ascii=False), actor,
-             source_branch, source_head_commit, chash))
+             source_branch, source_head_commit, chash])
+        cid = self.execute(
+            "INSERT INTO knowledge_commits (%s) VALUES (%s)"
+            % (", ".join(_kc_cols), ",".join("?" * len(_kc_cols))), tuple(_kc_vals))
         self.execute("UPDATE branches SET head_commit=? WHERE name=?", (cid, branch))
         return cid
 

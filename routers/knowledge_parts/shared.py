@@ -166,9 +166,13 @@ def _dprop_proj(row) -> dict:
 
 
 def _log_graph_edit(conn, op: str, node_id: str, payload: dict, operator: str) -> None:
-    conn.execute(
-        "INSERT INTO graph_edit_logs (op, node_id, payload, operator) VALUES (?,?,?,?)",
-        (op, node_id, json.dumps(payload, ensure_ascii=False), operator))
+    # ★ 2026-11-18：补 trace_id（列不存在自动降级），图谱变更才能与对话轮次关联
+    from core.audit import with_trace as _wt
+    _cols, _vals = _wt(conn, "graph_edit_logs",
+                       ["op", "node_id", "payload", "operator"],
+                       [op, node_id, json.dumps(payload, ensure_ascii=False), operator])
+    conn.execute("INSERT INTO graph_edit_logs (%s) VALUES (%s)"
+                 % (", ".join(_cols), ",".join("?" * len(_cols))), tuple(_vals))
     conn.commit()
 
 

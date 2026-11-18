@@ -412,11 +412,15 @@ def trace_query(conn, query: str, trace: dict) -> int:
     if not isinstance(_raw, str) or not _raw.strip():
         _raw = query
     try:
-        cur = conn.execute(
-            "INSERT INTO query_trace (query, normalized, query_raw, intent, route, domain, hit_docs, "
-            "hit_count, top_score, score_kind, top_graph, top_chunk, top_vec, "
-            "latency_ms, detail) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            (
+        # ★ 2026-11-18：query_trace 补 trace_id —— 检索事件此前无法关联到具体对话轮次，
+        #   导致「这轮为什么答偏」只能靠时间戳对齐（B1 门禁里该表覆盖率恒 0 的原因）。
+        from core.audit import with_trace as _wt_qt
+        _qt_cols, _qt_vals = _wt_qt(
+            conn, "query_trace",
+            ["query", "normalized", "query_raw", "intent", "route", "domain", "hit_docs",
+             "hit_count", "top_score", "score_kind", "top_graph", "top_chunk", "top_vec",
+             "latency_ms", "detail"],
+            [
                 query[:500],
                 (trace.get("normalized") or query)[:500],
                 str(_raw or "")[:500],
@@ -437,8 +441,10 @@ def trace_query(conn, query: str, trace: dict) -> int:
                 trace.get("top_vec"),
                 trace.get("latency_ms") or 0,
                 json.dumps(trace.get("detail", {}), ensure_ascii=False)[:4000],
-            ),
-        )
+            ])
+        cur = conn.execute(
+            "INSERT INTO query_trace (%s) VALUES (%s)"
+            % (", ".join(_qt_cols), ",".join("?" * len(_qt_cols))), tuple(_qt_vals))
         conn.commit()
         return cur.lastrowid
     except Exception as e:                                 # noqa: BLE001

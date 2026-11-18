@@ -1,22 +1,37 @@
 # -*- coding: utf-8 -*-
 """B1 跨层 trace 覆盖门禁（2026-11-18）。
 
-判据（确定性、只读真库）：
+判据（确定性；真库只读 + 副本实写）：
   T1 七表均有 trace_id 列 + 对应索引
-  T2 已接线的四表（audit_logs/harness_decisions/orch_run_spans/hil_confirmations）
-     最近 100 行 trace_id 非空率 >= 50%（历史行默认空，不要求 100%）
+  T2 七表具备写入能力（列 + 索引齐备）
+  T2b ★七表**真实写入**：在真库副本上绑定 trace 上下文，逐个调用该表的真实
+      写入函数，断言产出的那一行 trace_id 非空。六表实写（audit_logs /
+      graph_edit_logs / knowledge_commits / query_trace / orch_run_spans /
+      hil_confirmations），第七表 harness_decisions 的写入点是 AgentPipeline
+      实例方法且内部用全局 db_conn()（写生产库）⇒ 改用**精确 SQL 断言**
+      （同一条 INSERT 语句里既有 trace_id 列也有 _ctid_b1() 值），并在此注明。
   T3 audit_logs 哈希链仍 ok（trace 不进哈希，B1 硬约束）
   T4 llm_usage_stats 与 tool_call_logs 的 trace_id 存在交集（同源 begin_trace）
-  M1~M2 变异自证：删列/删索引断言会翻红
+  T5 旧库降级：缺 trace_id 列的库上，写入不得失败（core.audit.with_trace 契约）
+  M1~M2 变异自证：删列 / 无交集断言会翻红
+
+★ 2026-11-18 升级背景：首轮 B1 只接了四表，另三表（graph_edit_logs /
+knowledge_commits / query_trace）仅"补了列、没接写入点"，而 T2 对它们只查
+列是否存在 —— 那等于没验。三表写入点本轮已接线，判据随之收紧为"真的插一行"。
 
 用法：python tools/verify/verify_trace_coverage.py
 退出码：0=全绿 / 1=有失败
 """
 from __future__ import annotations
-import os, sqlite3, sys
+import io, os, sqlite3, sys
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, REPO)
 FAILS, N = [], 0
+
+#: 七表清单（T1/T2 遍历用；顺序即报告顺序）
+ALL_TABLES = ("audit_logs", "graph_edit_logs", "knowledge_commits",
+              "harness_decisions", "orch_run_spans", "query_trace",
+              "hil_confirmations")
 
 TABLES = ("audit_logs", "graph_edit_logs", "knowledge_commits", "harness_decisions",
           "orch_run_spans", "query_trace", "hil_confirmations")
@@ -29,6 +44,152 @@ def check(name, cond, detail=""):
     print(("  [OK]   " if cond else "  [FAIL] ") + name + (("  —— " + detail) if detail else ""))
     if not cond:
         FAILS.append(name)
+
+
+def _probe_writers():
+    """在真库副本上实调各表写入函数，断言 trace_id 真的落库（★ 2026-11-18）。
+
+    ## 为什么必须实调而非扫源码字面量
+    字面量扫描有三种假绿：① 写错列名；② 在不可达分支里；③ 用变量拼 SQL
+    （本轮三表正是 `with_trace` 拼的，字面量扫不到 `trace_id`）。
+
+    ## 时序纪律（本文件初版踩过）
+    先建副本 → 再设 MBSE_DB_PATH → 最后导入依赖该路径的模块。
+    `core.config` 在导入期读环境变量，导入后再设无效 ⇒ init_db 会打到生产库。
+    """
+    import shutil
+    import tempfile
+
+    src = os.environ.get("MBSE_DB_PATH") or os.path.join(REPO, "mbse.db")
+    tmpd = tempfile.mkdtemp(prefix="tracecov_")
+    dst = os.path.join(tmpd, "probe.db")
+    try:
+        _s = sqlite3.connect("file:%s?mode=ro" % src.replace("\\", "/"), uri=True)
+        _d = sqlite3.connect(dst)
+        _s.backup(_d)
+        _d.close()
+        _s.close()
+        for suf in ("-wal", "-shm"):
+            _w = src + suf
+            if os.path.exists(_w):
+                shutil.copy2(_w, dst + suf)
+
+        import core.config as _cfg
+        _cfg.CONFIG_PATH = _cfg.CONFIG_PATH          # 保持原配置（不写真配置）
+        tc = sqlite3.connect(dst)
+        tc.row_factory = sqlite3.Row
+        # 副本可能来自迁移前的备份 ⇒ 缺列就地补（只动副本）
+        for t in ALL_TABLES:
+            cols = {r[1] for r in tc.execute('PRAGMA table_info("%s")' % t)}
+            if cols and "trace_id" not in cols:
+                tc.execute('ALTER TABLE "%s" ADD COLUMN trace_id TEXT DEFAULT ""' % t)
+        tc.commit()
+
+        from core.audit import audit as _audit, begin_trace, current_trace_id
+
+        begin_trace(conversation_id=999990001)
+        tid = current_trace_id()
+        assert tid, "begin_trace 未产出 trace_id（门禁自身前提不成立）"
+        print("    探针 trace_id = %s" % tid)
+
+        def last_trace(table):
+            row = tc.execute(
+                'SELECT trace_id FROM "%s" WHERE rowid=(SELECT MAX(rowid) FROM "%s")'
+                % (table, table)).fetchone()
+            return str((row["trace_id"] if row else "") or "").strip()
+
+        def probe(table, fn, label):
+            try:
+                fn()
+                got = last_trace(table)
+                check("T2b %s %s" % (table, label), got == tid,
+                      "读回=%s" % (got[:12] or "空"))
+            except Exception as e:
+                check("T2b %s %s" % (table, label), False,
+                      "异常 %s: %s" % (type(e).__name__, str(e)[:70]))
+
+        # ① audit_logs
+        def _w_audit():
+            _audit("verify", "trace_cov_probe", "probe", "success", conn=tc)
+        probe("audit_logs", _w_audit, "实写带 trace")
+
+        # ② graph_edit_logs（走 entity_resolver 的收口函数）
+        def _w_graph():
+            from entity_resolver import _log_graph_edit
+            _log_graph_edit(tc, "trace_probe", "n_probe", {"k": "v"}, "verify")
+        probe("graph_edit_logs", _w_graph, "实写带 trace")
+
+        # ③ knowledge_commits
+        def _w_commit():
+            from repositories.commit_repo import CommitRepo
+            CommitRepo(tc).create_commit("verify-branch", "probe",
+                                         "trace 覆盖探针", {}, {}, actor="verify")
+            tc.commit()
+        probe("knowledge_commits", _w_commit, "实写带 trace")
+
+        # ④ query_trace（glossary.trace_query）
+        def _w_qtrace():
+            from glossary import trace_query
+            trace_query(tc, "探针查询", {"normalized": "探针查询", "intent": "verify",
+                                         "route": "vector", "hit_docs": [], "hit_count": 0,
+                                         "top_score": 0.0})
+        probe("query_trace", _w_qtrace, "实写带 trace")
+
+        # ⑤ orch_run_spans（SpanCollector → flush(conn)）
+        def _w_span():
+            from services.orch_span import SpanCollector
+            col = SpanCollector(enabled=True)
+            col.bind(run_id=0, conversation_id=999990001)
+            sid = col.open("probe", "trace_cov_probe")
+            col.close(sid, "ok")
+            col.flush(tc)
+            tc.commit()
+        probe("orch_run_spans", _w_span, "实写带 trace")
+
+        # ⑥ hil_confirmations
+        def _w_hil():
+            from hil_service import HILService
+            HILService.queue_confirmation(tc, "agent_cov", "write_file", {"path": "x"},
+                                          preview="p", tool_type="local",
+                                          level="confirm", requested_by="verify")
+        probe("hil_confirmations", _w_hil, "实写带 trace")
+
+        # ⑦ harness_decisions —— 写入点是 AgentPipeline 实例方法且用全局 db_conn()
+        #    （会写生产库）⇒ 不实调，改为精确 SQL 断言：同一条 INSERT 里既有
+        #    trace_id 列也有 _ctid_b1() 取值。这一条是**静态**判据，在此明示。
+        try:
+            ap = io.open(os.path.join(REPO, "agent", "pipeline_parts", "autopilot.py"),
+                         encoding="utf-8").read()
+            i = ap.find("INSERT INTO harness_decisions")
+            # 取样窗口要**向前**包含 `_tid_b1 = _ctid_b1()` 的赋值：trace 取值先算好
+            # 再作为 VALUES 的参数传入，取值语句本身不在 INSERT 字符串里。
+            seg = ap[max(0, i - 900):i + 900] if i > 0 else ""
+            check("T2b harness_decisions 写入语句含 trace_id 列与 trace 取值（静态判据）",
+                  bool(seg) and "trace_id" in seg and "_ctid_b1()" in seg,
+                  "该写入点用全局 db_conn()，探针不实调以免写生产库")
+        except Exception as e:
+            check("T2b harness_decisions 写入语句含 trace 取值（静态判据）", False,
+                  "读取失败 %s" % str(e)[:60])
+
+        # ── T5 旧库降级契约 ──
+        print("\nT5 旧库降级（缺 trace_id 列的库不得因加列而写入失败）")
+        from core.audit import with_trace
+        old = sqlite3.connect(":memory:")
+        old.execute("CREATE TABLE legacy (a TEXT)")
+        cols, vals = with_trace(old, "legacy", ["a"], ["x"])
+        check("T5 缺列时不追加 trace_id", cols == ["a"] and vals == ["x"], str(cols))
+        try:
+            old.execute("INSERT INTO legacy (%s) VALUES (%s)"
+                        % (",".join(cols), ",".join("?" * len(cols))), tuple(vals))
+            ok5 = old.execute("SELECT COUNT(*) FROM legacy").fetchone()[0] == 1
+        except Exception:
+            ok5 = False
+        check("T5 缺列时 INSERT 仍成功（业务不被加列拖垮）", ok5)
+        old.close()
+        tc.rollback()
+        tc.close()
+    finally:
+        shutil.rmtree(tmpd, ignore_errors=True)
 
 
 def main():
@@ -62,6 +223,9 @@ def main():
             # 写函数本身的正确性由 tmp 副本 PoC（四表实写 + 哈希链复验）覆盖。
             check("T2 %s 写入能力就绪" % t, ready,
                   "列+索引齐备；近100行 trace 非空 %d（需真实流量后增长）" % nz)
+        print("\nT2b 各表真实写入（真库副本 + 绑定 trace；零写生产）")
+        _probe_writers()
+
         print("\nT3 审计哈希链（trace 不进哈希）")
         from core.audit import verify_chain
         r = verify_chain(limit=0, conn=c)
