@@ -41,6 +41,24 @@ LIMITATIONS = [
 ]
 
 
+#: 已知**不可达**的用例判据（派生缺陷），随报告一起输出。
+#: 为什么不改数据集：`dataset_id = sha1(cases)`，动一个字段就换指纹 ⇒
+#:   当前 live 基线（eb245949e0d84ed1）立即失效，p1_release 会退回 blocked。
+#: 为什么不把判据改绿：那是掩盖问题。这里只做**如实注解**，判据照旧判红。
+#:
+#: G08（2026-11-18 实证）：判据要求 `artifact_kind_present(kind=report)`，
+#:   但源会话 9571 的 report 产物来自**后续另一轮**对话
+#:   （artifact 1442「继续分析文档内容输出报告」），而该用例自己那批编排
+#:   run 540 的 t6「组装需求分析结果报告」状态是 **failed** ⇒
+#:   这条期望在派生时就不成立（把"会话里有报告"当成了"这批编排产出了报告"）。
+#:   live 回放 t1~t3 全 done、产出 sysml+code，与源批次实际行为一致。
+KNOWN_CASE_DEFECTS = {
+    "G08": ("判据 artifact_kind_present(report) 不可达：源会话 9571 的 report 产物"
+            "来自后续另一轮对话，该用例自身批次 run 540 的 t6「组装需求分析结果报告」"
+            "当时即 failed ⇒ 派生时把「会话里有报告」误当成「本批编排产出报告」"),
+}
+
+
 def limitations_for(mode: str) -> list:
     """按 mode 给出**如实**的限制说明。
 
@@ -173,6 +191,8 @@ def score_case(c, case, conv_id=None):
         _n_task = 0
     if str(case.get("chain") or "") == "orchestrated" and not _n_task:
         row["chain_mismatch"] = "标注 orchestrated 但本轮未触发编排（判据不适用）"
+    if case["id"] in KNOWN_CASE_DEFECTS:
+        row["known_defect"] = KNOWN_CASE_DEFECTS[case["id"]]
     return row
 
 
@@ -192,6 +212,9 @@ def score_dataset(c, dataset, mode="offline_replay", conv_id_map=None):
         "rows": rows, "limitations": limitations_for(mode),
         # 链标注与实际编排不一致的用例（数据质量信号，不进通过率分母）
         "chain_mismatches": [r["case_id"] for r in rows if r.get("chain_mismatch")],
+        # 已知不可达的判据（派生缺陷，改数据集会换指纹 ⇒ 只做注解，不改判)
+        "known_defect_cases": {r["case_id"]: r["known_defect"]
+                               for r in rows if r.get("known_defect")},
         "generated_at_utc": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
     }
 
