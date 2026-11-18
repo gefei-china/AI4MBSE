@@ -161,7 +161,9 @@ def case_code() -> None:
     check("A4 告知并入 orch_content（而非另起一份收尾文本）", _i_merge > 0, "未找到")
 
     _i_fn = a.find("def build_orch_todo_notice")
-    _i_next = a.find("def _orch_notice_observe")
+    # 2026-11-18：新方法 orch_enforce_run 插在两者之间（它负责真执行验收），
+    # 切片边界必须停在它之前，否则"build_orch_todo_notice 零执行"会被误判。
+    _i_next = a.find("def orch_enforce_run")
     check("A5 构造器存在", _i_fn > 0, "未找到")
     _body = a[_i_fn:_i_next] if 0 < _i_fn < _i_next else ""
     check("A6 ★ 纯 parse 零执行（构造器内不得调用 _exec_tool_call）",

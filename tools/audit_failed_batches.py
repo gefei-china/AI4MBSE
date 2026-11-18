@@ -10,7 +10,9 @@
   二、pending 待办：按会话聚合 + 会话最后活跃时间 + 陈旧标记
 
 分类口径（与 verify_failed_batch_resume.py C 组同源，**只读不写**）：
-  · 全 done        ⇒ 事实已交付（phase 是收尾崩导致的错标），不该重投
+  · 全 done        ⇒ 子任务全完成但协议摘要聚合为 partial/failed ⇒ phase=failed。
+                       2026-11-18 实证 43 批中 41 批有汇总消息、卡片 agg!=full、
+                       0 批 summary_written=0 ⇒ **不是收尾崩溃**，是状态语义降级
   · interrupted    ⇒ 进程死亡，本可续跑（显式 include_failed=true）
   · internal/timeout ⇒ 真失败，不该重投
   · 无子任务        ⇒ 空批次
@@ -55,7 +57,8 @@ def classify_batch(conn, run_id: int) -> tuple:
             "可续跑：POST /api/orchestration/runs/%d/resume?include_failed=true" % run_id)
     if set(sts) == {"done"}:
         return "已交付", {"tasks": sts, "errors": ecs}, (
-            "不重投（summary 已写，重投=重复消息）；phase 错标候选，修正需人工拍板")
+            "非崩溃：摘要聚合 partial/failed 使 phase=failed，汇总与卡片已如实标注；"
+            "不重投（summary 已写，重投=重复消息）；改 phase 须人工评估")
     return "其他", {"tasks": sts, "errors": ecs}, "人工定性"
 
 

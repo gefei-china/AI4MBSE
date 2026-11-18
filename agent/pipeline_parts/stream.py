@@ -3859,6 +3859,14 @@ class StreamMixin:
                 _tn_text, _tn_stats = self.build_orch_todo_notice(int(run_id or 0))
             except Exception:
                 _tn_text, _tn_stats = "", None
+            # ★ 2026-11-18：光统计不够 —— enforce 模式下真跑只读验收。
+            # 编排三处分支都绕过 ReAct 尾部的 harness 闸，这里才是它唯一的收口点。
+            try:
+                _enf_text = self.orch_enforce_run(int(run_id or 0), int(conversation_id))
+            except Exception:
+                _enf_text = ""      # 验收设施故障不得把整轮带崩
+            if _enf_text:
+                _tn_text = ((_tn_text + "\n" + _enf_text) if _tn_text else _enf_text)
             if _tn_text:
                 orch_content = orch_content + _tn_text
         # 5) 汇总内容流式推送

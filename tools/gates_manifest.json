@@ -1,6 +1,6 @@
 {
  "version": 1,
- "generated_at": "2026-11-17 23:03:32",
+ "generated_at": "2026-11-18 08:33:20",
  "doc": "门禁清单唯一真源。由 tools/gate_runner.py 执行、tools/verify/verify_gate_manifest.py 守卫。分层依据：工具 2026-11-04 的双环境实测（真库 + 干净库）。",
  "budget": {
   "broken": 38,
@@ -1491,6 +1491,12 @@
    "tier": "local",
    "timeout": 180,
    "reason": "非流式编排暂存写请求必须批量入队（11 断言）。补的是静默丢弃缺陷：planner 补齐 _orch_subtask 后写工具会暂存到 subtask_artifacts，但 batch_queue_confirmations 此前只在流式路径调用 ⇒ 平台写入既不执行也不建确认单。需真库写入并精确清理 ⇒ local。2026-11-14 新增"
+  },
+  {
+   "script": "verify_orch_enforce_run.py",
+   "tier": "local",
+   "timeout": 120,
+   "reason": "编排主路径收口真执行只读验收：enforce/shadow 三态 + 白名单护栏 + 台账分母，16 项内存夹具实测 0.5s；属编排链路专项，登记 local"
   },
   {
    "script": "verify_orch_failure_class.py",
