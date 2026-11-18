@@ -365,16 +365,18 @@ class HILService:
         _tmo = int(timeout_min or 0) or DEFAULT_TIMEOUT_MIN
         _timeout_at = (datetime.now() + timedelta(minutes=_tmo)).strftime("%Y-%m-%d %H:%M:%S")
         try:
+            from core.audit import current_trace_id as _ctid_b1
             cur = conn.execute(
-                "INSERT INTO hil_confirmations (agent_id, conversation_id, run_id, action, payload, preview, status, task_key, idem_key, tool_type, level, batch_id, batch_count, timeout_at, batch_items) "
-                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                "INSERT INTO hil_confirmations (agent_id, conversation_id, run_id, action, payload, preview, status, task_key, idem_key, tool_type, level, batch_id, batch_count, timeout_at, batch_items, trace_id) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (agent_id or "", conversation_id or 0, run_id or 0, action,
                  json.dumps(payload or {}, ensure_ascii=False),
                  (preview or "")[:_PREVIEW_LEN], "pending", task_key or "", _idem,
                  tool_type or "", level or "", batch_id or "", 1, _timeout_at,
                  json.dumps([{"tool": action, "preview": (preview or "")[:300],
                               "target": _batch_target(payload or {}),
-                              "args": payload or {}}], ensure_ascii=False)))
+                              "args": payload or {}}], ensure_ascii=False),
+                 _ctid_b1()))
             conn.commit()
             out = HILService.get(conn, cur.lastrowid)
             if isinstance(out, dict):

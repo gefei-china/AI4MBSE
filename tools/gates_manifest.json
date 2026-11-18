@@ -2633,6 +2633,12 @@
    "tier": "local",
    "timeout": 120,
    "reason": "编排评审评分/建议沉淀为 report 产物门禁（G08 根因闭合，2026-11-18）。根因：live G08 conv 999999203 的 t2「打分评估+优化建议」done、reflection.score=90、advice 非空，但 _archive_artifacts 的 is_report 只看 intent/sections/report ⇒ report 产物 0 ⇒ artifact_kind_present(report) 不可达；全库 85 条带 reflection 的 assistant 消息全部零 report 产物，属系统性缺口而非单例。修法：纯函数 review_report_signal 识别「编排+实质评分/建议」，受 config orchestration.archive_review_report 闸控制，关掉逐字节回退。纯函数 8 + 接线 5 + 真库 3 + 变异自证 2，实测 18/18，0.4s。归 local：C 组读生产真库 conv 999999203（干净库无该会话必红）。"
+  },
+  {
+   "script": "verify_trace_coverage.py",
+   "tier": "local",
+   "timeout": 120,
+   "reason": "B1 跨层 trace 覆盖门禁（2026-11-18）：T1 七表(audit_logs/graph_edit_logs/knowledge_commits/harness_decisions/orch_run_spans/query_trace/hil_confirmations)补 trace_id 列+索引；T2 已接线四表写入能力就绪；T3 audit_logs 哈希链仍 ok（trace 刻意不进哈希，避免存量 7001 行验不过）；T4 llm/tool trace 同源（共享 426 个）；M1/M2 变异自证。只读真库、零 LLM、不制造流量，非空率只作提示。15/15。"
   }
  ]
 }

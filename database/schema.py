@@ -1774,6 +1774,11 @@ def init_db():
 
     # ── 幂等列迁移（老库补 P0-1 新增的 project_id 列，回填默认项目）──
     _migrate_columns(conn)
+    # ── B1 跨层 trace 索引（2026-11-18）：七表 trace_id 由 _migrate_columns 补齐，
+    #    索引必须建在补列之后；放在建表段会让老库启动报 no such column。
+    for _bt in ("audit_logs", "graph_edit_logs", "knowledge_commits", "harness_decisions",
+                "orch_run_spans", "query_trace", "hil_confirmations"):
+        c.execute("CREATE INDEX IF NOT EXISTS idx_%s_trace ON %s(trace_id)" % (_bt, _bt))
     # ── 依赖「迁移后才有」的列的索引，**必须**建在这一步之后 ──────────────
     # 幂等查询专用索引（§06）：(idem_key, status) 命中即返回，窗口判定在 SQL 里做。
     # ⚠️ 原先建在上面的建表段里 ⇒ 老库（无 idem_key 列）启动即崩

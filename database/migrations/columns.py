@@ -698,6 +698,18 @@ def _migrate_columns(conn):
     # 一跑就崩，且崩在 init_db 而非被测逻辑）。判据：新库初始化不报错。
     if conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='project_ingest_logs'").fetchone():
         conn.execute("UPDATE project_ingest_logs SET source='project_ingest' WHERE source='' OR source IS NULL")
+
+    # ── B1 可观测（2026-11-18）：七表补 trace_id，串起"请求→模型→工具→审批→结果"──
+    #   与 llm_usage_stats / tool_call_logs / context_audit 的 trace_id 同源
+    #   （core.audit.begin_trace / current_trace_id）。索引建在 schema.py
+    #   _migrate_columns 之后，不放在建表段（老库否则 no such column 启动失败）。
+    _add("audit_logs", "trace_id", "TEXT DEFAULT ''")  # B1: 跨层 trace 关联
+    _add("graph_edit_logs", "trace_id", "TEXT DEFAULT ''")  # B1: 跨层 trace 关联
+    _add("knowledge_commits", "trace_id", "TEXT DEFAULT ''")  # B1: 跨层 trace 关联
+    _add("harness_decisions", "trace_id", "TEXT DEFAULT ''")  # B1: 跨层 trace 关联
+    _add("orch_run_spans", "trace_id", "TEXT DEFAULT ''")  # B1: 跨层 trace 关联
+    _add("query_trace", "trace_id", "TEXT DEFAULT ''")  # B1: 跨层 trace 关联
+    _add("hil_confirmations", "trace_id", "TEXT DEFAULT ''")  # B1: 跨层 trace 关联
     # ── 建模工具适配层（2026-09-24 用户拍板：对接不限于智源，也支持 MagicDraw）──
     # tool_binding JSON = {"tool":"zhiyuan"|"magicdraw"|..., "ref":"vc/工程标识", "name":"工具侧工程名"}
     # 空 = 本地建模。对齐 08-31《多工程数据体现设计方案》tool_type: magicdraw/sysmlv2_api/cameo 设计。

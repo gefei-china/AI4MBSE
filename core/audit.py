@@ -220,16 +220,21 @@ def audit(user, event, detail, result="success", conn=None, branch=""):
         # 宁可记未脱敏的原文，也不能丢审计——但要留下痕迹让人知道脱敏没生效。
         detail = f"[redact-failed] {detail}"
 
+    # ★ B1（2026-11-18）：trace_id 只作关联元数据，**刻意不进 _row_hash** ——
+    #   哈希链覆盖的 9 字段是已认证内容；把 trace 加进去会让存量 7001 行全部
+    #   验不过（verify_chain 按固定字段重算）。trace 由 begin_trace 生成，
+    #   可与 llm_usage_stats / tool_call_logs JOIN 即可，不需要哈希背书。
     sql = ("INSERT INTO audit_logs (user_name, event_type, detail, result, branch, "
-           "ip_address, user_agent, request_id, prev_hash, hash) "
-           "VALUES (?,?,?,?,?,?,?,?,?,?)")
+           "ip_address, user_agent, request_id, trace_id, prev_hash, hash) "
+           "VALUES (?,?,?,?,?,?,?,?,?,?,?)")
 
     def _write(c):
         # 哈希链：先取链尾再算本行摘要，全程持锁（进程内写串行）
         with _chain_lock:
             prev = _last_hash(c)
             h = _row_hash(prev, user, event, detail, result, branch or "", ip, ua, rid)
-            c.execute(sql, (user, event, detail, result, branch or "", ip, ua, rid, prev, h))
+            c.execute(sql, (user, event, detail, result, branch or "", ip, ua, rid,
+                            current_trace_id(), prev, h))
             return h
 
     def _write_degrade(c):

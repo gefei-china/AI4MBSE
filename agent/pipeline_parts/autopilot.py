@@ -395,12 +395,14 @@ class AutoPilotMixin:
         try:
             import json as _json
             from database import db_conn
+            from core.audit import current_trace_id as _ctid_b1
+            _tid_b1 = _ctid_b1()
             with db_conn() as conn:
                 conn.execute(
                     "INSERT INTO harness_decisions (conversation_id, mode, would_block, "
                     "force_release, reason, remaining_n, pending_n, manual_n, autoready_n, "
-                    "guarded_n, tools_json, created_at) "
-                    "VALUES (?,?,?,?,?,?,?,?,?,?,?,datetime('now','localtime'))",
+                    "guarded_n, tools_json, trace_id, created_at) "
+                    "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,datetime('now','localtime'))",
                     (int(conversation_id or 0), str(mode),
                      1 if would_block else 0,
                      1 if (decision or {}).get("force_release") else 0,
@@ -409,6 +411,7 @@ class AutoPilotMixin:
                      int(stats.get("pending") or 0), int(stats.get("manual") or 0),
                      int(stats.get("autoready") or 0), int(stats.get("guarded") or 0),
                      _json.dumps((stats or {}).get("tools") or {}, ensure_ascii=False),
+                     _tid_b1,
                      ))
                 conn.commit()
         except Exception:
