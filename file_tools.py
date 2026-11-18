@@ -131,6 +131,77 @@ def _dir_contains_critical(dpath: str) -> bool:
     return False
 
 
+# ══════════════════════════════════════════════════════════════════════
+# ★ B2-4（2026-11-18）：受控工作区根约束 —— 只约束「写 / 追加 / 建目录 / 删除」，
+#   读不限（读的边界由 tools 表 side_effect 与权限闸管，见 Agent-Harness STEP 09）。
+#
+# 为什么默认只做「系统目录拒写」而不是「白名单放行」：
+#   本产品的正常用法就是用户让助手把结果存到任意目录（桌面 / 项目目录 / U 盘），
+#   默认白名单会**直接打断正常用法**。而写进 C:\\Windows、/etc、/System 这类系统目录
+#   在任何用法下都不是正当需求 ⇒ 默认拒绝，既有用法零影响。
+#   allow_roots 白名单留给「受控部署」（多租户 / 对外服务）显式开启。
+#
+# 判据用 realpath：解掉 .. 与符号链接，防「授权目录内放软链指向外部」的绕过。
+# 分隔符用「;」与换行 —— 路径含盘符冒号（C:\\），不能用冒号或逗号做分隔。
+# ══════════════════════════════════════════════════════════════════════
+
+#: 写操作类工具名（删/写/追加/建目录）。读类不在其内。
+_WRITE_OPS = ("file_write", "file_append", "file_mkdir", "file_delete")
+
+
+def split_roots(spec) -> list:
+    """把配置里的根列表（';' 或换行分隔的字符串 / list）切成 realpath 绝对路径列表。"""
+    if not spec:
+        return []
+    if isinstance(spec, (list, tuple)):
+        items = list(spec)
+    else:
+        txt = str(spec).replace("\r", ";").replace("\n", ";")
+        items = txt.split(";")
+    out = []
+    for it in items:
+        t = str(it or "").strip()
+        if not t:
+            continue
+        try:
+            out.append(os.path.realpath(os.path.abspath(os.path.expanduser(t))))
+        except Exception:
+            continue
+    return out
+
+
+def _under(child: str, parent: str) -> bool:
+    """child 是否等于 parent 或位于其下层（Windows 大小写不敏感）。"""
+    a = child.lower() if os.name == "nt" else child
+    b = parent.lower() if os.name == "nt" else parent
+    if a == b:
+        return True
+    return a.startswith(b.rstrip(os.sep) + os.sep)
+
+
+def check_write_path(path: str, allow_roots="", deny_roots="") -> tuple:
+    """写路径准入判定。返回 (allowed: bool, reason: str)。
+
+    顺序（**deny 优先**，否则白名单可用来"洗白"系统目录）：
+      1. 命中 deny_roots ⇒ 拒（默认含系统目录）
+      2. 配了 allow_roots ⇒ 必须落在其中，否则拒
+      3. 其余放行
+    """
+    if not path or not str(path).strip():
+        return False, "path 不能为空"
+    ap = os.path.realpath(_resolve(path))
+    for r in split_roots(deny_roots):
+        if _under(ap, r):
+            return False, "目标位于受保护目录 %s（系统目录默认禁止写入/删除）" % r
+    allow = split_roots(allow_roots)
+    if allow:
+        for r in allow:
+            if _under(ap, r):
+                return True, "在授权工作区根 %s 之内" % r
+        return False, "越出授权工作区根（允许：%s）" % "; ".join(allow)
+    return True, "未设白名单（仅受系统目录保护）"
+
+
 def _size_human(n: int) -> str:
     for unit in ("B", "KB", "MB", "GB"):
         if n < 1024:
@@ -291,6 +362,21 @@ def exec_file_tool(name: str, arguments: dict | None = None) -> dict:
     handler = _HANDLERS.get(name)
     if handler is None:
         return {"ok": False, "result": f"未知文件工具: {name}"}
+    # ★ B2-4（2026-11-18）：写类操作先过受控工作区根约束（读不限）。
+    #   fail-closed：配置读取异常 ⇒ 拒绝执行，不静默放行写操作。
+    if name in _WRITE_OPS:
+        try:
+            from core import config as _cfg
+            _ok, _why = check_write_path(
+                args.get("path"),
+                allow_roots=_cfg.get("file_tools", "allow_roots", ""),
+                deny_roots=_cfg.get("file_tools", "deny_roots", ""))
+        except Exception as _ge:
+            return {"ok": False, "code": "PATH_GUARD_ERROR",
+                    "result": f"⛔ 拒绝执行：工作区根约束判定失败（{str(_ge)[:120]}）"}
+        if not _ok:
+            return {"ok": False, "code": "PATH_OUT_OF_ROOT",
+                    "result": f"⛔ 拒绝执行：{_why}。路径 {args.get('path')}"}
     try:
         return handler(args)
     except Exception as e:

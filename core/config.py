@@ -38,6 +38,20 @@ CONFIG_PATH = os.environ.get(
 )
 
 # ── 内置默认值（三层优先级的最低层）──
+def _default_deny_roots():
+    """写操作默认禁止的系统目录（按平台动态生成，不硬编码单平台路径）。"""
+    if os.name == "nt":
+        cands = [
+            os.environ.get("SystemRoot") or "C:\\Windows",
+            os.environ.get("ProgramFiles") or "C:\\Program Files",
+            os.environ.get("ProgramFiles(x86)") or "C:\\Program Files (x86)",
+            os.environ.get("ProgramData") or "C:\\ProgramData",
+        ]
+    else:
+        cands = ["/etc", "/usr", "/bin", "/sbin", "/boot", "/System", "/Library"]
+    return ";".join([c for c in cands if c])
+
+
 DEFAULT_CONFIG = {
     "app": {
         "title": "AI赋能MBSE系统设计工具",
@@ -339,6 +353,20 @@ DEFAULT_CONFIG = {
         "deny_private": True,
         "provider": "",          # tavily | bocha（空=未配置，走免费抓取链）
         "api_key": "",           # 对应 provider 的 API key
+    },
+    # ★ B2-4（2026-11-18）：文件工具受控工作区根约束（只约束写/追加/建目录/删除，读不限）。
+    #   deny_roots 默认=系统目录（默认生效，正常用法零影响）；
+    #   allow_roots 为空=不按白名单限制，受控部署可显式填（';' 分隔）。
+    "file_tools": {
+        "deny_roots": _default_deny_roots(),
+        "allow_roots": "",
+    },
+    # ★ B2-5（2026-11-18）：HIL 审批策略开关。
+    #   阻止「同一个人既发起又批准」不可逆（destructive）动作 —— 四眼原则的最小切口。
+    #   仅对 destructive 生效：可逆写仍支持用户本人一键确认（否则正常用法被卡死）；
+    #   确认单无 requested_by（旧库 / 未接线调用方）时不做判定，避免误拦存量流程。
+    "hil": {
+        "block_destructive_self_approval": True,
     },
     "embedding": {
         "enabled": True,         # 语义出口总开关；False 强制 bigram（Mock/离线确定性）
@@ -2829,6 +2857,13 @@ _EXTRA_SCHEMA = {
         "deny_private":    {"type": "bool", "desc": "web_fetch 拒绝环回/私网/保留地址（防 SSRF，默认开）"},
         "provider":                {"type": "str",  "desc": "联网搜索提供方（空=不启用）"},
         "api_key":                 {"type": "secret", "desc": "搜索服务密钥（脱敏显示；提交掩码值不会覆盖真值）"},
+    },
+    "file_tools": {
+        "deny_roots":  {"type": "str", "desc": "写入/删除默认禁止的目录（';' 分隔，默认含系统目录）"},
+        "allow_roots": {"type": "str", "desc": "写入/删除白名单根（';' 分隔，空=不按白名单限制）"},
+    },
+    "hil": {
+        "block_destructive_self_approval": {"type": "bool", "desc": "不可逆动作禁止发起人自批（四眼原则，默认开）"},
     },
     # ★ 2026-11-09：与 DEFAULT_CONFIG.request_invariant 同源登记，缺这一段 ⇒
     #   save_override / 影子层 / 界面都改不了三态开关（实测三处均拒绝）。

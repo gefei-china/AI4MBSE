@@ -1776,9 +1776,15 @@ def init_db():
     _migrate_columns(conn)
     # ── B1 跨层 trace 索引（2026-11-18）：七表 trace_id 由 _migrate_columns 补齐，
     #    索引必须建在补列之后；放在建表段会让老库启动报 no such column。
+    # ⚠️ **必须逐表判在不在**（2026-11-18 回归修复）：`CREATE INDEX IF NOT EXISTS`
+    #   不会因为"表不存在"而跳过，而是直接抛 `no such table`。
+    #   干净库 / 只预建了部分表的夹具库（verify_curriculum 等）走不到建表段，
+    #   整条 init_db 会在这里崩 —— 实测三处夹具门禁因此转红。
     for _bt in ("audit_logs", "graph_edit_logs", "knowledge_commits", "harness_decisions",
                 "orch_run_spans", "query_trace", "hil_confirmations"):
-        c.execute("CREATE INDEX IF NOT EXISTS idx_%s_trace ON %s(trace_id)" % (_bt, _bt))
+        if c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
+                     (_bt,)).fetchone():
+            c.execute("CREATE INDEX IF NOT EXISTS idx_%s_trace ON %s(trace_id)" % (_bt, _bt))
     # ── 依赖「迁移后才有」的列的索引，**必须**建在这一步之后 ──────────────
     # 幂等查询专用索引（§06）：(idem_key, status) 命中即返回，窗口判定在 SQL 里做。
     # ⚠️ 原先建在上面的建表段里 ⇒ 老库（无 idem_key 列）启动即崩

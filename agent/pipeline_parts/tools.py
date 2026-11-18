@@ -1401,6 +1401,15 @@ class ToolMixin:
         # ── auto：放行 ──
         if _level == "auto":
             return None
+        # ── deny：系统硬拒（★ B2-5 2026-11-18）──
+        #   与 confirm/approve 的本质差别：**不创建确认单**、不提供批准入口。
+        #   approve/confirm 是「等人点头」，deny 是「无论谁点头都不做」。
+        #   必须放在 confirm/approve 分支之前，否则会被入队逻辑吃掉变成"可批准"。
+        if _level == "deny":
+            return {"ok": False, "confirm_required": False, "denied": True,
+                    "result": ("⛔ 已拒绝：动作「%s」被策略判为禁止执行（deny 档，"
+                               "不提供人工批准入口）%s"
+                               % (name, ("。依据：" + _reason) if _reason else ""))}
         # ── agent 级 hil_level 作为**下限**（只收紧、不放宽）──
         #   为什么只当"地板"：行业依据（Suntec 治理框架）明确说
         #   「**不要给 agent 整体分等级，要给每个动作分等级**」——
@@ -1471,6 +1480,15 @@ class ToolMixin:
         except Exception:
             _batch = ""
         _prev = _impact_preview(name, arguments or {})
+        # ★ B2-5（2026-11-18）：记录发起人，供 decide 时判「自批」。
+        #   与 routers 侧决定的 decided_by 取同一口径（display_name 优先，退回 username）。
+        _requester = ""
+        try:
+            _u5 = getattr(self, "_tool_user", None)
+            if isinstance(_u5, dict):
+                _requester = str(_u5.get("display_name") or _u5.get("username") or "").strip()
+        except Exception:
+            _requester = ""
         _conf = None
         try:
             from hil_service import HILService as _HS
@@ -1484,7 +1502,8 @@ class ToolMixin:
                     tool_type=_ttype,
                     level=_level,
                     batch_id=_batch,
-                    timeout_min=int(_pol.get("timeout_min") or 0))
+                    timeout_min=int(_pol.get("timeout_min") or 0),
+                    requested_by=_requester)
         except Exception as _qe:
             # 入队失败 ⇒ **fail-closed**：宁可不做，也不能在没确认的情况下写下去
             return {"ok": False, "confirm_required": False,

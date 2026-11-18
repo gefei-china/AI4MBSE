@@ -836,6 +836,9 @@ def _migrate_columns(conn):
     conn.execute("CREATE INDEX IF NOT EXISTS ix_bc_status ON bad_cases(status)")
     # 防御性补列：早期版本库已建过 bad_cases（无 last_src_id）时补齐，避免通用层读列炸。
     _add("bad_cases", "last_src_id", "INTEGER DEFAULT 0")
+    # ★ B2-5（2026-11-18）：记录写确认单的**发起人**，供 decide 时判「自批」。
+    #   旧库无此列时 decide 侧自动跳过判定（不误拦存量流程）。
+    _add("hil_confirmations", "requested_by", "TEXT DEFAULT ''")
     conn.commit()
 
 

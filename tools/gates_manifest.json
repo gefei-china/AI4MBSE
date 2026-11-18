@@ -2651,6 +2651,12 @@
    "tier": "pr",
    "timeout": 60,
    "reason": "B3 harness 默认安全侧门禁（2026-11-18）：H1 干净部署（屏蔽 override）默认 harness_mode=enforce（agent 组进 DEFAULT_CONFIG——此前 schema default 不并入运行时配置，干净部署整组 MISSING）；H2 manual 验收措辞诚实化（待人工核验，不再视为已确认）且全部返回块带 deferred；H3/H4 强制放行告知与无进展检测在位；M1/M2 变异自证。零 DB/零 LLM、10/10，故进 pr 层。"
+  },
+  {
+   "script": "verify_b2_file_hil.py",
+   "tier": "local",
+   "timeout": 300,
+   "reason": "B2-4/B2-5 门禁（2026-11-18）：F 组受控工作区根约束（系统目录默认拒写、allow_roots 白名单、'..' 穿越被 realpath 解掉、exec 入口真拦、读不受限）；H 组 HIL deny 档（LEVELS 最严档、策略表能裁决出 deny、escalate 不放宽、deny 分支先于入队分支）；S 组 destructive 自批闸（真库副本造单：本人批自己被拦且仍 pending、他人批放行、可逆写本人批不拦）；M1/M2 变异自证。24 项，零写生产（副本跑完即删）。归 local：S 组需真库建副本，干净 checkout 无 mbse.db 必红。"
   }
  ]
 }

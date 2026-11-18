@@ -105,6 +105,16 @@ def decide_hil_confirmation(cid: int, body: dict | None = None, conn=Depends(db_
     r = HILService.decide(conn, cid, bool(body.get("approve")), _decider,
                            expected_version=str(body.get("expected_version") or ""))
     exec_note = ""
+    # ★ B2-5（2026-11-18）：不可逆动作的自批拦截。必须给**可操作**的说明，
+    #   否则用户只会看到"点批准没反应"，不知道要换人批。
+    if r.get("status") == "self_approval_blocked":
+        return JSONResponse({
+            "error": "已拒绝：不可逆动作（destructive）不允许发起人自行批准。"
+                     "发起人与批准人同为「%s」。请由他人复核后批准，本次**未执行**。"
+                     % (r.get("requested_by") or ""),
+            "status": "self_approval_blocked", "executed": False,
+            "requested_by": r.get("requested_by") or "",
+            "decided_by": r.get("decided_by") or ""}, 403)
     if r.get("status") == "version_mismatch":
         return JSONResponse({
             "error": "确认单已过期：平台坐标与批准时的期望不一致（期望 %s，实际 %s）。"
