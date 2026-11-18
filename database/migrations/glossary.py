@@ -150,6 +150,9 @@ def _migrate_glossary_tables(conn):
         top_vec REAL,
         latency_ms INTEGER DEFAULT 0,
         detail TEXT DEFAULT '{}',              -- JSON: 各环节详情（归一化/置信度/召回原因）
+        -- ★ 2026-11-18：B1 补的 trace 列必须**同时写进建表语句**，
+        --   否则全新库上该列永久缺失（`_add` 在表不存在时会跳过；空库自举实测复现）。
+        trace_id TEXT DEFAULT '',
         created_at TEXT DEFAULT CURRENT_TIMESTAMP
     )""")
     # 旧库补列：`CREATE TABLE IF NOT EXISTS` 对已存在的表是**空操作**，不会新增列。
@@ -166,7 +169,8 @@ def _migrate_glossary_tables(conn):
                         #   注：ALTER 只能追加到表尾，故升级库的物理列序与
                         #   全新建库（query_raw 紧跟 normalized）不同；SELECT *
                         #   的字段顺序因此有差异，但读取一律按列名，无影响。
-                        ("query_raw", "TEXT")):
+                        ("query_raw", "TEXT"),
+                        ("trace_id", "TEXT DEFAULT ''")):
         if _col not in _trace_cols:
             c.execute("ALTER TABLE query_trace ADD COLUMN %s %s" % (_col, _decl))
     c.execute("CREATE INDEX IF NOT EXISTS idx_trace_time ON query_trace(created_at)")
@@ -174,6 +178,9 @@ def _migrate_glossary_tables(conn):
     # 复合索引让"组内 ORDER BY score ASC"能走索引而不是全表扫。
     c.execute("CREATE INDEX IF NOT EXISTS idx_trace_kind_score "
               "ON query_trace(score_kind, top_score)")
+    # ★ 2026-11-18：trace 索引也在此建一次 —— schema.py 的七表索引循环在本迁移
+    #   之前执行，全新库上 query_trace 尚未建出 ⇒ 那次会被存在性判断跳过。
+    c.execute("CREATE INDEX IF NOT EXISTS idx_query_trace_trace ON query_trace(trace_id)")
     # ── 历史行分数来源回填（2026-11-08，幂等）───────────────────────────────
     # 为什么要回填：新消费方（core/online_eval 低置信采样）按 `score_kind` 分组，
     # 若历史 6541 行全是 `''`，采样源会瞬间"无数据"——从"统计不全"变成"统计为零"，

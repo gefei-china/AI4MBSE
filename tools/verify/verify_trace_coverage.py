@@ -13,6 +13,10 @@
   T3 audit_logs 哈希链仍 ok（trace 不进哈希，B1 硬约束）
   T4 llm_usage_stats 与 tool_call_logs 的 trace_id 存在交集（同源 begin_trace）
   T5 旧库降级：缺 trace_id 列的库上，写入不得失败（core.audit.with_trace 契约）
+  T6 ★空库自举：子进程建全新库，断言七表都有 trace_id 列+索引，且 harness 写入
+      不抛异常。这一条守的是**跨服务器部署**：全新库上 `_add` 因"表还不存在"
+      会跳过，若建表语句里没有该列，列就永久缺失；而 harness 的 INSERT 把
+      trace_id 写死在列清单里 ⇒ 缺列即写入崩（空库自举实测复现，已修）。
   M1~M2 变异自证：删列 / 无交集断言会翻红
 
 ★ 2026-11-18 升级背景：首轮 B1 只接了四表，另三表（graph_edit_logs /
@@ -192,6 +196,85 @@ def _probe_writers():
         shutil.rmtree(tmpd, ignore_errors=True)
 
 
+def _probe_clean_boot():
+    """子进程建全新库，断言七表 trace 列/索引齐备 + harness 写入不崩。
+
+    ## 为什么用子进程
+    `core.config` 在**导入期**读 `MBSE_DB_PATH`。本门禁主流程已连着真库，
+    在同一进程里改环境变量再 import 会污染后续断言（实测会写到生产库）。
+    子进程把"设环境变量 → 导入 → 建库"整个序列封在干净进程里，
+    对环境零污染，也不受主进程已加载模块的影响。
+    """
+    import subprocess
+    import tempfile
+
+    script = r"""
+import json, os, sqlite3, sys
+d = os.environ["_COV_TMP"]
+db = os.path.join(d, "empty.db")
+sys.path.insert(0, os.environ["_COV_REPO"])
+from database import init_db
+init_db()
+c = sqlite3.connect(db)
+out = {}
+for t in ("audit_logs","graph_edit_logs","knowledge_commits","harness_decisions",
+          "orch_run_spans","query_trace","hil_confirmations"):
+    try:
+        cols = {r[1] for r in c.execute('PRAGMA table_info("%s")' % t)}
+        idx = {r[1] for r in c.execute('PRAGMA index_list("%s")' % t)}
+        out[t] = {"col": "trace_id" in cols, "idx": ("idx_%s_trace" % t) in idx}
+    except Exception as e:
+        out[t] = {"col": False, "idx": False, "err": str(e)[:60]}
+c.close()
+# 空库上真跑一次 harness 写入（该处 INSERT 硬写 trace_id 列）
+try:
+    from agent.pipeline_parts.autopilot import AutoPilotMixin
+    class _D:
+        pass
+    AutoPilotMixin._harness_observe(_D(), 999990002, "shadow",
+        {"reason": "cov_clean_boot", "remaining": [], "force_release": False},
+        False, {"pending": 0, "manual": 0, "autoready": 0, "guarded": 0})
+    c2 = sqlite3.connect(db)
+    out["_harness_write_rows"] = c2.execute(
+        "SELECT COUNT(*) FROM harness_decisions").fetchone()[0]
+    c2.close()
+except Exception as e:
+    out["_harness_write_error"] = "%s: %s" % (type(e).__name__, str(e)[:120])
+print("__RESULT__" + json.dumps(out))
+"""
+    tmpd = tempfile.mkdtemp(prefix="covboot_")
+    env = dict(os.environ)
+    env["_COV_TMP"] = tmpd
+    env["_COV_REPO"] = REPO
+    env["MBSE_DB_PATH"] = os.path.join(tmpd, "empty.db")
+    env["MBSE_CONFIG_PATH"] = os.path.join(tmpd, "cfg.json")
+    env["PYTHONIOENCODING"] = "utf-8"
+    try:
+        r = subprocess.run([sys.executable, "-X", "utf8", "-c", script], env=env,
+                           capture_output=True, text=True, timeout=300, cwd=REPO)
+        line = ""
+        for ln in (r.stdout or "").splitlines():
+            if ln.startswith("__RESULT__"):
+                line = ln[len("__RESULT__"):]
+        if not line:
+            tail = ((r.stdout or "") + (r.stderr or ""))[-160:].replace("\n", " ")
+            check("T6 空库自举可执行", False, "子进程无结果输出：%s" % tail)
+            return
+        import json as _json
+        data = _json.loads(line)
+    finally:
+        import shutil as _sh
+        _sh.rmtree(tmpd, ignore_errors=True)
+
+    bad = [t for t in ALL_TABLES
+           if not (data.get(t) or {}).get("col") or not (data.get(t) or {}).get("idx")]
+    check("T6 全新库七表 trace 列+索引齐备", not bad,
+          "缺：" + (", ".join(bad) if bad else "无"))
+    check("T6 全新库 harness 写入不抛异常（缺列会崩在这里）",
+          "_harness_write_error" not in data and data.get("_harness_write_rows", 0) >= 1,
+          data.get("_harness_write_error") or "写入行数=%s" % data.get("_harness_write_rows"))
+
+
 def main():
     print("B1 跨层 trace 覆盖门禁")
     print("=" * 66)
@@ -225,6 +308,9 @@ def main():
                   "列+索引齐备；近100行 trace 非空 %d（需真实流量后增长）" % nz)
         print("\nT2b 各表真实写入（真库副本 + 绑定 trace；零写生产）")
         _probe_writers()
+
+        print("\nT6 空库自举（子进程隔离：全新服务器首次启动）")
+        _probe_clean_boot()
 
         print("\nT3 审计哈希链（trace 不进哈希）")
         from core.audit import verify_chain

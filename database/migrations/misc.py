@@ -1078,9 +1078,18 @@ def _migrate_agent_todos(conn):
         autoready_n INTEGER DEFAULT 0,          -- 可自动执行（结构化 + 只读白名单）
         guarded_n INTEGER DEFAULT 0,            -- ★ 被护栏挡下的（旧实现会误判成 tool）
         tools_json TEXT DEFAULT '',             -- 可执行工具分布
+        -- ★ 2026-11-18：B1 补的列必须**同时写进建表语句**。
+        --   columns.py 的 `_add` 在"表还不存在"时直接返回 False 跳过
+        --   （该函数自己的注释就写明这个前提）⇒ 全新库上这两张表由本文件
+        --   建出、而建表语句里没有该列 ⇒ **列永久缺失**。
+        --   后果不是"少一列"而是"写入崩"：autopilot 的 INSERT 把 trace_id
+        --   写死在列清单里，缺列即 OperationalError。空库自举实测复现。
+        trace_id TEXT DEFAULT '',
         created_at TEXT DEFAULT CURRENT_TIMESTAMP
     )""")
     c.execute("CREATE INDEX IF NOT EXISTS ix_hdec_conv ON harness_decisions(conversation_id, id)")
+    # 新建库也要有 trace 索引（老库由 schema.py 的循环补，两处都 IF NOT EXISTS）
+    c.execute("CREATE INDEX IF NOT EXISTS idx_harness_decisions_trace ON harness_decisions(trace_id)")
     c.execute("CREATE INDEX IF NOT EXISTS ix_hdec_mode ON harness_decisions(mode, id)")
     conn.commit()
     print("[init_db] 迁移: agent_todos 已建立（计划外化；verify/verify_result 为 completed 前置条件）")
