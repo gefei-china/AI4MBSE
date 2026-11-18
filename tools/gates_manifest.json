@@ -1,6 +1,6 @@
 {
  "version": 1,
- "generated_at": "2026-11-18 08:42:07",
+ "generated_at": "2026-11-18 08:46:36",
  "doc": "门禁清单唯一真源。由 tools/gate_runner.py 执行、tools/verify/verify_gate_manifest.py 守卫。分层依据：工具 2026-11-04 的双环境实测（真库 + 干净库）。",
  "budget": {
   "broken": 38,
@@ -1519,6 +1519,12 @@
    "script": "verify_orch_planning.py",
    "tier": "pr",
    "timeout": 120
+  },
+  {
+   "script": "verify_orch_rate_not_applicable.py",
+   "tier": "local",
+   "timeout": 120,
+   "reason": "编排完成率判据口径：无子任务=不适用（不伪造 rate=0）+ 链标注错配可见。纯内存 9 项实测 0.4s；C 组回放 tmp 报告 ⇒ local"
   },
   {
    "script": "verify_orch_reliability.py",

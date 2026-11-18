@@ -113,10 +113,23 @@ def _assistant_answer(c, cid, chk):
 
 
 def _orch_done_rate(c, cid, chk):
+    """编排完成率。**无子任务 ≠ 完成率 0**。
+
+    ★ 2026-11-18（G07 事故）：该例输入是"单一交付物（一张 ACT 活动图）"，
+      `_needs_orchestration` 判为不需要编排（正确行为：LLM 复杂度判定器
+      docstring 明写"单一交付物任务一律 false"）⇒ 走了单 Agent 直行，
+      会话里**没有任何 agent_tasks**。原实现 `total=0 ⇒ rate=0.0` 判失败，
+      把"本轮不适用编排"误报成"编排一条都没完成"，该例因此丢 1/3 分。
+      判据只能回答"编排批次的完成率"，前提是**真的编排过**；未编排时应当
+      明确标为不适用（skipped），让报告者去看该例其它判据，而不是伪造一个 0。
+    """
     total = c.execute("SELECT COUNT(*) FROM agent_tasks WHERE conversation_id=?", (cid,)).fetchone()[0]
+    if not total:
+        # 不适用：本轮未触发编排（单 Agent 直行）—— 不算通过、也不算失败
+        return True, "no_orchestration(本轮未编排，判据不适用)"
     done = c.execute("SELECT COUNT(*) FROM agent_tasks WHERE conversation_id=? AND status='done'",
                      (cid,)).fetchone()[0]
-    rate = (done / total) if total else 0.0
+    rate = done / total
     return rate >= float(chk.get("min") or 0), "done=%d/%d rate=%.3f min=%.2f" % (
         done, total, rate, float(chk.get("min") or 0))
 
@@ -143,12 +156,24 @@ def score_case(c, case, conv_id=None):
         ok, ev = fn(c, cid, chk)
         results.append({"type": chk["type"], "passed": bool(ok), "evidence": ev})
     passed = all(x["passed"] for x in results) and bool(results)
-    return {
+    row = {
         "case_id": case["id"], "chain": case["chain"], "intent": case["intent"],
         "conv_id": cid, "source_conv_id": case["conv_id"],
         "passed": passed, "score": sum(1 for x in results if x["passed"]) / max(len(results), 1),
         "checks": results,
     }
+    # ★ 2026-11-18（G07）：链标注 vs 实际是否编排的错配必须**可见**。
+    #   `chain=orchestrated` 描述的是**派生时源会话**的行为；`_needs_orchestration`
+    #   对 design/requirement 意图含 LLM 复杂度判定 ⇒ 同一输入两次结论可能不同。
+    #   不能判红（那是惩罚正确行为），也不能静默通过（读者会以为这条真的验过编排）。
+    try:
+        _n_task = c.execute("SELECT COUNT(*) FROM agent_tasks WHERE conversation_id=?",
+                            (cid,)).fetchone()[0]
+    except Exception:
+        _n_task = 0
+    if str(case.get("chain") or "") == "orchestrated" and not _n_task:
+        row["chain_mismatch"] = "标注 orchestrated 但本轮未触发编排（判据不适用）"
+    return row
 
 
 def score_dataset(c, dataset, mode="offline_replay", conv_id_map=None):
@@ -165,6 +190,8 @@ def score_dataset(c, dataset, mode="offline_replay", conv_id_map=None):
                           "passed": sum(1 for r in rows if r["chain"] == ch and r["passed"])}
                      for ch in sorted({r["chain"] for r in rows})},
         "rows": rows, "limitations": limitations_for(mode),
+        # 链标注与实际编排不一致的用例（数据质量信号，不进通过率分母）
+        "chain_mismatches": [r["case_id"] for r in rows if r.get("chain_mismatch")],
         "generated_at_utc": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
     }
 
