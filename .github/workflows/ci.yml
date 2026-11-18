@@ -106,6 +106,10 @@ jobs:
         if: ${{ !cancelled() }}
         run: python tools/verify/verify_token_budget.py
 
+      - name: Guard harness 默认安全侧（10 项，零 DB）
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_harness_default_safe.py
+
       - name: Guard S4 调用契约（采样参数优先级，48 项）
         if: ${{ !cancelled() }}
         run: python tools/verify/verify_s4_calls.py

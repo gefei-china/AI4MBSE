@@ -1396,6 +1396,15 @@ DEFAULT_CONFIG = {
     #   ② 崩溃若是系统性的（如 provider 配额耗尽），自动重投会把剩余配额打得更干净。
     # 因此默认策略是「给入口，等人点」：`auto_resume_on_startup` 保持 False。
     # 真要打开，也必须同时把 `resume_include_failed` 保持 False（跳过已 failed 任务）。
+    # ★ B3-3（2026-11-18）：agent 组进 DEFAULT_CONFIG —— 此前该组只有 SCHEMA，
+    #   schema 的 default 字段不并入运行时配置（实测：干净部署 agent 整组 MISSING），
+    #   调用方 fallback 是空串 ⇒ 派生 off。默认值必须写在这里才真正生效。
+    "agent": {
+        "harness_mode": "enforce",   # 三态：off | shadow | enforce（安全侧默认；生产已以 override=enforce 实跑一天）
+        "harness_enabled": True,     # 旧开关（harness_mode 优先；True=enforce 推导兼容）
+        "harness_max_blocks": 8,     # 连续阻断上限（0=不阻断）
+        "harness_max_stall": 2,      # 无进展提前放行阈值
+    },
     "orchestration": {
         "resume_stale_s": 1800,          # 心跳超过该秒数才算"失活"（编排单任务实测上限 1155 s，取 1.5 倍）
         "resume_max_attempts": 5,        # 单批次最多恢复几次，超过不再自愈（防"恢复→再崩"死循环）
@@ -2106,7 +2115,7 @@ CONFIG_SCHEMA = {
         "todo_enabled": {"type": "bool", "default": False, "desc": "★ 计划外化总开关（默认关）：开启后模型可调 todo_write 建待办清单，完成判定改为『所有待办已通过验收』；关闭则无待办、走原有评估器路径（逐字节兼容）"},
         "todo_require_verify": {"type": "bool", "default": True, "desc": "★ 待办置 completed 是否强制要有验收回执（默认开，2026-10-28）：依据官方『Only mark as passing after careful testing』；关闭则允许无回执置完成（削弱约束力，仅供排障）"},
         "harness_enabled": {"type": "bool", "default": False, "desc": "★ harness 级强制闸总开关（默认关）：对齐官方 Stop hook —— 存在未完成待办且验收未过时**不允许结束本轮**，把失败输出回灌让 AI 继续；关闭则只做判定不强制。⚠️ 2026-11-09 起建议改用 harness_mode（三态）；两者并存时 harness_mode 优先"},
-        "harness_mode": {"type": "str", "default": "", "desc": "★ harness 闸三态（2026-11-09，优先于 harness_enabled）：off=不介入 ｜ shadow=**只判定、不执行任何工具**，把『若开闸会怎样』写 harness_decisions 供观察 ｜ enforce=真执行只读验收并拦住收尾。空字符串=按旧 harness_enabled 推导（true→enforce/false→off）。★ 为什么必须 shadow 能零执行：旧实现 shadow 语义下仍会 _exec_tool_call，而 verify 里混着写类与 ask_user ⇒ 观察期本身会重复写库/主动弹问（conv 990463 已发生『未知工具: JSON』空转）"},
+        "harness_mode": {"type": "str", "default": "enforce", "desc": "★ harness 闸三态（2026-11-09，优先于 harness_enabled；★ 2026-11-18 B3-3 默认改安全侧 enforce——生产已以 override=enforce 实跑一天未打坏主链路，把隐藏依赖变成代码默认：off=不介入 ｜ shadow=**只判定、不执行任何工具**，把『若开闸会怎样』写 harness_decisions 供观察 ｜ enforce=真执行只读验收并拦住收尾。空字符串=按旧 harness_enabled 推导（true→enforce/false→off）。★ 为什么必须 shadow 能零执行：旧实现 shadow 语义下仍会 _exec_tool_call，而 verify 里混着写类与 ask_user ⇒ 观察期本身会重复写库/主动弹问（conv 990463 已发生『未知工具: JSON』空转）"},
         "harness_max_blocks": {"type": "int", "default": 8, "desc": "★ harness 强制闸连续阻断上限（默认 8，对齐官方）：达到上限后强制放行并如实说明『未完成，卡在 X』——上限是必需的（FM-1.5 该停不停 12.4% > 过早终止 6.20%，双向都要管）；0=不阻断"},
         # ── 团队内定向的能力继承（2026-10-29，conv 9754 实测）──
         # 事实：主 Agent「智源对接agent」绑 71 个智源 MCP 工具；团队路由按意图把请求

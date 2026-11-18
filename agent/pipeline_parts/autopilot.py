@@ -436,13 +436,18 @@ class AutoPilotMixin:
         spec = _hg.parse_verify_spec(verify, verify_tool, verify_args)
         if spec["kind"] != "tool":
             _why = spec.get("blocked_reason") or spec.get("parse_error") or ""
-            return {"ok": True, "kind": "manual", "origin": spec.get("origin", "manual"),
-                    "detail": ("人工验收（不可自动执行，视为已确认）"
+            # ★ B3-2（2026-11-18）：manual 不再说"视为已确认"（那是假声明——
+            #   没有任何东西被确认过）。ok 保持 True：manual 无法被工具自动改进，
+            #   拦住收口只会空转到 max_blocks（D2 拍板：不阻断，如实告知）。
+            return {"ok": True, "kind": "manual", "deferred": True,
+                    "origin": spec.get("origin", "manual"),
+                    "detail": ("待人工核验（不可自动执行；未自动确认）"
                                + ("；%s" % _why if _why else ""))}
         # ②③ 执行前的最后一道：非只读工具绝不执行
         if not _hg.verify_tool_allowed(spec["tool"]):
-            return {"ok": True, "kind": "manual", "origin": spec.get("origin", ""),
-                    "detail": "工具「%s」不在只读白名单 ⇒ 不执行，按人工验收"
+            return {"ok": True, "kind": "manual", "deferred": True,
+                    "origin": spec.get("origin", ""),
+                    "detail": "工具「%s」不在只读白名单 ⇒ 不执行，待人工核验（未自动确认）"
                               % spec["tool"]}
         try:
             res = self._exec_tool_call(spec["tool"], spec["args"])
