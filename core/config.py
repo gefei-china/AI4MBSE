@@ -1423,6 +1423,9 @@ DEFAULT_CONFIG = {
         #   注意它与"可续跑"是两件事：超龄批次仍可在界面上人工点「继续编排」。
         "auto_resume_max_age_s": 259200,   # 3 天
         "checkpoint_enabled": True,      # 旁路开关：检查点写入失败永不阻断编排
+        # ★ 2026-11-18（G08 根因闭合）：编排评审评分/建议沉淀为 report 产物。
+        #   关掉 = 回到改动前归档行为（评审结果只留 messages.card_data）。
+        "archive_review_report": True,
     },
     # ── P0-C（2026-10-04）：异步作业队列（长任务提交即返回 job_id）──
     # 队列语义与取舍见 core/job_queue.py 顶部；此处只列运行参数。
@@ -2622,6 +2625,7 @@ CONFIG_SCHEMA = {
         "resume_interrupted":         {"type": "bool", "desc": "放行 interrupted（进程死亡类）自动续跑；需写类工具幂等开启，关掉即退回改动前行为"},
         "auto_resume_max_age_s":      {"type": "int",  "desc": "自动重投年龄闸：批次失活超过该秒数不再自动投（转人工），0=不限"},
         "checkpoint_enabled":         {"type": "bool", "desc": "检查点写入开关（失败永不阻断编排）"},
+        "archive_review_report":      {"type": "bool", "desc": "编排 reflection 的评分/建议沉淀为 report 产物（G08 根因闭合；关=回到改动前）"},
     },
     "replanning": {
         "enabled":             {"type": "bool", "desc": "重规划总闸（差量重画/LLM 重画；默认关=零行为变更，T1 补跑不受此闸约束——由 retry_once 单独控制）"},        "retry_once":          {"type": "bool", "desc": "T1 补跑：可重试类失败（timeout/transient/internal，排除 interrupted）同 key 自动补跑一次"},

@@ -766,6 +766,41 @@ def _resolve_code_artifact_title(conn, conversation_id, code_text: str,
         "name_key": subject, "name_base": base}
 
 
+def review_report_signal(card_data) -> dict | None:
+    """编排 reflection 的评分/建议是否能沉淀为 report 产物（纯函数，零 IO）。
+
+    ★ 2026-11-18（G08 根因闭合）：编排收口的 card_data.reflection 携带
+      score / advice / issues / criteria / conflicts，是真实的评审交付物；
+      但 _archive_artifacts 的 is_report 判据只看 intent / sections / report
+      ⇒ 评审结果只落在 messages.card_data，从未成为 artifacts(kind=report)。
+      实测 live G08 回放 conv 999999203：t2「打分评估+优化建议」done、
+      reflection.score=90，却 report 产物 0 ⇒ artifact_kind_present(report) 不可达。
+
+    返回 dict（应归档）或 None（不归档）。三个条件缺一不可：
+      ① 本轮是编排（orchestrated 或 orchestrated_status 非空）——单 Agent 直行不误产；
+      ② reflection 是 dict 且 enabled 不为 False；
+      ③ score 非空（含 0）或 advice 非空——只认实质评审结果，不认空壳。
+    """
+    cd = card_data if isinstance(card_data, dict) else {}
+    if not (cd.get("orchestrated") or cd.get("orchestrated_status")):
+        return None
+    refl = cd.get("reflection")
+    if not isinstance(refl, dict) or refl.get("enabled") is False:
+        return None
+    score = refl.get("score")
+    advice = str(refl.get("advice") or "").strip()
+    if score in (None, "") and not advice:
+        return None
+    return {
+        "score": score,
+        "advice": advice[:2000],
+        "rounds": refl.get("rounds"),
+        "passed": refl.get("passed"),
+        "issues": list(refl.get("issues") or [])[:20],
+        "criteria": str(refl.get("criteria") or "")[:2000],
+    }
+
+
 def _archive_artifacts(conn, conversation_id: int, message_id: int,
                        card_data, content: str, intent: str, created_by: str = "未登录",
                        tool_docs=None) -> None:
@@ -834,6 +869,20 @@ def _archive_artifacts(conn, conversation_id: int, message_id: int,
 
         # 2) 报告产物 + 报告中心自动归档
         is_report = intent == "report_generation" or bool(cd.get("sections")) or bool(cd.get("report"))
+        # ★ 2026-11-18（G08 根因闭合）：编排评审的评分/建议也是交付物 ——
+        #   原判据只看 intent/sections/report，漏掉了 reflection 里的实质评审结果，
+        #   于是「打分评估+优化建议」跑完却零 report 产物。补一条受配置闸控制的入口；
+        #   关掉闸 = 逐字节回到改动前（评审结果仍只留 messages.card_data）。
+        _review = None
+        if not is_report:
+            try:
+                from core import config as _cfg_rev
+                if bool(_cfg_rev.get("orchestration", "archive_review_report", True)):
+                    _review = review_report_signal(cd)
+            except Exception:
+                _review = None
+            if _review:
+                is_report = True
         if is_report:
             try:
                 from report_generator import report_generator as _rg
@@ -844,13 +893,22 @@ def _archive_artifacts(conn, conversation_id: int, message_id: int,
                 _t = str(cd.get("report_title") or cd.get("title") or "").strip()
                 title = (_t or derive_title_from_content(content) or FALLBACK_REPORT_TITLE)[:120]
                 report_meta = cd.get("meta") or _rg.build_meta(title, rtype)
+                if _review:
+                    # 把评分/建议随产物一并沉淀，避免只留标题不见结论
+                    report_meta = dict(report_meta) if isinstance(report_meta, dict) else {}
+                    report_meta["review"] = _review
                 structured = cd.get("sections") or _rg.structure("", content, report_type=rtype)["sections"]
                 summary = str(cd.get("summary") or structured[-1].get("body", "") if structured else "")[:500]
                 if not repo.exists(conversation_id, message_id, "report", title):
+                    _am = {"report_type": rtype, "sections": structured,
+                           "summary": summary, "meta": report_meta}
+                    if _review:
+                        # ★ 顶层也放一份：让 `meta.review.score` 可被直接查询
+                        #   （嵌套在 meta.meta.review 里对下游太深，易被漏读）。
+                        _am["review"] = _review
                     repo.create_artifact(
                         conversation_id, message_id, "report", title, "markdown", content,
-                        {"report_type": rtype, "sections": structured, "summary": summary, "meta": report_meta},
-                        source="conversation", created_by=created_by)
+                        _am, source="conversation", created_by=created_by)
                     # 报告中心自动归档（幂等：同会话同标题不重复写 reports）
                     dup = conn.execute(
                         "SELECT COUNT(*) FROM reports WHERE conversation_id=? AND title=?",

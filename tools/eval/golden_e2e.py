@@ -46,17 +46,22 @@ LIMITATIONS = [
 #:   当前 live 基线（eb245949e0d84ed1）立即失效，p1_release 会退回 blocked。
 #: 为什么不把判据改绿：那是掩盖问题。这里只做**如实注解**，判据照旧判红。
 #:
-#: G08（2026-11-18 实证）：判据要求 `artifact_kind_present(kind=report)`，
-#:   但源会话 9571 的 report 产物来自**后续另一轮**对话
-#:   （artifact 1442「继续分析文档内容输出报告」），而该用例自己那批编排
-#:   run 540 的 t6「组装需求分析结果报告」状态是 **failed** ⇒
-#:   这条期望在派生时就不成立（把"会话里有报告"当成了"这批编排产出了报告"）。
-#:   live 回放 t1~t3 全 done、产出 sysml+code，与源批次实际行为一致。
-KNOWN_CASE_DEFECTS = {
-    "G08": ("判据 artifact_kind_present(report) 不可达：源会话 9571 的 report 产物"
-            "来自后续另一轮对话，该用例自身批次 run 540 的 t6「组装需求分析结果报告」"
-            "当时即 failed ⇒ 派生时把「会话里有报告」误当成「本批编排产出报告」"),
-}
+#: G08 —— 历史不可达判据，2026-11-18 已由产品侧修复，此字典现为空（保留结构供未来派生缺陷登记）。
+#:
+#: 历史（如实留痕，不抹去）：派生时判据 `artifact_kind_present(kind=report)` 在源会话 9571
+#:   上确实不成立 —— report 产物 artifact 1442 来自**后续另一轮**，本批 run 540 的
+#:   t6「组装需求分析结果报告」状态 failed。live 回放（conv 999999203）同样缺 report 产物。
+#: 根因复判：不是判据错，是**产品漏归档** —— 该输入明确要求「打分、评估规范性、给出优化
+#:   建议」，live 回放 t2「打分评估+优化建议」done、reflection.score=90、advice 非空，
+#:   但 `_archive_artifacts` 的 `is_report` 只看 intent/sections/report ⇒ 评审结果只落在
+#:   `messages.card_data`，从未成为 `artifacts(kind=report)`。全库 85 条带 reflection 的
+#:   assistant 消息全部零 report 产物 ⇒ 系统性缺口，非 G08 单例。
+#: 修复（2026-11-18）：`agent/utils.py::review_report_signal` + 配置闸
+#:   `orchestration.archive_review_report`（默认开；关=逐字节回退）；门禁
+#:   `tools/verify/verify_review_report_archive.py` 18/18 + 变异自证，真库副本端到端
+#:   `artifact_kind_present(report)` 由 FAIL 转 PASS。dataset_id 不变 ⇒ 无需重建数据集、
+#:   无需作废基线、无需 3 小时重跑。
+KNOWN_CASE_DEFECTS = {}
 
 
 def limitations_for(mode: str) -> list:

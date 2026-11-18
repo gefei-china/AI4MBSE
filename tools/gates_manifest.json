@@ -2627,6 +2627,12 @@
    "tier": "local",
    "timeout": 180,
    "reason": "跨语言检索门禁：守「中文问英文规范」这条路。该能力此前是隐式的（靠 embedding 自带多语对齐 + retrieval_relevance 的相关度修正），两者都没有门禁，任何改动都可能悄悄弄坏，而症状是「库里明明有、AI 说没有」，最难归因。T1~T5 术语扩展方向性与边界（纯英文不扩 / 无关中文不扩 / min_terms / 长词覆盖短词）；F1~F5 RRF 融合（两路共同项排第一 / 无重复 / cap / 不改入参 / 缺 id 兜底）；S1~S7 源码接线（配置真被消费防死配置）+ 词表完整性；R1 真机：纯中文查询能召回 doc 798 KerML（需 DB+embedding，不可用则 SKIP）；M1~M4 变异自证。零写库、不调 LLM。2026-11-16 新增"
+  },
+  {
+   "script": "verify_review_report_archive.py",
+   "tier": "local",
+   "timeout": 120,
+   "reason": "编排评审评分/建议沉淀为 report 产物门禁（G08 根因闭合，2026-11-18）。根因：live G08 conv 999999203 的 t2「打分评估+优化建议」done、reflection.score=90、advice 非空，但 _archive_artifacts 的 is_report 只看 intent/sections/report ⇒ report 产物 0 ⇒ artifact_kind_present(report) 不可达；全库 85 条带 reflection 的 assistant 消息全部零 report 产物，属系统性缺口而非单例。修法：纯函数 review_report_signal 识别「编排+实质评分/建议」，受 config orchestration.archive_review_report 闸控制，关掉逐字节回退。纯函数 8 + 接线 5 + 真库 3 + 变异自证 2，实测 18/18，0.4s。归 local：C 组读生产真库 conv 999999203（干净库无该会话必红）。"
   }
  ]
 }
