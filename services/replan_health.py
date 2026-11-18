@@ -282,6 +282,40 @@ def _none(reason, *, level=LEVEL_NONE, metrics=None):
 
 
 # ── 提前收敛（v2 §4.4 B）───────────────────────────────────────────────────
+#: 用户明确点名的交付物 —— 对应任务不得被 early_stop 当"可选"取消。
+#: 2026-11-18 真机证据：GoldenSet G08 的输入明确要求「打分、评估规范性、给出优化建议」，
+#: planner 却把 t3（评分与优化建议）标成 config.required=false，early_stop 随即取消它
+#: ⇒ 会话 3/4 done、缺 report 类产物，live 基线该例失败。
+#: 这不是"提前收敛判定错了"——`early_stop_plan` 忠实执行了 required 标注 ——
+#: 而是 planner 把用户点名的交付物误降为可选。此处做确定性兜底（prompt 要求只是一半）。
+_EXPLICIT_DELIVERABLES = ("报告", "建议", "评分", "打分", "对照表", "清单", "追溯")
+
+
+def protect_explicit_required(plan: list, goal: str) -> list:
+    """把"用户点名交付物"对应的任务强制标 required=True（纯函数，返回改动条数）。
+
+    只做**加严**，绝不把 planner 标的 required 降级；`early_stop_plan` 的
+    "无标注不猜"纪律保持不变（这里补的是标注，不是替它做决策）。
+    """
+    _goal = str(goal or "")
+    changed = []
+    for t in (plan or []):
+        if not isinstance(t, dict):
+            continue
+        _txt = " ".join(str(t.get(k) or "") for k in ("title", "expected_output", "context"))
+        _hits = [kw for kw in _EXPLICIT_DELIVERABLES if kw in _goal and kw in _txt]
+        if not _hits:
+            continue
+        cfg = dict(t.get("config") or {})
+        if cfg.get("required") is True:
+            continue
+        cfg["required"] = True
+        cfg["required_reason"] = "用户明确要求：" + "、".join(_hits)
+        t["config"] = cfg
+        changed.append(str(t.get("key") or "?"))
+    return changed
+
+
 def early_stop_plan(tasks, *, enabled=False):
     """提前收敛判定（纯函数）。
 

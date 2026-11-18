@@ -127,10 +127,10 @@ if os.path.exists(PROD_DB):
                     " WHERE expected_output IS NOT NULL AND TRIM(expected_output)!=''").fetchone()[0]
     _ctx = _c.execute("SELECT COUNT(*) FROM agent_tasks"
                       " WHERE context IS NOT NULL AND TRIM(context)!=''").fetchone()[0]
-    _c.close()
     _rate = 100.0 * _n / max(_tot, 1)
     print("  expected_output %d/%d = %.1f%%｜context %d/%d = %.1f%%"
           % (_n, _tot, _rate, _ctx, _tot, 100.0 * _ctx / max(_tot, 1)))
+    # 注：_c 保留打开至 E4c 之后（2026-11-18 E4 重标定要查近7天与回填特征）
     # 2026-10-21 重标定（原判据 `_n <= 5`，按门禁自带指引更新）：
     #   原判据写于修复上线当天（1/222=0.5%）。此后真库自然积累到 10/253=4.0%
     #   （run 538/539/541，均为修复上线后的新计划）——**这是修复生效的证据，
@@ -138,8 +138,27 @@ if os.path.exists(PROD_DB):
     #   新判据改**比率上限 40%**：仍防两种真退化 —— ① 历史行被批量回填
     #   （比率会瞬间冲到接近 100%）；② 修复被悄悄撤掉（新行不再有值，
     #   比率随新任务积累持续走低，由 C 段字段漂移门禁另一路兜底）。
-    check("E4 真库 expected_output 填充率未异常（≤40%；防批量回填/伪造基线）",
-          _rate <= 40.0, "%.1f%%（%d/%d 行）" % (_rate, _n, _tot))
+    # ★ 2026-11-18 再标定（与 2026-10-21 那次同因）：总体比率随**新计划合法积累**
+    #   自然上升 —— 36 条 live 基线跑完后 45.1%，原 40% 上限把"修复持续生效"
+    #   误报成红。真要防的是"历史行被批量回填"与"新行不再填"，用三条区分：
+    #   ① 总体仍有上限（近 100% 必是回填）；② 近 7 天填充率高（功能在工作）；
+    #   ③ 有 expected_output 的行若 updated_at 远晚于 created_at = 回填特征，必须为 0。
+    _recent = _c.execute(
+        "SELECT COUNT(*) tot, SUM(expected_output IS NOT NULL AND TRIM(expected_output)!='') n "
+        "FROM agent_tasks WHERE created_at>=date('now','-7 days')").fetchone()
+    _recent_rate = 100.0 * int(_recent[1] or 0) / max(int(_recent[0] or 0), 1)
+    _backfill = _c.execute(
+        "SELECT COUNT(*) FROM agent_tasks WHERE expected_output IS NOT NULL "
+        "AND TRIM(expected_output)!='' AND julianday(updated_at)-julianday(created_at)>1"
+    ).fetchone()[0]
+    print("  近7天 %.1f%%（%d/%d）｜回填特征行 %d"
+          % (_recent_rate, _recent[1] or 0, _recent[0] or 0, _backfill))
+    check("E4a 总体填充率仍有上限（≤60%；近100%必是回填）",
+          _rate <= 60.0, "%.1f%%（%d/%d 行）" % (_rate, _n, _tot))
+    check("E4b ★ 近7天新计划填充率 ≥80%（修复仍在工作）",
+          _recent_rate >= 80.0, "%.1f%%" % _recent_rate)
+    check("E4c ★ 无回填特征行（expected_output 未被事后批量补写）",
+          int(_backfill) == 0, "回填特征 %d 行" % _backfill)
 else:
     print("  [SKIP] 未找到真库")
 

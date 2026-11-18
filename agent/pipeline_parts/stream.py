@@ -532,6 +532,20 @@ class StreamMixin:
                 plan = [t for t in ((data or {}).get("tasks") or []) if isinstance(t, dict) and t.get("key")]
             except Exception:
                 plan = []
+            # ★ 2026-11-18（G08 事故）：用户点名的交付物（报告/建议/评分/对照表…）
+            #   对应的任务**不得**被 planner 误标为可选后遭 early_stop 取消。
+            #   只加严 required，不替 early_stop 做决策；留痕进 config.required_reason。
+            if plan:
+                try:
+                    from services.replan_health import protect_explicit_required as _per
+                    _locked = _per(plan, goal)
+                    if _locked:
+                        import logging as _lgp2e
+                        _lgp2e.getLogger("mbse.planner").warning(
+                            "计划护栏：%d 个用户点名交付物任务已强制 required：%s",
+                            len(_locked), ",".join(_locked[:8]))
+                except Exception:
+                    pass
 
         # ★ 2026-10-13（B1-7）：**负载感知分派** —— planner LLM 选好 Agent 名之后，
         #   用确定性打分器补做两件事：

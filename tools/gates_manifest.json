@@ -1,6 +1,6 @@
 {
  "version": 1,
- "generated_at": "2026-11-18 08:33:20",
+ "generated_at": "2026-11-18 08:42:07",
  "doc": "门禁清单唯一真源。由 tools/gate_runner.py 执行、tools/verify/verify_gate_manifest.py 守卫。分层依据：工具 2026-11-04 的双环境实测（真库 + 干净库）。",
  "budget": {
   "broken": 38,
@@ -794,6 +794,12 @@
    "tier": "local",
    "timeout": 120,
    "reason": "expected_output（完成标准）落库兜底：prompt 口径一致 + create_plan 唯一收口兜底 + config 判空防误覆盖。★ 归 local：C 组读真库 11 月失败率口径（空20% vs 非空6.1%，干净库无数据必红）。实测 0.4s"
+  },
+  {
+   "script": "verify_explicit_required_guard.py",
+   "tier": "local",
+   "timeout": 120,
+   "reason": "用户点名交付物不得被 early_stop 取消（G08 事故）：纯函数 6 项 + 联动 3 项 + 真库根因 2 项，实测 0.4s；C 组读真库 ⇒ local"
   },
   {
    "script": "verify_fact_inference.py",
