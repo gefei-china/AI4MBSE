@@ -347,30 +347,120 @@ def usage_of(conn, kind, name):
     }
 
 
+def _fix_actions(agent_id, b, agent_label=""):
+    """把一条体检结果翻译成**可执行的处置动作**（前端不重新发明路由）。
+
+    原则：动作只列"确实能修这一条"的，做不到的给提示而不是假按钮。
+    解绑永远可兜底；启用目标/Agent 只在有明确 id 时给出。
+    """
+    acts = []
+    st = b.get("state") or ""
+    kind = b.get("kind") or ""
+    target = b.get("target") or {}
+    tid = target.get("id")
+    if st == "inactive":
+        acts.append({"id": "enable_agent", "label": "启用所属 Agent",
+                     "method": "POST",
+                     "api": "/api/studio/agents/%s/enable" % agent_id,
+                     "confirm": "启用该 Agent 后，它参与路由，本条绑定随即生效。继续？",
+                     "risk": "全局：该 Agent 会重新参与意图路由"})
+    if st == "off" and tid:
+        seg = {"skill": "skills", "tool": "tools", "mcp": "mcp-servers"}.get(kind)
+        if seg:
+            acts.append({"id": "enable_target", "label": "启用目标（%s）" % KIND_LABEL.get(kind, kind),
+                         "method": "POST",
+                         "api": "/api/studio/%s/%s/enable" % (seg, tid),
+                         "confirm": "启用「%s」后，本条绑定恢复生效。继续？" % b.get("name"),
+                         "risk": "全局：该能力对所有引用它的 Agent 都会恢复"})
+    if st == "offline" and tid:
+        acts.append({"id": "test_mcp", "label": "测试 MCP 连通",
+                     "method": "POST",
+                     "api": "/api/studio/mcp-servers/%s/test" % tid,
+                     "confirm": "现在测试该 MCP 服务器的连通性？",
+                     "risk": "只读探测"})
+    if b.get("binding_id"):
+        acts.append({"id": "unbind", "label": "解绑这条",
+                     "method": "DELETE",
+                     "api": "/api/studio/agents/%s/tools/%s" % (agent_id, b["binding_id"]),
+                     "confirm": "确认解绑 Agent「%s」的 %s「%s」？此操作只删绑定，不删能力本体。"
+                                % (agent_label or b.get("agent") or agent_id,
+                                   KIND_LABEL.get(kind, kind), b.get("name")),
+                     "risk": "仅本条绑定；能力本体和其他 Agent 的绑定保留"})
+    return acts
+
+
+def _usage_index(conn):
+    """一次性取调用次数，避免逐条 N+1。键同时兼容 tool/mcp 的 registry kind。"""
+    out = {}
+    try:
+        for r in conn.execute(
+                "SELECT kind, source_id, call_count, last_used_at FROM capability_registry"):
+            k = "mcp" if r["kind"] == "mcp_server" else r["kind"]
+            out[(k, r["source_id"])] = {"call_count": r["call_count"] or 0,
+                                        "last_used_at": r["last_used_at"] or ""}
+    except Exception:
+        pass
+    return out
+
+
 def audit(conn):
-    """全量体检：所有绑定按状态归类 + 问题清单（给运维/门禁用）。"""
+    """全量体检：所有绑定按状态归类 + **全部需关注项的明细**（给页面/门禁用）。
+
+    2026-11-19 口径纠偏（米爸反馈「提示看不到明细、不知道怎么处理」）：
+      · 旧 `broken` 只算 severe 四态，`inactive`（所属 Agent 停用）不算需处理，
+        于是界面出现「需处理 6」却在括号里列「所属 Agent 停用 7」的自相矛盾；
+      · `bypass/plugin_off` 虽然 effective=True（确实会进上下文），但属于**该治理**，
+        旧实现因 `if not effective` 把它们全挡在 problems 外，只剩一个孤零零的计数。
+      ⇒ 现在统一出 `details`：非生效（broken）+ 生效但状态不干净（govern）全部带
+        reason/hint/binding_id/actions；旧 `problems` 保留为 broken 子集，兼容既有门禁。
+    """
     agents = [dict(r) for r in conn.execute(
         "SELECT id,name,display_name,status FROM agents ORDER BY id")]
     by_state = {}
     problems = []
+    govern = []
     total = 0
+    usage = _usage_index(conn)
+    severe = ("dangling", "off", "offline", "unready", "inactive")
+    govern_states = ("bypass", "plugin_off", "draft")
     for a in agents:
         got = agent_bindings(conn, a["id"])
         for b in got["bindings"]:
             total += 1
-            by_state[b["state"]] = by_state.get(b["state"], 0) + 1
+            st = b["state"]
+            by_state[st] = by_state.get(st, 0) + 1
+            item = {
+                "agent_id": a["id"], "agent": a["display_name"] or a["name"],
+                "agent_status": a["status"],
+                "binding_id": b.get("binding_id"),
+                "kind": b["kind"], "kind_label": b["kind_label"], "name": b["name"],
+                "state": st, "state_label": b.get("state_label") or st,
+                "level": b.get("level"), "effective": bool(b["effective"]),
+                "reason": b["reason"], "hint": b["hint"],
+                "target": b.get("target"), "plugin": b.get("plugin"),
+                "usage": usage.get((b["kind"], b["name"]), {"call_count": 0, "last_used_at": ""}),
+                "actions": _fix_actions(a["id"], b, a["display_name"] or a["name"]),
+            }
             if not b["effective"]:
-                problems.append({"agent_id": a["id"], "agent": a["display_name"] or a["name"],
-                                 "kind": b["kind"], "name": b["name"],
-                                 "state": b["state"], "reason": b["reason"], "hint": b["hint"]})
-    severe = ("dangling", "off", "offline", "unready")
+                problems.append(item)
+            elif st in govern_states:
+                govern.append(item)
+    details = problems + govern
+    details.sort(key=lambda x: ((x.get("level") == "ok"), x["state"], x["agent"], x["name"]))
     return {
         "total": total,
         "by_state": by_state,
         "effective": sum(v for k, v in by_state.items() if k in _EFFECTIVE_STATES),
+        # broken = 这一轮没生效（含所属 Agent 停用）；旧口径漏掉 inactive。
         "broken": sum(by_state.get(k, 0) for k in severe),
         "broken_states": list(severe),
+        # govern = 会进上下文但状态不干净；不是"坏"，但不能不管。
+        "govern": sum(by_state.get(k, 0) for k in govern_states),
+        "govern_states": list(govern_states),
+        "attention": len(details),
         "problems": problems,
+        "govern_details": govern,
+        "details": details,
         "inactive_agents": [{"id": a["id"], "name": a["display_name"] or a["name"]}
                             for a in agents if a["status"] != "active"],
     }
