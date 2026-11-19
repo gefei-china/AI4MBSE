@@ -5586,7 +5586,12 @@ class StreamMixin:
                                 f"——本轮回答**无检索依据**，由模型基于自身知识生成，"
                                 f"请以规范原文为准。")
             else:
-                _r_delta = (f"（{agent_def.name}）本次未触发知识检索（纯问答/无 # 标签），直接基于专业知识与上传资料生成回答。")
+                # ★ 2026-11-19 问题1：原文案「本次未触发知识检索」是生成前的静态快照，
+                #   而 ReAct 工具循环里 LLM 可能再调 graph_retrieve（实测 conv 999999929
+                #   调 2 次、citations 8 条）⇒ 文案已发出无法回填，只能措辞留余地。
+                _r_delta = (f"（{agent_def.name}）初始未走知识库检索（无 # 标签 / 未满足检索条件），"
+                            f"直接基于专业知识与上传资料作答；若正文引用了知识库片段，"
+                            f"来自生成过程中的按需检索。")
             if self._last_skill_hits:
                 _r_delta += f" 自动触发技能：{'、'.join(self._last_skill_hits)}。"
                 # V2.5：技能执行环节独立事件（前端「🧩 技能执行」卡，命中技能与触发说明可见）
@@ -7435,6 +7440,21 @@ class StreamMixin:
                 self._deposit_session_memory(user_input, llm_content, intent)
                 # P0-5：技能使用反馈采集（主会话直行路径）
                 self._record_skill_feedback(conversation_id=_sess_conv, intent=intent, output_content=llm_content)
+                # RETRIEVE_COUNT_RECONCILE_V1 计数回填：初始检索未触发(should_retrieve=False)时，
+                #   retrieval 顶层计数恒 0，但 ReAct 工具检索命中的片段会进引用登记簿，
+                #   citations 因此非空 —— 造成「citations 有值、graph_count=0」的自相矛盾
+                #   （实测 conv 999999929：citations=8 / graph=0 / vector=0 / source=none）。
+                #   这里以登记簿为准回填，使 card 计数与 citations 单一真源对齐。
+                try:
+                    _reg_now = getattr(self, "_citation_registry", None) or []
+                    if _reg_now and not (int(retrieval.get("graph_count") or 0)
+                                         + int(retrieval.get("vector_count") or 0)):
+                        _n_cit = len([e for e in _reg_now if isinstance(e, dict) and e.get("chunk")])
+                        if _n_cit > 0:
+                            retrieval["graph_count"] = _n_cit
+                            retrieval["source"] = "tool_retrieve"
+                except Exception:
+                    pass  # 计数回填失败不影响正文落库（观测字段，非交付内容）
                 card_data = json.dumps({
                     "intent": intent,
                     "agent": agent_def.name,

@@ -1678,6 +1678,21 @@ def init_db():
     except Exception:
         pass
 
+    # FINALIZE_KEY_UNIQUE_V1 P3 根治（2026-11-19 conv 999999938 双写竞态）：
+    #   前端 /messages/partial 与服务端 SSE 兜底是两条独立写入路径，各自 check-then-write，
+    #   跨连接竞态导致同一轮写两条固化消息（已停止生成 + 连接已中断）。
+    #   根治靠 DB 唯一约束：finalize_key=会话末条 user 消息 id（两条路径都能独立算出）。
+    #   部分索引只对非空键生效 ⇒ 历史行(默认'')不受约束、存量库零影响。
+    try:
+        c.execute("ALTER TABLE messages ADD COLUMN finalize_key TEXT DEFAULT ''")
+    except Exception:
+        pass
+    try:
+        c.execute("CREATE UNIQUE INDEX IF NOT EXISTS ux_messages_finalize "
+                  "ON messages(finalize_key) WHERE finalize_key<>''")
+    except Exception:
+        pass
+
     # ── 需求实体表（2026-11-07）：需求条目的**唯一事实源** ──
     # 为什么必须有这张表：`requirement_itemize` 自 2026-10-08 起只做**纯函数**返回
     # （items[] 随对话消失），全库不存在任何需求实体 ⇒ 追溯链

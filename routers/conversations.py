@@ -3,6 +3,7 @@ import os
 import time
 import uuid
 import json
+import asyncio
 from typing import Optional
 
 from fastapi import APIRouter, Depends, UploadFile, File, HTTPException, Query
@@ -49,8 +50,41 @@ def _classify_abort(acc_exec, client_gone, fail_reason, last_event):
         return ("no_tool_no_output",
                 "执行主体「%s」本轮没有调用任何工具，也没能产出正文"
                 "（通常是能力不足或上游模型空响应），**不是网络中断**" % (agent or "未知"))
+    # ★ 2026-11-19（conv 999999937）：旧口径把所有无 done 的流统一说成
+    #   "服务端没有发出结束信号"，但真库同时存在「tool run 已发、tool done 未发」
+    #   的事实现象 —— 这说明执行线程是在工具/上游 LLM 调用途中被关闭或取消的，
+    #   不是"服务端忘了发 done"。必须区分，否则用户以为改个结束帧就能修好。
+    if last_event == "tool":
+        _running = [t for t in tools if isinstance(t, dict) and "ok" not in t]
+        if _running:
+            _names = [str(t.get("name") or "?") for t in _running[:3]]
+            return ("tool_inflight_abort",
+                    "工具调用「%s」已开始但本轮没收到它的完成回执（最后事件：tool）——"
+                    "执行线程是在工具/上游模型调用途中被关闭或取消的，"
+                    "不是模型没有输出；工具结果可能已在后台完成但未被本轮消费。"
+                    % "、".join(_names))
     return ("no_terminal_frame",
-            "服务端没有发出结束信号（最后事件：%s），原因未记录" % (last_event or "无"))
+            "执行流在「%s」之后结束，且未收到 done/error 终态帧；"
+            "通常是请求任务被取消或上游调用被中断（不是模型没有执行）。"
+            % (last_event or "无"))
+
+
+def _finalize_key_for_turn(conn, conv_id):
+    """本轮固化幂等键（FINALIZE_KEY_UNIQUE_ROUTER_V1）：会话末条 user 消息 id。
+
+    两条固化路径（服务端 SSE 兜底 / 前端 /messages/partial）各自独立调用，
+    只要属于同一轮用户消息就必得同一个键；配合 messages.finalize_key 唯一索引，
+    DB 层保证同一轮只有一条固化消息落库 —— 跨连接竞态在此被彻底消除。
+    user 消息在固化之前已落库，WAL 下 MAX(id) 取值稳定。取不到时返回 ''（不参与唯一约束）。
+    """
+    try:
+        r = conn.execute(
+            "SELECT COALESCE(MAX(id),0) AS m FROM messages WHERE conversation_id=? AND role='user'",
+            (conv_id,)).fetchone()
+        uid = int((r[0] if r else 0) or 0)  # 索引访问：兼容 sqlite3.Row 与 tuple
+        return "%s:%d" % (conv_id, uid) if uid > 0 else ""
+    except Exception:
+        return ""
 
 # 附件上传：允许类型与大小限制（V2.3 优化：会话窗口富输入）
 ALLOWED_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp",
@@ -964,6 +998,22 @@ async def chat_stream(conv_id: int, body: ChatIn, conn=Depends(db_session),
             except Exception:
                 pass
             raise
+        except asyncio.CancelledError:
+            # ★★ 2026-11-19（conv 999999937 实证）：客户端断开/服务收尾时，
+            #   ASGI 可能以 **CancelledError** 取消请求任务，而不是 GeneratorExit。
+            #   CancelledError 在 Python 3.11+ 继承 BaseException ⇒ 旧代码既进不了
+            #   GeneratorExit 分支（_client_gone 没置位），也进不了 except Exception
+            #   ⇒ finally 把它记成 `no_terminal_frame / last_event=tool`，
+            #   用户看到"服务端没发结束信号"这种似是而非的结论。
+            #   这里与 GeneratorExit 同语义：标记客户端已离开、停掉事件源、原样抛出
+            #   （取消语义不能吞，否则请求任务永不结束）。
+            _client_gone = True
+            try:
+                if _frames is not None:
+                    await _frames.aclose()
+            except (asyncio.CancelledError, Exception):
+                pass
+            raise
         except Exception as _e:
             # P1-32：本分支也要置终态 —— 否则 finally 的兜底会再补一条 error，
             # 同一条流里出现**两条互相矛盾的错误提示**（门禁 I11e 实证抓到：
@@ -1069,6 +1119,14 @@ async def chat_stream(conv_id: int, body: ChatIn, conn=Depends(db_session),
             #     · 一个字都没有 → 落一条**如实说明**（不留"发了消息但没有任何回应"的空档）。
             #   幂等：库里最后一条已是 assistant ⇒ 跳过（正常 done 已落过 / agent 侧已固化）。
             if not _terminal:
+                # ★ 2026-11-19 问题2：原因分类前移，供有正文/无正文两支共用；
+                #   旧实现只在无正文分支分类，有正文时写死「连接已中断」，
+                #   误导为网络/输出上限（实测 conv 999999938 finish_reason 无 length）。
+                try:
+                    _ab_code, _ab_txt = _classify_abort(
+                        _acc_exec, _client_gone, _fail_reason, _last_event)
+                except Exception:
+                    _ab_code, _ab_txt = "no_terminal_frame", "流在结束前中断，原因未记录"
                 try:
                     _pending = "".join(_acc_text).strip()
                     with db_conn() as _pc:
@@ -1083,8 +1141,11 @@ async def chat_stream(conv_id: int, body: ChatIn, conn=Depends(db_session),
                                              or int(_lastrow["id"]) > _start_msg_id))
                     if not _already:
                         if _pending:
-                            _tail = ("\n\n> ⏹ 连接已中断（以上为已生成内容，"
-                                     "可直接重新发送这条消息继续）")
+                            # _ABORT_REASON_IN_TAIL_V1 文案带真实原因码，不再暗示「输出上限」。
+                            # _ab_txt 若指明「工具/上游调用途中被取消」即如实呈现。
+                            _tail = ("\n\n> ⏹ 本轮输出未正常收尾（以上为已生成内容，已保留）。"
+                                     "\n> 原因[%s]：%s" % (_ab_code, _ab_txt) +
+                                     "\n> 可直接重新发送这条消息继续。")
                             # ★ 2026-11-04：先闭合正文末尾**未配对**的 ``` 围栏 ——
                             #   否则「连接已中断」提示会落进代码块内部（真库实证 msg 5761：
                             #   21432 字正文围栏 13 个=奇数，末段 ```sysml 未闭合）。
@@ -1120,23 +1181,43 @@ async def chat_stream(conv_id: int, body: ChatIn, conn=Depends(db_session),
                             _exec["tools"] = [
                                 {k: v for k, v in t.items() if not k.startswith("_")}
                                 for t in _acc_exec["tools"]]
-                        # ★ 2026-11-06：把中止原因结构化落库，事后可检索、可统计
-                        try:
-                            _ab_code, _ab_txt = _classify_abort(
-                                _acc_exec, _client_gone, _fail_reason, _last_event)
-                            _exec["abort_reason"] = _ab_code
-                            _exec["abort_detail"] = _ab_txt
-                        except Exception:
-                            pass
+                        # ★ 2026-11-06：中止原因结构化落库（复用前移结果，避免两处不一致）
+                        _exec["abort_reason"] = _ab_code
+                        _exec["abort_detail"] = _ab_txt
                         _card = _json.dumps({"exec": _exec}, ensure_ascii=False) if _exec else "{}"
-                        with db_conn() as _wc:
-                            _wc.execute(
-                                "INSERT INTO messages (conversation_id, role, content, "
-                                "msg_type, card_data) VALUES (?,?,?,?,?)",
-                                (conv_id, "assistant", _body, "text", _card))
-                            _wc.execute(
-                                "UPDATE conversations SET updated_at=CURRENT_TIMESTAMP "
-                                "WHERE id=?", (conv_id,))
+                        # FINALIZE_WRITE_RECHECK_V1 同连接二次复查：写入前用 _wc 自己再查末条，
+                        #   若本轮已有 assistant 固化消息则跳过 —— check/write 同一连接，
+                        #   前端 commit_partial 的写入即时可见，消除跨连接竞态双写。
+                        #   (实测 conv 999999938：前端「已停止生成」与服务端「连接已中断」同秒双写)
+                        _recheck_skip = False
+                        try:
+                            _last2 = _wc.execute(
+                                "SELECT id, role, content FROM messages WHERE conversation_id=? "
+                                "ORDER BY id DESC LIMIT 1", (conv_id,)).fetchone()
+                            if _last2 and _last2["role"] == "assistant":
+                                _is_new = (_start_msg_id <= 0 or int(_last2["id"]) > _start_msg_id)
+                                _is_final = "以上为已生成内容" in ((_last2["content"] or ""))
+                                if _is_new and _is_final:
+                                    _recheck_skip = True
+                        except Exception:
+                            _recheck_skip = False  # 复查失败则维持原行为（宁可重复也不静默丢）
+                        # 根治层：唯一键 + INSERT OR IGNORE（DB 原子保证，跨连接也只落一条）
+                        _finalize_key = _finalize_key_for_turn(_wc, conv_id)
+                        _inserted = 0
+                        if not _recheck_skip:
+                            _cur = _wc.execute(
+                                "INSERT OR IGNORE INTO messages "
+                                "(conversation_id, role, content, msg_type, card_data, finalize_key) "
+                                "VALUES (?,?,?,?,?,?)",
+                                (conv_id, "assistant", _body, "text", _card, _finalize_key))
+                            _inserted = _cur.rowcount
+                            if _inserted:
+                                _wc.execute(
+                                    "UPDATE conversations SET updated_at=CURRENT_TIMESTAMP "
+                                    "WHERE id=?", (conv_id,))
+                        if not _inserted:
+                            print("[route_persist_gone] conv=%s 未写入：唯一键冲突或二次复查跳过 key=%s"
+                                  % (conv_id, _finalize_key), flush=True)
                         print("[route_persist_gone] conv=%s 兜底固化 正文=%d 字 有内容=%s "
                               "子任务=%d 工具=%d 思考=%d 字"
                               % (conv_id, len(_pending), bool(_pending),
@@ -1166,8 +1247,14 @@ async def chat_stream(conv_id: int, body: ChatIn, conn=Depends(db_session),
                     _pending_fu = int(_fup.pending_count(conv_id) or 0)
                 except Exception:
                     _pending_fu = 0
-                _msg = ("执行流程异常终止（未收到完成事件）。本次未产出结果，请直接重新发送消息重试；"
-                        "若反复出现，请到「AI 对话流」查看服务日志或联系管理员。")
+                try:
+                    _tail_code, _tail_txt = _classify_abort(
+                        _acc_exec, _client_gone, _fail_reason, _last_event)
+                except Exception:
+                    _tail_code, _tail_txt = "no_terminal_frame", "未收到完成事件"
+                _msg = ("执行流程异常终止（%s）：%s 本次未产出结果，"
+                        "请直接重新发送消息重试；若反复出现，请联系管理员并给出该原因码。"
+                        % (_tail_code, _tail_txt))
                 if _pending_fu:
                     _msg += ("另检测到 %d 条生成期间提交的补充指令未被执行（本轮已终止），"
                              "请重新发送。" % _pending_fu)
@@ -1235,9 +1322,21 @@ async def chat_stream(conv_id: int, body: ChatIn, conn=Depends(db_session),
         # ③ 整轮墙钟起点（拿到名额之后才算 —— 排队时间不该计入用户预算）
         _deadline = _runtime_state.compute_deadline()
 
+        # ★ 2026-11-19：持有内层生成器引用，CancelledError 时主动 aclose ——
+        #   取消若落在外层 `yield _f`（SSE 写出点），内层只会被 GC 延迟收尾，
+        #   其 `_client_gone` 来不及置位 ⇒ span 误记 no_terminal_frame。
+        _inner = _event_stream_inner(deadline_ts=_deadline)
         try:
-            async for _f in _event_stream_inner(deadline_ts=_deadline):
+            async for _f in _inner:
                 yield _f
+        except asyncio.CancelledError:
+            # 同 GeneratorExit：让内层走自己的断连收口（固化正文 + 清 follow-up + 闭 span），
+            # 然后把取消继续向上抛，不能吞。
+            try:
+                await _inner.aclose()
+            except (asyncio.CancelledError, Exception):
+                pass
+            raise
         finally:
             # 必须放 finally：客户端断开时 `async for` 会被 GeneratorExit 打断，
             # 不放这里就会出现"名额永久泄漏 ⇒ 几次之后所有人 429"。
@@ -1480,7 +1579,28 @@ def commit_partial_message(conv_id: int, body: dict = None, conn=Depends(db_sess
         # 查重失败**不阻断固化**（宁可多写一条，也不能丢内容），但必须留痕：
         # 静默 pass 会让"去重失效"这类缺陷完全不可见（2026-10-10 就是这么漏了一整天）。
         print(f"[commit_partial] 去重判据异常，会退化为写入一条：{_dedup_err!r}")
-    mid = repo.add_assistant_message(conv_id, content + suffix, msg_type="text")
+    # FINALIZE_KEY_UNIQUE_ROUTER_V1 根治层：与服务端兜底共用确定性键 + DB 唯一约束（跨请求竞态彻底消除）
+    try:
+        _fkey = _finalize_key_for_turn(conn, conv_id)
+        _cur = conn.execute(
+            "INSERT OR IGNORE INTO messages "
+            "(conversation_id, role, content, msg_type, card_data, finalize_key) "
+            "VALUES (?,?,?,?,?,?)",
+            (conv_id, "assistant", content + suffix, "text", "{}", _fkey))
+        if _cur.rowcount:
+            mid = int(_cur.lastrowid)
+            conn.execute("UPDATE conversations SET updated_at=CURRENT_TIMESTAMP WHERE id=?", (conv_id,))
+        else:
+            # 唯一键冲突：本轮已由服务端兜底固化 ⇒ 返回那条 id，前端据此重渲染
+            _exist = conn.execute(
+                "SELECT id FROM messages WHERE conversation_id=? AND finalize_key=? "
+                "ORDER BY id DESC LIMIT 1", (conv_id, _fkey)).fetchone()
+            mid = int(_exist["id"]) if _exist else 0
+            print(f"[commit_partial] 唯一键命中，复用已固化消息 id={mid} key={_fkey}")
+    except Exception as _fk_err:
+        # 迁移未执行/旧库无列时回退原路径（向后兼容），但留痕
+        print(f"[commit_partial] 唯一键路径异常，回退 repo 写入：{_fk_err!r}")
+        mid = repo.add_assistant_message(conv_id, content + suffix, msg_type="text")
     audit(audit_user(user), "conversation_partial_commit", f"会话#{conv_id} 固化已生成内容（{len(content)} 字）", conn=conn)
     return {"ok": True, "id": mid}
 

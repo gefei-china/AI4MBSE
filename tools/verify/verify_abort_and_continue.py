@@ -45,11 +45,23 @@ rec("A4 其余 ⇒ no_terminal_frame（不再谎称连接中断）", c4 == "no_t
 
 rec("A5 四种原因互不重复", len({c1, c2, c3, c4}) == 4, [c1, c2, c3, c4])
 
+# 2026-11-19 conv 999999937：tool run 已发、done 未发 ⇔ 工具/上游调用途中被取消
+c8, t8 = _classify_abort(
+    {"agent": "工程建模方案设计Agent",
+     "tools": [{"name": "todo_write", "ok": True},
+               {"name": "sysml_v2_validate"}]},
+    False, "", "tool")
+rec("A8 tool 未完成 ⇒ tool_inflight_abort", c8 == "tool_inflight_abort", c8)
+rec("A8b 文案点名工具而非泛泛的结束信号",
+    "sysml_v2_validate" in t8 and "不是模型没有输出" in t8, t8)
+
 # 文案里不许再出现"连接中断或服务端异常"这种合并口径
 src = open(os.path.join(ROOT, "routers", "conversations.py"), encoding="utf-8").read()
 rec("A6 旧合并口径已移除",
     "连接中断或服务端异常；执行过程见下方" not in src)
 rec("A7 中止原因已结构化落库", 'abort_reason' in src)
+rec("A9 ASGI CancelledError 与断连同口径（否则误报 no_terminal_frame）",
+    "except asyncio.CancelledError:" in src and "_client_gone = True" in src)
 
 # ── B. 短续句：承继上文 + 不澄清（含错字） ─────────────────────────
 r = IntentRouter()
