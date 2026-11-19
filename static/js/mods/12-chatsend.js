@@ -462,6 +462,44 @@ async function _annotateAbnormalEnd(aiBox, bootAtStart){
   }
 }
 
+// RECOVER_TURN_CONTENT_V1 断线恢复：对标 Dify「断线不致命」。
+// SSE 流异常且无 done/error 终态时，后端已按 finalize_key 把本轮内容固化落库；
+// 这里取回并如实展示（含结构化原因），编排轮额外给「从检查点续跑」入口。
+// 只恢复展示、不自动重生成 —— 是否继续由用户决定，避免断线误触烧 token。
+async function _recoverTurnContent(aiBox){
+  const _cid = aiBox && (aiBox.dataset.convId || currentConvId);
+  if(!_cid || !aiBox || aiBox.dataset.recovered) return;
+  try{ aiBox.dataset.recovered = '1'; }catch(_e){}
+  let r = null;
+  try{ r = await api(`/api/conversations/${_cid}/recovery`); }catch(_e){ return; }
+  if(!r || !r.found) return;
+  try{ if(r.message_id) aiBox.dataset.recoveredMsgId = String(r.message_id); }catch(_e){}
+  const bodyEl = aiBox.querySelector('.body');
+  if(!bodyEl) return;
+  const note = document.createElement('div');
+  note.className = 'turn-recover-note';
+  note.style.cssText = 'margin-top:8px;padding:7px 10px;border-left:3px solid #2f9e44;'
+    + 'background:rgba(47,158,68,.10);color:#2b8a3e;font-size:12.5px;line-height:1.6;';
+  let html = '本轮已生成内容<b>已自动保留</b>（未丢失）。';
+  if(r.abort_reason || r.abort_detail) html += '<br>中断原因：' + esc(r.abort_detail || r.abort_reason);
+  if(r.orchestrated_run_id > 0){
+    html += '<br>这是编排任务，可从检查点继续（<b>不重跑已完成的子任务</b>）：';
+    note.innerHTML = html;
+    const btn = document.createElement('button');
+    btn.textContent = '从检查点续跑';
+    btn.className = 'btn btn-sm btn-outline-primary';
+    btn.style.cssText = 'margin-left:8px;';
+    btn.onclick = ()=>{ if(typeof startResumeRun === 'function') startResumeRun(r.orchestrated_run_id, null); };
+    note.appendChild(btn);
+  }else{
+    html += '<br>需要继续请直接重发这条消息。';
+    note.innerHTML = html;
+  }
+  bodyEl.appendChild(note);
+  const _cs = document.getElementById('chat-status');
+  if(_cs) _cs.textContent = '已恢复本轮内容';
+}
+
 async function pumpStream(aiBox, msg, atts, resumeOf){
   // ★ 2026-11-06：开流前记进程身份 + 清终态标记（handleSSE 收到 done/error 会置位）
   window._sseTerminal = 0;
@@ -535,7 +573,7 @@ async function pumpStream(aiBox, msg, atts, resumeOf){
     if(_streamAbort === myAbort) _streamAbort = null;
     // ★ 2026-11-06：流读完了但**从未收到 done/error** ⇒ 服务端没正常收口。
     //   这种情况旧实现什么都不说（用户以为"跑完了"），现在按进程身份给出准确原因。
-    if(!window._sseTerminal){ try{ await _annotateAbnormalEnd(aiBox, _bootAtStart); }catch(e){} }
+    if(!window._sseTerminal){ try{ await _annotateAbnormalEnd(aiBox, _bootAtStart); }catch(e){} try{ await _recoverTurnContent(aiBox); }catch(_r){ } }
   } catch(e) {
     // ★ 2026-10-16 Q2：本流正被「澄清改选 / 澄清续答」主动中止以复用此盒接管 ——
     //   不要改 _streaming/showStopBtn（会被错置成"已停"），也别进 _finalizeStoppedRender 替换盒子。
@@ -553,7 +591,7 @@ async function pumpStream(aiBox, msg, atts, resumeOf){
       return;
     }
     // ★ 2026-11-06：网络类失败（Failed to fetch / 流被掐断）同样要判定是否重启
-    if(!window._sseTerminal){ try{ await _annotateAbnormalEnd(aiBox, _bootAtStart); }catch(_e2){} }
+    if(!window._sseTerminal){ try{ await _annotateAbnormalEnd(aiBox, _bootAtStart); }catch(_e2){} try{ await _recoverTurnContent(aiBox); }catch(_r){ } }
     const bodyEl = aiBox.querySelector('.body');
     const _typ = bodyEl ? bodyEl.querySelector('.typing') : null; if(_typ) _typ.remove();
     if(bodyEl) bodyEl.classList.remove('streaming');

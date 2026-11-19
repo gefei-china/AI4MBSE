@@ -558,6 +558,49 @@ def get_messages(conv_id: int, limit: int | None = None, before_id: int | None =
             "main_agent": main_agent}
 
 
+# RECOVERY_ENDPOINT_V1 断线恢复端点（2026-11-19）：对标 Dify「断线不致命」。
+# 前端 SSE 流异常且无 done/error 终态时调本端点，按 finalize_key 取回本轮已固化内容，
+# 避免让用户误以为「什么都没生成、只能从头重跑」。只读、不触发生成、无副作用。
+@router.get("/api/conversations/{conv_id}/recovery")
+def get_turn_recovery(conv_id: int, conn=Depends(db_session), user=Depends(current_user)):
+    _own_conv(conn, conv_id, user)   # B1-9 归属校验：不可见即 404
+    key = _finalize_key_for_turn(conn, conv_id)
+    if not key:
+        return {"found": False, "reason": "no_user_turn"}
+    row = None
+    try:
+        row = conn.execute(
+            "SELECT id, content, card_data, msg_type FROM messages "
+            "WHERE conversation_id=? AND role='assistant' AND finalize_key=? "
+            "ORDER BY id DESC LIMIT 1", (conv_id, key)).fetchone()
+    except Exception:
+        return {"found": False, "reason": "query_failed"}
+    if not row:
+        return {"found": False, "reason": "no_finalized_message"}
+    # 结构化中断原因（取自 P2 前移落库的 abort_reason）
+    abort_code, abort_detail = "", ""
+    try:
+        _card = json.loads(row["card_data"] or "{}")
+        _ex = (_card.get("exec") or {}) if isinstance(_card, dict) else {}
+        abort_code = str(_ex.get("abort_reason") or "")
+        abort_detail = str(_ex.get("abort_detail") or "")
+    except Exception:
+        pass
+    # 编排 run_id：从本轮 stream 事件里取（若有），供前端跳「从检查点续跑」
+    run_id = 0
+    try:
+        _r = conn.execute(
+            "SELECT run_id FROM orch_stream_events WHERE conversation_id=? "
+            "AND run_id>0 ORDER BY id DESC LIMIT 1", (conv_id,)).fetchone()
+        run_id = int(_r["run_id"] or 0) if _r else 0
+    except Exception:
+        pass
+    return {"found": True, "message_id": int(row["id"]), "key": key,
+            "content": row["content"] or "", "msg_type": row["msg_type"] or "text",
+            "abort_reason": abort_code, "abort_detail": abort_detail,
+            "orchestrated_run_id": run_id}
+
+
 def _turn_overrides(body) -> dict:
     """**仅单轮临时**的覆盖（`ChatIn.o_*`，程序调用才用，界面已不用）。
 
