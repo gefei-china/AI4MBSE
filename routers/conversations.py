@@ -130,6 +130,40 @@ def create_conversation(conv: ConvIn, conn=Depends(db_session),
       「当前工程」现在是前端**页面级**状态，随请求显式带上。
     """
     repo = ConversationRepo(conn)
+
+    # ★ 2026-11-19 P0-B：提交幂等 —— 同 client_request_id 的重放不新建会话。
+    #   原子占位：SQLite 请求级事务串行，两个并发重放只有一个 INSERT 成功；
+    #   抢不到的一方读回已占位的 conv_id（可能为 0=对方事务未提交 ⇒ 409 让前端重试）。
+    _rid = str(getattr(conv, "client_request_id", "") or "").strip()
+    if _rid:
+        try:
+            _ph = conn.execute(
+                "INSERT OR IGNORE INTO client_request_dedup(request_id, conv_id) VALUES(?,0)",
+                (_rid,))
+            _won = (_ph.rowcount or 0) > 0
+            if not _won:
+                _hit = conn.execute(
+                    "SELECT conv_id FROM client_request_dedup WHERE request_id=?",
+                    (_rid,)).fetchone()
+                _cid_hit = int((_hit[0] if _hit else 0) or 0)
+                if _cid_hit:
+                    _row = repo.get_conversation(_cid_hit) or {}
+                    try:
+                        from core.write_log import wrote as _wlog
+                        _wlog("conv_create_replay", conv_id=_cid_hit, client_rid=_rid[:16])
+                    except Exception:
+                        pass
+                    return {"id": _cid_hit, "title": _row.get("title") or conv.title,
+                            "project_id": str(_row.get("project_id") or ""),
+                            "idempotent_hit": True}
+                raise HTTPException(status_code=409, detail="该提交正在处理中，请稍候重试")
+        except HTTPException:
+            raise
+        except Exception as _ide:
+            # 幂等表缺失（老库未跑 init_db）时**降级**为原行为，不阻断建会话
+            import logging as _idl
+            _idl.getLogger("mbse.idempotency").warning("幂等占位失败（降级直建）：%s", _ide)
+            _rid = ""
     # ★ B1-9：归属取当前登录用户，不再硬编码 `1`。
     #   原写法 `create_conversation(conv.title, conv.intent, 1, ...)` 把所有新会话都记到
     #   user_id=1（王工）名下 —— 归属隔离若不改这里会**当场失效**（谁建的都算他的）。
@@ -137,6 +171,18 @@ def create_conversation(conv: ConvIn, conn=Depends(db_session),
     _uid = int((user or {}).get("id") or 1)
     cid = repo.create_conversation(conv.title, conv.intent, _uid,
                                    project_id=conv.project_id)
+    if _rid:
+        try:
+            conn.execute("UPDATE client_request_dedup SET conv_id=? WHERE request_id=?",
+                         (cid, _rid))
+        except Exception as _idu:
+            import logging as _idl
+            _idl.getLogger("mbse.idempotency").warning("幂等回填失败：%s", _idu)
+    try:
+        from core.write_log import wrote as _wlog
+        _wlog("conv_create", conv_id=cid, client_rid=(_rid[:16] or "-"))
+    except Exception:
+        pass
     row = repo.get_conversation(cid) or {}
     _pid = str(row.get("project_id") or "")
     audit(audit_user(user), "conversation_create",
@@ -663,8 +709,33 @@ async def chat_stream(conv_id: int, body: ChatIn, conn=Depends(db_session),
         #   （正是用户反馈的「不清楚是什么环节输出的」）。
         #   结构对齐后端正常落库的 `card_data.exec`（见 stream.py 的 exec 构造），
         #   前端 `procBlocksHtml(cd.exec)` 据此还原时间线。
-        _acc_exec = {"agent": "", "subtasks": [], "tools": [], "reasoning": []}
+        _acc_exec = {"agent": "", "subtasks": [], "tools": [], "reasoning": [], "attempts": []}
         _acc_exec_cap = 8000   # reasoning 上限（与 stream.py 落库口径一致）
+
+        # ★★ 2026-11-18（真库事故 conv 999999207）：**节流落盘检查点**。
+        #   user 消息落了库、chat/stream 也启动了，33 秒后服务被 `taskkill /F` 强杀
+        #   ⇒ 进程没有任何执行收尾代码的机会：前端 /messages/partial 来不及调，
+        #     后端 GeneratorExit / CancelledError 固化分支也不会跑
+        #   ⇒ 用户已看到的输出全部蒸发且不可恢复（服务端不记 SSE 正文）。
+        #   既有兜底覆盖"用户点停止 / 客户端断开"，本检查点只补**进程被强杀**这一格。
+        #   同步写但节流（默认 5s / 2000 字），SQLite 本地单行 upsert < 10ms。
+        _ck_th = [None]
+
+        def _ck_maybe_save():
+            try:
+                _n = _acc_len[0]
+                if _n < 4:
+                    return
+                if _ck_th[0] is None:
+                    from services.stream_checkpoint import Throttle
+                    _ck_th[0] = Throttle()
+                if not _ck_th[0].should(_n):
+                    return
+                from services.stream_checkpoint import save as _ck_save
+                if _ck_save(conv_id, "".join(_acc_text), _acc_exec):
+                    _ck_th[0].mark(_n)
+            except Exception:
+                pass          # 检查点失败绝不影响用户拿结果
 
         def _acc_frame(raw):
             """逐帧攒正文 + 执行过程。任何异常静默（绝不能影响转发）。"""
@@ -675,7 +746,7 @@ async def chat_stream(conv_id: int, body: ChatIn, conn=Depends(db_session),
                 if _ei < 0:
                     return
                 _typ = raw[7:_ei].strip()
-                if _typ not in ("token", "agent", "subtask", "tool", "reasoning"):
+                if _typ not in ("token", "agent", "subtask", "tool", "reasoning", "attempt"):
                     return
                 _di = raw.find("data:")
                 if _di < 0:
@@ -688,12 +759,25 @@ async def chat_stream(conv_id: int, body: ChatIn, conn=Depends(db_session),
                     if _d:
                         _acc_text.append(_d)
                         _acc_len[0] += len(_d)
+                        _ck_maybe_save()   # ★ 2026-11-18：节流落盘，防强杀丢输出
                 elif _typ == "reasoning":
                     # 只收模型 CoT（kind != progress）；系统进度提示不属于"思考"
                     if _pl.get("kind") != "progress":
                         _cur = _acc_exec["reasoning"]
                         if sum(len(x) for x in _cur) < _acc_exec_cap:
                             _cur.append(_pl.get("delta") or "")
+                elif _typ == "attempt":
+                    # ★ 2026-11-19 P1-1：断点恢复时保住「跑过几次」的元数据。
+                    #   只有 index/kind/chars（无正文）—— 正文由 stream 侧 locals 的
+                    #   `_ac_attempts` 在固化时写入，两条兜底路径互补。
+                    _ai = _pl.get("index")
+                    if _ai is not None:
+                        _item = next((x for x in _acc_exec["attempts"]
+                                      if x.get("index") == _ai), None)
+                        if _item is None:
+                            _acc_exec["attempts"].append(
+                                {"index": _ai, "kind": _pl.get("kind"),
+                                 "chars": _pl.get("chars", 0)})
                 elif _typ == "agent":
                     if _pl.get("status") == "done":
                         _nm = _pl.get("display_name") or _pl.get("name") or ""
@@ -928,6 +1012,26 @@ async def chat_stream(conv_id: int, body: ChatIn, conn=Depends(db_session),
                 _tracer.flush()
             except Exception:
                 pass   # 观测落库失败绝不阻断已完成的主流程
+            # ★★ 2026-11-19 P0-C：**intent 回填**（真库实证 117/473 = 24.7% 会话 intent 为空）。
+            #   根因（代码实读）：`conversations.intent` 的唯一写入点是
+            #   `ConversationRepo.create_conversation()` 的 INSERT —— 由**创建方**在那一刻传入；
+            #   **全仓没有任何代码在意图识别之后回填该字段**。
+            #   于是凡绕过前端创建流程的会话（脚本 / API 直调 / 澄清续答新建）永远为空，
+            #   哪怕它跑完了完整识别链路：117 条空值里 **103 条有消息**，title 全非空。
+            #   后果：按意图归因的统计少算 1/4；按 intent 过滤排查会直接漏掉这些会话。
+            #   判据：**只填空、不覆盖** —— 前端/人工显式指定过的值一律尊重。
+            #   连接：独立 `db_conn()`（请求级 conn 在流式循环里抢写锁，同 _evbuf 刷库的理由）。
+            #   位置：与 tracer.flush()/检查点清理同处收口，正常收口与断连路径都会执行。
+            try:
+                _ri = str(_conv_meta.get("intent") or "").strip()
+                if _ri:
+                    with db_conn() as _ic:
+                        _ic.execute(
+                            "UPDATE conversations SET intent=? WHERE id=? "
+                            "AND (intent IS NULL OR TRIM(intent)='')",
+                            (_ri[:60], conv_id))
+            except Exception:
+                pass   # 回填失败不影响任何用户可见结果
             # ── P0-2（2026-10-26）：上下文分块归因落库 ──
             # 与上面的 tracer.flush() 同理：观测在请求收口处统一落库（一次请求 = 一次装配），
             # 失败不阻断。`context_audit.trace_id` 与 `llm_usage_stats.trace_id` 同源 ⇒ 可 JOIN。
@@ -943,6 +1047,15 @@ async def chat_stream(conv_id: int, body: ChatIn, conn=Depends(db_session),
             #   正文 0 条 + 事件 0 条，事后无法回答"跑到哪一步、哪步开始错"）。
             #   与 `_tracer.flush()` / `_ctx_flush()` 同一位置、同一理由：
             #   GeneratorExit 期间禁止 yield，但**不禁止** DB 写。
+            # ★ 2026-11-18：本轮已正常收口（含断连兜底路径）⇒ 删掉检查点。
+            #   只有**进程被强杀**（finally 根本没机会执行）才会留下记录，
+            #   下次启动由 services/stream_checkpoint.recover_all() 统一固化。
+            #   必须早于 `_client_gone` 早退；失败静默（残留也会被启动时去重兜住）。
+            try:
+                from services.stream_checkpoint import clear as _ck_clear
+                _ck_clear(conv_id)
+            except Exception:
+                pass
             _flush_evbuf()
             # ★★ 2026-10-29（用户反馈「无辜终止 + 重新打开只看到自己输入」）：
             #   **收口兜底固化** —— 这是本轮最后一道防线，必须早于 `_client_gone` 早退。

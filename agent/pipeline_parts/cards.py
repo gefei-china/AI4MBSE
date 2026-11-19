@@ -4,6 +4,79 @@
 由 tools/split_pipeline.py 从 agent/pipeline.py 机械切分而成；⚠️ 切分脚本**已一次性执行完毕、不可重跑**—— 此后本文件按普通源码维护（方法体与其它模块一样可直接改）。"""
 from .common import *
 
+import difflib
+
+
+def _dedupe_sysml_blocks(blocks: list) -> list:
+    """同一套模型被**重生成多次**时只保留一份（2026-11-18 R1）。
+
+    ★ 为什么必须有（真库实证）：
+      msg#6979 一条回复里有两个 ```sysml 块（6849 / 6570 字符，相似度 **97.4%**，
+      第二段是同一套 CabinCoolingActivity 模型的重生成、仅少一个短语）。
+      原实现 `"\n\n".join(blocks)` **无任何去重** ⇒ 产物 ver#1000495（13419 字符）里
+      `package CabinCoolingActivity` 出现了 **2 次**。
+      更危险的是：重复拼接版**照样通过 checker.jar（rc=0，0 error）**
+      —— 校验器不查重，不能拿「校验通过」当「产物干净」的判据。
+
+    判据（两条同时满足才判重，宁漏不误杀）：
+      ① `package` 名集合**完全相同**（不同 package 的文件永不合并）
+      ② 两级相似度（实测选型见 tmp/diag_metric.py）：
+            a. 3-gram 字符集 Jaccard ≥ 0.55  —— 粗筛（重复对实测 0.714，负样本 ≤0.17）
+            b. difflib SequenceMatcher ≥ 0.90 —— 精判（重复对实测 **0.974**，
+               同包不同片段 0.542、同模型分段 0.036 ⇒ 分得很开）
+         ⚠️ **不要退回"5-gram 集合 Jaccard"**：对零星改写过敏，实测重复对只有 0.655
+            （difflib 却是 0.974）⇒ 判据失效、去重静默不生效。
+    保留**更长**的那份（重生成通常有增补，长的更完整）。
+
+    ⚠️ 永不抛：去重失败就原样返回（去重是优化，不是门禁）。
+    ⚠️ 位置纪律：本函数必须在 `class CardMixin` **之前**定义。放进类体中间会
+       （因缩进 0）提前结束 class，把后续方法变成嵌套函数，而 py_compile 不报错。
+    """
+    try:
+        if not blocks or len(blocks) < 2:
+            return blocks
+
+        def _pkgset(s: str) -> set:
+            return set(re.findall(r"^\s*package\s+([A-Za-z_]\w*)", s, re.M))
+
+        def _tri(s: str) -> set:
+            t = re.sub(r"\s+", "", s)
+            return {t[i:i + 3] for i in range(max(0, len(t) - 2))}
+
+        def _is_dup(a: str, b: str) -> bool:
+            """两级判重：便宜的先算，贵的只在疑似时算。"""
+            la, lb = len(a), len(b)
+            if not la or not lb:
+                return False
+            # ① 长度比：重生成不会差出 30%（负样本"分段"长度比 1.0 但这步只是粗筛之一）
+            if abs(la - lb) / max(la, lb) > 0.30:
+                return False
+            # ② 3-gram Jaccard 粗筛（实测：重复对 0.714 / 负样本 ≤0.17）
+            sa, sb = _tri(a), _tri(b)
+            if len(sa & sb) / (len(sa | sb) or 1) < 0.55:
+                return False
+            # ③ difflib 精判（0.53s/对，只在疑似时执行）
+            return difflib.SequenceMatcher(None, a, b, autojunk=False).ratio() >= 0.90
+
+        kept = []
+        for b in blocks:
+            pkg = _pkgset(b)
+            dup_at = -1
+            for i, k in enumerate(kept):
+                if _pkgset(k) != pkg:
+                    continue
+                if _is_dup(k, b):
+                    dup_at = i
+                    break
+            if dup_at < 0:
+                kept.append(b)
+            elif len(b) > len(kept[dup_at]):
+                # 更长的那份胜出（重生成通常带增补）
+                kept[dup_at] = b
+        return kept
+    except Exception:
+        return blocks
+
 
 class CardMixin:
     """SysML 视图抽取与富卡片（变更影响/评审）生成。"""
@@ -159,6 +232,8 @@ class CardMixin:
         if not blocks:
             return None
         cleaned = [b.strip() for b in blocks if b.strip()]
+        # ★ 2026-11-18 R1：同一套模型被重生成多次 ⇒ 只留一份（真库实证 2 份拼接）
+        cleaned = _dedupe_sysml_blocks(cleaned)
         return "\n\n".join(cleaned) if cleaned else None
 
     @classmethod
@@ -349,6 +424,34 @@ class CardMixin:
         except Exception:
             return content
 
+    @staticmethod
+    def _has_sysml_declaration(code: str) -> bool:
+        """代码真实性闸门：这段文本里是否存在真正的 SysML v2 声明语句。
+
+        为什么需要（2026-11-18 conv 999999904 / msg#7008 米爸报「让 AI 生成提示词，
+        提示词被放代码块后却声称 2 个视图」）：
+          _extract_sysml_code 的无标签兜底路径靠「含 part def / item def 关键词」判代码，
+          而**提示词正文恰恰在教 AI 写这些语法**，于是提示词被当成代码；
+          _gen_sysml_views 在 design 意图、用户未指定视角时无条件兜底 BDD/IBD，
+          投影出 nodes=0 的空壳视图 → 前端「视图 2」+ 把提示词搬进代码 tab。
+
+        判据取「行首声明语句」而非全文关键词：SysML v2 代码必有
+        `package X {` / `part def X` / `part X :> Y {` / `requirement <id>` 等声明行；
+        提示词只在正文**提到**这些词（「各类 item def」「每方案一个 part def」），行首是
+        序号/破折号/中文说明，声明行数为 0。
+
+        已用真库 57 条有代码的 assistant 消息校准：提示词=0 行，合法代码≥3 行。
+        这是**代码事实判据**，不依赖节点数阈值，合法小模型（1 个 part def）也不误伤。
+        """
+        if not code:
+            return False
+        decl_re = re.compile(
+            r"^\s*(?:package\s+"
+            r"|(?:part|interface|port|item|attribute|action|state|constraint|occurrence|requirement|enumeration|annotation|view)\s+(?:def|usage)\b"
+            r"|(?:part|interface|port|item|attribute|action|state|requirement)\s+[^;{}]+?[:]{1,2}\s*\w"
+            r"|requirement\s*<)", re.I)
+        return any(decl_re.match(line) for line in str(code).split("\n"))
+
     def _gen_sysml_views(self, llm_content, intent=None, user_input: str = ""):
         """LLM 输出含 SysML v2 代码 → 解析并投影与用户诉求匹配的视图 ViewModel；无代码/解析失败返回 None。
 
@@ -375,6 +478,10 @@ class CardMixin:
             code = (getattr(self, "_sysml_last_pass_code", None)
                     or getattr(self, "_sysml_last_checked_code", None))
         if not code:
+            return None
+        # ★ 2026-11-18 代码真实性闸门：提示词正文含 V2 关键词会被 _extract_sysml_code
+        #   误判为代码（msg#7008），必须先确认有真正的声明语句再投影，否则产出空壳视图。
+        if not self._has_sysml_declaration(code):
             return None
         # ★ P2：生成后校验（挂诊断；失败/不可用一律降级，不影响下面的视图投影）
         _chk = self._check_generated_sysml(code)
@@ -415,6 +522,21 @@ class CardMixin:
             # P2：校验摘要挂到 views 的兄弟键（与既有 quality_check 同级；前端只迭代 views.views，零影响）
             if _chk and isinstance(views, dict):
                 views["check"] = _chk
+            # ★ 2026-11-18 出口闸门（与入口闸门互补）：**投影后所有视图都空** ⇒ 返回 None。
+            #   入口闸门挡的是「提示词被当代码」（无声明语句）；这道挡的是「代码形状对、
+            #   但投影出来一个元素都没有」（如只有 package 壳、或引用全失效）。
+            #   理由：一张 nodes=0/edges=0 的「块定义图」对用户没有任何信息量，
+            #   却会让前端声称「视图 2」并把正文搬进代码 tab —— 正是米爸报的现象。
+            #   ⚠️ **范围不许扩大**：用户**显式指定**了视图类型时保留（哪怕空）——
+            #      他要的是「需求图」，而代码里没有需求，此时 `warnings`
+            #      「视图最小输入集缺失：requirement（请先补充对应模型元素）」
+            #      正是他需要的反馈。丢弃它等于把「缺什么」也一起藏了。
+            if isinstance(views, dict):
+                _vs = views.get("views") or {}
+                if _vs and not user_views and not any(
+                        (isinstance(v, dict) and (v.get("nodes") or v.get("edges")))
+                        for v in _vs.values()):
+                    return None
             return views
         except Exception:
             return None

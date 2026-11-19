@@ -417,6 +417,15 @@ def init_db():
         updated_at TEXT DEFAULT CURRENT_TIMESTAMP
     )""")
 
+    # ★ 2026-11-19 P0-B：提交幂等表（一次 sendChat = 一个 client_request_id）。
+    #   CREATE TABLE IF NOT EXISTS：老库 init_db 启动时自动补建，零迁移、零回填。
+    #   占位与会话创建在**同一请求事务**内（db_session 末尾 commit）⇒ 重放请求串行化。
+    c.execute("""CREATE TABLE IF NOT EXISTS client_request_dedup (
+        request_id TEXT PRIMARY KEY,
+        conv_id INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP
+    )""")
+
     c.execute("""CREATE TABLE IF NOT EXISTS messages (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         conversation_id INTEGER REFERENCES conversations(id),
@@ -1758,6 +1767,23 @@ def init_db():
         created_at TEXT DEFAULT CURRENT_TIMESTAMP
     )""")
     c.execute("CREATE INDEX IF NOT EXISTS idx_sa_run ON subtask_artifacts(run_id, task_key)")
+
+    # ── ★ 2026-11-18（重启不吞已生成内容）：流式输出节流检查点 ──────────────
+    # 背景（真库事故 conv 999999207）：user 消息已落库、chat/stream 已启动，
+    #   33 秒后服务被 taskkill /F **强制终止** ⇒ 进程没有任何执行收尾代码的机会：
+    #   前端 /messages/partial 来不及调、后端 GeneratorExit / CancelledError
+    #   固化也不会跑 ⇒ 用户已看到的数千字输出**全部蒸发**，且不可恢复
+    #   （服务端不记 SSE 正文，前端只缓存输入框草稿）。
+    # 方案：转发层逐帧攒正文时**节流写这里**（默认每 5s / 2000 字符一次），
+    #   正常收口（finally）删除；只有进程被强杀才会留下记录，下次启动统一固化。
+    # ⚠️ 一轮一个会话：前端新消息会 abort 上一轮，不存在同会话并发两轮流。
+    c.execute("""CREATE TABLE IF NOT EXISTS stream_checkpoints (
+        conversation_id INTEGER PRIMARY KEY,
+        content TEXT NOT NULL DEFAULT '',
+        exec_json TEXT NOT NULL DEFAULT '{}',
+        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )""")
 
     # ── 架构优化：意图路由规则配置化（触发关键词 → 路由意图，权重/启停）──
     c.execute("""CREATE TABLE IF NOT EXISTS intent_rules (

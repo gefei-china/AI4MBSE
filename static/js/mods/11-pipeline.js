@@ -259,17 +259,17 @@ function procRender(){
     });
   }
   b.innerHTML = h;
-  // 2026-10-23（WorkBuddy 式"进行中环节收敛在卡片中"）：running 卡片的内滚区
-  //   自动跟随到底 —— proc-body 有 340px max-height（内容确实被收敛在卡片内），
-  //   但流式追加时视口停在顶部，用户看到的永远是旧内容。用户在卡片内上滑查看
-  //   上文时不强拽（与外层 stickBottom 同策略：判断是否已近底部）。
+  // 2026-11-18 18:00（米爸收敛到「仅思考节点容器化」）：running 卡片正文跟随到底。
+  //   现仅 .proc-block.thinking .proc-body 有 36vh 限高内滚；其余环节正文不限高、
+  //   clientHeight==scrollHeight，nearBottom 恒真、赋值无副作用（保留统一逻辑即可）。
+  //   流式追加时视口停顶部会看到旧内容 ⇒ 已近底部才跟随，用户上滑查看时不强拽。
   b.querySelectorAll('.proc-block.running .proc-body').forEach(body=>{
     const nearBottom = body.scrollHeight - body.scrollTop - body.clientHeight < 48;
     if(nearBottom) body.scrollTop = body.scrollHeight;
   });
-  // ★ 2026-10-27：执行过程区已**整区限高**（CSS `.proc{max-height:44vh;overflow-y:auto}`）
-  //   ⇒ 新环节追加后，若用户本来就停在底部，必须把**外层容器**也钉到底，
-  //   否则会被看成"内容卡住不动"。与外层会话的 stickBottom 同策略：用户上滑查看后不强拽。
+  // ★ 2026-11-18：整区限高已撤销（只思考节点容器化）⇒ .proc 自身不再内滚，
+  //   这段「外层钉到底」现在是无副作用的兜底（scrollHeight==clientHeight）；保留以兼容
+  //   将来若外层再出现可滚容器的情形，无需重新接线。
   try {
     const nearBottomBox = b.scrollHeight - b.scrollTop - b.clientHeight < 48;
     if(nearBottomBox) b.scrollTop = b.scrollHeight;
@@ -323,9 +323,15 @@ function _intentBriefBody(b, ev){
 function procAddStage(name, status, detail, detailHtml, body){
   const iconMap = {'意图识别':'🔍','知识库检索':'📚','生成与校验':'✍️','写入会话':'💾',
                    '任务完成度评估':'⚖️','自主续跑':'🔄','取回模型文件':'📄'};
+  // ★ 2026-11-18（米爸「知道每个环节做什么、输出什么」）：
+  //   done 态把 detail 的**首句**提到折叠态头部（sub 通道）——
+  //   此前 detail 只进展开体 ⇒ 折叠后头部只有「✓ 完成」，看不出这一环产出了什么。
+  //   ⚠️ 判据：detail 是**后端给的纯文本**（本批只传产出概览），不是 HTML ⇒ 直接 esc。
+  //   用 _procSumText 提炼首句（与工具卡 sub 同一口径，两处不各写一套词表）。
+  const _doneSum = (status!=='run' && detail && !detailHtml) ? _procSumText(String(detail)) : '';
   procUpsert('stage_'+name, {type:'stage', icon: iconMap[name]||'🔍', title: name,
     status, statusText: status==='run'?'执行中…':'✓ 完成',
-    sub: detail||'', subHtml: detailHtml||'',
+    sub: detail||_doneSum||'', subHtml: detailHtml||'',
     // body：展开区的可信 HTML（当前仅「意图识别」的意图理解明细使用）。
     //   与 subHtml 同为白名单构造，**不经过 esc** ⇒ 调用方必须自己转义所有动态文本。
     ...(body !== undefined ? {detail: body} : {})});
@@ -372,7 +378,8 @@ function procAddThinking(delta, round, key){
    * 现在：**一轮思考 = 一个块**（round 0 是模型未分轮的首段 CoT）。
    *   · 块 id 按轮次稳定（`thinking` / `thinking_r2`…），跨 delta 原地增长、不新建；
    *   · 位置即语义：它出现在**该轮工具调用之前**，用户能顺着时间线看出"想 → 做 → 再想 → 再做"；
-   *   · 每块仍受 `.proc-body` 的 max-height 约束（限高可滚，不把页面拉长）。
+   *   · 每块正文默认全量展开；仅 `.proc-block.thinking .proc-body` 限高 36vh 内滚
+   *     （2026-11-18：米爸要求只把思考节点容器化，其他环节不收进容器）。
    */
   const _txt = _procS.thinkingRounds[round];
   const _tail = String(_txt || '').replace(/\s+/g, ' ').trim();

@@ -179,6 +179,16 @@ function clearTeamChip(){
 // P0-1 澄清改选重发：全局流中止控制器（新发送前中止旧流）
 let _streamAbort = null;
 let _streaming = false;        // P1-1 流式进行中标记（控制发送/停止按钮切换）
+
+// ★ 2026-11-19 P0-A：创建会话**临界区**同步锁。
+//   为什么不是整个 sendChat 的全局锁：系统支持多会话并发（见下方 :300 的 _sameConv 判据），
+//   `if(_streaming) return` 会把「切到别的会话发消息」也拦掉，属于误伤。
+//   竞态只发生在 `if(!currentConvId)` → await POST → 赋值 这段 TOCTOU 窗口，锁这一段即可。
+let _creatingConv = false;
+function _newClientRequestId(){
+  try{ if(window.crypto && crypto.randomUUID) return crypto.randomUUID(); }catch(e){}
+  return 'c-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2,10);
+}
 let _stoppedManually = false;  // 手动停止 vs 澄清改选自动中止
 // ★ 2026-10-16 Q2：澄清改选 / 澄清续答**复用原输出盒**时，会先 abort 当前流再用同一盒重跑。
 //   旧流的 catch 本会把 _streaming 置 false、并触发 _finalizeStoppedRender 把盒子 outerHTML 替换掉
@@ -191,6 +201,76 @@ function draftTitle(msg){
   if(clean) return clean.length>20 ? clean.slice(0,18)+'…' : clean;
   return '任务 '+(Date.now()%1000);
 }
+// ★ 2026-11-19 P2-2：从 sendChat 提取的两个独立职责块（行为逐字节不变）。
+//   返回 true=继续走发送主流程；false=已处理完毕，调用方应 return。
+//   为什么用返回值而不是在子函数里 return：原代码这些分支直接 return 终止 sendChat，
+//   提取后必须由调用方决定是否终止 —— 这是保证行为不变的关键。
+async function _ensureConversation(msg){
+  // 草稿态首次提交时创建会话（未提交前左侧列表不出现空会话）
+  // 若由「项目 → ＋ 新建任务」发起，带走该项目归属（window._pendingProjectId）
+  if(currentConvId) return true;
+  // ★ P0-A：同步置锁（在任何 await 之前）——挡住双击/Enter/K-bar 并发进入的第二次创建。
+  //   P0-C：立即给状态反馈，不等 pumpStream（原实现要等近 200 行之后才有反馈）。
+  if(_creatingConv){ toast('正在创建会话，请稍候…'); return false; }
+  _creatingConv = true;
+  const _st0 = document.getElementById('chat-status');
+  if(_st0) _st0.textContent = '正在创建会话…';
+  let _rid = '';
+  try{
+    const _body = {title:draftTitle(msg)};
+    const _pid = window._pendingProjectId || '';
+    if(_pid) _body.project_id = _pid;
+    // ★ P0-B：一次提交一个 request_id，后端据此做幂等（重放返回同一 conv_id，不再 INSERT）。
+    _rid = _newClientRequestId();
+    _body.client_request_id = _rid;
+    const r = await api('/api/conversations', {method:'POST', body:JSON.stringify(_body)});
+    currentConvId = r.id;
+    if(r && r.idempotent_hit) toast('该请求已提交过，已复用原会话');
+    _isDraft = false;
+    loadConversations();
+    if(_pid){
+      window._pendingProjectId = '';
+      if(typeof renderGnavProjects === 'function') renderGnavProjects();
+    }
+    const st = document.getElementById('chat-status');
+    if(st) st.textContent = '';
+    try{ localStorage.removeItem('mbse_draft_input'); }catch(e){}
+  }catch(e){ toast('创建会话失败：'+(e && (e.message||e)) ); return false; }
+  finally{ _creatingConv = false; }   // 所有分支（含 return）都释放，绝不留死锁
+  return true;
+}
+
+async function _submitClarify(msg, input){
+  // 待澄清状态下，主输入框内容即"澄清补充"——走 clarify-answer（会清空挂起）。
+  // ★ G-1：带附件时绝不能走本分支（clarify-answer 不收附件，会静默丢弃）；
+  //   带附件是新的建模请求 ⇒ 调用方直接走正常发送。
+  if(!(window._pendingClarify && currentConvId && !(pendingAttachments && pendingAttachments.length)))
+    return true;
+  try{
+    const r = await api(`/api/conversations/${currentConvId}/clarify-answer`,
+                        {method:'POST', body: JSON.stringify({free_text: msg})});
+    if(r && r.resume_text){
+      input.value = '';
+      _chatInputAutoGrow();
+      try{ localStorage.removeItem('mbse_draft_input'); }catch(e){}
+      toast('已作为澄清补充提交，正在继续…');
+      setPendingClarify(null);
+      _continueInSameBox(null, r.resume_text, {
+        user_msg_id: r.resume_of_user_msg_id || 0,
+        append: r.resume_append || '',
+      }, msg.slice(0, 40));
+      return false;                  // ★ 与原 return 等价：终止 sendChat
+    }
+    // 后端返回"无待澄清"⇒ 本地挂起态已不同步，清掉并落入正常发送（不吞输入）
+    setPendingClarify(null);
+    toast((r && r.error) || '澄清状态已过期，按新消息发送');
+  }catch(e){
+    setPendingClarify(null);
+    toast('澄清提交失败，已按新消息发送');
+  }
+  return true;
+}
+
 async function sendChat() {
   const input = document.getElementById('chat-input');
   // ★★ 2026-10-30（用户报「从产物加入会话后发送异常，附件消失、输入框还在、会话没发起」）：
@@ -221,69 +301,12 @@ async function sendChat() {
     msg = '请查看我附加的材料，并据此继续。';
     toast('未输入文字，已按「请查看我附加的材料」发送');
   }
-  // 2026-09-04 v3：草稿态首次提交时创建会话（未提交前左侧列表不出现空会话）
-  // 2026-09-24：若由「项目 → ＋ 新建任务」发起，带走该项目归属（window._pendingProjectId），
-  //   创建成功后立刻刷新项目组（任务数 +1），并清除暂存避免下一次误归属。
-  if(!currentConvId){
-    try{
-      const _body = {title:draftTitle(msg)};
-      const _pid = window._pendingProjectId || '';
-      if(_pid) _body.project_id = _pid;
-      const r = await api('/api/conversations', {method:'POST', body:JSON.stringify(_body)});
-      currentConvId = r.id;
-      _isDraft = false;
-      loadConversations();
-      if(_pid){
-        window._pendingProjectId = '';
-        if(typeof renderGnavProjects === 'function') renderGnavProjects();
-      }
-      const st = document.getElementById('chat-status');
-      if(st) st.textContent = '';
-      try{ localStorage.removeItem('mbse_draft_input'); }catch(e){}
-    }catch(e){ toast('创建会话失败：'+(e && (e.message||e)) ); return; }
-  }
-  // 2026-09-25：待澄清状态下，主输入框内容即"澄清补充"——走 clarify-answer（会清空挂起），
-  // 不再当成普通新消息。此前两条路都不通：挂起永不清除（AI 反复追问）、用户也看不到"在哪作答"。
-  //
-  // ★ G-1（2026-10-15 米爸报「携带多个产物文件建模仍异常：消息不上屏、按钮一直进行中」）：
-  //   **带附件时绝不能走 clarify 分支** —— 原实现对任何输入都先判 _pendingClarify：
-  //     ① clarify-answer 只发 {free_text: msg}，**附件被静默丢弃**（后端该接口本就不收附件）；
-  //     ② 该分支**不渲染用户消息** ⇒ "对话流中没有展示用户发送的信息"；
-  //     ③ 任一失败 → toast + return ⇒ **输入框不清空**（截图输入框还留着全文）、消息丢失；
-  //     ④ 按钮红是上一轮的流/挂起态，用户看起来就是"点了发送但什么都没发生"。
-  //   带附件的输入是**新的建模请求**（附件是建模输入的一部分），不是"澄清补充"
-  //   ⇒ 直接走正常发送；澄清卡保持挂起，由用户在卡上作答或随本轮 done 清除。
-  if(window._pendingClarify && currentConvId && !(pendingAttachments && pendingAttachments.length)){
-    try{
-      const r = await api(`/api/conversations/${currentConvId}/clarify-answer`,
-                          {method:'POST', body: JSON.stringify({free_text: msg})});
-      if(r && r.resume_text){
-        input.value = '';
-        _chatInputAutoGrow();   // 2026-09-29：清空后高度回缩
-        try{ localStorage.removeItem('mbse_draft_input'); }catch(e){}
-        toast('已作为澄清补充提交，正在继续…');
-        setPendingClarify(null);
-        // ★ 2026-10-16 Q2：与卡片作答同口径——在**原 AI 输出盒**内续答，不新起气泡；
-        //   ★ 2026-10-17 Q1：带上 resume_of_user_msg_id/append ⇒ DB 层追加进原 user 消息，
-        //   刷新后历史与直播一致（此前此路走 sendResume，新起用户气泡+新 AI 盒）。
-        //   ★ 2026-10-17 反馈1：答案摘要 → 确认环节标记「✓ 已确认 · <补充内容>」。
-        _continueInSameBox(null, r.resume_text, {
-          user_msg_id: r.resume_of_user_msg_id || 0,
-          append: r.resume_append || '',
-        }, msg.slice(0, 40));
-        return;
-      }
-      // ★ G-1：后端返回"无待澄清"等业务失败 ⇒ **本地挂起态已与后端不同步**，
-      //   清掉本地状态并**落入正常发送** —— 绝不 return 吞掉用户输入。
-      //   （后端 400 原文："当前无待澄清问题（可能已作答或已过期）"）
-      setPendingClarify(null);
-      toast((r && r.error) || '澄清状态已过期，按新消息发送');
-    }catch(e){
-      // ★ G-1：接口异常同理 —— 清挂起、继续正常发送，不吞输入。
-      setPendingClarify(null);
-      toast('澄清提交失败，已按新消息发送');
-    }
-  }
+  // 草稿态首次提交时创建会话（含 P0-A 提交锁 / P0-B 幂等键 / P0-C 即时反馈）
+  // ★ P2-2：实现已提取到 _ensureConversation()，此处只保留调用。
+  if(!(await _ensureConversation(msg))) return;
+  // 待澄清状态下主输入框内容作为澄清补充（带附件时跳过，走正常发送）
+  // ★ P2-2：实现已提取到 _submitClarify()，此处只保留调用。
+  if(!(await _submitClarify(msg, input))) return;
   // P0-1 澄清改选重发：中止上一轮未读完的流（防旧 token 追加到新消息容器）
   // 2026-09-25：中止前先把上一轮**已生成内容固化落库**——否则"提交新消息"= 上一轮输出白丢
   // P1-② follow-up（2026-10-07）：**上一轮还在跑时**提交的消息，不再 abort 它，

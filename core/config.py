@@ -84,6 +84,16 @@ DEFAULT_CONFIG = {
         # 现场用法：想在不换模型的前提下放开输出上限 → 置 warn（或 off），并把
         # `refine.max_tokens` / `delegation.summary_max_tokens` 一并上调（否则那两个才是瓶颈）。
         "context_window_guard": "clamp",
+        # ── ★ 2026-11-18（R3）：输出上限钳制，防上游 400 ──────────────────────────────
+        # 背景：`max_tokens` 是**一次响应的输出 token 数**，与 `context_window`
+        #   （输入+输出的总容量）**量纲不同**。真库实测 provider 1/71/109 配成
+        #   max_tokens=112000 / context_window=128000 —— 两处已有校验
+        #   （后端 clamp 段 + 前端保存校验）都拿这两者比大小 ⇒ 双双放行 ⇒ 上游 400。
+        # 两个旋钮（出站口取 min，均在 `llm/providers/openai_compat.py` 生效并留 WARNING）：
+        #   output_ratio_cap  = 输出上限 / context_window 的比例上限（默认 0 = 不启用）
+        #   max_output_tokens = 全局输出硬上限（默认 32768；**0 = 不启用该层**）
+        "output_ratio_cap": 0,
+        "max_output_tokens": 0,
         # ── P0-a（2026-10-02）：流式 usage 采集 ────────────────────────────────────────
         # 流式（前端主路径 `/chat/stream`）此前**完全不落 token 统计**（恒 pt=0/ct=0），
         # 导致成本、截断观测、TokenCounter 三项在主路径上全失真。现在 `_stream_wrapped`
@@ -726,6 +736,17 @@ DEFAULT_CONFIG = {
         "artifact_digest_enabled": True,   # 会话产物摘要开关（false = 回退到改动前行为）
         # 2026-10-27（截断清单 P2-C7）：900 → 1500。摘要里"最近 N 个版本 + 产物标题"
         #   在 900 处常被砍到只剩前两条 ⇒ 模型看不到上一轮刚建的那份，重复产出。
+        # ★ 2026-11-19 P0-A：父会话「用户原文」注入编排子任务（conv 999999905 事故）。
+        #   子任务 conversation_id=0 ⇒ 看不到历史；artifact_digest 只有产物清单不含需求原文。
+        #   enabled=False 或 count<=0 或 max_chars<=0 ⇒ 完全不注入（逐字节回到改动前）。
+        "subtask_parent_msgs_enabled": True,
+        "subtask_parent_msgs_count": 3,      # 取最近 N 条 user 消息（不含本轮输入）
+        "subtask_parent_msgs_max_chars": 6000,  # 该段总字符预算（<=0 即不注入）
+        # ★ 2026-11-19：短输入时压低 slots（槽位）实体拼接上限。
+        #   事故 conv 999999905：6 字「我的提示词呢」被拼上 5 个上一轮实体 ⇒ 检索串 70+ 字。
+        #   short_max_chars<=0 ⇒ 关闭本机制（恒用旧上限 5，逐字节回旧行为）。
+        "slot_entity_short_max_chars": 20,   # 判定"短输入"的字数阈值
+        "slot_entity_cap_short": 2,          # 短输入时的实体上限（旧行为恒为 5）
         "artifact_digest_max_chars": 1500, # 摘要字符上限（<=0 不限）
         "artifact_digest_versions": 3,     # 摘要中列出最近 N 个 SysML 模型版本
         # P1-7（2026-10-01）：标题恰为系统性兜底名（AI 生成文档/报告、{kind}产物）的产物行整行不列。
@@ -1375,6 +1396,10 @@ DEFAULT_CONFIG = {
         # 既不会误杀正在长思考的批次（一次 LLM 调用超时上限 180 s + 重试，远小于此）。
         "orphan_ttl_s": 1800,
         "reap_on_startup": True,     # 启动时执行回收；排障期可置 False 临时关闭
+        # ★ 2026-11-19 P0-D：孤儿回收是否参考「批次心跳」
+        #   true（默认）= 批次心跳未超时就不判孤儿（修 93/105 条"假失败"）；
+        #   false = 逐字节回到改动前（只看 agent_tasks.updated_at）。
+        "orphan_respect_run_heartbeat": True,
         "reap_dry_run": False,       # True = 只报告不改写（上线灰度/排障用）
         # ── 2026-10-30：运行时稳定性四键 ──
         # 为什么这四个必须有默认值（不只是"补齐更规范"）：
@@ -2014,6 +2039,8 @@ CONFIG_SCHEMA = {
         "deepseek_api_key": {"type": "secret", "desc": "DeepSeek API key（无 key 时注入预置 provider）"},
         "qwen_api_key":     {"type": "secret", "desc": "Qwen API key"},
         "context_window_guard": {"type": "str", "desc": "context_window 守卫：clamp(默认，超窗截断+留痕)/warn(只告警不截断，用于放开「假天花板」)/off(不介入)"},
+        "output_ratio_cap": {"type": "float", "desc": "输出上限占上下文窗口的比例上限（默认 0=不启用）。max_tokens 是「一次响应的输出 token 数」，与上下文窗口量纲不同——原校验拿两者比大小，导致 112000/128000 被放行并触发上游 400。设 0 关闭（默认）；0<x<1 时启用"},
+        "max_output_tokens": {"type": "int", "desc": "输出硬上限（token，默认 0=不启用）。优先级：model_params.max_output_tokens（provider 级）> 本键（全局）。实测 deepseek 官方接受 112000，而内部网关拒绝 ⇒ 不设全局默认值，谁被拒只给谁配。钳制会打 WARNING 留痕"},
         "stream_include_usage": {"type": "bool", "desc": "流式请求显式带 stream_options.include_usage（默认关；DeepSeek 流式默认就发 usage 帧，仅部分兼容端点需要打开）"},
         "retry_times":          {"type": "int", "desc": "真实调用失败重试次数（指数退避；流式恒不重试）"},
         "retry_backoff_ms":     {"type": "int", "desc": "首次重试退避毫秒（第 n 次 = 该值 × 2^n）"},
@@ -2255,6 +2282,17 @@ CONFIG_SCHEMA = {
         "budget_retrieval_ratio":  {"type": "float", "desc": "检索区占窗口比例（>0 覆盖绝对值键；0=关闭占比制；默认 0.15）"},
         "budget_history_ratio":    {"type": "float", "desc": "历史区占窗口比例（>0 覆盖绝对值键；0=关闭占比制；默认 0.35）"},
         "artifact_digest_enabled": {"type": "bool", "desc": "会话产物摘要注入开关（多轮：让后续轮次知道本会话已产出什么）"},
+        "subtask_parent_msgs_enabled": {"type": "bool",
+            "desc": "编排子任务是否注入父会话用户原文（默认 true）。子任务看不到会话历史，"
+                    "关掉后子任务只能靠产物摘要推断用户需求——实测会导致「原始提示词未取回」这类误判"},
+        "subtask_parent_msgs_count": {"type": "int",
+            "desc": "注入最近 N 条用户消息原文（默认 3；不含本轮输入）"},
+        "subtask_parent_msgs_max_chars": {"type": "int",
+            "desc": "父会话用户原文段的总字符预算（默认 6000；<=0 即不注入）"},
+        "slot_entity_short_max_chars": {"type": "int",
+            "desc": "判定「短输入」的字数阈值（默认 20）。短输入时上一轮实体视为噪音。<=0 关闭本机制（回到恒用上限 5）"},
+        "slot_entity_cap_short": {"type": "int",
+            "desc": "短输入时拼接的 slots（槽位）实体上限（默认 2；长输入恒为 5）"},
         "artifact_digest_max_chars": {"type": "int", "desc": "会话产物摘要字符上限（<=0 不限）"},
         "artifact_digest_versions": {"type": "int", "desc": "摘要中列出的最近 SysML 模型版本数"},
         "artifact_digest_skip_placeholder_only": {"type": "bool", "desc": "摘要过滤掉标题为系统兜底名的产物行（P1-7）"},
@@ -2631,6 +2669,9 @@ CONFIG_SCHEMA = {
         "orphan_ttl_s":           {"type": "int",   "desc": "非终态任务超过该秒数无进展 ⇒ 判孤儿（既有键，一并登记以便界面可调）"},
         "reap_on_startup":        {"type": "bool",  "desc": "启动时回收孤儿编排任务（既有键）"},
         "reap_dry_run":           {"type": "bool",  "desc": "孤儿回收只报告不改写（既有键，灰度/排障用）"},
+        "orphan_respect_run_heartbeat": {"type": "bool",
+            "desc": "孤儿回收是否参考批次心跳（默认 true）。true=批次心跳未超时就不判孤儿"
+                    "（修 93/105 条「健康跑着的批次被看门狗判死」）；false=只看任务自身 updated_at"},
         "tool_idempotency_enabled": {"type": "bool", "desc": "写类工具幂等闸总开关：同一子任务的重试/续跑不会重复执行已成功的写（关 = 回到改动前行为）"},
         "tool_idempotency_scope":  {"type": "str",   "desc": "幂等作用域：subtask=仅编排子任务（默认，有重试语义处）/ off=全关"},
         "tool_idempotency_ttl_s":  {"type": "int",   "desc": "幂等记录保留时长（秒，默认 86400=24h）"},

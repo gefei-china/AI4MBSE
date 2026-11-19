@@ -2299,8 +2299,21 @@ async function saveLLM() {
   const tempRaw = parseFloat(document.getElementById('f-temp').value);
   // 温度 0 是合法值（贪心解码），不能用 || 兜底；仅当留空/NaN/越界时回落默认
   const temperature = (Number.isFinite(tempRaw) && tempRaw >= 0 && tempRaw <= 2) ? tempRaw : 0.3;
-  const max_tokens = (Number.isFinite(maxtRaw) && maxtRaw > 0) ? maxtRaw : Math.min(context_window, 8192);
-  if(max_tokens > context_window) { toast('上下文输出不能超过输入窗口'); return; }
+  let max_tokens = (Number.isFinite(maxtRaw) && maxtRaw > 0) ? maxtRaw : Math.min(context_window, 8192);
+  if(max_tokens > context_window) { toast('输出上限不能超过上下文窗口'); return; }
+  // ★ 2026-11-18（R3）：原来**只有**上面这一条校验，而它的判据是错的 ——
+  //   `max_tokens` 是「一次响应的输出 token 数」，`context_window` 是「输入+输出的总容量」，
+  //   两者量纲不同。实测 provider 1/71/109 配成 112000 / 128000，这条判据照样放行
+  //   ⇒ 上游直接 400（`max_tokens 112000 exceeds ...`）。
+  //   现在：超过窗口比例上限（与后端 `llm.output_ratio_cap` 同口径，默认 50%）时
+  //   **如实警告**，不阻断保存 —— 真正生效的钳制在后端出站口（单一权威，一处管控）。
+  const _RATIO_CAP = 0.5;
+  if(max_tokens > context_window * _RATIO_CAP){
+    const _sug = Math.floor(context_window * _RATIO_CAP);
+    toast(`提示：输出上限 ${max_tokens} 已超过窗口的 ${Math.round(_RATIO_CAP*100)}%（约 ${_sug}）。`
+        + `多数 chat 模型的真实输出上限更低（常见 8K~32K），超出会被上游拒绝（400）。`
+        + `保存后实际发送时会被自动钳到 min(窗口×比例, llm.max_output_tokens)，并打 WARNING 留痕。`, 'warn');
+  }
   // 高级设置：TopP（0~1）、TopK（整数 1~100）、思考模式（模型默认/开启/关闭）
   const topPRaw = parseFloat(document.getElementById('f-top-p').value);
   const topP = (Number.isFinite(topPRaw) && topPRaw >= 0 && topPRaw <= 1) ? topPRaw : null;

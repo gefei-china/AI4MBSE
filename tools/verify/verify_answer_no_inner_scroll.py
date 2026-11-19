@@ -32,8 +32,26 @@ A 正文**不得**限高/内滚
 B 反向断言：**范围不许扩大**（这些必须仍限高，谁删谁红）
   B1 `.code-fold .md-code` 在 chat.css 与 app.css **两处都必须有** max-height
   B2 `.svm-code` 必须有 max-height
-  B3 `.proc` 仍 `max-height:44vh`（执行过程区；米爸 2026-10-27 明确要求限高）
+  B3 `.proc` **不得整区限高/内滚** ★2026-11-18 18:00 **判据三次收敛**（见下）
+  B3b 普通 `.proc-body` **不得**限高/内滚（除思考节点外，环节正文一律全量展开）
+  B3c 折叠态 `.proc-block.collapsed .proc-body{max-height:0}` 必须仍在
+  B3e `.proc-block.thinking .proc-body` **必须限高内滚**（思考节点单独容器化，36vh）
   B4 `.svm-canvas` 仍限高（图形视口，不是文字被截断）
+
+★ B3 判据**三次收敛**（2026-11-18 18:00，米爸原话）：
+  「只针对思考过程这个节点进行容器化，现在是把整个执行过程都收到容器里，继续优化下」
+  ⇒ 撤销整区限高：`.proc` / `.proc-timeline` 不再限高，所有执行环节正常展开、随页面滚动；
+    只把**思考过程节点**容器化：`.proc-block.thinking .proc-body` 限高 36vh + 区内滚动；
+    其他环节的 `.proc-body` 一律不限高、不内滚。
+
+  判据演变四段（每段都是反转/收敛，不是删判据）：
+    ① 2026-10-27：守「.proc 限高 44vh」（别把页面拉太长）
+    ② 2026-11-18 上午：反转为「不得限高」（去掉最外层滚动条，结果页面又被拉长）
+    ③ 2026-11-18 晚：再反转为「必须限高且 > 44vh」（限高范围过宽，把整段过程都收进去了）
+    ④ 2026-11-18 18:00：收敛为「proc 不限高 + 仅 thinking 节点限高」（本次）
+  ⚠️ **判据反转不是删判据**：删掉即「这个维度不再受保护」，下次又会有人加回来。
+  ⚠️ **范围仍不许扩大**：代码块 `.code-fold .md-code`(340px) 与整合卡 `.svm-code`(440px)
+     **保持限高**（米爸 2026-11-03 明确）；正文 `.msg.ai .body` 仍**不得**限高（B5-8 铁律）。
 
 C JS 侧不得再对**正文**施加高度干预
   C1 `51-answer-view.js` 不含 `ans-capped` / `ans-cap-hint` / `CAP_PX`
@@ -74,6 +92,71 @@ def _has_maxh(css: str, selector_pat: str) -> bool:
     return False
 
 
+def _standalone_blocks(css: str, sel_escaped: str):
+    """只取「以 sel{ 开头」的**独立**规则块。
+
+    ⚠️ 为什么不能用 `sel\\s*\\{` 直接扫：那会连**复合选择器**一起命中
+    （如 `.proc-block.collapsed .proc-body{max-height:0}`），而折叠态的
+    `max-height:0` 是**收放机制**、必须保留 ⇒ 会造成误报。
+    这里按「前一个非空白字符不是标识符字符」来区分独立块 vs 复合块。
+    """
+    out = []
+    for m in re.finditer(sel_escaped + r"\s*\{([^}]*)\}", css):
+        pre = css[:m.start()].rstrip()
+        if pre and (pre[-1].isalnum() or pre[-1] in "._-"):
+            continue          # 复合选择器（如 .proc-block.collapsed .proc-body）
+        out.append(m.group(1))
+    return out
+
+
+def _proc_capped(css: str) -> bool:
+    """执行过程区是否**仍是限高内滚容器**（本次目标：必须为 False）。
+
+    判据只针对独立规则块 `.proc{...}`，且把 `max-height:0` 排除在外
+    （折叠态的 0 是收放机制，不是限高）。
+    """
+    for blk in _standalone_blocks(css, r"\.proc"):
+        if re.search(r"max-height\s*:\s*[^0]", blk):
+            return True
+        if re.search(r"overflow-y\s*:\s*(auto|scroll)", blk):
+            return True
+    return False
+
+
+def _thinking_body_capped(css: str) -> bool:
+    """思考节点 `.proc-block.thinking .proc-body{...}` 是否限高内滚（本次目标：必须为 True）。
+
+    2026-11-18 18:00：米爸要求「只针对思考过程这个节点容器化」⇒ 只有这一个
+    复合选择器的 body 允许限高内滚；其他环节正文保持全量展开。
+    """
+    m = re.search(r"\.proc-block\.thinking\s+\.proc-body\s*\{([^}]*)\}", css)
+    if not m:
+        return False
+    blk = m.group(1)
+    return (bool(re.search(r"max-height\s*:\s*[^0]", blk)) and
+            bool(re.search(r"overflow-y\s*:\s*(auto|scroll)", blk)))
+
+
+def _proc_body_capped(css: str) -> bool:
+    """**普通**环节正文是否限高内滚（本次目标：必须为 False）。
+
+    ⚠️ 必须排除 `.proc-block.thinking .proc-body` —— 那是本次唯一允许限高的节点；
+    若把 thinking 复合块算进来，B3b 会假红（thinking 合法限高却被当成普通环节限高）。
+    """
+    for m in re.finditer(r"\.proc-body\s*\{([^}]*)\}", css):
+        pre = css[:m.start()].rstrip()
+        # 复合选择器前缀（thinking / collapsed 等）跳过：它们不是"普通环节正文"
+        if pre.endswith(".thinking") or pre.endswith(".collapsed") or \
+           re.search(r"\.proc-block[\w.\-]*\s*$", pre):
+            continue
+        blk = m.group(1)
+        if re.search(r"max-height\s*:\s*[^0]", blk):
+            return True
+        if re.search(r"overflow-y\s*:\s*(auto|scroll)", blk):
+            return True
+    return False
+
+
 def _judge(chat_css: str, app_css: str) -> dict:
     return {
         # A 正文不得限高（本次唯一放开的目标）
@@ -84,8 +167,16 @@ def _judge(chat_css: str, app_css: str) -> dict:
         "mdc_chat": _has_maxh(chat_css, r"\.code-fold\s+\.md-code"),
         "mdc_app": _has_maxh(app_css, r"\.code-fold\s+\.md-code"),
         "svmcode": _has_maxh(app_css, r"\.svm-code(?!\s*copy)"),
-        "proc_capped": bool(re.search(r"\.proc\s*\{[^}]*max-height\s*:\s*44vh", app_css))
-                        or bool(re.search(r"\.proc\s*\{[^}]*max-height\s*:\s*44vh", chat_css)),
+        # ★ 2026-11-18 18:00：B3 判据**三次收敛** —— 整区不限高，
+        #   只把思考节点 (.proc-block.thinking .proc-body) 容器化。
+        #   "thinking 限高" 与 "普通环节不限高" 必须同时成立，缺一即失守。
+        "proc_capped": _proc_capped(app_css) or _proc_capped(chat_css),
+        "proc_body_capped": _proc_body_capped(app_css) or _proc_body_capped(chat_css),
+        "thinking_capped_chat": _thinking_body_capped(chat_css),
+        "thinking_capped_app": _thinking_body_capped(app_css),
+        # 折叠态的收放机制必须仍在（收放是显式动作，不是被截断）
+        "proc_collapse_kept": bool(re.search(
+            r"\.proc-block\.collapsed\s+\.proc-body\s*\{[^}]*max-height\s*:\s*0", chat_css)),
         "canvas_capped": bool(re.search(
             r"\.sv-card\s+\.svm-canvas\s*\{[^}]*max-height", app_css)),
     }
@@ -113,7 +204,14 @@ def main() -> int:
     ck("B1a chat.css 中 .code-fold .md-code 仍限高（米爸：代码块不动）", v["mdc_chat"])
     ck("B1b app.css 中 .code-fold .md-code 仍限高（后加载，会覆盖 chat.css）", v["mdc_app"])
     ck("B2 .svm-code（整合卡代码面板）仍限高（米爸：整合卡不用去掉）", v["svmcode"])
-    ck("B3 执行过程区 .proc 仍限高 44vh（米爸 2026-10-27 的要求）", v["proc_capped"])
+    ck("B3 执行过程区 .proc **不限高/不内滚**（米爸 2026-11-18 18:00：只容器化思考节点）",
+       not v["proc_capped"])
+    ck("B3e 思考节点 .proc-block.thinking .proc-body **限高内滚**（唯一容器化的节点）",
+       v["thinking_capped_chat"] and v["thinking_capped_app"])
+    ck("B3b 普通环节 .proc-body **不限高/内滚**（除思考外一律全量展开）",
+       not v["proc_body_capped"])
+    ck("B3c 折叠态 .proc-body 的 max-height:0 仍在（收放是显式动作，不是被截断）",
+       v["proc_collapse_kept"])
     ck("B4 图形视口 .svm-canvas 仍限高（那是画布，不是文字截断）", v["canvas_capped"])
 
     # ── C JS 侧 ──
@@ -143,6 +241,31 @@ def main() -> int:
     m4 = re.sub(r"(\.svm-code\s*\{[^}]*?)max-height\s*:\s*440px\s*;?\s*", r"\1", app, count=1)
     ck("D4 变异（反向）：删掉 .svm-code max-height ⇒ B2 必红",
        m4 != app and not _judge(chat, m4)["svmcode"])
+    # D5 变异：给 .proc 加回整区限高（= 范围扩大，用户明确否掉）⇒ B3 必红
+    # ⚠️ 两处 CSS 各自在一条渲染路径生效，判据用 or ⇒ 变异必须同时给两处加上才翻红
+    _plain_proc = ".proc{overscroll-behavior:auto;padding-right:2px;}"
+    _capped_proc = ".proc{max-height:62vh;overflow-y:auto;overscroll-behavior:auto;padding-right:2px;}"
+    m5 = chat.replace(_plain_proc, _capped_proc, 1)
+    m5_app = app.replace(_plain_proc, _capped_proc, 1)
+    ck("D5 变异（反向）：两处 CSS 都加回 .proc 整区限高 ⇒ B3 必红（守住'只容器化思考节点'）",
+       m5 != chat and m5_app != app and _judge(m5, m5_app)["proc_capped"])
+    # D5b 变异：删掉 thinking 节点限高 ⇒ B3e 必红（证明「思考节点容器化」判据承重）
+    _think_rule = ".proc-block.thinking .proc-body{max-height:36vh;overflow-y:auto;overscroll-behavior:contain;}"
+    m5b = chat.replace(_think_rule,
+                       ".proc-block.thinking .proc-body{overflow-y:auto;overscroll-behavior:contain;}", 1)
+    ck("D5b 变异：删掉 thinking 节点限高 ⇒ B3e 必红",
+       m5b != chat and not _judge(m5b, app)["thinking_capped_chat"])
+    # D6 变异：把环节正文 340px 内滚加回去 ⇒ B3b 必红
+    m6 = chat.replace(
+        ".proc-body{display:block;padding:3px 8px 8px;",
+        ".proc-body{display:block;max-height:340px;overflow-y:auto;padding:3px 8px 8px;", 1)
+    ck("D6 变异（反向）：把 .proc-body 的 340px 内滚加回 ⇒ B3b 必红",
+       m6 != chat and _judge(m6, app)["proc_body_capped"])
+    # D7 变异：删掉折叠态的 max-height:0 ⇒ B3c 必红（证明"收放机制"被守住）
+    m7 = chat.replace(".proc-block.collapsed .proc-body{max-height:0;",
+                      ".proc-block.collapsed .proc-body{", 1)
+    ck("D7 变异（反向）：删掉折叠态 max-height:0 ⇒ B3c 必红",
+       m7 != chat and not _judge(m7, app)["proc_collapse_kept"])
 
     # ── E 运行时证据（可选）──
     aft = ROOT / "outputs" / "_no_inner_scroll_bodyonly.json"

@@ -67,6 +67,16 @@ from routers import (
 async def lifespan(app: FastAPI):
     """应用生命周期（替代已弃用的 @app.on_event("startup")，语义等价）。"""
     init_db()
+    # ★★ 2026-11-18：**强杀恢复** —— 把上次进程异常终止时留下的流式检查点固化成消息。
+    #   必须紧跟 init_db()（表刚建好），且在所有后台守护线程启动之前。
+    #   正常收口的流已在 finally 里删除检查点 ⇒ 这里扫到的只可能是强杀残留。
+    try:
+        from services.stream_checkpoint import recover_all as _ck_recover
+        _n_ck = _ck_recover()
+        if _n_ck:
+            print("[startup] 流式中检查点恢复：固化 %d 条被中断的输出" % _n_ck, flush=True)
+    except Exception as _e_ck:
+        print("[startup] 检查点恢复跳过：%s" % str(_e_ck)[:120], flush=True)
     # P1-4（2026-10-02）：工具结果 offload 过期清理（TTL 默认 30 天，context.offload_ttl_days）
     try:
         from agent.pipeline_parts import tool_offload as _toff

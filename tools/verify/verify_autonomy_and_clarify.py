@@ -206,8 +206,17 @@ def main():
     ok("真执行时归零（否则跨轮累计会被正常推进误伤）",
        re.search(r"_dup_streak\s*=\s*0\s*#\s*★?\s*真执行|_dup_streak = 0\s+result = _lg\.call",
                  code) is not None)
-    ok("连续 ≥2 次短路即收敛（break 出 ReAct，交兜底生成）",
-       re.search(r"if _dup_streak >= 2:[\s\S]{0,900}?break", code) is not None)
+    # ★★ 2026-11-19 **判据同步（不是放宽）**：代码自 2026-10-28 起，`if _dup_streak >= 2:`
+    #   不再直接 break，而是「先注入强指令重定向，最多 2 次；仍无进展才 break」。
+    #   实测 `if _dup_streak >= 2:` 到 `break` 的**实际距离 3188 字符**，而旧判据上限 900
+    #   ⇒ 必然失配。这是**判据未随需求演进同步**，不是产品退化（`git diff` 证实该段本轮未被改动）。
+    #   新判据守**当前真实语义**的三个要素且保持顺序，仍保留「必须收敛」这个保护
+    #   （不能退化成"只要有 break 字样就算过"）：
+    #     入口 `if _dup_streak >= 2:` → 重定向上限 `_dup_redirect < 2` → 最终 `break`
+    ok("连续 ≥2 次短路 ⇒ 先强指令重定向、最终仍收敛 break（判据已同步 2026-11-19）",
+       re.search(r"if _dup_streak >= 2:[\s\S]{0,6000}?_dup_redirect\s*<\s*2"
+                 r"[\s\S]{0,6000}?break", code) is not None,
+       "入口→重定向→break 三段顺序正确（实测距离 3188 字符）")
     ok("收敛时发可见 stage（用户能看到'为什么停'）",
        '"重复调用收敛"' in code)
     _dup_streak_events = []

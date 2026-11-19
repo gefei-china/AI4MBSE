@@ -410,7 +410,9 @@ class ExecuteMixin:
         if should_retrieve:
             retrieve_query = user_input + kb_hint
             # P1：结构化拆解的实体并入检索词（提升图谱/向量召回）
-            slot_ents = [str(e) for e in (slots.get("entities") or []) if str(e)][:5]
+            # ★ 2026-11-19：短输入时压低实体上限（与 stream.py 成对改，口径必须一致）
+            slot_ents = [str(e) for e in (slots.get("entities") or []) if str(e)][
+                :_slot_entity_cap(user_input)]
             if slot_ents:
                 retrieve_query += " " + " ".join(slot_ents)
             if retrieval_att:
@@ -717,6 +719,10 @@ class ExecuteMixin:
             _ac_deadline = ((time.time() + _ac_cfg["deadline_s"])
                             if (_ac_cfg["enabled"] and _ac_cfg["deadline_s"] > 0) else None)
             _ac_full = ""             # 跨轮全量产出（非流式路径，收口并回 llm_content）
+            # ★ 2026-11-19（结构对齐标杆）：每次生成在**产生时**打标 ——
+            #   content 只承载收敛后的最终版，`exec.attempts` 存历次原文供过程区回放。
+            #   下游不再靠文本相似度猜"这是第几次、续写还是重跑"（见 core/attempt_trace 模块头）。
+            _ac_attempts = []
             # ★ 2026-11-15：**上一轮正文**（正文级空转闸用，与 stream.py 同构）。
             #   判据在 auto_continue.is_content_repeating（只写一份），这里只喂数据。
             _ac_prev_content = ""
@@ -992,6 +998,20 @@ class ExecuteMixin:
                     _cont_input = bool(self._is_continuation_input(user_input))
                 except Exception:
                     _cont_input = False
+                # ★ 2026-11-19：在产生时留痕（每种 attempt 的原文 + 语义 kind）。
+                #   ⚠️ 位置：必须在 harness 闸改写 `llm_content` **之前** ——
+                #      闸反馈（"未完成"/预算提醒）属于过程信息，不是模型这一轮的交付原文。
+                try:
+                    from core.attempt_trace import record as _at_rec, kind_of as _at_kind
+                    _ac_attempts = _at_rec(
+                        _ac_attempts, llm_content, index=len(_ac_attempts),
+                        kind=_at_kind(len(_ac_attempts),
+                                      continuation_signal=bool(_cont_input),
+                                      harness_retry=bool(_auto_continues)))
+                except Exception as _ate:
+                    import logging as _atl
+                    _atl.getLogger("mbse.attempt_trace").warning(
+                        "直行 attempt 留痕失败（不影响交付）：%s", str(_ate)[:160])
                 if (_ac_cfg["enabled"] and not dry_run and (_ac_tool_n > 0 or _cont_input)
                         and not _clarify_req and _auto_continues < _ac_cfg["max"]):
                     # 本轮产出并进全量（收口/落库用全量；评估器只看本轮+工具史）
@@ -999,7 +1019,9 @@ class ExecuteMixin:
                     #   而 stream.py 走去重 ⇒ 同一件事两条路径两个口径（模型每轮重写整份时，
                     #   非流式路径会把同一份答案堆 N 遍）。判据统一收口到 auto_continue 一份。
                     if llm_content:
-                        _ac_full = _ac.merge_round_content(_ac_full, llm_content)
+                        _ac_full = _ac.merge_round_content(
+                            _ac_full, llm_content,
+                            kind=(_ac_attempts[-1].get('kind') if _ac_attempts else None))
                     _verdict = self._evaluate_completion(
                         user_input=user_input, exec_tools=_ac_tools_hist, answer=llm_content,
                         provider_id=effective_provider, agent_name=agent_def.name,
@@ -1089,7 +1111,9 @@ class ExecuteMixin:
                     if llm_content:
                         # ★ 2026-11-15：与 stream.py 同构 —— 走 merge 去重，
                         #   口径统一（原先这里直接拼接，与 stream 不一致）。
-                        _ac_full = _ac.merge_round_content(_ac_full, llm_content)
+                        _ac_full = _ac.merge_round_content(
+                            _ac_full, llm_content,
+                            kind=(_ac_attempts[-1].get('kind') if _ac_attempts else None))
                     messages.append({"role": "assistant", "content": llm_content})
                     messages.append({"role": "user", "content": _hgate.get("feedback") or ""})
                     llm_response = llm_client.chat(messages, provider_id=effective_provider,
@@ -1143,6 +1167,35 @@ class ExecuteMixin:
         # SysML v2 视图联动：LLM 输出含 SysML 代码 → 解析并投影各视图 ViewModel（会话内即时预览，不落库）
         # 2026-09-20：正文无代码时用工具层缓存补回（见 _ensure_sysml_from_tools 的说明）
         llm_content = self._ensure_sysml_from_tools(llm_content)
+        # ★★ 2026-11-19（**直行路径正文收敛**，msg#7039 实证）：
+        #   现象：一条 21,864 字回复里，提示词出现 **2 遍**、同一份 SysML 代码出现 **3 遍**。
+        #   两个缺口叠加（缺一不可地解释"反馈多次仍未解决"）：
+        #     ① `final_content._is_interim` 引用从未定义的 `_SIM_OTHER`
+        #        ⇒ NameError 被 `except: return text, 0` 静默吞掉 ⇒ dedupe **从未真正跑过**；
+        #     ② 三处挂钩点（planner×2 + stream×1）**不含直行**，而 #7039 走的正是直行。
+        #   本段补 ②；① 已在 `agent/final_content.py` 修（定义常量 + 兜底不再静默）。
+        #
+        #   ⚠️ 位置：必须在 `_ensure_sysml_from_tools` **之后** ——
+        #      它会把工具层缓存的代码追加进正文，先收敛再追加会漏掉那一份（又变成两份）。
+        #   ⚠️ 顺序：块级 → 段级 → 序号归一。序号归一给"多份报告首尾相接"善后，
+        #      必须在收敛之后跑，否则被收敛掉的块若带标题会让序号出现空洞。
+        try:
+            from agent.final_content import (dedupe_interim_code_blocks as _dedupe_fc,
+                                             collapse_restated_sections as _collapse_fc,
+                                             normalize_ordinal_headings as _ordfix_fc)
+            _fc_before = len(llm_content or "")
+            llm_content, _fc_blk = _dedupe_fc(llm_content)
+            llm_content, _fc_sec = _collapse_fc(llm_content)
+            llm_content, _fc_ord = _ordfix_fc(llm_content)
+            if _fc_blk or _fc_sec or _fc_ord:
+                print("[final-content] 直行收敛（块 %d / 重述段 %d / 序号 %d）：%d -> %d 字"
+                      % (_fc_blk, _fc_sec, _fc_ord, _fc_before, len(llm_content)), flush=True)
+        except Exception as _fe:
+            # ⚠️ 呈现层失败不得影响交付，但**必须可见**——
+            #    上一条同类 bug 正是被 `except: pass` 藏了整整三个月。
+            import logging as _lg
+            _lg.getLogger("mbse.final_content").warning(
+                "直行正文收敛失败（已跳过，正文原样交付）：%s", str(_fe)[:200])
         sysml_views = self._gen_sysml_views(llm_content, intent, user_input)
 
         # Step 5: Store messages (exception-safe: rollback+close on any error)
@@ -1174,6 +1227,16 @@ class ExecuteMixin:
                     "submitted_by": audit_user(user) if isinstance(user, dict) else "会话发起人",
                     **self._build_rich_card(intent, retrieval, branch, user_input, provider_id),
                 }, ensure_ascii=False)
+                # ★ 2026-11-19：结构化留痕注入（见 core/attempt_trace.attach）。
+                #   · 单次生成 ⇒ attempts 为空 ⇒ attach 原样返回（向后兼容，零字段膨胀）；
+                #   · 多次生成 ⇒ exec.attempts 存历次原文，content 仍是收敛后的最终版。
+                try:
+                    from core.attempt_trace import attach as _at_attach
+                    card_data = _at_attach(card_data, _ac_attempts)
+                except Exception as _ate:
+                    import logging as _atl
+                    _atl.getLogger("mbse.attempt_trace").warning(
+                        "直行 attempt 注入失败（卡片原样交付）：%s", str(_ate)[:160])
                 cursor = conn.execute(
                     "INSERT INTO messages (conversation_id, role, content, msg_type, card_data) VALUES (?,?,?,?,?)",
                     (conversation_id, "assistant", llm_content, self._get_card_type(intent), card_data)

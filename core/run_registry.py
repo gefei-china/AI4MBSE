@@ -39,13 +39,54 @@ def _ttl(cfg=None):
         return 1800
 
 
+def _respect_run_heartbeat(cfg=None) -> bool:
+    """是否把「批次心跳仍未超时」作为**不判孤儿**的依据（默认开）。
+
+    回退开关：runtime.orphan_respect_run_heartbeat=false ⇒ 逐字节回到改动前判据。
+    """
+    try:
+        from core import config as _c
+        return bool((cfg or _c).as_bool("runtime", "orphan_respect_run_heartbeat", True))
+    except Exception:
+        return True
+
+
 def find_orphans(conn, ttl_s: int | None = None):
     """返回超过 TTL 仍未推进的非终态任务行。
 
     仅读不改 —— 供端点与自检脚本使用；真正的改写只在 `reap_orphans` 里发生。
+
+    ★★ 2026-11-19 P0-D：判据加入**批次心跳**（93/105 条"假失败"的根因修复）。
+    为什么必须加（真库归因）：`agent_tasks.updated_at` 只在**状态变更**时刷新，
+    而单轮编排实测 343s / 371s / 849s / **1155s**（最坏单任务 241s）——
+    长 LLM 调用期间该列不动，30 分钟墙钟一到就被判"无进展"，
+    于是**健康跑着的批次被自己的看门狗杀掉**，错误文案还写成"进程重启或线程丢失"。
+    而**批次心跳早就存在**：`orch_checkpoint.touch(conn, run_id, every_s=5.0)`
+    在主循环里每 5 秒刷 `orch_checkpoints.updated_at`。
+    ⇒ 只要批次心跳还在走（< TTL），就说明**有线程在推进**，任务不是孤儿。
+
+    边界（都必须成立才判孤儿）：
+      · 任务自身 `updated_at` 超 TTL；且
+      · 该批次 `orch_checkpoints.updated_at` 也超 TTL（或无对应批次行）。
+    老库（无 orch_checkpoints 表）⇒ SQL 失败 ⇒ 降级到改动前的单表判据。
     """
     ttl = _ttl() if ttl_s is None else int(ttl_s)
     marks = ",".join("?" for _ in ACTIVE_STATUSES)
+    if _respect_run_heartbeat():
+        sql = (f"SELECT t.id, t.run_id, t.conversation_id, t.task_key, t.title, t.status, "
+               f"t.updated_at, t.agent_id "
+               f"FROM agent_tasks t "
+               f"LEFT JOIN orch_checkpoints oc ON oc.run_id = t.run_id "
+               f"WHERE t.status IN ({marks}) "
+               f"AND t.updated_at < datetime('now', ?) "
+               f"AND (oc.updated_at IS NULL OR oc.updated_at < datetime('now', ?)) "
+               f"ORDER BY t.updated_at ASC")
+        try:
+            return list(conn.execute(sql, (*ACTIVE_STATUSES,
+                                           "-%d seconds" % ttl,
+                                           "-%d seconds" % ttl)).fetchall())
+        except Exception:
+            pass          # 老库/无 orch_checkpoints：落到下面的旧判据
     sql = (f"SELECT id, run_id, conversation_id, task_key, title, status, updated_at, agent_id "
            f"FROM agent_tasks WHERE status IN ({marks}) "
            f"AND updated_at < datetime('now', ?) ORDER BY updated_at ASC")

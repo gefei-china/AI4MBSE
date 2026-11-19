@@ -761,6 +761,66 @@ class OpenAICompatProvider(BaseLLM):
             except (TypeError, ValueError):
                 _temp = 0.3
 
+        # ── ★ 2026-11-18（R3）输出上限钳制：**必须紧贴 payload 之前**
+        #    （依赖 mt / cw / mp 三者都已就绪；挪到 mp 解析之前会 NameError，
+        #      而症状是「出站 mt=None、请求根本没发出」，不是「钳制没生效」）：防「DB 里 max_tokens 设成 112000 ⇒ 上游 400」──
+        # 为什么这一段必须存在（真库实证）：
+        #   provider 1/71/109 的 max_tokens=112000、context_window=128000，
+        #   而 `max_tokens` 的语义是**一次响应的输出 token 数**，与「上下文窗口」**量纲不同**
+        #   （窗口 = 输入 + 输出的总容量）。上面那段 `context_window_guard=clamp` 与
+        #   前端保存校验 `max_tokens > context_window` **都用同一个错判据**
+        #   —— 拿输出上限和窗口比大小 ⇒ 112000 < 128000 双双放行 ⇒ 上游
+        #   `400: max_tokens 112000 exceeds ...`。
+        # 两层取 min（都是确定性规则，不猜各家具体上限）：
+        #   ① cw × llm.output_ratio_cap（**默认 0 = 不启用**）—— 可选护栏，拦「输出占满窗口」。
+        #      为什么默认关：实测 0.5 会误伤正常配置（8192/8192 被压到 4096、
+        #      32768/64000 被压到 32000）。真正防 400 的是 ②，比例层只作可选加强。
+        #   ② 输出硬上限，**两层**（默认都 0 = 不启用）：
+        #        model_params.max_output_tokens（provider 级，优先）
+        #        llm.max_output_tokens（全局）
+        # 为什么默认关（本轮真调上游实测）：
+        #   provider 71（deepseek-v4-flash，api.deepseek.com）**接受 max_tokens=112000，HTTP 200**；
+        #   报 400 的是 provider 109（内部网关 1.95.113.224，status=inactive）。
+        #   ⇒ 一刀切全局收紧会**误伤能接受的 provider**；正解是「谁被拒只给谁配」。
+        # ⚠️ 必须留痕：静默压低输出与「模型本来就写不长」在现象上无法区分（本仓既有教训）。
+        _mt_raw = mt
+        try:
+            from core import config as _c_mt
+            _rcap = float(_c_mt.get("llm", "output_ratio_cap", 0) or 0)
+            _mceil = int(_c_mt.get("llm", "max_output_tokens", 32768) or 0)
+        except Exception:
+            _rcap, _mceil = 0, 32768
+        # provider 级覆盖优先于全局：`model_params.max_output_tokens`
+        #   —— 谁被上游拒就只给谁配（实测：provider 109 内部网关拒 112000，
+        #      而 71/1 走 deepseek 官方**接受 112000**⇒ 全局收紧会误伤可用配置）。
+        _mceil_prov = 0
+        try:
+            _mceil_prov = int(mp.get("max_output_tokens") or 0)
+        except (TypeError, ValueError):
+            _mceil_prov = 0
+        _ceil = _mceil_prov or _mceil
+        _cap_by_ratio = int(cw * _rcap) if (0 < _rcap <= 1 and cw > 0) else 0
+        if _cap_by_ratio and mt > _cap_by_ratio:
+            mt = _cap_by_ratio
+        if _ceil and mt > _ceil:
+            mt = _ceil
+        if mt < 1:
+            mt = _mt_raw        # 防御：钳制算出 0/负数（cw 配错）⇒ 不生效，交上游判定
+        if mt != _mt_raw:
+            try:
+                _kcap = (cfg.get("id"), "mtcap", _mt_raw)
+                if _kcap not in _ctx_warned:
+                    _ctx_warned.add(_kcap)
+                    _log.warning(
+                        "[max_tokens] 输出上限已钳制：%s -> %s｜provider=%s(id=%s) model=%s"
+                        " context_window=%s ratio_cap=%s ceil=%s"
+                        "｜max_tokens 是「一次响应的输出 token 数」，不等于上下文窗口；"
+                        "若确需更大输出，请同时上调 context_window 并置 llm.output_ratio_cap /"
+                        " llm.max_output_tokens（0=不启用该层）",
+                        _mt_raw, mt, cfg.get("name"), cfg.get("id"), cfg.get("model_name"),
+                        cw, _rcap, ("provider:%s" % _mceil_prov) if _mceil_prov else ("global:%s" % _mceil))
+            except Exception:
+                pass
         payload = {
             "model": model_name,
             "messages": messages,

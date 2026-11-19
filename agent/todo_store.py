@@ -473,8 +473,23 @@ def handle_todo_write(arguments: dict, conversation_id: int, conn=None,
             "COALESCE(verify_tool,'') FROM agent_todos WHERE id=? AND conversation_id=?",
             (tid, int(conversation_id or 0))).fetchone()
         if not row:
+            # ★ 2026-11-19（真库归因：8 条「待办 #N 不存在」真实失败）：
+            #   模型常**编造/记错**待办编号（#1 / #5 / #85 / #600 等），旧文案只说"不存在"，
+            #   模型于是继续猜下一个编号（与 `tool_result_fetch` 的 offload 编号同一形态）。
+            #   修法：**把本会话确实存在的 id 列出来**，让它一次纠正到位。
+            try:
+                _avail = [r[0] for r in c.execute(
+                    "SELECT id FROM agent_todos WHERE conversation_id=? "
+                    "AND status NOT IN ('deleted') ORDER BY id", (int(conversation_id or 0),)).fetchall()]
+            except Exception:
+                _avail = []
+            _hint = ("本会话现有待办 id：%s" % _avail) if _avail else \
+                "本会话当前**没有任何待办**——先用 action=add 建，再 update"
             return {"ok": False,
-                    "result": "todo_write update：待办 #%d 不存在（或不属于本会话）" % tid}
+                    "result": ("todo_write update：待办 #%d 不存在（或不属于本会话）。%s。"
+                               "不要按顺序猜编号；id 只能取自 action=list 或 add 的返回"
+                               % (tid, _hint)),
+                    "available_ids": _avail}
         item = _at.TodoItem(subject=row[1], status=row[2], verify=row[3],
                             verify_result=row[4], blocked_by=row[5], note=row[6])
         to_status = str(a.get("status") or "").strip().lower()

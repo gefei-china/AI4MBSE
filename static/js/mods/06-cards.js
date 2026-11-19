@@ -39,6 +39,30 @@ function procBlocksHtml(ex, mid){
                   sub:'系统进度提示（非模型思考）', body:_ntBody, cls:'notice'});
     }
   }
+  /* ★ 2026-11-19（结构对齐标杆）：历次生成尝试收进过程区，**正文一律不折叠**。
+     数据源 = card_data.exec.attempts（产生时打标，见 core/attempt_trace.py）；
+     老消息无该字段 ⇒ 不产生该行，刷新后与旧版逐字节一致。
+     ⚠️ 用原生 <details> 折叠尝试正文，不给 .proc-body / .msg.ai .body 加任何
+        max-height / overflow-y —— 门禁 verify_answer_no_inner_scroll 守着这条。 */
+  const _attempts = Array.isArray(ex.attempts) ? ex.attempts : [];
+  if(_attempts.length > 1){
+    const _kLabel = {answer:'首次', continuation:'续写', retry:'重跑'};
+    const _aBody = _attempts.map(a=>{
+      const idx = Number((a && a.index) || 0) + 1;
+      const k = _kLabel[(a && a.kind)] || ((a && a.kind) || '生成');
+      const n = Number((a && a.chars) || 0);
+      const txt = esc((a && a.content) || '');
+      return `<details style="margin:5px 0;"><summary style="cursor:pointer;font-size:12.5px;color:var(--mut);">第 ${idx} 次 · ${esc(k)}${n?' · '+n+' 字':''}${(a && a.truncated)?'（已截断）':''}</summary><div style="white-space:pre-wrap;font-size:12px;line-height:1.6;padding:6px 2px;">${txt}</div></details>`;
+    }).join('');
+    steps.push({icon:'↻', title:`生成尝试（${_attempts.length}）`, status:'done', cls:'attempts',
+      sub:_attempts.map(a=>_kLabel[(a && a.kind)] || '生成').join(' → '), body:_aBody});
+  }
+  /* ★ 2026-11-19 P1-3：编排路径显式标记。此前用户只能从"attempts 为空"反推，
+     很容易误以为是漏标；现在直接说明"本轮走的是多子任务编排，不适用单次尝试回放"。 */
+  if(ex.flow_kind === 'orchestrated'){
+    steps.push({icon:'🧩', title:'执行方式：多子任务编排', status:'done', cls:'flowkind',
+      sub:'由多个子任务协作完成，不适用单次生成尝试回放', noBody: true});
+  }
   if(ex.agent) steps.push({icon:'🤖', title:`子智能体：${esc(ex.agent)}`, status:'done', sub:'✓ 已完成', cls:'agent', noBody: true});
   const subs = ex.subtasks||[];
   if(subs.length){
@@ -480,6 +504,10 @@ function stripFencedCode(text) {
 function cardSysmlTabs(cd, content) {
   const sv = cd.sysml_views;
   if(!sv || !sv.views) return '';
+  // ★ 2026-11-18：空壳视图（所有视图 nodes/edges 皆空）不渲染视图卡。
+  //   与 sysmlViewsUsable 同判据 —— 与 05-markdown.js 的正文剥离保持一致，
+  //   避免「正文剥走了、卡又不画」导致内容消失（msg#7008 现象）。
+  if(!sysmlViewsUsable(cd)) return '';
   const entries = Object.entries(sv.views);
   if(!entries.length) return '';
   const parsed = sv.parsed || {nodes:0, edges:0};

@@ -240,20 +240,104 @@ def _fmt_list(dpath: str, recursive: bool, depth: int = 0) -> list:
     return entries
 
 
+# ── 路径纠偏：不存在的路径要回列「真实存在的候选」 ──────────────────────
+#
+# 事故（2026-11-19 归因，约 20 条）：模型反复用 `00_master.sysml`、
+# `C:\tmp\artifacts\...` 这类**从不存在的**路径调 file_read，每次只拿到
+# 「文件不存在」——它没有任何信息可以收敛，于是换个名字继续猜（同一会话内 3 次）。
+# 本仓纪律：「只给症状不给下一步」的报错会被模型忽略，错误信息必须带可执行分支。
+#
+# 三步策略（全部只读、全部有上限，绝不遍历整盘）：
+#   ① 同目录模糊匹配（difflib）—— 拼错/换名的情形；
+#   ② 同目录清单（同扩展名优先）—— 名字完全不对但目录对的情形；
+#   ③ 逐级上溯到最近存在的祖先再列 —— 目录本身不存在的情形。
+def _path_suggest_on() -> bool:
+    try:
+        from core import config as _cfg
+        v = str(_cfg.get("file_tools", "path_suggest", "1")).strip().lower()
+        return v not in ("0", "false", "off", "no")
+    except Exception:
+        return True
+
+
+def _suggest_paths(path: str, limit: int = 6) -> str:
+    """回列目标附近**真实存在**的路径；无从建议时返回空串。"""
+    if not _path_suggest_on():
+        return ""
+    try:
+        ap = os.path.abspath(str(path or ""))
+        d, base = os.path.split(ap)
+        hops = 0
+        # ③ 目录不存在 ⇒ 上溯到最近存在的祖先（base 累积成相对路径，帮模型看懂位置）
+        while d and not os.path.isdir(d) and hops < 6:
+            d2, b2 = os.path.split(d)
+            base = (b2 + "/" + base) if base else b2
+            d, hops = d2, hops + 1
+        if not d or not os.path.isdir(d):
+            return ""
+        names = sorted(os.listdir(d))
+    except OSError:
+        return ""
+    except Exception:
+        return ""
+    # 隐藏文件只在「没有别的可选」时才列（实测把 `.aiignore` 当候选毫无帮助）
+    names = [n for n in names if not n.startswith(".")] or names
+    if not names:
+        return ""
+    import difflib
+    want = os.path.basename(ap) or base.rsplit("/", 1)[-1]
+    # cutoff 0.55：低于此值的"相似"其实是无关项（实测 0.4 会把 root 下任何文件都当候选，
+    # 反而把真正该看的目录清单挤掉）⇒ 不相似就退回"列目录"。
+    close = difflib.get_close_matches(want, names, n=limit, cutoff=0.55)
+    if close:
+        return "同目录相似项（%s）：%s" % (d, "、".join(close))
+    ext = os.path.splitext(want)[1].lower()
+    same = [n for n in names if ext and n.lower().endswith(ext)]
+    pool = same or names
+    more = "（共 %d 项，可先用 file_list 查看）" % len(pool) if len(pool) > limit else ""
+    return "该目录下现有（%s）：%s%s" % (d, "、".join(pool[:limit]), more)
+
+
+def _miss(msg: str, path: str) -> dict:
+    """路径不存在的统一返回：原始症状 + 可执行的下一步。"""
+    hint = _suggest_paths(path)
+    return {"ok": False, "result": msg + (("\n可改用：" + hint) if hint else "")}
+
+
 # ── 各工具实现（返回 {"ok": bool, "result": str}，异常兜底为 result 错误）──
 def _do_list(args: dict) -> dict:
     path = _resolve(args.get("path"))
     if not os.path.isdir(path):
-        return {"ok": False, "result": f"目录不存在或不是目录: {path}"}
+        return _miss(f"目录不存在或不是目录: {path}", path)
     entries = _fmt_list(path, bool(args.get("recursive")))
-    lines = [f"{e['type']:4s} {e['size'] or '':>8s}  {e['name']}" for e in entries]
-    return {"ok": True, "result": f"目录 {path} 共 {len(lines)} 项：\n" + "\n".join(lines[:MAX_LIST_ITEMS])}
+    # ★ 2026-11-19 修 KeyError('type')/KeyError('name')（真库归因：42 次真实失败）：
+    #   `_fmt_list` 有两种**非条目形态**的返回值 —— 异常与截断提示：
+    #     [{"error": "权限不足，无法读取 …"}]        ← 无 type/size/name
+    #     [... , {"note": "条目超过 N 上限，已截断"}]  ← 无 type/size/name
+    #   旧实现对每个 e 都硬取 `e['type']`，于是「目录没权限」被报成
+    #   「文件工具执行失败: 'type'」—— 把**可解释的权限问题**变成**看不懂的内部错误**，
+    #   模型据此会反复重试同一路径（真机 conv 999999905 / 999999205 各 3 次）。
+    #   现在：异常/提示条目原样呈现为一行说明，不再参与表格格式化。
+    bad = [e for e in entries if not (isinstance(e, dict) and "type" in e and "name" in e)]
+    good = [e for e in entries if isinstance(e, dict) and "type" in e and "name" in e]
+    lines = [f"{(e.get('type') or '?'):4s} {(e.get('size') or ''):>8s}  {e.get('name') or ''}"
+             for e in good]
+    for e in bad:
+        if not isinstance(e, dict):
+            continue
+        msg = e.get("error") or e.get("note") or ""
+        if msg:
+            lines.insert(0, f"⚠️ {msg}")
+    if not lines:
+        # 目录存在但读不到任何条目（权限/空）—— 明确说出来，不要让模型猜
+        return {"ok": True, "result": f"目录 {path} 无可列条目（可能权限不足或为空）"}
+    return {"ok": True, "result": f"目录 {path} 共 {len(good)} 项：\n" + "\n".join(lines[:MAX_LIST_ITEMS])}
 
 
 def _do_read(args: dict) -> dict:
     path = _resolve(args.get("path"))
     if not os.path.isfile(path):
-        return {"ok": False, "result": f"文件不存在或不是文件: {path}"}
+        return _miss(f"文件不存在或不是文件: {path}", path)
     try:
         max_chars = int(args.get("max_chars") or DEFAULT_READ_CHARS)
     except (TypeError, ValueError):
@@ -343,7 +427,7 @@ def _do_delete(args: dict) -> dict:
         if bounded_rmtree(path):
             return {"ok": True, "result": f"已递归删除目录: {path}"}
         return {"ok": False, "result": f"递归删除超时或失败（可能被系统保护，请重试）: {path}"}
-    return {"ok": False, "result": f"路径不存在: {path}"}
+    return _miss(f"路径不存在: {path}", path)
 
 
 _HANDLERS = {

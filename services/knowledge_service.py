@@ -493,6 +493,12 @@ class KnowledgeService(BaseService):
         （切会话即不可见），台账是持久的入库审计记录。source_tag：zhiyuan_pull=智源拉取
         （batch 前缀 ZPULL-）；工程入库旧捷径为 project_ingest（已下线）。
         """
+        # ★ 2026-11-19：本函数内独立 import `json`。
+        #   原来只在**别的函数**里 `import json as _json`（函数内 import 不跨函数），
+        #   本函数用 `_json` 时抛 NameError ⇒ 被外层 `except Exception` 吞成
+        #   status=failed —— 台账写的是「失败」，真因却是名字未定义。
+        #   静态发现工具：tools/verify/find_undefined_names.py（已接入门禁）。
+        import json as _json
         import time as _time
         import uuid as _uuid
         from datetime import datetime as _dt, timedelta as _timedelta
@@ -500,6 +506,11 @@ class KnowledgeService(BaseService):
         from vector2graph import confirm_candidates
         from core.audit import audit
         t0 = _time.time()
+        # ★ 2026-11-19：`t0_str` 原先**从未定义**（下方 SQL 直接引用）⇒ NameError。
+        #   语义：本批待审三元组的自动批准**时间窗起点** —— 只批准本次入库产生的，
+        #   不碰存量 pending。减 2 秒余量：created_at 是秒级文本、插入可能早于 t0。
+        t0_str = (_dt.fromtimestamp(t0) - _timedelta(seconds=2)).strftime(
+            "%Y-%m-%d %H:%M:%S")
         ledger_batch = f"ZPULL-{_uuid.uuid4().hex[:8]}" if source_tag == "zhiyuan_pull" \
             else f"PINGEST-{_uuid.uuid4().hex[:8]}"
         if not project_name and project_id:

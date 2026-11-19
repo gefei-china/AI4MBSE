@@ -401,6 +401,30 @@ def assemble_system_prompt(blocks: dict, audit: bool = True) -> str:
 # ════════════════════════════════════════════════════════════════════════════
 
 #: 工具使用约束文案（**唯一真源**；此前只内联在 `stream.py` 的 blocks dict 里）
+def _slot_entity_cap(user_input: str) -> int:
+    """短输入时压低 slots（槽位）实体拼接上限 —— 2026-11-19。
+
+    事故（conv 999999905 / msg#7015）：用户输入「我的提示词呢」只有 **6 字**，
+    却被拼上 5 个**上一轮遗留**实体（A8E / 空调子系统V1 / 热管理系统（AD1) …）
+    ⇒ 检索串膨胀到 70+ 字 ⇒ 检索被拉向旧话题，用户真正的问题被稀释。
+
+    判据：**短输入的主意图是"指代上一轮"，上一轮实体是噪音**。
+    修法：短输入（< context.slot_entity_short_max_chars，默认 20）时上限压到 2。
+    回退：`context.slot_entity_short_max_chars <= 0` ⇒ 恒返回 5（逐字节回旧行为）。
+    ⚠️ stream.py 与 execute.py **两处必须同时调用本函数**：只改一处会让
+       一半请求用新口径、一半用旧口径，这种不一致在数据里长得像"历史波动"，极难发现。
+    """
+    try:
+        from core import config as _cfg
+        _short_th = int(_cfg.get("context", "slot_entity_short_max_chars", 20) or 0)
+        _cap_short = int(_cfg.get("context", "slot_entity_cap_short", 2) or 2)
+    except Exception:
+        _short_th, _cap_short = 20, 2
+    if _short_th <= 0:
+        return 5                      # 开关关闭 ⇒ 旧行为
+    return _cap_short if len((user_input or "").strip()) < _short_th else 5
+
+
 TOOL_RULES_TEXT = ("工具使用约束：仅调用完成当前任务所必需的工具，一次最多调用 2 个；"
                    "工具返回与任务无关、结果为空或已足够作答时，直接基于已有信息回答，"
                    "禁止反复/连环调用工具。\n")
@@ -415,7 +439,16 @@ ASK_USER_RULES_TEXT = (
     "（question 结合当前上下文具体化 + options 给 2-6 个基于上下文的候选），"
     "调用后流程会暂停并弹出可点选的确认卡片，用户回答后自动继续。"
     "⚠️ 不要用纯文本写『请确认：……』然后自行结束——那不会生成确认卡片；"
-    "信息足够时直接执行，不要为确认而确认。\n")
+    "信息足够时直接执行，不要为确认而确认。\n"
+    # ★★ 2026-11-19（conv 999999905 / msg#7016 实测）：模型拿「MCP 502」去问用户
+    #   「你希望怎么继续」，而用户问的是「我的提示词呢」——技术故障被当成用户拍板事项，
+    #   用户的问题完全没被回答。以下三条锚定**行为本身**。
+    "【ask_user 禁止事项】① 技术故障（工具不可用 / 接口 4xx·5xx / 超时 / 授权失效 /"
+    "数据取不到）**不得**用 ask_user 问用户怎么办 —— 自行降级或跳过，并在回答里如实说明"
+    "哪步没做成、为什么、已保留什么；② **不得**要求用户提供本可自行获取或本就无法获取的"
+    "技术参数（工程 id / 分支 id / 包 id / 令牌 / 服务地址），取不到就如实说明；"
+    "③ 调 ask_user 前**必须**先正面回答用户本轮的直接问题（『在哪 / 是什么 / 为什么 / 有没有』"
+    "这类询问必须给出答案），不能只报告执行障碍。\n")
 
 #: ★ 2026-10-17（米爸「harness 持续工作」）：持续工作模式指引（prompt 层）。
 #: 为什么需要：完成度评估器只能兜住「模型以为自己完成了」；如果模型**计划上**就只做
@@ -1133,6 +1166,7 @@ __all__ = [
     '_is_capability', '_exec_capability',
     'AgentDefinition', 'AgentRegistry', 'IntentRouter', 'GraphRAG', 'ConflictDetector',
     '_citations_payload', '_extract_code_blocks', '_archive_impact_analysis',
+    '_slot_entity_cap',   # ★ 2026-11-19：下划线名必须显式登记，否则 import * 取不到
     '_archive_sysml_version', '_archive_artifacts', '_TOOL_RESULT_CAP',
     '_TOOL_MODEL_CAP', '_ATT_INJECT_CAP', '_ATT_OUTLINE_CAP', '_ATT_SECTION_MODEL_CAP', '_AGENT_ROLE_CAP',
     '_STREAM_CHARS_PER_SEC', '_STREAM_MAX_CPS', '_STREAM_CHUNK', '_STREAM_MAX_DRAIN_SEC',

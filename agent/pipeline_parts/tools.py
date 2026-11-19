@@ -56,6 +56,14 @@ _ASK_USER_TOOL = {
             "③ 动作影响面大，执行前需要用户确认。调用后流程暂停并弹出**可点选的确认卡片**，"
             "用户回答后自动继续执行。⚠️ 不要用纯文本提问然后自行结束——那不会生成确认卡片，"
             "用户只能手打回复；也不要为确认而确认（信息足够时直接执行，不要滥用）。"
+            "\n\n【禁止事项·违反即视为交付失败】"
+            "① 不得把**技术故障**当成需要用户拍板的事去问——工具不可用 / MCP 或接口报错（4xx/5xx）/"
+            "网络超时 / 授权失效 / 数据取不到，一律**自行降级或跳过**，并在回答里如实说明"
+            "「哪一步没做成、为什么、已保留什么」，**不要**弹确认卡要求用户决策；"
+            "② 不得要求用户提供**本可自行获取或本就无法获取的技术参数**"
+            "（如工程 id / 分支 id / 包 id / 令牌 / 服务地址）——取不到就说明取不到；"
+            "③ 调用本工具前，**必须先回答用户本轮的直接问题**：若用户在问『在哪 / 是什么 / 为什么 / 有没有』，"
+            "回答里必须正面给出该问题的答案，不能只报告执行障碍或只贴确认卡。"
         ),
         "parameters": {
             "type": "object",
@@ -267,6 +275,54 @@ from requirement_itemize_tools import REQ_TOOL_NAMES as _REQ_TOOL_NAMES  # noqa:
 from requirement_itemize_tools import exec_tool as exec_req_tool  # noqa: E402
 
 
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 「工具名 → 执行器」注册表（2026-11-19）
+#
+# 为什么需要它：`BUILTIN_DESC` 是**注入清单**，不是**能力清单** —— 两者口径曾反复错位，
+# 每次的表现都一样：「模型看得见 → 调用 → 必败」。已发生四次：
+#   · `conflict_check`（假实现，恒返回「无新冲突」）⇒ 2026-10-13 连登记一起删；
+#   · `code_exec` / `doc_parse` / `requirement_itemize`（实现好了但分发点没 import）
+#     ⇒ 真机 46 次调用全返回「未知工具」；
+#   · `save_artifact`（有实现但 BUILTIN_DESC 漏登记）⇒ 绑定了也不注入；
+#   · `entity_create`（**至今仍无任何执行分支**，却被 seeds 绑给 requirement_analysis /
+#     design 两个 Agent ⇒ 这两个 Agent 每轮都拿到一个必败工具）。
+# 四次事故的共同点：**「登记」与「接线」是两个动作，没有任何东西校验它们一致**。
+#
+# 本注册表把「接线」显式写出来，`_build_tools_def` 用它做注入过滤：
+#   名字在 BUILTIN_DESC 却不在本表 ⇒ 不注入（看不见 = 不会调用 = 不会失败），
+#   同时留痕到 `self._dropped_no_executor`（**不静默丢弃**，本仓纪律）。
+# 反漂移由 `tools/verify/verify_tool_executor_registry.py` 守：
+#   ① BUILTIN_DESC ⊆ 本表（例外清单显式列出，新增必须改门禁）；
+#   ② tools.py 里每个 `if name == "X"` 的 X 都在本表（防止新增分支忘登记）。
+# ══════════════════════════════════════════════════════════════════════════════
+
+#: 走 `name in (...)` 分派、名字集合来自各自实现模块的工具名集合。
+#: ⚠️ 这些集合是**导入来的**（`from .common import *`）：新增一个工具模块时，
+#:   必须把它的 NAMES 加进本元组，否则新工具会被下面的注入过滤**静默剔除** —— 门禁会报。
+_EXECUTOR_NAME_SETS = (
+    _FILE_TOOL_NAMES, _WEB_TOOL_NAMES, _REPORT_TOOL_NAMES,
+    _CODE_TOOL_NAMES, _DOC_TOOL_NAMES, _SKILL_TOOL_NAMES,
+    _REQ_TOOL_NAMES, _META_QUERY_NAMES, _META_APPLY_NAMES,
+)
+
+#: 走 `if name == "X"` 单点分派的内置工具（人工核对；门禁会反向校验有无遗漏）。
+_BUILTIN_SINGLE_DISPATCH = frozenset({
+    "graph_retrieve", "impact_analyze", "validate", "save_artifact",
+    "sysml_ast_extract", "sysml_stdlib_meta", "sysml_import_graph",
+    "todo_write", "ask_user", "memory_fetch", "tool_result_fetch",
+    "read_attachment_section", "alternatives_score",
+    "methodology_profile_load", "mbse_pull_ingest",
+})
+
+#: 内置通道**确实有执行器**的工具名全集。
+EXECUTABLE_BUILTIN_NAMES = frozenset(
+    set(_BUILTIN_SINGLE_DISPATCH).union(*[set(s) for s in _EXECUTOR_NAME_SETS]))
+
+
+def builtin_has_executor(name: str) -> bool:
+    """该名字在内置通道是否有执行器（决定「要不要注入给模型」）。"""
+    return str(name or "") in EXECUTABLE_BUILTIN_NAMES
 class ToolMixin:
     """工具定义、执行、重试策略与调用留痕。"""
 
@@ -527,7 +583,20 @@ class ToolMixin:
                 except Exception:
                     pass
                 continue
+            # ★ 2026-11-19：**无执行器的内置工具不注入**（见模块级「工具名 → 执行器」注册表）。
+            #   真库实证：`entity_create` 在 BUILTIN_DESC 里、被 seeds 绑给 requirement_analysis 与
+            #   design 两个 Agent，但全仓**没有任何执行分支** ⇒ 模型每轮都看得见、调用必败
+            #   （落到兜底报「已注册但未配置执行器」）。看不见 = 不会调用 = 不会失败。
+            #   ⚠️ 必须留痕：本仓纪律「静默丢弃 = bug」，剔除项进 self._dropped_no_executor，
+            #      供观测面板与门禁核对（与 _dropped_disabled 同口径）。
             if name in builtin_desc and not any(c[0] == name for c in candidates):
+                if not builtin_has_executor(name):
+                    try:
+                        self._dropped_no_executor = list(
+                            getattr(self, "_dropped_no_executor", []) or []) + [name]
+                    except Exception:
+                        pass
+                    continue
                 candidates.append((name, builtin_desc[name], "builtin", ""))
         # TR-P3：DB 注册表自定义工具（Agent 通过绑定面板绑定的 type=tool 本地工具——
         # 修复既有缺口：绑定后运行时本应可消费，此前 _build_tools_def 遗漏了这类绑定）
@@ -2055,6 +2124,34 @@ class ToolMixin:
             #   它就会被暂存 ⇒ 模型调修复工具拿到"已暂存"回执 ⇒ **校验-修复闭环被卡死**
             #   （正是 `_REPAIR_WRITE_EXEMPT` 注释里记的那个坑）。
             #   豁免集合与确认闸共用同一对常量，语义天然一致。
+            # ═══════════════════════════════════════════════════════════════
+            # ★ 2026-11-19（写入范围三态 · 执行侧确定性闸）
+            #
+            # `_orch_readonly` 由编排层按 `core.write_scope.scan_write_intent` 的
+            # `verdict == "no"` 置位（用户**明确**说了不要写入平台）。此时写类工具
+            # **不执行、不暂存、不入确认队列** —— 因为已经确定它不该发生，
+            # 再生成一张确认单只会白占用户的待办。
+            #
+            # 为什么 `unknown` 不拦：真库 519 条 unknown 里 6 条（1.2%）确实是写入
+            # （「把那个包删掉」不含「删除」二字）⇒ 硬拦会误伤；而 `no` 的 12 条之后
+            # 平台写入 **0 条** ⇒ 硬拦零误伤。这个不对称是这道闸存在的全部依据。
+            #
+            # ⚠️ 豁免集与下面暂存分支**共用同一对常量**：`sysml_v2_autofix` 的
+            #   side_effect 也是 write，被拦就等于「模型知道要修也修不了」；
+            #   `capability_apply` 本身只写一张提案确认单，不需要二次拦截。
+            if getattr(self, "_orch_readonly", False):
+                if (str(name) not in _REPAIR_WRITE_EXEMPT
+                        and str(name) not in _PROPOSE_WRITE_EXEMPT
+                        and self._classify_write(name).get("kind") != "read"):
+                    result = {"ok": False, "error_class": "readonly_scope",
+                              "result": (f"工具「{name}」未执行：本轮写入范围为**只读**"
+                                         f"（用户明确不需要写入平台）。"
+                                         f"不要重试、不要换参数重试；"
+                                         f"请按 expected_output 直接交付文本，"
+                                         f"并在答复里说明「需要写入的话请明确指示」。")}
+                    self._log_tool_call(name, tool_type, arguments, result,
+                                        intent_ctx, agent_ctx, conv_ctx, t0)
+                    return result
             if getattr(self, "_orch_subtask", False):
                 if (str(name) not in _REPAIR_WRITE_EXEMPT
                         and str(name) not in _PROPOSE_WRITE_EXEMPT
@@ -2588,21 +2685,67 @@ class ToolMixin:
             #     （写入 knowledge_conflicts + 人工裁决），以及 `workflows/tools.py` 里那套
             #     （会真检索图谱、比对同名实体），二者均**未改动**。
             # TR-P3：DB 注册表自定义工具——已注册但未配置执行器 → typed error（LLM 可恢复，非 500）
-            _registered = False
+            # ★★ 2026-11-19 **分类修复**：此前一律报「未配置执行器」，但实测 367 条真实失败里
+            #   business 类最大一块是 **MCP 离线**被这么报（智源 MCP 超时时 8+ 个工具全中）。
+            #   分派条件见上方 `WHERE status='online'` —— 离线时 row=None 跳过 MCP 分支，
+            #   落到这里就成了"未配置执行器"。
+            #   后果：模型以为能力不存在 ⇒ 改用别的方式凑；用户以为要配执行器 ⇒ 走错方向。
+            #   现在按 ①工具 source ②MCP server 实际状态 如实分三类说明。
+            _trow = None
+            _mcp_info = None
             try:
                 from database import get_db
                 conn = get_db()
                 try:
-                    _registered = conn.execute(
-                        "SELECT 1 FROM tools WHERE name=? AND status='active'", (name,)).fetchone() is not None
+                    _trow = conn.execute(
+                        "SELECT name, source, mcp_server_id, status FROM tools WHERE name=?",
+                        (name,)).fetchone()
+                    if _trow is not None:
+                        _src = str((_trow["source"] if hasattr(_trow, "keys") else _trow[1]) or "")
+                        if _src == "mcp":
+                            # 该工具对应哪个 MCP server。`tools` 列是 JSON 数组
+                            # （形如 ["query_projects", ...]）⇒ **必须带引号精确匹配**，
+                            # 否则 `query_project` 会误命中 `query_projects`。
+                            _mcp_info = conn.execute(
+                                "SELECT name, status, COALESCE(last_error,'') le FROM mcp_servers "
+                                "WHERE tools LIKE ? ORDER BY (status='online') DESC, id LIMIT 1",
+                                ('%"' + name + '"%',)).fetchone()
                 finally:
                     conn.close()
             except Exception:
-                pass
-            if _registered:
-                result = {"ok": False,
-                          "result": f"工具「{name}」已注册但未配置执行器（仅内置工具与在线 MCP 工具可执行），"
-                                    f"请基于已有能力完成，或联系管理员为它配置执行器"}
+                _trow = None
+            _registered = _trow is not None and str(
+                (_trow["status"] if hasattr(_trow, "keys") else _trow[3]) or "") == "active"
+            if _registered and _mcp_info is not None:
+                _sname = str(_mcp_info["name"] if hasattr(_mcp_info, "keys") else _mcp_info[0] or "")
+                _sstat = str(_mcp_info["status"] if hasattr(_mcp_info, "keys") else _mcp_info[1] or "")
+                _serr = str((_mcp_info["le"] if hasattr(_mcp_info, "keys") else _mcp_info[2]) or "")
+                if _sstat != "online":
+                    # A 类：真因是"依赖离线"，不是"没实现"
+                    result = {"ok": False, "error_class": "dependency_unavailable",
+                              "result": (f"工具「{name}」属于 MCP 服务「{_sname}」，该服务当前"
+                                         f"**{_sstat}**（不是工具缺失，无需配置执行器）。"
+                                         + (f"最近错误：{_serr[:120]}。" if _serr else "")
+                                         + "请到「能力中心 → 工具与 MCP → MCP 服务」重连/重新签发凭据后重试；"
+                                           "本轮如需继续，请基于已有信息完成，并在答复里说明该依赖不可用。")}
+                else:
+                    # server 在线但工具没调通 → 保留"执行器/工具名"口径，但要指出 server 是通的
+                    result = {"ok": False,
+                              "result": (f"工具「{name}」在 MCP 服务「{_sname}」中未找到可执行入口"
+                                         f"（服务本身在线）——请确认工具名是否属于该服务的已发布工具列表。")}
+            elif _registered:
+                # B 类：真·无执行器（如内置声明了但没实现）
+                # ★ 2026-11-19：把**判断依据**一起说出来，并给同类可用工具。
+                #   只说「未配置执行器」时模型不知道该改用什么（真机里它反复重试同一个名字）。
+                _alts = sorted(n for n in EXECUTABLE_BUILTIN_NAMES
+                               if n != name and any(
+                                   w in n for w in str(name).split('_')))
+                _alt_txt = ("可改用同类工具：%s。" % "、".join(_alts[:4])) if _alts else ""
+                result = {"ok": False, "error_class": "not_implemented",
+                          "result": f"工具「{name}」已注册但本通道**没有执行器**"
+                                    f"（内置执行器注册表共 {len(EXECUTABLE_BUILTIN_NAMES)} 个，不含它；"
+                                    f"它也不是在线 MCP/HTTP 工具）。{_alt_txt}"
+                                    f"请基于已有能力完成，不要重复调用同一工具，也不要改参数重试。"}
             else:
                 result = {"ok": False, "result": f"未知工具: {name}"}
             self._log_tool_call(name, tool_type, arguments, result, intent_ctx, agent_ctx, conv_ctx, t0)
