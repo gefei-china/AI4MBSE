@@ -1083,6 +1083,20 @@ DEFAULT_CONFIG = {
         "types": "stage,tool",         # 落哪几类（逗号分隔）；改这个不会让转发丢事件
         "max_per_run": 200,            # 单次编排事件数兜底（防异常循环撑爆表）
     },
+    # ── 方案B P0/P1：帧日志（断线重连可重放已生成内容，2026-11-19）────────────
+    # 与 stream_event_log 的分工：那张表回答"走了哪些阶段、调了哪些工具"（白名单
+    # stage/tool，无 token）；本组管的是**有序可重放的完整帧流**（含 token/reasoning，
+    # 合帧后落库），用来把"断线后已经滚过去的内容"再显示出来。
+    # 关掉（enabled=False）= 完全不建 run、不写帧，行为逐字节回到改动前。
+    "run_stream": {
+        "enabled": True,
+        "max_frames": 2000,          # 单 run 帧数上限；超限置 truncated=1 并停止记帧（防止异常流撑爆表）
+        "flush_frames": 40,          # 攒够多少帧批量写一次（逐帧写会打满 SQLite 单写者）
+        "flush_interval_s": 0.4,     # 或者距上次写超过该秒数就落一次（保证重连能追上进度）
+        "coalesce_tokens": True,     # 连续 token/reasoning 合并成一帧（关 = 一帧一字，帧数暴涨）
+        "tail_poll_s": 0.4,          # 订阅端等待新帧的轮询间隔（P2 换成推送总线后可置 0）
+        "tail_max_s": 60,            # 订阅端最长 tail 时长（超时后结束本次订阅，客户端可再次续传）
+    },
     "agent_assignment": {
         # ── 编排分派打分（2026-10-13，B1-7）────────────────────────────────
         # 定位：**择优与留痕，不是决策者**。planner LLM 已产出每个子任务的 agent，
@@ -2417,6 +2431,15 @@ CONFIG_SCHEMA = {
         "enabled": {"type": "bool", "desc": "编排 SSE 关键事件落库总开关（关=不落任何事件，转发不受影响）"},
         "types": {"type": "str", "desc": "落哪几类事件（逗号分隔）。★ 刻意不含 token/reasoning：两者是逐字增量，一次真实建模可达数百帧，全量落库会撑爆表"},
         "max_per_run": {"type": "int", "desc": "单次编排（conversation_id+run_id）事件数上限，超出丢弃最旧的"},
+    },
+    "run_stream": {
+        "enabled":          {"type": "bool",  "desc": "帧日志总开关：一轮生成把每帧（含合帧后的 token/reasoning）按序号落库，用于断线重连重放。关=不建 run、不写帧，行为回到改动前"},
+        "max_frames":       {"type": "int",   "desc": "单 run 帧数上限（默认 2000）：超限置 truncated=1 并停止记帧，防异常流撑爆表"},
+        "flush_frames":     {"type": "int",   "desc": "批量写帧的帧数阈值（默认 40）：逐帧写会打满 SQLite 单写者"},
+        "flush_interval_s": {"type": "float", "desc": "批量写帧的时间阈值（秒，默认 0.4）：保证重连端能追上当前进度"},
+        "coalesce_tokens":  {"type": "bool",  "desc": "连续 token/reasoning 合帧（默认开）：关掉会让帧数按字增长"},
+        "tail_poll_s":      {"type": "float", "desc": "订阅端等待新帧的轮询间隔（秒，默认 0.4）"},
+        "tail_max_s":       {"type": "float", "desc": "订阅端单次最长 tail 时长（秒，默认 60）；超时结束订阅，客户端可凭游标再次续传"},
     },
     "kb_scope": {
         "docs_missing_fallback": {"type": "bool", "desc": "白名单文档不存在时剔除失效项；全失效则退化为不限文档"},

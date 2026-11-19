@@ -466,13 +466,27 @@ async function _annotateAbnormalEnd(aiBox, bootAtStart){
 // SSE 流异常且无 done/error 终态时，后端已按 finalize_key 把本轮内容固化落库；
 // 这里取回并如实展示（含结构化原因），编排轮额外给「从检查点续跑」入口。
 // 只恢复展示、不自动重生成 —— 是否继续由用户决定，避免断线误触烧 token。
+// ★ 2026-11-19 方案B P1：若本轮**没有**固化消息（服务被强杀 / 固化条件不满足），
+//   但帧日志里有内容，则改走 `_renderRunReplay` 把"当时滚过的内容"重建出来。
 async function _recoverTurnContent(aiBox){
   const _cid = aiBox && (aiBox.dataset.convId || currentConvId);
   if(!_cid || !aiBox || aiBox.dataset.recovered) return;
   try{ aiBox.dataset.recovered = '1'; }catch(_e){}
   let r = null;
   try{ r = await api(`/api/conversations/${_cid}/recovery`); }catch(_e){ return; }
-  if(!r || !r.found) return;
+  if(!r) return;
+  // ★ 方案B P1：本轮没有固化消息（服务被强杀/固化条件不满足）⇒ 帧日志是唯一副本
+  if(!r.found){
+    const _rid = Number(r.stream_run_id || 0);
+    if(_rid > 0){
+      const ok = await _renderRunReplay(_cid, _rid, aiBox, {reason: r.reason || ''});
+      if(ok){
+        const _cs0 = document.getElementById('chat-status');
+        if(_cs0) _cs0.textContent = '已按帧日志重建本轮输出';
+      }
+    }
+    return;
+  }
   try{ if(r.message_id) aiBox.dataset.recoveredMsgId = String(r.message_id); }catch(_e){}
   const bodyEl = aiBox.querySelector('.body');
   if(!bodyEl) return;
@@ -498,6 +512,104 @@ async function _recoverTurnContent(aiBox){
   bodyEl.appendChild(note);
   const _cs = document.getElementById('chat-status');
   if(_cs) _cs.textContent = '已恢复本轮内容';
+}
+
+// RUN_FRAME_REPLAY_V1（2026-11-19，方案B P1）：**按帧日志重建本轮输出**。
+//
+// 为什么需要它：`/recovery` 只能给"已固化落库"的正文，而固化是节流/收口行为 ——
+//   进程被强杀（真库 conv 999999207）、或固化条件不满足时，用户看过的内容
+//   **只在帧日志里**。没有这条路径，"刷新/重连后内容回来"就是假的。
+//
+// 关键语义（不要改成"追加"）：
+//   · **替换，不是追加** —— run_frames 是整轮的完整帧序列，重建结果本身是完备的；
+//     追加会把已经显示过的文本再显示一遍（重复 token），这正是要避免的。
+//   · **只读** —— 帧里的工具结果直接渲染，绝不重新调用工具（重放不产生第二次副作用）。
+//   · `last_event_id` 固定传空 = 从头重建。带游标的增量续传留给 P2（那时才需要
+//     "我已渲染到第几个字"的偏移量，P1 阶段生成仍随连接停止，用不到）。
+async function _renderRunReplay(convId, runId, aiBox, opts){
+  opts = opts || {};
+  let r = null;
+  try{ r = await api(`/api/runs/${runId}/frames?reconstruct=1`); }catch(_e){ return false; }
+  if(!r || !r.reconstructed) return false;
+  const text = String(r.reconstructed.content || '');
+  const exec = r.reconstructed.exec || {};
+  if(!text.trim() && !(exec.tools && exec.tools.length) && !(exec.subtasks && exec.subtasks.length)){
+    return false;   // 真的没有任何内容：不伪造一个空气泡
+  }
+  // 组装成"一条消息"来渲染：复用历史消息的渲染器 ⇒ 样式/代码块/时间线与落库消息一致
+  const fake = { role: 'assistant', content: text, msg_type: 'text', card_data: JSON.stringify({exec: exec}) };
+  const holder = document.createElement('div');
+  holder.innerHTML = (typeof renderMessage === 'function')
+    ? renderMessage(fake)
+    : `<div class="msg ai"><div class="msg-inner">${esc(text)}</div></div>`;
+  const el = holder.firstElementChild || holder;
+  try{ el.classList.add('turn-replayed'); }catch(_e){}
+
+  const note = document.createElement('div');
+  note.className = 'turn-recover-note';
+  note.style.cssText = 'margin-top:8px;padding:7px 10px;border-left:3px solid #1c7ed6;'
+    + 'background:rgba(28,126,214,.10);color:#1864ab;font-size:12.5px;line-height:1.6;';
+  let html = '以下内容来自<b>本轮帧日志回放</b>（服务端逐帧记录，与当时屏幕上的输出一致）。';
+  if(r.status === 'running') html += '<br>该轮在服务端仍标记为运行中（本轮可能未正常收口）。';
+  if(Number(r.truncated || 0) === 1) html += '<br>⚠ 帧日志已达上限被截断，末尾部分可能缺失。';
+  if(opts.reason === 'no_finalized_message') html += '<br>本轮正文未落库（进程中断/未收口），这是唯一的完整副本。';
+  html += '<br>需要继续请直接重发这条消息。';
+  note.innerHTML = html;
+
+  const bodyEl = (aiBox && aiBox.querySelector) ? aiBox.querySelector('.body') : null;
+  if(bodyEl){
+    // 流式现场：整块替换（含 typing 占位），保证"回放内容 == 唯一副本"
+    bodyEl.innerHTML = '';
+    bodyEl.appendChild(el);
+    bodyEl.appendChild(note);
+    try{ bodyEl.classList.remove('streaming'); }catch(_e){}
+    try{ const _t = bodyEl.querySelector('.typing'); if(_t) _t.remove(); }catch(_e){}
+  }else{
+    // 会话重开后没有现场盒子：作为一条"回放消息"追加到消息区
+    const area = opts.area || document.getElementById('chat-area');
+    if(!area) return false;
+    const wrap = document.createElement('div');
+    wrap.className = 'msg-wrap msg-replay';
+    wrap.appendChild(el);
+    wrap.appendChild(note);
+    area.appendChild(wrap);
+    try{ if(typeof pinChatBottom === 'function') pinChatBottom(area, 2000); }catch(_e){}
+  }
+  return true;
+}
+
+// 会话重新打开时：若末条是"用户说了但没有任何 AI 回应"，说明上一轮没落库 ——
+// 帧日志可能是唯一副本，给一个「回放上一轮输出」的入口（不自动回放，避免打扰）。
+async function maybeOfferRunReplay(convId, area){
+  try{
+    if(!convId || !area) return;
+    if(_streaming) return;                       // 正在跑本轮：现场优先
+    const msgs = area.querySelectorAll('.msg');
+    if(!msgs.length) return;
+    const last = msgs[msgs.length - 1];
+    if(!last.classList.contains('u')) return;    // 末条不是用户消息 ⇒ 本轮已有回应
+    const r = await api(`/api/conversations/${convId}/recovery`);
+    const _rid = Number((r && r.stream_run_id) || 0);
+    if(!_rid || (r && r.found)) return;           // 没有 run / 已有固化消息 ⇒ 无需回放
+    if(Number(r.stream_last_seq || 0) <= 0) return;  // 帧日志里也没有内容
+    const wrap = document.createElement('div');
+    wrap.style.cssText = 'margin:10px 0;padding:8px 10px;border-left:3px solid #1c7ed6;'
+      + 'background:rgba(28,126,214,.08);color:#1864ab;font-size:12.5px;line-height:1.7;';
+    wrap.innerHTML = '上一轮有 <b>' + Number(r.stream_last_seq) + ' 帧</b>输出未落库'
+      + '（服务端中断前已逐帧记录）：';
+    const btn = document.createElement('button');
+    btn.className = 'btn btn-sm btn-outline-primary';
+    btn.style.cssText = 'margin-left:8px;';
+    btn.textContent = '回放上一轮输出';
+    btn.onclick = async ()=>{
+      btn.disabled = true; btn.textContent = '回放中…';
+      const ok = await _renderRunReplay(convId, _rid, null, {area: area, reason: 'reopen'});
+      if(!ok){ btn.disabled = false; btn.textContent = '回放失败，点此重试'; }
+      else wrap.remove();
+    };
+    wrap.appendChild(btn);
+    area.appendChild(wrap);
+  }catch(_e){ /* 旁路能力，失败静默 */ }
 }
 
 async function pumpStream(aiBox, msg, atts, resumeOf){

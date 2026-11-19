@@ -113,6 +113,7 @@ from .misc import (
 )
 from .events import (
     _migrate_event_tables,            # 2026-11-01 事件驱动底座三表（Super-agent 落地 P0-2/P0-4）
+    _migrate_run_stream,              # 2026-11-19 方案B P0：帧日志地基（run_sessions/run_frames）
 )
 from .permissions import (
     _migrate_agent_tool_perm,         # 2026-10-06 Agent 工具链 RBAC + HIL 批准授权（P0-6/P0-2）
@@ -195,4 +196,5 @@ __all__ = [
     "_migrate_feedback_link_sanity",  # 2026-11-06 错误关联自愈
     "_migrate_requirement_acceptance",  # 2026-11-10 需求验收标准
     "_migrate_event_tables",  # 2026-11-01 事件驱动底座三表（Super-agent 落地 P0-2/P0-4）
+    "_migrate_run_stream",  # 2026-11-19 方案B P0：帧日志地基（run_sessions/run_frames）
 ]

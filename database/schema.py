@@ -89,6 +89,7 @@ from .migrations import (
     _migrate_curriculum_p22,  # 2026-10-19 失败驱动任务提案队列（P2-2，只提议不自动执行）
     _migrate_agent_archive_p23,  # 2026-10-19 Agent 变体台账 + 死路记忆（P2-3，只记录不切换生效版本）
     _migrate_event_tables,  # 2026-11-01 事件驱动底座三表（Super-agent 落地 P0-2/P0-4）
+    _migrate_run_stream,    # 2026-11-19 方案B P0：帧日志地基（run_sessions/run_frames）
 )
 from .seeds import (
     _seed,
@@ -2033,6 +2034,11 @@ def init_db():
     #   同批放这里是有意的：中断要靠 run_id 定位批次，去重要靠内容指纹判同，
     #   三者都是「judge 面缺一列/缺一张表」型缺口，分开加会出现半成品。
     _migrate_run_dimension(conn)
+    # ── 2026-11-19 方案B P0：帧日志地基（run_sessions / run_frames + messages 两列）──
+    #    与 _migrate_run_dimension 同批位置：两者都属"run 维度"落点，且都必须在
+    #    messages / conversations 建表之后（本段已是 init_db 尾部）。
+    #    纯新表 + 补列，幂等；关掉 run_stream.enabled 即完全不写（行为回到改动前）。
+    _migrate_run_stream(conn)
     _migrate_doc_dedupe(conn)
     _migrate_orch_interrupts(conn)
     # ── 2026-11-10 需求验收标准（P0-1）：验收标准填充率曾为 0/24，直接卡验收 ──

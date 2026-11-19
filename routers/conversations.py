@@ -6,7 +6,7 @@ import json
 import asyncio
 from typing import Optional
 
-from fastapi import APIRouter, Depends, UploadFile, File, HTTPException, Query
+from fastapi import APIRouter, Depends, UploadFile, File, HTTPException, Query, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from core.deps import db_session, current_user
@@ -564,9 +564,27 @@ def get_messages(conv_id: int, limit: int | None = None, before_id: int | None =
 @router.get("/api/conversations/{conv_id}/recovery")
 def get_turn_recovery(conv_id: int, conn=Depends(db_session), user=Depends(current_user)):
     _own_conv(conn, conv_id, user)   # B1-9 归属校验：不可见即 404
+
+    def _stream_run_info():
+        """本轮帧日志 run 的对外摘要（**任何分支都要带**，含 found=False）。
+
+        为什么不能只在"已固化"分支给：固化是节流/收口行为，进程被强杀或固化条件
+        不满足时，用户看过的内容**只在帧日志里**。若此时 `found=False` 且不给
+        run 信息，前端就没有任何入口把这些内容取回来 —— 又回到"刷新全没了"。
+        """
+        try:
+            from services.run_frame_store import latest_run as _latest_run
+            _sr = _latest_run(conn, conv_id) or {}
+        except Exception:
+            _sr = {}
+        return {"stream_run_id": int(_sr.get("run_id") or 0),
+                "stream_last_seq": int(_sr.get("last_seq") or 0),
+                "stream_status": str(_sr.get("status") or ""),
+                "stream_truncated": int(_sr.get("truncated") or 0)}
+
     key = _finalize_key_for_turn(conn, conv_id)
     if not key:
-        return {"found": False, "reason": "no_user_turn"}
+        return dict({"found": False, "reason": "no_user_turn"}, **_stream_run_info())
     row = None
     try:
         row = conn.execute(
@@ -574,9 +592,9 @@ def get_turn_recovery(conv_id: int, conn=Depends(db_session), user=Depends(curre
             "WHERE conversation_id=? AND role='assistant' AND finalize_key=? "
             "ORDER BY id DESC LIMIT 1", (conv_id, key)).fetchone()
     except Exception:
-        return {"found": False, "reason": "query_failed"}
+        return dict({"found": False, "reason": "query_failed"}, **_stream_run_info())
     if not row:
-        return {"found": False, "reason": "no_finalized_message"}
+        return dict({"found": False, "reason": "no_finalized_message"}, **_stream_run_info())
     # 结构化中断原因（取自 P2 前移落库的 abort_reason）
     abort_code, abort_detail = "", ""
     try:
@@ -595,10 +613,150 @@ def get_turn_recovery(conv_id: int, conn=Depends(db_session), user=Depends(curre
         run_id = int(_r["run_id"] or 0) if _r else 0
     except Exception:
         pass
-    return {"found": True, "message_id": int(row["id"]), "key": key,
-            "content": row["content"] or "", "msg_type": row["msg_type"] or "text",
-            "abort_reason": abort_code, "abort_detail": abort_detail,
-            "orchestrated_run_id": run_id}
+    # ★ 2026-11-19 方案B：**帧日志 run**（与本轮生成一一对应，可重放已生成内容）。
+    #   与上面 `orchestrated_run_id` 是两个不同口径，**不可互换**：
+    #     · orchestrated_run_id = 编排批次（agent_tasks.run_id）→ 只对编排轮有意义，
+    #       前端拿它去调「从检查点续跑」；
+    #     · stream_run_id       = 本轮帧日志（run_sessions.run_id）→ 每一轮都有，
+    #       前端拿它去调 `/api/runs/{id}/frames` 把"当时滚过的内容"重建出来。
+    return dict({"found": True, "message_id": int(row["id"]), "key": key,
+                 "content": row["content"] or "", "msg_type": row["msg_type"] or "text",
+                 "abort_reason": abort_code, "abort_detail": abort_detail,
+                 "orchestrated_run_id": run_id}, **_stream_run_info())
+
+
+# RECOVERY_ENDPOINT_V1 的补充口径（2026-11-19，方案B P1）：`/recovery` 之前只在
+# 「本轮已固化落库」时才有东西可给。但固化是**节流/收口行为**，而进程被强杀、
+# 或固化条件不满足时，用户看过的内容只在帧日志里 ⇒ 必须让前端知道"这轮有 run"，
+# 才能给出「回放已生成内容」的入口。故 `/recovery` 的**每个分支**（含 found=False）
+# 都带 `stream_run_id/last_seq/status/truncated` —— 这四个字段由 `_stream_run_info()` 统一给。
+
+
+def _own_run(conn, run_id: int, user) -> dict:
+    """run 归属校验：不可见即 404（与会话同一口径，见 `_own_conv`）。"""
+    from services.run_frame_store import get_run
+    run = get_run(conn, run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail="运行记录不存在")
+    _own_conv(conn, int(run.get("conversation_id") or 0), user)
+    return run
+
+
+def _collect_frames(conn, run_id, after_seq=0, limit=4000):
+    """按页读完某 run 的帧（`reconstruct` 需要全量，不能用单页）。"""
+    from services.run_frame_store import read_frames as _read
+    out, cursor, page = [], int(after_seq or 0), 800
+    while len(out) < limit:
+        rows = _read(conn, run_id, cursor, page)
+        if not rows:
+            break
+        out.extend(rows)
+        cursor = int(rows[-1]["seq"])
+        if len(rows) < page:
+            break
+    return out[:limit]
+
+
+# 方案B P1：帧日志回放（**只读**，绝不触发生成、绝不重放工具副作用）。
+# 两种用法：
+#   ① `last_event_id` 空 = 从头重建整段输出（前端刷新/重开时用，天然无重复：
+#      它是"替换"而不是"追加"，见 12-chatsend.js 的 `_renderRunReplay`）；
+#   ② 带游标 = 只取"我还没看过的部分"（SSE `id:` 行/`X-Last-Event-ID` 头，
+#      为 P2 的"断线后台继续、重连接着冒字"预留；P1 阶段生成仍随连接停止）。
+@router.get("/api/runs/{run_id}/frames")
+def get_run_frames(run_id: int, last_event_id: str = Query(""),
+                   limit: int = Query(4000, ge=1, le=20000),
+                   reconstruct: int = Query(1),
+                   conn=Depends(db_session), user=Depends(current_user)):
+    run = _own_run(conn, run_id, user)
+    from services.run_frame_store import parse_last_event_id, reconstruct_from_frames
+    after = parse_last_event_id(last_event_id)
+    rows = _collect_frames(conn, run_id, after, limit)
+    frames = []
+    for r in rows:
+        try:
+            payload = json.loads(r["payload"] or "{}")
+        except Exception:
+            payload = {"_raw": str(r["payload"])[:500]}
+        frames.append({"seq": int(r["seq"]), "type": r["event_type"], "data": payload})
+    out = {"run_id": int(run_id), "status": run.get("status") or "",
+           "cancel_reason": run.get("cancel_reason") or "",
+           "last_seq": int(run.get("last_seq") or 0),
+           "truncated": int(run.get("truncated") or 0),
+           "message_id": int(run.get("message_id") or 0),
+           "conversation_id": int(run.get("conversation_id") or 0),
+           "frames": frames}
+    if reconstruct:
+        rec = reconstruct_from_frames(rows if after == 0 else _collect_frames(conn, run_id, 0, limit))
+        out["reconstructed"] = {"content": rec["content"], "exec": rec["exec"],
+                                "last_seq": rec["last_seq"]}
+    return out
+
+
+@router.get("/api/runs/{run_id}/subscribe")
+async def subscribe_run(run_id: int, request: Request,
+                        last_event_id: str = Query(""),
+                        tail: int = Query(1),
+                        max_wait_s: float = Query(0),
+                        conn=Depends(db_session), user=Depends(current_user)):
+    """按游标重放帧，run 仍在跑时可继续等待新帧（SSE）。
+
+    ⚠️ **重放是纯展示**：帧里的 tool result 直接渲染，绝不重新调用工具 ——
+    这是"续传不产生第二次副作用"的根本原因（配合 `tool_idempotency` 双保险）。
+    """
+    _own_run(conn, run_id, user)
+    from services.run_frame_store import (parse_last_event_id, prepare_frame_replay,
+                                          frame_sse, read_frames as _read, get_run as _get)
+    from core.config import get as _cfg_get
+    _cursor = parse_last_event_id(last_event_id or request.headers.get("x-last-event-id") or "")
+    _poll = float(_cfg_get("run_stream", "tail_poll_s", 0.4) or 0.4)
+    _maxw = float(max_wait_s or 0) or float(_cfg_get("run_stream", "tail_max_s", 60) or 60)
+
+    async def _gen():
+        yield "retry: 3000\n\n"
+        _cur = _cursor
+        _t0 = time.monotonic()
+        _ping_at = _t0
+        _meta = {}
+        while True:
+            try:
+                with db_conn() as _c:
+                    _run = _get(_c, run_id) or {}
+                    _rows = _read(_c, run_id, _cur, 400)
+            except Exception:
+                _run, _rows = {}, []
+            if _rows:
+                for _r in _rows:
+                    yield frame_sse(run_id, _r["seq"], _r["event_type"], _r["payload"])
+                    _cur = int(_r["seq"])
+                continue
+            _plan = prepare_frame_replay(_cur, _run.get("status"), _run.get("last_seq"),
+                                         tail=bool(tail))
+            if not _meta:
+                _meta = {"run_id": int(run_id), "status": _run.get("status") or "",
+                         "last_seq": int(_run.get("last_seq") or 0),
+                         "truncated": int(_run.get("truncated") or 0),
+                         "mode": _plan["mode"], "cursor_ahead": int(bool(_plan["cursor_ahead"])),
+                         "conversation_id": int(_run.get("conversation_id") or 0)}
+                yield ("event: run_meta\ndata: "
+                       + json.dumps(_meta, ensure_ascii=False) + "\n\n")
+            if not _plan["tail"]:
+                break
+            if (time.monotonic() - _t0) >= _maxw:
+                break
+            await asyncio.sleep(max(0.05, _poll))
+            if (time.monotonic() - _ping_at) > 5.0:
+                _ping_at = time.monotonic()
+                yield ": ping\n\n"
+        yield ("event: run_end\ndata: " + json.dumps(
+            {"run_id": int(run_id), "status": (_meta.get("status") or ""),
+             "last_seq": int(_cur), "waited_s": round(time.monotonic() - _t0, 2)},
+            ensure_ascii=False) + "\n\n")
+
+    return StreamingResponse(_gen(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache",
+                                      "X-Accel-Buffering": "no"})
+
 
 
 def _turn_overrides(body) -> dict:
@@ -725,6 +883,84 @@ async def chat_stream(conv_id: int, body: ChatIn, conn=Depends(db_session),
         # ⚠️ 建在生成器**体内**而非模块级/外层—— 建在外层等于每次请求建一个，
         #    但若提到模块级就退回单例了；建在体内保证「一个 SSE 连接 = 一个实例」。
         _pipe = get_pipeline()
+        # ★★ 2026-11-19 方案B P0（RUN_STREAM_TEE_V1）：**本轮帧日志 run**。
+        #   为什么建在这里：这是"一个 SSE 连接 = 一个 Pipeline 实例"的同一处，
+        #   run 的生命周期与本轮生成严格一致（生成结束 = run 收口），
+        #   而帧日志是**断线重连重放的唯一真源**（`services/run_frame_store.py`）。
+        #   与 `orch_stream_events` 的分工：那张表只有 stage/tool（排障用），
+        #   本 run 记全类型（含合帧后的 token/reasoning），用来把"已经滚过去的内容"
+        #   在重连/刷新后原样重建出来。
+        #   开关 `run_stream.enabled`（默认 True）；置 False ⇒ 不建 run、不写帧，
+        #   行为逐字节回到改动前（连 SSE 帧都不会多出 `id:` 行）。
+        #   ⚠️ 任何异常都只是"没有帧日志"，绝不影响本轮生成。
+        _fr_run_id = 0
+        _fr_tee = None
+        _fr_closed = [False]
+
+        def _fr_open():
+            nonlocal _fr_run_id, _fr_tee
+            try:
+                from core.config import get as _fr_cfg
+                if not _fr_cfg("run_stream", "enabled", True):
+                    return
+                from services.run_frame_store import new_run as _fr_new, FrameTee as _FrTee
+                with db_conn() as _frc:
+                    _fr_run_id = _fr_new(_frc, conv_id, {"branch": work_branch})
+                _fr_tee = _FrTee(
+                    _fr_run_id, conv_id, conn_factory=db_conn,
+                    max_frames=int(_fr_cfg("run_stream", "max_frames", 2000) or 2000),
+                    flush_frames=int(_fr_cfg("run_stream", "flush_frames", 40) or 40),
+                    flush_interval_s=float(_fr_cfg("run_stream", "flush_interval_s", 0.4) or 0.0),
+                    coalesce=bool(_fr_cfg("run_stream", "coalesce_tokens", True)))
+            except Exception:
+                _fr_run_id, _fr_tee = 0, None
+
+        def _fr_close():
+            """帧日志收口：落残留帧 + 写终态 + 把本轮落库消息与 run 对齐。
+
+            幂等（`_fr_closed`），且在 `_client_gone` 早退**之前**调用 ——
+            断连正是最需要帧日志的场景，早退后再收口等于白记。
+            """
+            if _fr_closed[0]:
+                return
+            _fr_closed[0] = True
+            if not _fr_run_id:
+                return
+            try:
+                if _fr_tee is not None:
+                    _fr_tee.close()
+                if _client_gone:
+                    _st, _rn = "cancelled", "client_gone"
+                elif _fail_reason:
+                    _st, _rn = "error", _fail_reason
+                elif _last_event == "done":
+                    _st, _rn = "done", "ok"
+                else:
+                    _st, _rn = "cancelled", "no_terminal_frame"
+                from services.run_frame_store import finish_run as _fr_fin
+                with db_conn() as _frc2:
+                    # 本轮实际落库的 assistant 消息（用「本轮开始后的消息基线」判定，
+                    # 不依赖各插入路径自觉回填 —— 见 run_frame_store.finish_run 的说明）
+                    _mid = 0
+                    try:
+                        _mr = _frc2.execute(
+                            "SELECT MAX(id) AS m FROM messages WHERE conversation_id=? "
+                            "AND role='assistant' AND id>?",
+                            (conv_id, int(_start_msg_id or 0))).fetchone()
+                        _mid = int((_mr["m"] if _mr else 0) or 0)
+                    except Exception:
+                        _mid = 0
+                    _fr_fin(_frc2, _fr_run_id, _st, _rn, _mid)
+                print("[run_stream] conv=%s run=%s status=%s reason=%s frames=%s last_seq=%s%s"
+                      % (conv_id, _fr_run_id, _st, _rn,
+                         getattr(_fr_tee, "_stored", 0), getattr(_fr_tee, "last_seq", 0),
+                         " truncated=1" if getattr(_fr_tee, "truncated", False) else ""),
+                      flush=True)
+            except Exception:
+                pass      # 帧日志收口失败绝不影响用户可见结果
+
+        _fr_open()
+
         # ⚠️ 客户端已断开标志：GeneratorExit 期间**禁止再 yield**
         # （CPython 会抛 "generator ignored GeneratorExit"，且该异常发生在收尾路径，
         #  比断连本身更难排查）。下面的 finally 必须先判这个标志才能补发降级告知。
@@ -1029,7 +1265,24 @@ async def chat_stream(conv_id: int, body: ChatIn, conn=Depends(db_session),
                 #   而客户端断连（GeneratorExit）会让生成器停在 yield 处 ⇒ 缓冲永不清空。
                 if _evbuf and _et in ("done", "error"):
                     _flush_evbuf()
-                yield raw
+                # ── 方案B P0（RUN_STREAM_TEE_V1）：记帧 + 给帧加 SSE `id:` 游标 ──
+                # 为什么放在 `yield` 前最后一步、且用 `_out` 中转：
+                #   上面所有判据（终态哨兵 / _last_event / _acc_frame / 事件录制）都
+                #   依赖 `raw` **以 `event:` 开头**；加前缀后再回写 `raw` 会让它们全部
+                #   静默失效（`startswith` 只是 False，不报错 —— 最难查的一类）。
+                # 为什么每帧都要 `id:`：客户端游标必须跟着内容走。连续 token 会被
+                #   合并成"最后一帧的序号"落库，故合并组内每个 token 的 seq 都发给
+                #   客户端，游标才会停在与内容一致的位置（详见 run_frame_store 不变量 2）。
+                #   `id:` 是 SSE 原生字段，旧前端按行只看 `event:`/`data:` ⇒ 忽略即兼容。
+                _out = raw
+                if _fr_tee is not None:
+                    try:
+                        _sq = _fr_tee.feed(raw)
+                        if _sq:
+                            _out = "id: %d-%d\n" % (_fr_run_id, _sq) + raw
+                    except Exception:
+                        pass        # 记帧失败不影响转发（观测旁路原则）
+                yield _out
         except GeneratorExit:
             _client_gone = True
             # 断连止损：显式关闭心跳包装器 → 其内部会连带 close 事件源
@@ -1274,6 +1527,11 @@ async def chat_stream(conv_id: int, body: ChatIn, conn=Depends(db_session),
                     # 兜底失败不能掩盖原始故障，但必须留痕（否则又是一次"静默丢内容"）
                     print("[route_persist_gone] conv=%s 兜底固化失败：%r"
                           % (conv_id, _pg_err), flush=True)
+            # ── 方案B P0：帧日志收口（**必须早于 `_client_gone` 早退**）──────
+            # 断连正是最需要帧日志的场景：早退后再收口等于"最该记的那一轮没记"。
+            # 这里只做三件无 yield 的事（DB 写在 GeneratorExit 期间是允许的）：
+            #   落残留帧 / 写 run 终态 / 把本轮 assistant 消息与 run 对齐。
+            _fr_close()
             if _client_gone:
                 return
             # P1-32：终态兜底 —— 流结束却从未发过 done/error ⇒ 必须补一条 error，
