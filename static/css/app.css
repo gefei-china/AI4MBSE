@@ -428,6 +428,23 @@ body.nr-full-lock{overflow:hidden;}
   border-left:6px solid var(--mut);
   margin-right:4px;opacity:.5;
 }
+/* ── 2026-11-20 归属徽章（Agent / 技能 / MCP）───────────────────────────────
+   用户要求：「执行过程中调用的 agent、skill、tool 等，需要在对应的环节标识出来」。
+   缩进只说"挂在哪"，说不出"是谁"；徽章把名字直接写在每个环节标题旁，折叠态也可见。
+   三色区分：Agent(紫) / 技能(青) / MCP(橙)，与左侧层级线互补而不冲突。 */
+.proc-badge{
+  display:inline-flex;align-items:center;gap:3px;
+  font-size:11.5px;font-weight:600;line-height:1.5;
+  padding:1px 6px;border-radius:10px;white-space:nowrap;
+  max-width:220px;overflow:hidden;text-overflow:ellipsis;
+  border:1px solid transparent;
+}
+.proc-badge.ba{background:#f3e8ff;color:#6b21a8;border-color:#e9d5ff;}
+.proc-badge.bs{background:#e0f2fe;color:#075985;border-color:#bae6fd;}
+.proc-badge.bm{background:#ffedd5;color:#9a3412;border-color:#fed7aa;}
+/* 参与方汇总行：与业务环节视觉区分（虚线边框、略灰底），避免被当成执行步骤 */
+.proc-block.participants{border-style:dashed;background:rgba(0,0,0,.012);}
+.proc-block.participants .proc-title{font-weight:600;}
 /* 思考图标脉冲动画 */
 @keyframes think-pulse{0%,100%{opacity:1;}50%{opacity:.45;}}
 .proc-block.thinking .think-icon{animation:think-pulse 1.3s ease-in-out infinite;}

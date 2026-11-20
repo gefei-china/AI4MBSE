@@ -4,6 +4,17 @@
  */
 function procBlocksHtml(ex, mid){
   if(!ex) return '';
+  // ★ 2026-11-20（用户要求「调用的 agent/skill/tool 在对应环节标识出来」）：
+  //   历史回放走的是 card_data.exec 重建，与实时路径是**两套代码**，必须成对维护。
+  //   这里提供与 11-pipeline.js 同名的徽章函数（全局作用域，后加载者覆盖，实现逐字一致）。
+  const _bd = (kind, name) => {
+    if(!name) return '';
+    const t = String(name);
+    const c = kind === 'agent' ? 'ba' : (kind === 'skill' ? 'bs' : 'bm');
+    const ic = kind === 'agent' ? '🤖' : (kind === 'skill' ? '🧩' : '🔌');
+    const lbl = kind === 'agent' ? 'Agent' : (kind === 'skill' ? '技能' : 'MCP');
+    return `<span class="proc-badge ${c}" title="${lbl}：${esc(t)}">${ic} ${esc(t)}</span>`;
+  };
   const now = new Date().toLocaleTimeString('zh-CN',{hour12:false,hour:'2-digit',minute:'2-digit',second:'2-digit'});
   const uid = (mid || 'h' + Math.random().toString(36).slice(2,8));
   let steps = [];
@@ -76,7 +87,7 @@ function procBlocksHtml(ex, mid){
     steps.push({icon:'🧩', title:'执行方式：多子任务编排', status:'done', cls:'flowkind',
       sub:'由多个子任务协作完成，不适用单次生成尝试回放', noBody: true});
   }
-  if(ex.agent) steps.push({icon:'🤖', title:`子智能体：${esc(ex.agent)}`, status:'done', sub:'✓ 已完成', cls:'agent', noBody: true});
+  if(ex.agent) steps.push({icon:'🤖', title:`子智能体：${esc(ex.agent)}`, status:'done', sub:'✓ 已完成', cls:'agent', noBody: true, badges: _bd('agent', ex.agent)});
   const subs = ex.subtasks||[];
   if(subs.length){
     const doneN = subs.filter(s=>s.status==='done').length;
@@ -113,6 +124,9 @@ function procBlocksHtml(ex, mid){
       </div>`;
       window._orchRerunDefault = _bad ? (_bad.key || '') : '';
     }
+    // ★ 2026-11-20：历史侧子任务卡补 skills（落库字段 subtasks[].skills），
+    //   让展开体里也能看到"这一步用了哪些技能"。
+    subs.forEach(s=>{ if(s && !Array.isArray(s.skills)) s.skills = []; });
     const body = planList + subs.map(s=>subtaskCardHtml(s)).join('') + rerunHtml;
     steps.push({icon:'📋', title:`计划清单（${subs.length} 任务：${doneN} 完成${failN?` / ${failN} 失败`:''}）`, status:'done', sub:`${doneN}/${subs.length}`, body, cls:'orchestrate'});
   }
@@ -159,10 +173,40 @@ function procBlocksHtml(ex, mid){
     }
     // P0-1 历史工具耗时（exec 持久化 elapsed_ms 时显示）
     const elapsedSub = t.elapsed_ms ? ` · ⏱ ${(t.elapsed_ms/1000).toFixed(1)}s` : '';
-    steps.push({icon:'🛠', title:`调用 ${esc(t.name)}`, status:t.ok===true?'done':(t.ok===false?'error':'run'), sub:statusText+elapsedSub+subTxt, body, cls, badge: statusText, badgeCls: statusCls});
+    steps.push({icon:'🛠', title:`调用 ${esc(t.name)}`, status:t.ok===true?'done':(t.ok===false?'error':'run'), sub:statusText+elapsedSub+subTxt, body, cls, badge: statusText, badgeCls: statusCls,
+      // ★ 2026-11-20：历史回放同样标出「谁调的 / 哪个技能指导的」，与实时路径一致。
+      badges: _bd('agent', t.agent) + _bd('skill', t.skill || t.skill_guide)});
   });
+  // ★ 2026-11-20：历史侧补「执行参与方」汇总（与实时路径 _participantsHtml 同口径，
+  //   数据源换成已落库的 exec.agent / exec.subtasks[].agent / exec.tools[].agent|skill）。
+  try{
+    const _ag = new Set(), _sk = new Set(), _tl = new Set();
+    if(ex.agent) _ag.add(String(ex.agent));
+    (ex.subtasks||[]).forEach(s=>{ if(s.agent) _ag.add(String(s.agent)); });
+    (ex.tools||[]).forEach(t=>{
+      if(t.agent) _ag.add(String(t.agent));
+      if(t.skill || t.skill_guide) _sk.add(String(t.skill || t.skill_guide));
+      if(t.name) _tl.add(String(t.name));
+    });
+    (ex.subtasks||[]).forEach(s=>{
+      ((s.summary&&typeof s.summary==='object'&&s.summary.skills)||[]).forEach(x=>_sk.add(String(x)));
+    });
+    if(_ag.size + _sk.size + _tl.size){
+      const _lst = (arr, kind) => arr.length
+        ? `<div style="display:flex;flex-wrap:wrap;gap:4px;margin-top:4px;">${arr.map(x=>_bd(kind, x)).join('')}</div>`
+        : '<div style="font-size:12px;color:var(--mut);margin-top:4px;">无</div>';
+      steps.unshift({icon:'🧭', cls:'participants',
+        title:`执行参与方（Agent ${_ag.size} · 技能 ${_sk.size} · 工具 ${_tl.size}）`,
+        status:'done', sub:'本轮用到',
+        body:`<div style="font-size:12.5px;color:var(--mut);line-height:1.6;">`
+          + `<div><b>Agent（${_ag.size}）</b></div>${_lst([..._ag],'agent')}`
+          + `<div style="margin-top:6px;"><b>技能（${_sk.size}）</b></div>${_lst([..._sk],'skill')}`
+          + `<div style="margin-top:6px;"><b>工具（${_tl.size}）</b></div>${_lst([..._tl],'tool')}`
+          + `</div>`});
+    }
+  }catch(e){}
   // V2.6 历史消息执行过程：统一收口条（默认收起）+ 时间线容器（点击展开按层级回看）
-  const timeline = steps.map((s,i)=>`<div class="proc-block collapsed ${s.cls||''}"><div class="proc-head" onclick="toggleProc(this)"><span>${s.icon}</span><span class="proc-title">${s.title}</span>${s.sub?`<span class="proc-sub">${s.sub}</span>`:''}${s.badge?`<span class="tool-status ${s.badgeCls}">${s.badge}</span>`:''}<span class="chev">▾</span><span class="proc-time">${now}</span></div>${s.noBody?'':`<div class="proc-body">${s.body||''}</div>`}</div>`).join('');
+  const timeline = steps.map((s,i)=>`<div class="proc-block collapsed ${s.cls||''}"><div class="proc-head" onclick="toggleProc(this)"><span>${s.icon}</span><span class="proc-title">${s.title}</span>${s.sub?`<span class="proc-sub">${s.sub}</span>`:''}${s.badges||''}${s.badge?`<span class="tool-status ${s.badgeCls}">${s.badge}</span>`:''}<span class="chev">▾</span><span class="proc-time">${now}</span></div>${s.noBody?'':`<div class="proc-body">${s.body||''}</div>`}</div>`).join('');
   if(!steps.length) return '';
   const failN = (ex.tools||[]).filter(t=>t.ok===false).length;
   const sumTxt = `✓ 已完成 · ${steps.length} 环节${failN?` · ${failN} 失败`:''}`;

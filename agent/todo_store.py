@@ -57,6 +57,9 @@ _TODO_WRITE_TOOL = {
             "会被按人工验收处理，收尾闸看不到真实结果。能自动验的就一定填 verify_tool。\n"
             "· update —— 更新状态。**置 completed 必须同时给 verify_result（验收回执）**"
             "（如『PASS: 0 errors』），否则会被拒绝；置 blocked 必须给 blocked_by 说明卡在哪\n"
+            "  ★ 多条**同一批完成**时用 `ids=[1,2,3]` 一次提交，不要一条一条调"
+            "（每次调用都是一整轮往返，纯记账开销）。但**不同验收回执的条目要分开提交** —— "
+            "verify_result 是逐条的，合并会丢验收信息。\n"
             "· list —— 读当前清单（含每条的状态与验收回执）\n"
             "⚠️ 清单不是可选的：完成判定以**待办全部通过验收**为准，"
             "「建议下一步做 X」不算完成 —— 那就建一条 todo 并把它做完。\n"
@@ -97,6 +100,13 @@ _TODO_WRITE_TOOL = {
                 "id": {
                     "type": "integer",
                     "description": "（update 必填）要更新的待办 id（list 的返回里有）",
+                },
+                "ids": {
+                    "type": "array",
+                    "items": {"type": "integer"},
+                    "description": ("（update 可选，★推荐）**同一批完成**的多条待办一次提交，"
+                                    "避免一条一次调用。逐条仍各自校验验收回执，语义不变；"
+                                    "与 id 二选一，给 ids 时忽略 id"),
                 },
                 "subject": {
                     "type": "string",
@@ -365,6 +375,39 @@ def upsert_todo(conn, conversation_id: int, *, subject=None, verify=None,
 
 # ── 工具 handler ────────────────────────────────────────────
 
+def _update_many(conn, conversation_id, ids, a, run_id: int = 0) -> dict:
+    """批量 update（★ 2026-11-20）：把「同一批完成的条目」压成一次工具调用。
+
+    为什么需要：真机 conv 999999952 的 2 个子任务共调 `todo_write` 13 次，
+    其中约半数是"一条做完就 update 一次" —— 每次都是一整轮 LLM 往返，
+    却只改了 status 一个字段。
+
+    纪律（**不降语义，只降次数**）：
+      · 逐条仍走 `handle_todo_write` 的单条路径（transition + machine_evidence 全保留）；
+      · 任何一条失败都**不吞**：汇总里逐条列出 ok/失败原因，让模型知道哪条要修；
+      · 全部成功才算 ok=True（部分成功返回 ok=False + 明细，避免"假成功"）。
+    """
+    results, ok_n = [], 0
+    for _i in ids:
+        _sub = dict(a)
+        _sub.pop("ids", None)
+        _sub["id"] = _i
+        try:
+            r = handle_todo_write(_sub, conversation_id, conn=conn, run_id=run_id)
+        except Exception as e:
+            r = {"ok": False, "result": "待办 #%s 更新异常：%r" % (_i, e)}
+        if isinstance(r, dict) and r.get("ok"):
+            ok_n += 1
+        results.append({"id": _i, "ok": bool(isinstance(r, dict) and r.get("ok")),
+                        "result": str((r or {}).get("result") or "")[:220]})
+    lines = ["批量更新 %d 条（成功 %d / 失败 %d）："
+             % (len(results), ok_n, len(results) - ok_n)]
+    for x in results:
+        lines.append("  #%s %s %s" % (x["id"], "✓" if x["ok"] else "✗", x["result"]))
+    return {"ok": ok_n == len(results), "result": "\n".join(lines),
+            "results": results, "ok_count": ok_n, "total": len(results)}
+
+
 def handle_todo_write(arguments: dict, conversation_id: int, conn=None,
                       run_id: int = 0, task_key: str = "") -> dict:
     """`todo_write` 工具 handler。返回 {ok, result, ...}。
@@ -462,7 +505,26 @@ def handle_todo_write(arguments: dict, conversation_id: int, conn=None,
                                verify_args=a.get("verify_args"), run_id=run_id)
 
         # ── update ──
-        tid = a.get("id")
+        # ★ 2026-11-20（用户要求降记账开销；真机 conv 999999952 实测 2 个子任务里
+        #   todo_write 被调了 13 次，其中约半数是"一条做完就 update"）：
+        #   支持**批量结项** `ids=[...]` —— 同一批完成的条目一次调用上报。
+        #   ⚠️ 不做的是：不合并「不同 status / 不同 verify_result」的条目（那会丢验收信息），
+        #      所以逐条仍各自走 `transition` + `machine_evidence`，语义一分不降。
+        _ids = a.get("ids")
+        # ⚠️ 判据是"给了 ids"而不是"给了多个 ids"：模型完全可能对 1 条也用 ids 形式
+        #    （统一写法更不易出错）。若只在 len>1 时分流，`ids=[5]` 会掉进单条路径，
+        #    而单条路径只读 `id` ⇒ 报"缺少有效的 id"（门禁 P5 抓到的真实缺口）。
+        # ⚠️ 不要 `a = dict(a)`：`a` 是外层参数，在 `_run` 闭包里重新赋值会让它变成
+        #    闭包局部变量 ⇒ UnboundLocalError（门禁实测踩到）。用新名字。
+        _a2 = a
+        if isinstance(_ids, (list, tuple)) and len(_ids) >= 1:
+            if len(_ids) == 1:
+                _a2 = dict(a)
+                _a2["id"] = _ids[0]
+                _a2.pop("ids", None)
+            else:
+                return _update_many(c, conversation_id, _ids, a, run_id=run_id)
+        tid = _a2.get("id")
         try:
             tid = int(tid)
         except Exception:

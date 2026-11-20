@@ -28,6 +28,30 @@
    "reason": "2026-11-20 新增：A/B 真实 LLM 会话评测「视图生成内容澄清」在含糊输入下的效果（J1命中/J2版式锚点/J3澄清优先/J4因果）。需运行中 8000 服务 + 真库 + LLM，CI 无此运行时"
   },
   {
+   "script": "verify_proc_badges_browser.js",
+   "tier": "local",
+   "timeout": 180,
+   "reason": "2026-11-20 新增：真实浏览器验证执行环节徽章（Agent/技能）渲染在 proc-head 内、样式生效、参与方汇总齐全。需本机 Chrome/Edge + 运行中服务"
+  },
+  {
+   "script": "verify_proc_attribution.py",
+   "tier": "local",
+   "timeout": 120,
+   "reason": "2026-11-20 新增：执行环节必须标出 Agent/技能/工具（后端字段接线 + 实时/历史两套渲染 + node 实跑徽章 + 变异自证）；静态判据为主，暂不进 CI"
+  },
+  {
+   "script": "verify_todo_batch_update.py",
+   "tier": "local",
+   "timeout": 120,
+   "reason": "2026-11-20 新增：todo_write 支持 ids 批量结项（降纯记账开销），自建临时库跑真实 handler + 变异自证；暂不进 CI"
+  },
+  {
+   "script": "verify_prose_confirm_card.py",
+   "tier": "local",
+   "timeout": 120,
+   "reason": "2026-11-20 新增：正文祈使式确认自动成卡（含陈述式误触发防护 + 变异自证）；暂不进 CI"
+  },
+  {
    "script": "verify_orch_clarify_card.py",
    "tier": "local",
    "timeout": 120,

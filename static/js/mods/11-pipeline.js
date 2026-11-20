@@ -140,7 +140,10 @@ function _newProcState(){
           //   子任务的 token **绝不能**流进正文区（米爸需求3：最终输出正文在流程执行
           //   完成后再输出）—— 后端 subtask token 带 `key`、最终正文 token 不带，
           //   据此分流；此前无条件全进 _tokBuf，子任务产出与最终正文混在一起。
-          subOutput: {}, subOutputRaf: 0};
+          subOutput: {}, subOutputRaf: 0,
+          // ★ 2026-11-20：本轮参与方集合（Agent / 技能 / 工具），供「执行参与方」汇总行。
+          //   Set 不能 JSON 序列化，故用普通对象做集合；重置由本工厂统一负责（防漂移）。
+          agentsUsed: new Set(), skillsUsed: new Set(), toolsUsed: new Set()};
 }
 let _procS = _newProcState();
 function toggleProc(headEl){
@@ -173,6 +176,51 @@ function procReset(){
   const b = document.getElementById('proc-box'); if(b) b.innerHTML='';
 }
 // 按 id 更新或追加时间线步骤；status 离开 run（完成/失败）时自动收起，进行中保持展开
+/** 归属徽章（★ 2026-11-20 用户要求「调用的 agent/skill/tool 要在对应环节标识出来」）。
+ *
+ * 为什么不能只靠缩进：缩进只能表达"挂在哪"，说不出"是谁"——用户要的是**看得见的名字**。
+ * 三级各一个徽章，颜色区分（Agent 紫 / 技能青 / MCP 橙），历史回放同一套。
+ */
+function _procBadge(kind, name){
+  if(!name) return '';
+  const t = String(name);
+  const c = kind === 'agent' ? 'ba' : (kind === 'skill' ? 'bs' : 'bm');
+  const ic = kind === 'agent' ? '🤖' : (kind === 'skill' ? '🧩' : '🔌');
+  const lbl = kind === 'agent' ? 'Agent' : (kind === 'skill' ? '技能' : 'MCP');
+  return `<span class="proc-badge ${c}" title="${lbl}：${esc(t)}">${ic} ${esc(t)}</span>`;
+}
+/** 执行参与方汇总行（★ 2026-11-20）。
+ *
+ * 数据源 = `_procS.agentsUsed/skillsUsed/toolsUsed`（事件到达时累加）+ 时间线反查兜底
+ * （历史回放路径不经过 procAddAgent/Tool，只能从 timeline 里扫）。
+ * 为什么需要：逐环节徽章解决"这一步是谁做的"，但用户还常问"这一轮到底动了哪些东西"。
+ * ⚠️ **纯函数**：只返回 HTML，绝不调 procUpsert —— 否则
+ *    `procRender → _syncParticipants → procUpsert → procRender` 会无限递归把页面打死。
+ */
+function _participantsHtml(){
+  const tl = _procS.timeline || [];
+  tl.forEach(s=>{
+    if(s.agent) _procS.agentsUsed.add(String(s.agent).replace(/^子智能体：/, ''));
+    if(s.skill || s.skillGuide) _procS.skillsUsed.add(String(s.skill || s.skillGuide));
+  });
+  const a = Array.from(_procS.agentsUsed||[]).filter(Boolean);
+  const k = Array.from(_procS.skillsUsed||[]).filter(Boolean);
+  const t = Array.from(_procS.toolsUsed||[]).filter(Boolean);
+  if(!(a.length + k.length + t.length)) return '';
+  const list = (arr, kind) => (arr.length
+    ? `<div style="display:flex;flex-wrap:wrap;gap:4px;margin-top:4px;">${arr.map(x=>_procBadge(kind, x)).join('')}</div>`
+    : '<div style="font-size:12px;color:var(--mut);margin-top:4px;">无</div>');
+  return `<div class="proc-block participants" data-pid="participants">
+    <div class="proc-head" onclick="toggleProc(this)" title="点击展开/收起详情"><span>🧭</span>
+      <span class="proc-title">执行参与方（Agent ${a.length} · 技能 ${k.length} · 工具 ${t.length}）
+        <span class="proc-sub">${esc([...a.slice(0,3), ...k.slice(0,2)].join(' · ').slice(0,80))}</span></span>
+      <span class="st ok" style="margin-left:auto;">本轮用到</span><span class="chev">▾</span></div>
+    <div class="proc-body"><div style="font-size:12.5px;color:var(--mut);line-height:1.6;">
+      <div><b>Agent（${a.length}）</b></div>${list(a,'agent')}
+      <div style="margin-top:6px;"><b>技能（${k.length}）</b></div>${list(k,'skill')}
+      <div style="margin-top:6px;"><b>工具（${t.length}）</b></div>${list(t,'tool')}
+    </div></div></div>`;
+}
 function procUpsert(id, patch){
   let s = _procS.timeline.find(x=>x.id===id);
   if(!s){ s = Object.assign({id, type:'', icon:'•', title:'', sub:'', status:'run', statusText:'执行中…', detail:'', collapsed:false}, patch); _procS.timeline.push(s); }
@@ -231,6 +279,8 @@ function procRender(){
   }
   const hideBody = _procS.done && _procS.summaryCollapsed;
   if(!hideBody){
+    // ★ 2026-11-20：参与方汇总固定在时间线最上方（纯 HTML，不走 procUpsert 防递归）
+    try{ h += _participantsHtml(); }catch(e){}
     _procS.timeline.forEach(s=>{
       const run = s.status==='run';
       // 五轮反馈5：stopped（已终止）用黄色警示但不转圈；只有 run 才有 spinner/呼吸
@@ -252,8 +302,13 @@ function procRender(){
       const parentId = s.parent ? ` data-parent="${esc(s.parent)}"` : '';
       const lvlCls = dp>0 ? ` proc-lv${Math.min(dp,2)}` : '';
       const guide = dp>0 ? `<span class="proc-guide" aria-hidden="true"></span>` : '';
+      // ★ 2026-11-20：归属徽章（Agent / 技能 / MCP）直接写在标题旁 —— 缩进只说"挂在哪"，
+      //   说不出"是谁"，用户要的是看得见的名字。
+      const badges = _procBadge('agent', s.agent)
+        + _procBadge('skill', s.skill || s.skillGuide)
+        + _procBadge('mcp', s.mcp);
       h += `<div class="proc-block ${s.type}${run?' running':''}${s.collapsed?' collapsed':''}${lvlCls}" data-depth="${dp}"${parentId} data-pid="${esc(s.id)}">
-        <div class="proc-head" onclick="toggleProc(this)" title="点击${s.collapsed?'展开':'收起'}详情">${guide}<span>${s.icon}</span><span class="proc-title">${esc(s.title)}${sub}${subHtml}</span>${elapsed}<span class="st ${statusCls}" style="margin-left:auto;">${spin}${esc(s.statusText)}</span><span class="chev">▾</span></div>
+        <div class="proc-head" onclick="toggleProc(this)" title="点击${s.collapsed?'展开':'收起'}详情">${guide}<span>${s.icon}</span><span class="proc-title">${esc(s.title)}${sub}${subHtml}</span>${badges}${elapsed}<span class="st ${statusCls}" style="margin-left:auto;">${spin}${esc(s.statusText)}</span><span class="chev">▾</span></div>
         ${s.detail?`<div class="proc-body">${s.detail}</div>`:''}
       </div>`;
     });
@@ -396,11 +451,12 @@ function procAddThinking(delta, round, key){
 function procAddAgent(ev){
   const name = ev.display_name||ev.name||'-';
   const run = ev.status!=='done';
+  try{ _procS.agentsUsed.add(String(name)); }catch(e){}
   // ★ 2026-11-11 三级层级：Agent 是**第 1 层容器**（depth=0），
   //   后续 skill/tool 事件靠后端回填的 `agent` 字段挂到这里（parent=agent_<key>）。
   procUpsert('agent_'+(ev.name||ev.intent||'agent'), {type:'agent', icon:'🤖', title:'子智能体：'+name,
     status: run?'run':'done', statusText: run?'执行中…':'✓ 已完成',
-    depth: 0, parent: null, agentKey: ev.name||ev.intent||'agent'});
+    depth: 0, parent: null, agentKey: ev.name||ev.intent||'agent', agent: name});
 }
 // V2.5：技能执行环节（SSE type=skill）——命中技能名 + 注入说明，可展开查看
 function procAddSkill(ev){
@@ -408,9 +464,11 @@ function procAddSkill(ev){
   // ★ depth=1（第 2 层）挂 Agent 下；多技能时取**首个**名字做 key，
   //   保证「技能 → 其工具」有稳定父子锚点。
   const key = (ev.names&&ev.names[0]) || names;
+  (ev.names||[]).forEach(n=>{ if(n) _procS.skillsUsed.add(String(n)); });
   procUpsert('skill_'+key, {type:'skill', icon:'🧩', title:'技能执行：'+names,
     status:'done', statusText:'✓ 已注入',
     depth: 1, parent: ev.agent ? 'agent_'+ev.agent : null, agent: ev.agent||null, skillKey: key,
+    skill: key,
     detail: `<div style="font-size:12.5px;color:var(--mut);line-height:1.6;">${esc(ev.note||'技能指令已注入生成阶段')}</div>` +
       `<div style="font-size:12px;color:var(--mut);margin-top:4px;">触发方式：${ev.note&&ev.note.includes('指定')?'手动指定（/ 或 # 选择）':'触发词命中（消息含技能触发词）'}</div>`});
 }
@@ -456,6 +514,7 @@ function procAddTool(ev){
   // UX规范·硬规则2（2026-10-02）：标题=「动词+宾语」完整活动短语（命中映射表不带「调用」前缀）；
   // 结果摘要只出现在 sub 槽位（下方 '· xxx'），与标题互斥、永不拼接成一句。
   const patch = {type:'tool', icon:'🛠', title: _toolActivity(ev.name)};
+  try{ _procS.toolsUsed.add(String(ev.name||'')); }catch(e){}
   // ★ 2026-11-11 三级层级（Agent → Skill → 工具/MCP）：
   //   后端已在 tool 事件回填 `agent`（谁调的）/ `skill`（命中哪个技能）/ `depth` / `mcp`。
   //   归属规则：**命中技能 ⇒ depth=2 挂技能下；未命中 ⇒ depth=1 直挂 Agent 下**。
@@ -470,6 +529,11 @@ function procAddTool(ev){
     patch.depth = ev.skill ? 2 : 1;
     if(ev.mcp) patch.sub = (patch.sub?patch.sub+' · ':'') + 'MCP:' + ev.mcp;
   }
+  // ★ 2026-11-20：技能徽章。`skill`=真归属（该技能白名单覆盖本工具，层级也挂它下面）；
+  //   `skill_guide`=本轮命中技能的**指导标识**（不改变层级，只让用户知道"这轮是哪套技能
+  //   指令在指导工具选择"）。两者都写进徽章，取值优先级 真归属 > 指导。
+  patch.skillGuide = ev.skill || ev.skill_guide || null;
+  patch.mcp = ev.mcp || null;
   // 2026-09-25（对齐 Claude Code / Codex）：头部加**一行结果摘要**，折叠状态下也能一眼看出
   // "这个工具干了什么、成没成"；完整参数/结果仍在展开体里（信息密度与细节两者兼顾）。
   if(!run){
@@ -986,6 +1050,8 @@ function _procAddSubTool(pk, ev, displayName){
   } else if(!item){
     arr.push({name:ev.name, displayName, call_id:ev.call_id||'', arguments:ev.arguments, status: run?'run':'done',
               ok: !!ev.ok, result: ev.result||'', error: ev.error||'',
+              // ★ 2026-11-20：子任务内部工具同样记录归属（谁调的 / 哪个技能指导）
+              agent: ev.agent||null, skill: ev.skill||ev.skill_guide||null,
               truncated: !!ev.truncated, latencyMs: ev.latency_ms||0, elapsedStart: run?Date.now():null});
   }
   // 子任务卡执行明细变化 → 重渲染（保留其展开/收起状态）
@@ -1016,6 +1082,7 @@ function _subChildrenHtml(key){
     h += '<div style="margin-bottom:6px;">'
       + '<div style="display:flex;align-items:center;gap:6px;font-size:12.5px;font-weight:600;color:var(--blue-d,#3478f6);flex-wrap:wrap;">🛠 '+esc(it.displayName||it.name)
       + ' <span class="st '+stCls+'">'+spin+stTxt+'</span>'
+      + _procBadge('agent', it.agent) + _procBadge('skill', it.skill)
       + (it.latencyMs?'<span style="color:var(--mut);font-size:12px;">⏱ '+(it.latencyMs/1000).toFixed(1)+'s</span>':'')
       + '</div>'
       + (it.arguments?'<div class="proc-tool-param">参数：'+esc(typeof it.arguments==='string'?it.arguments:JSON.stringify(it.arguments))+'</div>':'')
@@ -1415,7 +1482,9 @@ function procAddSubtask(ev){
     ui_summary: _pick('ui_summary'),
     input: _pick('input'), output: _pick('output'),
     summary_status: ev.summary_status||cur.summary_status||'', retry_count: ev.retry_count||cur.retry_count||0,
-    token_count: ev.token_count||cur.token_count||0};
+    token_count: ev.token_count||cur.token_count||0,
+    // ★ 2026-11-20：子任务用过的技能（后端 subtask 事件带 skills）⇒ 环节上标技能徽章
+    skills: ev.skills || cur.skills || []};
   // 计划清单数据维护（V2.7 文本清单替代 DAG 画布；deps 驱动顺序展示）
   _procS.dag.nodes[key] = {title: s.title, status: s.status, deps: s.deps, latency_ms: s.latency_ms, agent: s.agent};
   if(!_procS.dag.order.includes(key)) _procS.dag.order.push(key);
@@ -1461,6 +1530,11 @@ function procAddSubtask(ev){
   const _stNew = !_procS.timeline.some(x=>x.id===_stId);
   const _stPatch = {type:'subtask', icon:'🕸', title: s.title||key, status: s.status,
     statusText, key,
+    // ★ 2026-11-20：子任务卡直接标出执行它的 Agent（此前 agent 只藏在「计划清单」
+    //   展开体里，折叠态完全看不出这一步是谁做的）。
+    agent: s.agent || null,
+    // 技能徽章：多个取首个（避免环节行被撑爆），完整清单在展开体里
+    skill: (s.skills && s.skills.length) ? s.skills[0] : null,
     sub: _procSumText(s.ui_summary || ((s.summary&&typeof s.summary==='object')?(s.summary.summary||''):(s.summary||''))),
     detail: subtaskCardHtml(s) + _subChildrenHtml(key)};
   // ⚠️ 只在**首次创建**时置 collapsed —— 否则每来一次 run/done 事件都会把用户手动展开的卡重新折叠

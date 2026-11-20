@@ -63,6 +63,73 @@ def _collapse_intermediate_artifacts(content: str) -> tuple:
     return "".join(out), saved
 
 
+#: 祈使式确认（用户必须拍板才能继续）——**故意只收祈使句**。
+#: ★ 2026-11-20（用户反馈「AI 输出中有项用户询问确认的描述，结果并未出现澄清卡片，
+#:   这个问题屡次出现」）：模型常把"请你确认"写在正文里而不调 `ask_user`，
+#:   于是正文有请求、界面无卡片、用户无处作答 ⇒ 只能自己另起一句追问。
+#: 必须排除的两类（否则会误触发，把报告内容当成交互请求）：
+#:   ① 报告里的「缺口与待确认项」清单（陈述式："待确认：xxx"）；
+#:   ② 自我说明（"已按…不需确认"）。
+_PROSE_CONFIRM_PAT = (
+    "请你确认", "请你拍板", "需要你确认", "需要您确认", "需你确认",
+    "待你确认", "等你确认", "请确认后", "你确认一下", "请您确认",
+    "需要你拍板", "需要你指定", "请你指定", "确认后我再", "确认后我会继续",
+)
+#: 明显是陈述/否定的上下文 ⇒ 不算交互请求（在命中点附近出现即排除）
+_PROSE_CONFIRM_NEG = (
+    "不需确认", "无需确认", "不需要你确认", "已确认", "待确认：", "待确认项",
+    "确认单已备齐",
+)
+
+
+def detect_prose_confirm(text: str, *, has_card: bool = False,
+                         max_scan_tail: int = 1200) -> dict | None:
+    """正文里的祈使式确认 → 一张澄清卡（★ 2026-11-20）。
+
+    返回 `{question, options, context}` 或 None。**纯函数**，便于单测与门禁。
+
+    设计取舍（为什么不是"见到'确认'就发卡"）：
+      · 只扫**尾部** `max_scan_tail` 字符 —— 交互请求总是在结论之后提出；
+        扫全文会把报告正文里的「待确认项」全部误判成交互；
+      · 只认**祈使式**短语（"请你确认/需要你拍板"），不认陈述式（"待确认：…"）；
+      · `has_card=True`（本轮已有澄清/确认卡）直接返回 None —— 不重复弹卡；
+      · 选项按"继续 / 改动 / 取消"三档给，**允许自定义输入**（真实答案往往是具体内容）。
+    """
+    s = str(text or "")
+    if has_card or not s.strip():
+        return None
+    tail = s[-int(max_scan_tail):] if max_scan_tail > 0 else s
+    hit = ""
+    for p in _PROSE_CONFIRM_PAT:
+        if p in tail:
+            hit = p
+            break
+    if not hit:
+        return None
+    # 命中点附近若是陈述式说明（"待确认项" / "无需确认"）⇒ 不算
+    i = tail.find(hit)
+    near = tail[max(0, i - 40): i + len(hit) + 40]
+    if any(n in near for n in ("不需确认", "无需确认", "不需要你确认", "已确认",
+                              "待确认：", "待确认项", "不需要你拍板")):
+        return None
+    # 取命中所在句作为问题（去掉 Markdown 记号，避免卡片里出现 ** 或 ###）
+    import re as _re
+    seg = tail[i: i + 199]
+    for sep in ("。", "\n", "！", "？"):
+        j = seg.find(sep)
+        if j > 0:
+            seg = seg[:j]
+            break
+    q = _re.sub(r"[*#>`\-]{1,4}", "", seg).strip() or hit
+    return {
+        "id": "q_prose_confirm",
+        "question": q[:180],
+        "options": ["按当前方案继续", "我要改几处（下面补充）", "先不继续"],
+        "allow_custom": True,
+        "context": "该确认来自正文中的询问（模型未调用确认工具，系统已自动成卡）",
+    }
+
+
 def _attach_usage_summary(card_obj: dict, content: str, usage: dict) -> dict:
     """把本轮 usage + 结论速览**在落库前**写进 card_data（2026-11-20）。
 
@@ -1471,6 +1538,19 @@ class StreamMixin:
                                 e2 = dict(ev); e2["name"] = f"{tkey}:{e2.get('name','')}"
                                 evs.append(e2)
                                 _evq.put(e2)
+                            elif _et == "skill":
+                                # ★ 2026-11-20（用户要求「skill 要在对应环节标识出来」）：
+                                #   子任务的 skill 事件此前**无分支 ⇒ 被丢弃**，于是历史回放里
+                                #   每个子任务都不知道用了哪些技能。这里记到 _sub_meta，
+                                #   随 subtask 事件落库（前端在子任务卡上标技能徽章）。
+                                _sn = [str(x) for x in (ev.get("names") or []) if str(x)]
+                                if _sn:
+                                    _sm = _sub_meta.setdefault(tkey, {})
+                                    _sm["skills"] = list(dict.fromkeys(
+                                        list(_sm.get("skills") or []) + _sn))
+                                e3 = dict(ev); e3["key"] = tkey
+                                evs.append(e3)
+                                _evq.put(e3)
                             elif _et in ("clarify_ask", "hil_confirm"):
                                 # ★ 2026-11-20：子任务的确认/澄清事件此前**无分支 ⇒ 被丢弃**。
                                 #   不直接转发到前端（5 个子任务同时问会弹 5 张卡），
@@ -3255,9 +3335,13 @@ class StreamMixin:
                                              "token_count": _tok,
                                              "retry_count": _rc,
                                              "summary": _summary if isinstance(_summary, dict) else None,
-                                             "summary_status": _sm_status})
+                                             "summary_status": _sm_status,
+                                             # ★ 2026-11-20：子任务用过的技能（钉在环节上，
+                                             #   历史回放时前端据此标技能徽章）。
+                                             "skills": (_sub_meta.get(tkey) or {}).get("skills") or []})
                             yield {"type": "subtask", "key": tkey, "status": "done" if tk_ok else "failed",
                                    "title": ttitle, "agent": tk.get("agent_id") or "",
+                                   "skills": (_sub_meta.get(tkey) or {}).get("skills") or [],
                                    "latency_ms": _t_lat, "error": _t_err or None,
                                    "token_count": _tok,
                                    "retry_count": _rc,
@@ -6179,7 +6263,25 @@ class StreamMixin:
                 #   `mcp` 字段留给将来：`tools.mcp_server_id` 目前**全库为空**（0 条），
                 #   故 L3 实际是「本地工具」；协议先留位，MCP 接入后无需改结构。
                 _ctx_agent = agent_def.name or "-"
+                # ★★ 2026-11-20（用户要求「执行过程中调用的 agent/skill/tool 要在对应环节标识出来」）：
+                #   此前本字段**全文件只被赋 None、从未接线**（grep 只有两处 `= None`），
+                #   于是 tool 事件的 `depth` 恒为 1、`skill` 恒为 None ⇒ 声明好的三级
+                #   （Agent → 技能 → 工具）第 2 层永远不成立，用户只看到平铺缩进，
+                #   无法判断"这个工具是哪个技能的指令让它调的"。
+                #   现在按**真实归属**接线，分两种粒度：
+                #     · `_ctx_skill`      —— 该工具确实被某技能的白名单覆盖（真归属，depth=2）
+                #     · `_ctx_skill_guide`—— 本轮命中技能的**指导徽章**（不改变层级，只做标识）
+                #   为什么区分：技能常只是"指导产出格式"（不声明 allowed_tools），
+                #   把所有工具都缩进到它下面会把层级画歪；但完全不标又等于没标识。
                 _ctx_skill = None            # None = 未命中技能（工具直接挂 agent 下）
+                _ctx_skill_guide = None      # 仅标识用：本轮命中技能名（不参与 depth）
+                _hit_skills = [str(x) for x in (getattr(self, "_last_skill_hits", None) or [])]
+                if _hit_skills:
+                    _ctx_skill_guide = _hit_skills[0]
+                    # 只有"技能声明了工具白名单"时才算工具归属（否则只是格式指导）
+                    _wl_skill = getattr(self, "_skill_allowed_tools", None)
+                    if _wl_skill:
+                        _ctx_skill = _ctx_skill_guide
                 # ★ 2026-10-17（米爸反馈3）：ask_user 人在回路澄清信号（None=未触发）。
                 #   LLM 调 ask_user ⇒ _exec_tool_call 返回 clarify_required ⇒ 中断循环，
                 #   由下方（follow-up 消费前）发射 clarify_ask + 落挂起 + return。
@@ -6386,7 +6488,7 @@ class StreamMixin:
                                        "ok": False, "result": _tr["result"],
                                        "error": "args_truncated", "call_id": _call_id,
                                        "truncated": True,
-                                       "agent": _ctx_agent, "skill": _ctx_skill,
+                                       "agent": _ctx_agent, "skill": _ctx_skill, "skill_guide": _ctx_skill_guide,
                                        "depth": 2 if _ctx_skill else 1, "mcp": _mcp_of(tname)}
                                 results.append({"tool_call_id": tc.get("id", ""), "role": "tool",
                                                 "name": tname,
@@ -6406,7 +6508,7 @@ class StreamMixin:
                             yield {"type": "tool", "status": "run", "name": tname, "arguments": targs,
                                    "call_id": _call_id,
                                    # ★ 2026-11-11 三级展示层级（详见 _ctx_agent 处注释）
-                                   "agent": _ctx_agent, "skill": _ctx_skill,
+                                   "agent": _ctx_agent, "skill": _ctx_skill, "skill_guide": _ctx_skill_guide,
                                    "depth": 2 if _ctx_skill else 1, "mcp": _mcp_of(tname)}
                             _t0 = time.time()   # P0-1 工具耗时：run→done 计时
                             # 2026-10-04：重复调用短路（同工具同参数已成功跑过 ⇒ 回喂既有结果）。
@@ -6447,7 +6549,7 @@ class StreamMixin:
                                            "latency_ms": int((time.time() - _t0) * 1000),
                                            "call_id": _call_id, "skipped": False,
                                            "skip_reason": "", "agent": _ctx_agent,
-                                           "skill": _ctx_skill, "depth": 2 if _ctx_skill else 1,
+                                           "skill": _ctx_skill, "skill_guide": _ctx_skill_guide, "depth": 2 if _ctx_skill else 1,
                                            "mcp": _mcp_of(tname)}
                                     break
                                 # ★ 2026-10-28（写前确认 HITL）：写操作被确认闸拦下 ⇒ 中断本轮。
@@ -6463,7 +6565,7 @@ class StreamMixin:
                                            "latency_ms": int((time.time() - _t0) * 1000),
                                            "call_id": _call_id, "skipped": False,
                                            "skip_reason": "", "agent": _ctx_agent,
-                                           "skill": _ctx_skill, "depth": 2 if _ctx_skill else 1,
+                                           "skill": _ctx_skill, "skill_guide": _ctx_skill_guide, "depth": 2 if _ctx_skill else 1,
                                            "mcp": _mcp_of(tname)}
                                     break
                                 _r0 = str(result.get("result") or "")
@@ -6595,6 +6697,10 @@ class StreamMixin:
                                                "arguments": targs, "result": _t_result,
                                                "error": _t_error, "truncated": _t_trunc,
                                                "elapsed_ms": _t_ms,
+                                               # ★ 2026-11-20：归属随卡片落库，历史回放
+                                               # 才能标出"这一步是谁/哪个技能让它调的"。
+                                               "agent": _ctx_agent, "skill": _ctx_skill,
+                                               "skill_guide": _ctx_skill_guide,
                                                "skipped": _skipped, "skip_reason": _skip_why})
                             yield {"type": "tool", "status": "done", "name": tname,
                                    "ok": _t_ok, "result": _t_result, "error": _t_error,
@@ -6602,7 +6708,7 @@ class StreamMixin:
                                    "call_id": _call_id,
                                    "skipped": _skipped, "skip_reason": _skip_why,
                                    # ★ 2026-11-11 三级展示层级（与上方 run 事件同源）
-                                   "agent": _ctx_agent, "skill": _ctx_skill,
+                                   "agent": _ctx_agent, "skill": _ctx_skill, "skill_guide": _ctx_skill_guide,
                                    "depth": 2 if _ctx_skill else 1, "mcp": _mcp_of(tname)}
                             _weak = bool(result.get("weak")) or ("未检索到" in _t_result) or ("无新冲突" in _t_result)
                             if _weak:
@@ -6717,7 +6823,7 @@ class StreamMixin:
                                        "ok": False, "result": "本轮并发已达上限，未执行",
                                        "error": "round_tool_limit", "call_id": _sr.get("tool_call_id"),
                                        "skipped": True, "skip_reason": "round_tool_limit",
-                                       "agent": _ctx_agent, "skill": _ctx_skill,
+                                       "agent": _ctx_agent, "skill": _ctx_skill, "skill_guide": _ctx_skill_guide,
                                        "depth": 2 if _ctx_skill else 1, "mcp": _mcp_of(_sfn)}
                             results.extend(_skip_res)
                         # 工具结果回填后进入下一轮（观察 → 再思考）
@@ -7086,7 +7192,7 @@ class StreamMixin:
                                         yield {"type": "tool", "status": "run", "name": _tn,
                                                "arguments": _ta, "call_id": _tc.get("id", ""),
                                                "round": _rnd + 1, "phase": "repair",
-                                               "agent": _ctx_agent, "skill": _ctx_skill,
+                                               "agent": _ctx_agent, "skill": _ctx_skill, "skill_guide": _ctx_skill_guide,
                                                "depth": 2 if _ctx_skill else 1, "mcp": _mcp_of(_tn)}
                                         _res = _lg.call(self._exec_tool_call, _tn, _ta)
                                         if _res.get("ok"):
@@ -7096,7 +7202,7 @@ class StreamMixin:
                                                "ok": bool(_res.get("ok")),
                                                "call_id": _tc.get("id", ""),
                                                "round": _rnd + 1, "phase": "repair",
-                                               "agent": _ctx_agent, "skill": _ctx_skill,
+                                               "agent": _ctx_agent, "skill": _ctx_skill, "skill_guide": _ctx_skill_guide,
                                                "depth": 2 if _ctx_skill else 1, "mcp": _mcp_of(_tn)}
                                         _repair_msgs.append({
                                             "tool_call_id": _tc.get("id", ""), "role": "tool",
@@ -7621,6 +7727,36 @@ class StreamMixin:
             yield {"type": "agent", "status": "done", "name": agent_def.name,
                    "display_name": agent_def.name, "intent": intent, "hil_level": hil_level}
 
+            # ★★ 2026-11-20（用户：AI 输出有询问确认的描述却没出澄清卡，屡次出现）：
+            #   模型只在**正文**里写"请你确认"，不调 `ask_user` ⇒ 界面无卡、用户无处作答。
+            #   这里在正文定稿后补一次探测：命中即发卡 + 落 pending，但**正文照常保留**
+            #   （与"先澄清后执行"不同：这一轮已经产出，用户要的是"看到东西并决定下一步"）。
+            #   `_prose_confirm_q` 同时让 done 带上 msg_type='clarify'，前端 finishStream
+            #   会用 r.content 重建消息再插卡 —— 正文与卡片并存。
+            _prose_confirm_q = None
+            try:
+                if not dry_run:
+                    _prose_confirm_q = detect_prose_confirm(llm_content, has_card=False)
+            except Exception:
+                _prose_confirm_q = None
+            if _prose_confirm_q:
+                try:
+                    # ⚠️ content **不能传正文**：正文随后会由阶段 4 正常落库，
+                    #   这里再写一份会出现两条消息、正文重复。这里只落"待确认"这一事实。
+                    _pmid2 = self._persist_clarify(
+                        conversation_id, user_input, intent, branch, attachments,
+                        forced_intent, skill_name, team, [_prose_confirm_q],
+                        content="⏸ 正文里提出了确认请求，已生成确认卡：%s"
+                                % str(_prose_confirm_q.get("question") or "")[:160]) or 0
+                except Exception:
+                    _pmid2 = 0
+                yield {"type": "clarify_ask", "questions": [_prose_confirm_q],
+                       "intent": intent, "title": "❓ 需要你确认后继续",
+                       "message": str(user_input)[:200], "source": "prose_confirm"}
+                yield {"type": "progress", "kind": "progress",
+                       "delta": "（澄清自动成卡）正文里有「请你确认」式的询问，"
+                                "已为你生成确认卡——回答后我会按你的选择继续。"}
+
             # ── 阶段 4：落库（dry_run=True 时跳过，供编排子任务流式执行不落库）──
             yield {"type": "stage", "name": "写入会话", "status": "run"}
             msg_id = 0
@@ -7836,6 +7972,12 @@ class StreamMixin:
             yield {"type": "done", "data": {
                 "message_id": msg_id,
                 "intent": intent,
+                # ★ 2026-11-20：正文里有祈使式确认 ⇒ 这一轮以「正文 + 澄清卡」双呈现收口。
+                #   前端 finishStream 见到 msg_type='clarify' 会用 content 重建消息，
+                #   再插 renderClarifyAsk ⇒ 正文不丢、卡片可作答。
+                **({"clarify_asked": True, "msg_type": "clarify",
+                    "questions": [_prose_confirm_q],
+                    "clarify_source": "prose_confirm"} if _prose_confirm_q else {}),
                 "intent_route": _intent_meta["route"],
                 "intent_confidence": _intent_meta["confidence"],
                 "needs_clarification": _intent_meta["needs_clarification"],
