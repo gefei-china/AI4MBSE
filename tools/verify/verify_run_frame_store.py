@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# CI-OPTIONAL: [local] tier=local（见 tools/gates_manifest.json）：默认分支只用 tempfile 临时库，但 `--with-e2e` 分支要 sqlite3.backup 真库副本 + TestClient lifespan，同一脚本不可拆分 ⇒ 整体未接线。2026-11-20 本机实测 87 PASS/0 FAIL（含 --with-e2e）。改法须同步改清单 tier 并接线，不允许只删这行
 """门禁：方案B P0/P1 —— 帧日志地基 + 断线重连回放（RUN_STREAM_STORE_V1）。
 
 跑法（必须用项目 venv）：

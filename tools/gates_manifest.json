@@ -2657,6 +2657,78 @@
    "tier": "local",
    "timeout": 300,
    "reason": "B2-4/B2-5 门禁（2026-11-18）：F 组受控工作区根约束（系统目录默认拒写、allow_roots 白名单、'..' 穿越被 realpath 解掉、exec 入口真拦、读不受限）；H 组 HIL deny 档（LEVELS 最严档、策略表能裁决出 deny、escalate 不放宽、deny 分支先于入队分支）；S 组 destructive 自批闸（真库副本造单：本人批自己被拦且仍 pending、他人批放行、可逆写本人批不拦）；M1/M2 变异自证。24 项，零写生产（副本跑完即删）。归 local：S 组需真库建副本，干净 checkout 无 mbse.db 必红。"
+  },
+  {
+   "script": "find_undefined_names.py",
+   "tier": "local",
+   "timeout": 120,
+   "reason": "2026-11-20 补登记：历史漏入清单，当前按 local 手工跑；是否晋 pr 需先确认无外部依赖并同步 ci.yml（G6a）"
+  },
+  {
+   "script": "verify_attempt_trace.py",
+   "tier": "local",
+   "timeout": 120,
+   "reason": "2026-11-20 补登记：历史漏入清单，当前按 local 手工跑；是否晋 pr 需先确认无外部依赖并同步 ci.yml（G6a）"
+  },
+  {
+   "script": "verify_finalize_key_unique.py",
+   "tier": "local",
+   "timeout": 120,
+   "reason": "2026-11-20 补登记：历史漏入清单，当前按 local 手工跑；是否晋 pr 需先确认无外部依赖并同步 ci.yml（G6a）"
+  },
+  {
+   "script": "verify_p0_fixes_20261119.py",
+   "tier": "local",
+   "timeout": 120,
+   "reason": "2026-11-20 补登记：历史漏入清单，当前按 local 手工跑；是否晋 pr 需先确认无外部依赖并同步 ci.yml（G6a）"
+  },
+  {
+   "script": "verify_p1_p2_hardening.py",
+   "tier": "local",
+   "timeout": 120,
+   "reason": "2026-11-20 补登记：历史漏入清单，当前按 local 手工跑；是否晋 pr 需先确认无外部依赖并同步 ci.yml（G6a）"
+  },
+  {
+   "script": "verify_run_frame_store.py",
+   "tier": "local",
+   "timeout": 120,
+   "reason": "2026-11-20 补登记：历史漏入清单，当前按 local 手工跑；是否晋 pr 需先确认无外部依赖并同步 ci.yml（G6a）"
+  },
+  {
+   "script": "verify_single_source_content.py",
+   "tier": "local",
+   "timeout": 120,
+   "reason": "2026-11-20 补登记：历史漏入清单，当前按 local 手工跑；是否晋 pr 需先确认无外部依赖并同步 ci.yml（G6a）"
+  },
+  {
+   "script": "verify_stream_recovery.py",
+   "tier": "local",
+   "timeout": 120,
+   "reason": "2026-11-20 补登记：历史漏入清单，当前按 local 手工跑；是否晋 pr 需先确认无外部依赖并同步 ci.yml（G6a）"
+  },
+  {
+   "script": "verify_submit_idempotency.py",
+   "tier": "local",
+   "timeout": 120,
+   "reason": "2026-11-20 补登记：历史漏入清单，当前按 local 手工跑；是否晋 pr 需先确认无外部依赖并同步 ci.yml（G6a）"
+  },
+  {
+   "script": "verify_three_issue_fixes.py",
+   "tier": "local",
+   "timeout": 120,
+   "reason": "2026-11-20 补登记：历史漏入清单，当前按 local 手工跑；是否晋 pr 需先确认无外部依赖并同步 ci.yml（G6a）"
+  },
+  {
+   "script": "verify_tool_executor_registry.py",
+   "tier": "local",
+   "timeout": 120,
+   "reason": "2026-11-20 补登记：历史漏入清单，当前按 local 手工跑；是否晋 pr 需先确认无外部依赖并同步 ci.yml（G6a）"
+  },
+  {
+   "script": "verify_unclosed_round3.py",
+   "tier": "local",
+   "timeout": 120,
+   "reason": "2026-11-20 补登记：历史漏入清单，当前按 local 手工跑；是否晋 pr 需先确认无外部依赖并同步 ci.yml（G6a）"
   }
  ]
 }

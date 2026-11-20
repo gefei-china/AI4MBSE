@@ -1,3 +1,4 @@
+# CI-OPTIONAL: [local] tier=local（见 tools/gates_manifest.json）：B 组用例前置「真库可用」（读仓库根 mbse.db，B1 直接判红），CI 无真库 ⇒ 未接线。2026-11-19 本机实测 14/14。改法须同步改清单 tier 并接线，不允许只删这行
 """verify_stream_recovery — 断线恢复机制门禁（2026-11-19）
 
 对标 Dify「断线不致命」的稳妥落地：SSE 异常无终态时，后端按 finalize_key

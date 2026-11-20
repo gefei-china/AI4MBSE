@@ -1,3 +1,4 @@
+# CI-OPTIONAL: [local] tier=local（见 tools/gates_manifest.json）：纯本地可跑（临时库），但尚未接入 ci.yml（2026-11-20 补登记为 local）；下一轮应晋 pr 并在 ci.yml 增加执行行。改法须同步改清单 tier 并接线，不允许只删这行
 """verify_finalize_key_unique — P3 根治门禁：DB 唯一键彻底消除固化双写（2026-11-19）
 
 核心判据（行为级，非静态）：
