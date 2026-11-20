@@ -16,6 +16,7 @@
 | `input_invalid` | 输入或参数不合法 | ❌ 永久 |
 | `output_rejected` | 模型输出不合格（协议校验失败） | ❌ 永久（重试同样 prompt 大概率同样输出） |
 | `business` | 业务规则拒绝（如"无数据可算"） | ❌ 永久 |
+| `needs_user` | 人在回路中断（ask_user / 写前确认），等用户回答 | ❌ 永久（2026-11-20 新增，见下） |
 | `internal` | 未归类的内部错误 | ✅ 默认当瞬态（保守：宁可多重试一次，也不把瞬态错判成永久） |
 
 ⚠️ **`internal` 归为可重试是刻意的**：分类器的职责是"避免确定的永久失败被无谓重试"，
@@ -60,11 +61,22 @@ except Exception:      # pragma: no cover - tool_resilience 不可用时的兜�
 # ── 枚举 ────────────────────────────────────────────────────────────────────
 ERROR_CLASSES = (
     "timeout", "transient", "permission", "input_invalid",
-    "output_rejected", "business", "interrupted", "internal",
+    "output_rejected", "business", "interrupted", "internal", "needs_user",
 )
 
 #: 明确**不可重试**的类别（其余均可重试，见模块头"internal 归可重试"的取舍说明）。
-NON_RETRYABLE = frozenset({"permission", "input_invalid", "output_rejected", "business"})
+# ★ 2026-11-20：`needs_user` 加进来 —— 子任务 ask_user/确认闸中断后**再重试只会让
+#   模型改写成散文绕开确认**（真机 conv 999999952 的 t5 重试 2 次，最终既没卡片
+#   也没暂停语义）。"等用户回答"是终态，不是故障，重试既不合法也不省时。
+NON_RETRYABLE = frozenset({"permission", "input_invalid", "output_rejected",
+                           "business", "needs_user"})
+
+#: 等用户输入的中断文案（由 stream._run_subtask 统一以 `pending_clarify:` /
+#: `pending_confirm:` 前缀写出；额外保留工具回执原文以兼容历史数据）。
+_NEEDS_USER_KW = (
+    "pending_clarify:", "pending_confirm:", "等待用户澄清", "等待人工确认",
+    "流程暂停，等待用户回答", "已向用户发起确认", "等待用户回答后继续",
+)
 
 # ── 永久失败特征词（小写匹配；顺序有讲究：先判权限再判参数）─────────────────
 _PERMISSION_KW = (
@@ -138,6 +150,13 @@ def classify(error_text, ok=True):
     if not low.strip():
         # 有失败标志但无文本：算内部错误（可重试），而不是永久失败。
         return "internal"
+
+    # 1b) 等用户输入（★ 2026-11-20）：必须先于 timeout / internal 判定。
+    #     `pending_*` 文案里常带"确认/暂停"，若落到 internal 会被重试，
+    #     于是模型第二次改写成"请确认"散文 —— 卡片永远出不来。
+    for kw in _NEEDS_USER_KW:
+        if kw in low:
+            return "needs_user"
 
     # 2) 权限（最先判，见函数注释）
     for kw in _PERMISSION_KW:

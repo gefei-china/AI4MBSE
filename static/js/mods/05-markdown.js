@@ -2,6 +2,21 @@
  * 由 static/index.html 巨型 inline script 机械切分而来
  * 原行号 2300-2525  ·  全局作用域（非 module），内联 onclick 依赖全局函数名
  */
+/* ★ 2026-11-18（米爸报「AI 输出放代码块就固定会有视图，这不合理」）：
+   视图可用性判据 —— **所有视图的 nodes 与 edges 全为空 ⇒ 没有可用视图**。
+   为什么不能只看 `Object.keys(views).length`：空壳视图（msg#7008 的 BDD/IBD
+   都是 nodes=[] edges=[]）同样占用 key，会让前端声称「视图 2」。
+   为什么放在 05（最先加载的渲染模块）：05 的 hasViews 决定**是否剥离正文围栏**，
+   06 的 cardSysmlTabs 决定**是否渲染视图卡** —— 两处必须同一判据，否则会出现
+   「正文被剥走、卡片又不渲染」⇒ 内容凭空消失。 */
+function sysmlViewsUsable(cd){
+  const sv = cd && cd.sysml_views;
+  if(!sv || !sv.views) return false;
+  const entries = Object.entries(sv.views);
+  if(!entries.length) return false;
+  return entries.some(([k, v]) => !!(v && ((v.nodes && v.nodes.length) || (v.edges && v.edges.length))));
+}
+
 function escMd(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
 /* ★ 2026-11-15（米爸报「知识库检索 引用的片段 输出正文没有展示引用标识」的真根治）：
    从 citations 的 `anchor` 建「条款号 → 最小编号」索引（1-based，与 [n] 同序）。
@@ -377,7 +392,8 @@ function renderMessage(m) {
   // 问答可解释性：card_data.citations → 答案内 [n] 引用链接（按消息 id 缓存供 openCitation 跳转）
   let cites = (cd && Array.isArray(cd.citations)) ? cd.citations : [];
   // 建模输出（含 sysml_views）：正文剥离代码块（代码收敛到下方「代码/视图」整合卡 tab 内，聚焦同步查看）
-  const hasViews = !!(cd && cd.sysml_views && cd.sysml_views.views && Object.keys(cd.sysml_views.views).length);
+  // ★ 2026-11-18：改用「至少一个视图有元素」判据 —— 空壳视图不再剥离正文
+  const hasViews = sysmlViewsUsable(cd);
   const codeFound = (hasViews && m.role==='assistant') ? extractSysmlCode(m.content||'') : null;
   const bodySrc = codeFound ? stripFencedCode(m.content||'') : (m.content||'');
   /* ★ 2026-11-16：引用视图必须在**正文确定之后**算（要扫正文里的 [n]），

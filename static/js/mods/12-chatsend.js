@@ -179,6 +179,16 @@ function clearTeamChip(){
 // P0-1 澄清改选重发：全局流中止控制器（新发送前中止旧流）
 let _streamAbort = null;
 let _streaming = false;        // P1-1 流式进行中标记（控制发送/停止按钮切换）
+
+// ★ 2026-11-19 P0-A：创建会话**临界区**同步锁。
+//   为什么不是整个 sendChat 的全局锁：系统支持多会话并发（见下方 :300 的 _sameConv 判据），
+//   `if(_streaming) return` 会把「切到别的会话发消息」也拦掉，属于误伤。
+//   竞态只发生在 `if(!currentConvId)` → await POST → 赋值 这段 TOCTOU 窗口，锁这一段即可。
+let _creatingConv = false;
+function _newClientRequestId(){
+  try{ if(window.crypto && crypto.randomUUID) return crypto.randomUUID(); }catch(e){}
+  return 'c-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2,10);
+}
 let _stoppedManually = false;  // 手动停止 vs 澄清改选自动中止
 // ★ 2026-10-16 Q2：澄清改选 / 澄清续答**复用原输出盒**时，会先 abort 当前流再用同一盒重跑。
 //   旧流的 catch 本会把 _streaming 置 false、并触发 _finalizeStoppedRender 把盒子 outerHTML 替换掉
@@ -191,6 +201,76 @@ function draftTitle(msg){
   if(clean) return clean.length>20 ? clean.slice(0,18)+'…' : clean;
   return '任务 '+(Date.now()%1000);
 }
+// ★ 2026-11-19 P2-2：从 sendChat 提取的两个独立职责块（行为逐字节不变）。
+//   返回 true=继续走发送主流程；false=已处理完毕，调用方应 return。
+//   为什么用返回值而不是在子函数里 return：原代码这些分支直接 return 终止 sendChat，
+//   提取后必须由调用方决定是否终止 —— 这是保证行为不变的关键。
+async function _ensureConversation(msg){
+  // 草稿态首次提交时创建会话（未提交前左侧列表不出现空会话）
+  // 若由「项目 → ＋ 新建任务」发起，带走该项目归属（window._pendingProjectId）
+  if(currentConvId) return true;
+  // ★ P0-A：同步置锁（在任何 await 之前）——挡住双击/Enter/K-bar 并发进入的第二次创建。
+  //   P0-C：立即给状态反馈，不等 pumpStream（原实现要等近 200 行之后才有反馈）。
+  if(_creatingConv){ toast('正在创建会话，请稍候…'); return false; }
+  _creatingConv = true;
+  const _st0 = document.getElementById('chat-status');
+  if(_st0) _st0.textContent = '正在创建会话…';
+  let _rid = '';
+  try{
+    const _body = {title:draftTitle(msg)};
+    const _pid = window._pendingProjectId || '';
+    if(_pid) _body.project_id = _pid;
+    // ★ P0-B：一次提交一个 request_id，后端据此做幂等（重放返回同一 conv_id，不再 INSERT）。
+    _rid = _newClientRequestId();
+    _body.client_request_id = _rid;
+    const r = await api('/api/conversations', {method:'POST', body:JSON.stringify(_body)});
+    currentConvId = r.id;
+    if(r && r.idempotent_hit) toast('该请求已提交过，已复用原会话');
+    _isDraft = false;
+    loadConversations();
+    if(_pid){
+      window._pendingProjectId = '';
+      if(typeof renderGnavProjects === 'function') renderGnavProjects();
+    }
+    const st = document.getElementById('chat-status');
+    if(st) st.textContent = '';
+    try{ localStorage.removeItem('mbse_draft_input'); }catch(e){}
+  }catch(e){ toast('创建会话失败：'+(e && (e.message||e)) ); return false; }
+  finally{ _creatingConv = false; }   // 所有分支（含 return）都释放，绝不留死锁
+  return true;
+}
+
+async function _submitClarify(msg, input){
+  // 待澄清状态下，主输入框内容即"澄清补充"——走 clarify-answer（会清空挂起）。
+  // ★ G-1：带附件时绝不能走本分支（clarify-answer 不收附件，会静默丢弃）；
+  //   带附件是新的建模请求 ⇒ 调用方直接走正常发送。
+  if(!(window._pendingClarify && currentConvId && !(pendingAttachments && pendingAttachments.length)))
+    return true;
+  try{
+    const r = await api(`/api/conversations/${currentConvId}/clarify-answer`,
+                        {method:'POST', body: JSON.stringify({free_text: msg})});
+    if(r && r.resume_text){
+      input.value = '';
+      _chatInputAutoGrow();
+      try{ localStorage.removeItem('mbse_draft_input'); }catch(e){}
+      toast('已作为澄清补充提交，正在继续…');
+      setPendingClarify(null);
+      _continueInSameBox(null, r.resume_text, {
+        user_msg_id: r.resume_of_user_msg_id || 0,
+        append: r.resume_append || '',
+      }, msg.slice(0, 40));
+      return false;                  // ★ 与原 return 等价：终止 sendChat
+    }
+    // 后端返回"无待澄清"⇒ 本地挂起态已不同步，清掉并落入正常发送（不吞输入）
+    setPendingClarify(null);
+    toast((r && r.error) || '澄清状态已过期，按新消息发送');
+  }catch(e){
+    setPendingClarify(null);
+    toast('澄清提交失败，已按新消息发送');
+  }
+  return true;
+}
+
 async function sendChat() {
   const input = document.getElementById('chat-input');
   // ★★ 2026-10-30（用户报「从产物加入会话后发送异常，附件消失、输入框还在、会话没发起」）：
@@ -221,69 +301,12 @@ async function sendChat() {
     msg = '请查看我附加的材料，并据此继续。';
     toast('未输入文字，已按「请查看我附加的材料」发送');
   }
-  // 2026-09-04 v3：草稿态首次提交时创建会话（未提交前左侧列表不出现空会话）
-  // 2026-09-24：若由「项目 → ＋ 新建任务」发起，带走该项目归属（window._pendingProjectId），
-  //   创建成功后立刻刷新项目组（任务数 +1），并清除暂存避免下一次误归属。
-  if(!currentConvId){
-    try{
-      const _body = {title:draftTitle(msg)};
-      const _pid = window._pendingProjectId || '';
-      if(_pid) _body.project_id = _pid;
-      const r = await api('/api/conversations', {method:'POST', body:JSON.stringify(_body)});
-      currentConvId = r.id;
-      _isDraft = false;
-      loadConversations();
-      if(_pid){
-        window._pendingProjectId = '';
-        if(typeof renderGnavProjects === 'function') renderGnavProjects();
-      }
-      const st = document.getElementById('chat-status');
-      if(st) st.textContent = '';
-      try{ localStorage.removeItem('mbse_draft_input'); }catch(e){}
-    }catch(e){ toast('创建会话失败：'+(e && (e.message||e)) ); return; }
-  }
-  // 2026-09-25：待澄清状态下，主输入框内容即"澄清补充"——走 clarify-answer（会清空挂起），
-  // 不再当成普通新消息。此前两条路都不通：挂起永不清除（AI 反复追问）、用户也看不到"在哪作答"。
-  //
-  // ★ G-1（2026-10-15 米爸报「携带多个产物文件建模仍异常：消息不上屏、按钮一直进行中」）：
-  //   **带附件时绝不能走 clarify 分支** —— 原实现对任何输入都先判 _pendingClarify：
-  //     ① clarify-answer 只发 {free_text: msg}，**附件被静默丢弃**（后端该接口本就不收附件）；
-  //     ② 该分支**不渲染用户消息** ⇒ "对话流中没有展示用户发送的信息"；
-  //     ③ 任一失败 → toast + return ⇒ **输入框不清空**（截图输入框还留着全文）、消息丢失；
-  //     ④ 按钮红是上一轮的流/挂起态，用户看起来就是"点了发送但什么都没发生"。
-  //   带附件的输入是**新的建模请求**（附件是建模输入的一部分），不是"澄清补充"
-  //   ⇒ 直接走正常发送；澄清卡保持挂起，由用户在卡上作答或随本轮 done 清除。
-  if(window._pendingClarify && currentConvId && !(pendingAttachments && pendingAttachments.length)){
-    try{
-      const r = await api(`/api/conversations/${currentConvId}/clarify-answer`,
-                          {method:'POST', body: JSON.stringify({free_text: msg})});
-      if(r && r.resume_text){
-        input.value = '';
-        _chatInputAutoGrow();   // 2026-09-29：清空后高度回缩
-        try{ localStorage.removeItem('mbse_draft_input'); }catch(e){}
-        toast('已作为澄清补充提交，正在继续…');
-        setPendingClarify(null);
-        // ★ 2026-10-16 Q2：与卡片作答同口径——在**原 AI 输出盒**内续答，不新起气泡；
-        //   ★ 2026-10-17 Q1：带上 resume_of_user_msg_id/append ⇒ DB 层追加进原 user 消息，
-        //   刷新后历史与直播一致（此前此路走 sendResume，新起用户气泡+新 AI 盒）。
-        //   ★ 2026-10-17 反馈1：答案摘要 → 确认环节标记「✓ 已确认 · <补充内容>」。
-        _continueInSameBox(null, r.resume_text, {
-          user_msg_id: r.resume_of_user_msg_id || 0,
-          append: r.resume_append || '',
-        }, msg.slice(0, 40));
-        return;
-      }
-      // ★ G-1：后端返回"无待澄清"等业务失败 ⇒ **本地挂起态已与后端不同步**，
-      //   清掉本地状态并**落入正常发送** —— 绝不 return 吞掉用户输入。
-      //   （后端 400 原文："当前无待澄清问题（可能已作答或已过期）"）
-      setPendingClarify(null);
-      toast((r && r.error) || '澄清状态已过期，按新消息发送');
-    }catch(e){
-      // ★ G-1：接口异常同理 —— 清挂起、继续正常发送，不吞输入。
-      setPendingClarify(null);
-      toast('澄清提交失败，已按新消息发送');
-    }
-  }
+  // 草稿态首次提交时创建会话（含 P0-A 提交锁 / P0-B 幂等键 / P0-C 即时反馈）
+  // ★ P2-2：实现已提取到 _ensureConversation()，此处只保留调用。
+  if(!(await _ensureConversation(msg))) return;
+  // 待澄清状态下主输入框内容作为澄清补充（带附件时跳过，走正常发送）
+  // ★ P2-2：实现已提取到 _submitClarify()，此处只保留调用。
+  if(!(await _submitClarify(msg, input))) return;
   // P0-1 澄清改选重发：中止上一轮未读完的流（防旧 token 追加到新消息容器）
   // 2026-09-25：中止前先把上一轮**已生成内容固化落库**——否则"提交新消息"= 上一轮输出白丢
   // P1-② follow-up（2026-10-07）：**上一轮还在跑时**提交的消息，不再 abort 它，
@@ -439,6 +462,156 @@ async function _annotateAbnormalEnd(aiBox, bootAtStart){
   }
 }
 
+// RECOVER_TURN_CONTENT_V1 断线恢复：对标 Dify「断线不致命」。
+// SSE 流异常且无 done/error 终态时，后端已按 finalize_key 把本轮内容固化落库；
+// 这里取回并如实展示（含结构化原因），编排轮额外给「从检查点续跑」入口。
+// 只恢复展示、不自动重生成 —— 是否继续由用户决定，避免断线误触烧 token。
+// ★ 2026-11-19 方案B P1：若本轮**没有**固化消息（服务被强杀 / 固化条件不满足），
+//   但帧日志里有内容，则改走 `_renderRunReplay` 把"当时滚过的内容"重建出来。
+async function _recoverTurnContent(aiBox){
+  const _cid = aiBox && (aiBox.dataset.convId || currentConvId);
+  if(!_cid || !aiBox || aiBox.dataset.recovered) return;
+  try{ aiBox.dataset.recovered = '1'; }catch(_e){}
+  let r = null;
+  try{ r = await api(`/api/conversations/${_cid}/recovery`); }catch(_e){ return; }
+  if(!r) return;
+  // ★ 方案B P1：本轮没有固化消息（服务被强杀/固化条件不满足）⇒ 帧日志是唯一副本
+  if(!r.found){
+    const _rid = Number(r.stream_run_id || 0);
+    if(_rid > 0){
+      const ok = await _renderRunReplay(_cid, _rid, aiBox, {reason: r.reason || ''});
+      if(ok){
+        const _cs0 = document.getElementById('chat-status');
+        if(_cs0) _cs0.textContent = '已按帧日志重建本轮输出';
+      }
+    }
+    return;
+  }
+  try{ if(r.message_id) aiBox.dataset.recoveredMsgId = String(r.message_id); }catch(_e){}
+  const bodyEl = aiBox.querySelector('.body');
+  if(!bodyEl) return;
+  const note = document.createElement('div');
+  note.className = 'turn-recover-note';
+  note.style.cssText = 'margin-top:8px;padding:7px 10px;border-left:3px solid #2f9e44;'
+    + 'background:rgba(47,158,68,.10);color:#2b8a3e;font-size:12.5px;line-height:1.6;';
+  let html = '本轮已生成内容<b>已自动保留</b>（未丢失）。';
+  if(r.abort_reason || r.abort_detail) html += '<br>中断原因：' + esc(r.abort_detail || r.abort_reason);
+  if(r.orchestrated_run_id > 0){
+    html += '<br>这是编排任务，可从检查点继续（<b>不重跑已完成的子任务</b>）：';
+    note.innerHTML = html;
+    const btn = document.createElement('button');
+    btn.textContent = '从检查点续跑';
+    btn.className = 'btn btn-sm btn-outline-primary';
+    btn.style.cssText = 'margin-left:8px;';
+    btn.onclick = ()=>{ if(typeof startResumeRun === 'function') startResumeRun(r.orchestrated_run_id, null); };
+    note.appendChild(btn);
+  }else{
+    html += '<br>需要继续请直接重发这条消息。';
+    note.innerHTML = html;
+  }
+  bodyEl.appendChild(note);
+  const _cs = document.getElementById('chat-status');
+  if(_cs) _cs.textContent = '已恢复本轮内容';
+}
+
+// RUN_FRAME_REPLAY_V1（2026-11-19，方案B P1）：**按帧日志重建本轮输出**。
+//
+// 为什么需要它：`/recovery` 只能给"已固化落库"的正文，而固化是节流/收口行为 ——
+//   进程被强杀（真库 conv 999999207）、或固化条件不满足时，用户看过的内容
+//   **只在帧日志里**。没有这条路径，"刷新/重连后内容回来"就是假的。
+//
+// 关键语义（不要改成"追加"）：
+//   · **替换，不是追加** —— run_frames 是整轮的完整帧序列，重建结果本身是完备的；
+//     追加会把已经显示过的文本再显示一遍（重复 token），这正是要避免的。
+//   · **只读** —— 帧里的工具结果直接渲染，绝不重新调用工具（重放不产生第二次副作用）。
+//   · `last_event_id` 固定传空 = 从头重建。带游标的增量续传留给 P2（那时才需要
+//     "我已渲染到第几个字"的偏移量，P1 阶段生成仍随连接停止，用不到）。
+async function _renderRunReplay(convId, runId, aiBox, opts){
+  opts = opts || {};
+  let r = null;
+  try{ r = await api(`/api/runs/${runId}/frames?reconstruct=1`); }catch(_e){ return false; }
+  if(!r || !r.reconstructed) return false;
+  const text = String(r.reconstructed.content || '');
+  const exec = r.reconstructed.exec || {};
+  if(!text.trim() && !(exec.tools && exec.tools.length) && !(exec.subtasks && exec.subtasks.length)){
+    return false;   // 真的没有任何内容：不伪造一个空气泡
+  }
+  // 组装成"一条消息"来渲染：复用历史消息的渲染器 ⇒ 样式/代码块/时间线与落库消息一致
+  const fake = { role: 'assistant', content: text, msg_type: 'text', card_data: JSON.stringify({exec: exec}) };
+  const holder = document.createElement('div');
+  holder.innerHTML = (typeof renderMessage === 'function')
+    ? renderMessage(fake)
+    : `<div class="msg ai"><div class="msg-inner">${esc(text)}</div></div>`;
+  const el = holder.firstElementChild || holder;
+  try{ el.classList.add('turn-replayed'); }catch(_e){}
+
+  const note = document.createElement('div');
+  note.className = 'turn-recover-note';
+  note.style.cssText = 'margin-top:8px;padding:7px 10px;border-left:3px solid #1c7ed6;'
+    + 'background:rgba(28,126,214,.10);color:#1864ab;font-size:12.5px;line-height:1.6;';
+  let html = '以下内容来自<b>本轮帧日志回放</b>（服务端逐帧记录，与当时屏幕上的输出一致）。';
+  if(r.status === 'running') html += '<br>该轮在服务端仍标记为运行中（本轮可能未正常收口）。';
+  if(Number(r.truncated || 0) === 1) html += '<br>⚠ 帧日志已达上限被截断，末尾部分可能缺失。';
+  if(opts.reason === 'no_finalized_message') html += '<br>本轮正文未落库（进程中断/未收口），这是唯一的完整副本。';
+  html += '<br>需要继续请直接重发这条消息。';
+  note.innerHTML = html;
+
+  const bodyEl = (aiBox && aiBox.querySelector) ? aiBox.querySelector('.body') : null;
+  if(bodyEl){
+    // 流式现场：整块替换（含 typing 占位），保证"回放内容 == 唯一副本"
+    bodyEl.innerHTML = '';
+    bodyEl.appendChild(el);
+    bodyEl.appendChild(note);
+    try{ bodyEl.classList.remove('streaming'); }catch(_e){}
+    try{ const _t = bodyEl.querySelector('.typing'); if(_t) _t.remove(); }catch(_e){}
+  }else{
+    // 会话重开后没有现场盒子：作为一条"回放消息"追加到消息区
+    const area = opts.area || document.getElementById('chat-area');
+    if(!area) return false;
+    const wrap = document.createElement('div');
+    wrap.className = 'msg-wrap msg-replay';
+    wrap.appendChild(el);
+    wrap.appendChild(note);
+    area.appendChild(wrap);
+    try{ if(typeof pinChatBottom === 'function') pinChatBottom(area, 2000); }catch(_e){}
+  }
+  return true;
+}
+
+// 会话重新打开时：若末条是"用户说了但没有任何 AI 回应"，说明上一轮没落库 ——
+// 帧日志可能是唯一副本，给一个「回放上一轮输出」的入口（不自动回放，避免打扰）。
+async function maybeOfferRunReplay(convId, area){
+  try{
+    if(!convId || !area) return;
+    if(_streaming) return;                       // 正在跑本轮：现场优先
+    const msgs = area.querySelectorAll('.msg');
+    if(!msgs.length) return;
+    const last = msgs[msgs.length - 1];
+    if(!last.classList.contains('u')) return;    // 末条不是用户消息 ⇒ 本轮已有回应
+    const r = await api(`/api/conversations/${convId}/recovery`);
+    const _rid = Number((r && r.stream_run_id) || 0);
+    if(!_rid || (r && r.found)) return;           // 没有 run / 已有固化消息 ⇒ 无需回放
+    if(Number(r.stream_last_seq || 0) <= 0) return;  // 帧日志里也没有内容
+    const wrap = document.createElement('div');
+    wrap.style.cssText = 'margin:10px 0;padding:8px 10px;border-left:3px solid #1c7ed6;'
+      + 'background:rgba(28,126,214,.08);color:#1864ab;font-size:12.5px;line-height:1.7;';
+    wrap.innerHTML = '上一轮有 <b>' + Number(r.stream_last_seq) + ' 帧</b>输出未落库'
+      + '（服务端中断前已逐帧记录）：';
+    const btn = document.createElement('button');
+    btn.className = 'btn btn-sm btn-outline-primary';
+    btn.style.cssText = 'margin-left:8px;';
+    btn.textContent = '回放上一轮输出';
+    btn.onclick = async ()=>{
+      btn.disabled = true; btn.textContent = '回放中…';
+      const ok = await _renderRunReplay(convId, _rid, null, {area: area, reason: 'reopen'});
+      if(!ok){ btn.disabled = false; btn.textContent = '回放失败，点此重试'; }
+      else wrap.remove();
+    };
+    wrap.appendChild(btn);
+    area.appendChild(wrap);
+  }catch(_e){ /* 旁路能力，失败静默 */ }
+}
+
 async function pumpStream(aiBox, msg, atts, resumeOf){
   // ★ 2026-11-06：开流前记进程身份 + 清终态标记（handleSSE 收到 done/error 会置位）
   window._sseTerminal = 0;
@@ -512,7 +685,7 @@ async function pumpStream(aiBox, msg, atts, resumeOf){
     if(_streamAbort === myAbort) _streamAbort = null;
     // ★ 2026-11-06：流读完了但**从未收到 done/error** ⇒ 服务端没正常收口。
     //   这种情况旧实现什么都不说（用户以为"跑完了"），现在按进程身份给出准确原因。
-    if(!window._sseTerminal){ try{ await _annotateAbnormalEnd(aiBox, _bootAtStart); }catch(e){} }
+    if(!window._sseTerminal){ try{ await _annotateAbnormalEnd(aiBox, _bootAtStart); }catch(e){} try{ await _recoverTurnContent(aiBox); }catch(_r){ } }
   } catch(e) {
     // ★ 2026-10-16 Q2：本流正被「澄清改选 / 澄清续答」主动中止以复用此盒接管 ——
     //   不要改 _streaming/showStopBtn（会被错置成"已停"），也别进 _finalizeStoppedRender 替换盒子。
@@ -530,7 +703,7 @@ async function pumpStream(aiBox, msg, atts, resumeOf){
       return;
     }
     // ★ 2026-11-06：网络类失败（Failed to fetch / 流被掐断）同样要判定是否重启
-    if(!window._sseTerminal){ try{ await _annotateAbnormalEnd(aiBox, _bootAtStart); }catch(_e2){} }
+    if(!window._sseTerminal){ try{ await _annotateAbnormalEnd(aiBox, _bootAtStart); }catch(_e2){} try{ await _recoverTurnContent(aiBox); }catch(_r){ } }
     const bodyEl = aiBox.querySelector('.body');
     const _typ = bodyEl ? bodyEl.querySelector('.typing') : null; if(_typ) _typ.remove();
     if(bodyEl) bodyEl.classList.remove('streaming');

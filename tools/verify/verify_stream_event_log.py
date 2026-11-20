@@ -139,9 +139,19 @@ def main():
     check("C4 ★ 用缓冲而非边收边落（run_id 只在 done 才到，边收边落会落成孤岛行）",
           "_evbuf" in r_src and "_evbuf.append" in r_src,
           "未见缓冲 ⇒ 落库行 run_id 恒为 0，与本项要修的毛病同型")
+    # ★ 2026-11-19（方案B P0）：转发语句从 `yield raw` 变成 `yield _out` ——
+    #   帧要先加 SSE `id: {run_id}-{seq}` 前缀再发（RUN_STREAM_TEE_V1），
+    #   而 `raw` 必须保持未加前缀（上面的终态哨兵/事件录制都按 `event:` 前缀判）。
+    #   **判据语义不变**（刷库必须早于 yield）：从"刷库那一行"往后找第一条 yield。
+    #   ⚠️ 别写成 `index("yield raw")` —— 它在本改动后恒 ValueError，
+    #     而"找不到就抛异常"会被误读成"代码错了"，实际是**断言锚点过期**。
+    _flush_pos = r_src.find('if _evbuf and _et in ("done", "error")')
+    _yield_after = re.search(r"^\s*yield (_out|raw)\s*$",
+                             r_src[_flush_pos:] if _flush_pos >= 0 else "", re.M)
     check("C5 刷库在 done/error 时触发且在 yield 之前",
           re.search(r'if _evbuf and _et in \("done", "error"\):', r_src) is not None
-          and r_src.index("if _evbuf and _et in") < r_src.index("yield raw", r_src.index("if _evbuf and _et in")))
+          and _yield_after is not None,
+          "flush 块之后未找到 yield（转发语句被改坏？）")
     check("C6 落库用独立连接（不抢请求级 conn 的写锁）",
           "from database import db_conn" in r_src and "with db_conn() as _evc" in r_src)
     check("C7 观测失败不阻断（整段被 try 包住）",

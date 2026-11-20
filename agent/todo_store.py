@@ -24,6 +24,7 @@ __all__ = [
     "load_todo_items",
     "todo_gate_for_conv",
     "upsert_todo",
+    "run_todos",
 ]
 
 
@@ -56,6 +57,9 @@ _TODO_WRITE_TOOL = {
             "会被按人工验收处理，收尾闸看不到真实结果。能自动验的就一定填 verify_tool。\n"
             "· update —— 更新状态。**置 completed 必须同时给 verify_result（验收回执）**"
             "（如『PASS: 0 errors』），否则会被拒绝；置 blocked 必须给 blocked_by 说明卡在哪\n"
+            "  ★ 多条**同一批完成**时用 `ids=[1,2,3]` 一次提交，不要一条一条调"
+            "（每次调用都是一整轮往返，纯记账开销）。但**不同验收回执的条目要分开提交** —— "
+            "verify_result 是逐条的，合并会丢验收信息。\n"
             "· list —— 读当前清单（含每条的状态与验收回执）\n"
             "⚠️ 清单不是可选的：完成判定以**待办全部通过验收**为准，"
             "「建议下一步做 X」不算完成 —— 那就建一条 todo 并把它做完。\n"
@@ -96,6 +100,13 @@ _TODO_WRITE_TOOL = {
                 "id": {
                     "type": "integer",
                     "description": "（update 必填）要更新的待办 id（list 的返回里有）",
+                },
+                "ids": {
+                    "type": "array",
+                    "items": {"type": "integer"},
+                    "description": ("（update 可选，★推荐）**同一批完成**的多条待办一次提交，"
+                                    "避免一条一次调用。逐条仍各自校验验收回执，语义不变；"
+                                    "与 id 二选一，给 ids 时忽略 id"),
                 },
                 "subject": {
                     "type": "string",
@@ -191,14 +202,43 @@ def list_todos(conn, conversation_id: int, include_deleted: bool = False) -> lis
     return out
 
 
+def run_todos(conn, run_id: int) -> list:
+    """读**一个编排批次**（run 维度）建过的全部待办。
+
+    为什么按 run 而不按 conversation：编排批次里**所有子任务共享同一个
+    编排批次号**（`stream.py` 的 run_id，子任务不覆盖父值），待办全部落在
+    父会话下 ⇒ 会话维度会把「上一轮/上一批」的待办也混进来，无法回答
+    「**这一批**建了多少、完成了多少」。这也是编排收口「如实告知」
+    （`AutoPilotMixin.build_orch_todo_notice`）的数据源。
+
+    :returns: list[dict]（含 subject/status/verify/verify_tool/verify_args）；
+              run_id 为 0 或表异常时返回 []（调用方按"无待办"处理）。
+    """
+    if not run_id:
+        return []
+    try:
+        rows = conn.execute(
+            "SELECT id, subject, status, verify, verify_tool, verify_args "
+            "FROM agent_todos WHERE run_id=? AND status != 'deleted' "
+            "ORDER BY COALESCE(seq, id), id", (int(run_id),)).fetchall()
+    except Exception:
+        return []
+    out = []
+    for r in rows:
+        out.append({
+            "id": r[0], "subject": r[1] or "", "status": r[2] or "",
+            "verify": r[3] or "", "verify_tool": r[4] or "", "verify_args": r[5] or "",
+        })
+    return out
+
+
 def load_todo_items(conn, conversation_id: int, include_deleted: bool = False):
     """读清单并转成 `agent_todo.TodoItem`（供 `todo_gate()` 消费）。"""
     from agent import agent_todo as _at
     rows = list_todos(conn, conversation_id, include_deleted)
     return [_at.TodoItem(subject=r["subject"], status=r["status"],
                          verify=r["verify"], verify_result=r["verify_result"],
-                         blocked_by=r["blocked_by"], note=r["note"])
-            for r in rows]
+                         blocked_by=r["blocked_by"], note=r["note"])            for r in rows]
 
 
 def todo_gate_for_conv(conn, conversation_id: int) -> dict:
@@ -335,6 +375,39 @@ def upsert_todo(conn, conversation_id: int, *, subject=None, verify=None,
 
 # ── 工具 handler ────────────────────────────────────────────
 
+def _update_many(conn, conversation_id, ids, a, run_id: int = 0) -> dict:
+    """批量 update（★ 2026-11-20）：把「同一批完成的条目」压成一次工具调用。
+
+    为什么需要：真机 conv 999999952 的 2 个子任务共调 `todo_write` 13 次，
+    其中约半数是"一条做完就 update 一次" —— 每次都是一整轮 LLM 往返，
+    却只改了 status 一个字段。
+
+    纪律（**不降语义，只降次数**）：
+      · 逐条仍走 `handle_todo_write` 的单条路径（transition + machine_evidence 全保留）；
+      · 任何一条失败都**不吞**：汇总里逐条列出 ok/失败原因，让模型知道哪条要修；
+      · 全部成功才算 ok=True（部分成功返回 ok=False + 明细，避免"假成功"）。
+    """
+    results, ok_n = [], 0
+    for _i in ids:
+        _sub = dict(a)
+        _sub.pop("ids", None)
+        _sub["id"] = _i
+        try:
+            r = handle_todo_write(_sub, conversation_id, conn=conn, run_id=run_id)
+        except Exception as e:
+            r = {"ok": False, "result": "待办 #%s 更新异常：%r" % (_i, e)}
+        if isinstance(r, dict) and r.get("ok"):
+            ok_n += 1
+        results.append({"id": _i, "ok": bool(isinstance(r, dict) and r.get("ok")),
+                        "result": str((r or {}).get("result") or "")[:220]})
+    lines = ["批量更新 %d 条（成功 %d / 失败 %d）："
+             % (len(results), ok_n, len(results) - ok_n)]
+    for x in results:
+        lines.append("  #%s %s %s" % (x["id"], "✓" if x["ok"] else "✗", x["result"]))
+    return {"ok": ok_n == len(results), "result": "\n".join(lines),
+            "results": results, "ok_count": ok_n, "total": len(results)}
+
+
 def handle_todo_write(arguments: dict, conversation_id: int, conn=None,
                       run_id: int = 0, task_key: str = "") -> dict:
     """`todo_write` 工具 handler。返回 {ok, result, ...}。
@@ -432,7 +505,26 @@ def handle_todo_write(arguments: dict, conversation_id: int, conn=None,
                                verify_args=a.get("verify_args"), run_id=run_id)
 
         # ── update ──
-        tid = a.get("id")
+        # ★ 2026-11-20（用户要求降记账开销；真机 conv 999999952 实测 2 个子任务里
+        #   todo_write 被调了 13 次，其中约半数是"一条做完就 update"）：
+        #   支持**批量结项** `ids=[...]` —— 同一批完成的条目一次调用上报。
+        #   ⚠️ 不做的是：不合并「不同 status / 不同 verify_result」的条目（那会丢验收信息），
+        #      所以逐条仍各自走 `transition` + `machine_evidence`，语义一分不降。
+        _ids = a.get("ids")
+        # ⚠️ 判据是"给了 ids"而不是"给了多个 ids"：模型完全可能对 1 条也用 ids 形式
+        #    （统一写法更不易出错）。若只在 len>1 时分流，`ids=[5]` 会掉进单条路径，
+        #    而单条路径只读 `id` ⇒ 报"缺少有效的 id"（门禁 P5 抓到的真实缺口）。
+        # ⚠️ 不要 `a = dict(a)`：`a` 是外层参数，在 `_run` 闭包里重新赋值会让它变成
+        #    闭包局部变量 ⇒ UnboundLocalError（门禁实测踩到）。用新名字。
+        _a2 = a
+        if isinstance(_ids, (list, tuple)) and len(_ids) >= 1:
+            if len(_ids) == 1:
+                _a2 = dict(a)
+                _a2["id"] = _ids[0]
+                _a2.pop("ids", None)
+            else:
+                return _update_many(c, conversation_id, _ids, a, run_id=run_id)
+        tid = _a2.get("id")
         try:
             tid = int(tid)
         except Exception:
@@ -443,8 +535,23 @@ def handle_todo_write(arguments: dict, conversation_id: int, conn=None,
             "COALESCE(verify_tool,'') FROM agent_todos WHERE id=? AND conversation_id=?",
             (tid, int(conversation_id or 0))).fetchone()
         if not row:
+            # ★ 2026-11-19（真库归因：8 条「待办 #N 不存在」真实失败）：
+            #   模型常**编造/记错**待办编号（#1 / #5 / #85 / #600 等），旧文案只说"不存在"，
+            #   模型于是继续猜下一个编号（与 `tool_result_fetch` 的 offload 编号同一形态）。
+            #   修法：**把本会话确实存在的 id 列出来**，让它一次纠正到位。
+            try:
+                _avail = [r[0] for r in c.execute(
+                    "SELECT id FROM agent_todos WHERE conversation_id=? "
+                    "AND status NOT IN ('deleted') ORDER BY id", (int(conversation_id or 0),)).fetchall()]
+            except Exception:
+                _avail = []
+            _hint = ("本会话现有待办 id：%s" % _avail) if _avail else \
+                "本会话当前**没有任何待办**——先用 action=add 建，再 update"
             return {"ok": False,
-                    "result": "todo_write update：待办 #%d 不存在（或不属于本会话）" % tid}
+                    "result": ("todo_write update：待办 #%d 不存在（或不属于本会话）。%s。"
+                               "不要按顺序猜编号；id 只能取自 action=list 或 add 的返回"
+                               % (tid, _hint)),
+                    "available_ids": _avail}
         item = _at.TodoItem(subject=row[1], status=row[2], verify=row[3],
                             verify_result=row[4], blocked_by=row[5], note=row[6])
         to_status = str(a.get("status") or "").strip().lower()

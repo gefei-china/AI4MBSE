@@ -1,21 +1,21 @@
 {
   "schema": "p0/eval-freshness@1",
-  "checked_at_utc": "2026-11-16 02:53:00",
+  "checked_at_utc": "2026-11-18 03:09:43",
   "thresholds": {
     "max_age_days": 7.0,
     "max_pending": 0
   },
   "eval_reports": {
-    "rows": 26,
-    "latest_created_at_utc": "2026-11-15 15:21:45",
-    "age_days": 0.48,
-    "is_golden_rows": 1,
+    "rows": 31,
+    "latest_created_at_utc": "2026-11-18 00:59:33",
+    "age_days": 0.09,
+    "is_golden_rows": 4,
     "by_eval_kind": {
       "": 5,
-      "generation_quality": 8,
-      "golden_e2e": 1,
+      "generation_quality": 9,
+      "golden_e2e": 4,
       "rag_retrieval": 1,
-      "trace_consistency": 11
+      "trace_consistency": 12
     }
   },
   "online_eval_queue": {
@@ -27,9 +27,9 @@
     "cases": 12,
     "baseline_dataset_id": "eb245949e0d84ed1"
   },
-  "nightly_latest_age_days": 23.681307835798613,
+  "nightly_latest_age_days": 25.692908444814815,
   "warnings": [
-    "nightly/latest.json 陈旧或未带时间戳（age=23.681307835798613 d）；本机跑批器 tools/eval/run_nightly_local.py 需人工触发"
+    "nightly/latest.json 陈旧或未带时间戳（age=25.692908444814815 d）；本机跑批器 tools/eval/run_nightly_local.py 需人工触发"
   ],
   "pass": 4,
   "fail": 0,

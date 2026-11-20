@@ -209,8 +209,12 @@ def group_b():
 
     # B9：两处累加口径必须一致（都走 merge_round_content，不许一个拼一个去重）
     _src_e = open(os.path.join(_ROOT, "agent/pipeline_parts/execute.py"), encoding="utf-8").read()
-    check("B9", "execute.py 的跨轮累加也走 merge_round_content（与 stream 同口径）",
-          "_ac_full = _ac.merge_round_content(_ac_full, llm_content)" in _src_e, "")
+    # ★ 2026-11-19 P1-2：merge 调用改为多行并传 kind（上游 attempt 语义标），
+    #   原单行字符串判据会假红。判据跟着结构改：**仍守"走 merge 且传 kind"**，
+    #   不是删掉这条保护（删掉即允许有人改回裸拼接）。
+    check("B9", "execute.py 的跨轮累加走 merge_round_content 且传 kind（与 stream 同口径）",
+          "_ac_full = _ac.merge_round_content(" in _src_e
+          and "kind=(_ac_attempts[-1].get('kind') if _ac_attempts else None)" in _src_e, "")
 
 
 # ══════════════════════════════════════════════════════════════════════════

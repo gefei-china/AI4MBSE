@@ -148,7 +148,17 @@ async function loadSkillCombined(){
         </div></div>`;
       }
       const tag = it.view==='market-installed' ? '<span class="st" style="background:#e8f5e9;color:#2e7d32;">来自市场</span>' : '<span class="st amb">自定义</span>';
-      const st = it.enabled===0 ? '<span class="st r">停用</span>' : '<span class="st ok">启用</span>';
+      // ★ 2026-11-20 状态-动作闭环（与能力中心 capCard 同一口径）：
+      //   ① 发布态文案与个人安装态**分开**，否则同卡出现「已停用 … 已启用」互相打脸（用户实测）；
+      //   ② 个人启停只在「已发布」时才有意义 —— 草稿/下架态本来就不可能被消费，
+      //      挂一个「停用」按钮等于把用户困在死胡同里。
+      const _pubd = (it.status === 'published');
+      const _stMap = { draft:'草稿（未发布）', rejected:'已驳回', submitted:'待审核',
+                       published:'已发布', disabled:'已停用（不可消费）', removed:'已删除' };
+      const st = _pubd
+        ? (it.enabled===0 ? '<span class="st r" title="个人安装态：仅影响你自己">个人已停用</span>'
+                          : '<span class="st ok" title="个人安装态：仅影响你自己">个人已启用</span>')
+        : `<span class="st r" title="发布态：决定能否被 AI 消费">${esc(_stMap[it.status] || it.status || '')}</span>`;
       // 2026-09-17 第二刀：分享/撤回统一走 /api/plugins/{plugin_id}/*（与能力中心同一套守卫与语义）。
       //   · 旧实现调 /api/studio/share/submit 且传 plugins 表数值主键，后端按 name/label 查找
       //     必 404 —— 按钮形式存在、点了必失败；
@@ -164,10 +174,17 @@ async function loadSkillCombined(){
         else if(it.scope !== 'public')
           share = `<button class="btn sm ghost" onclick="sharePlugin('${_sk}','${esc(it.plugin_id)}')">⬆ 分享到市场</button>`;
       }
-      let ops = `<button class="btn sm ghost" onclick="editMCP(${it.id})">✏️</button>
-        <button class="btn sm ghost" title="复制为副本" onclick="copySkill(${it.id})">📑 复制</button>
-        <button class="btn sm ${it.enabled===0?'ok':'ghost amb'}" onclick="toggleMCPStatus(${it.id},${it.enabled===0?1:0})">${it.enabled===0?'启用':'停用'}</button>
-        <button class="btn sm red" onclick="deleteMCP(${it.id})">删除</button>`;
+      // ★ 2026-11-20 修：这里原来调 editMCP / toggleMCPStatus / deleteMCP —— **全是 MCP 函数**，
+      //   会打到 `/api/studio/mcp-servers/{id}`，而传进去的是 `plugins.id`。
+      //   两套主键空间不同：轻则 404（"点了没反应"），重则**改到一条不相干的 MCP 服务器**
+      //   （实测 plugins.id=167 与 mcp_servers.id=167 都可能有行）。技能卡必须走插件轨，
+      //   与能力中心 capCard 用同一套接口，才谈得上"状态与操作项闭环"。
+      const _pid = esc(it.plugin_id || '');
+      const _nm4del = esc(String(_skDispName(it)).replace(/'/g, ''));
+      let ops = `<button class="btn sm ghost" title="编辑" onclick="capEdit('${_pid}')">✏️</button>
+        <button class="btn sm ghost" title="复制为副本" onclick="capCopy('${_pid}','st-skill')">📑 复制</button>
+        ${_pubd ? `<button class="btn sm ${it.enabled===0?'ok':'ghost amb'}" title="只影响你自己：停用后你不再消费它" onclick="setSkillPluginEnabled('${_pid}',${it.enabled===0?'true':'false'})">${it.enabled===0?'启用':'停用'}</button>` : ''}
+        ${it.can_delete ? `<button class="btn sm red" onclick="deleteSkillPlugin('${_pid}','${_nm4del}')">删除</button>` : ''}`;
       return `<div class="panel"><div class="ph"> ${esc(_skDispName(it))} ${tag} <span style="flex:1"></span>${st}</div>
       <div class="pb">
         <div style="font-size:12.5px;color:var(--mut);line-height:1.5;min-height:34px;" title="${dispDescr(it)}">${dispDescr(it)}</div>${cardMeta(it)}
@@ -179,6 +196,27 @@ async function loadSkillCombined(){
 // 兼容旧调用点（loadMarket/loadMinePlugins/写操作刷新链）：已整合为单视图
 async function loadSkillMarket(){ return loadSkillCombined(); }
 async function loadMySkills(){ return loadSkillCombined(); }
+
+/* 技能卡的个人启停 —— 走插件轨（与能力中心同一接口），刷新本视图。
+ * 为什么不复用 toggleSkillStatus：那个打 /api/studio/skills/{id}/{enable|disable}，
+ * 参数是 **skills.id**，而本视图的条目来自 plugins（plugins.id / plugin_id 两套键）。
+ * 混用会"改错行"或静默无效果 —— 这正是本轮要消灭的那类缺陷。 */
+async function setSkillPluginEnabled(pid, enabled){
+  if(!pid){ toast('该条目缺少 plugin_id，无法操作'); return; }
+  const r = await api('/api/plugins/' + encodeURIComponent(pid) + '/installed-enabled',
+    {method:'PUT', body: JSON.stringify({enabled: !!enabled})}).catch(e=>({error:e.message}));
+  if(r.error){ toast('操作失败：' + r.error); return; }
+  toast(enabled ? '已为你启用' : '已为你停用（不影响他人）');
+  loadSkillCombined();
+}
+async function deleteSkillPlugin(pid, name){
+  if(!pid){ toast('该条目缺少 plugin_id，无法操作'); return; }
+  if(!(await confirmDialog('删除「' + (name||'') + '」？\n\n将移除该能力本体（软删除，审计保留）。'))) return;
+  const r = await api('/api/plugins/' + encodeURIComponent(pid), {method:'DELETE'})
+    .catch(e=>({error:e.message}));
+  if(r.error){ toast('删除失败：' + r.error); return; }
+  toast('已删除'); loadSkillCombined();
+}
 // MCP 工具整合视图：自定义 + 插件市场 单入口（分类筛选；操作入口在右上角）
 async function loadMCPCombined(){
   const box = document.getElementById('mcp-cards');

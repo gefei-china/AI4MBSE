@@ -112,7 +112,27 @@ _MSG_CAP = 200                # 单条诊断消息截断长度
 #      来自 **parser**：token 合法但语法位置不对 → **语法**。
 # 代价：`$` 这类真·非法字符会归到语法路（它的文案走 parser 通道）。可接受 ——
 #   门禁上词法与语法**同门槛**（都计入 `n_hard`），路别只影响给 LLM 的标签精度，不影响拦不拦。
-_LEX_DEFAULT = r""
+#
+# ★★★ 2026-11-17 修复（米爸报「检验逻辑要细化结果，不能统一标记为词法错误」）：
+#   本行在 `cf33d3e`（2026-11-09~10 那条大提交）中被改成了 `r""` —— **空正则**，
+#   且**提交说明里完全没有提这处改动**。
+#
+#   后果：`re.compile("").search(任意字符串)` **恒为真**（空模式在位置 0 就能匹配）
+#   ⇒ `classify()` 第一句 `if lex.search(msg): return "lexical"` **永远命中**
+#   ⇒ 所有诊断（包括 `no viable alternative`、纯语义错）全被标成「词法」。
+#   实测：20 条 ERROR 全归词法，`n_syntax` / `n_semantic` 恒为 0；
+#   更严重的是**语法错也被当成词法**，让"语法错 vs 语义错"这个最关键的区分消失
+#   （`verify_sysml_check_gate` 的 16 项断言因此全红）。
+#
+#   ⚠️ 为什么这种改动能活下来：`n_hard = n_lexical + n_syntax` 仍然算得对，
+#     「拦不拦」的结论没变，只有**标签**错了 ⇒ 除专门断言分类的门禁外没人会发现。
+#     这正是"代价可接受"那段注释埋下的盲区：既然"路别只影响标签精度"，
+#     标签错了就没人当回事 —— **但标签精度本身就是需求**（要按错因给 LLM 可操作的信息）。
+#
+#   恢复内容取自本行历史第一个版本（`b3846b2` 建库基线），并加 `at character \d+`
+#   覆盖 `at character 5, invalid char` 这种**不带引号**的形态。
+_LEX_DEFAULT = (r"token recognition error|mismatched character"
+                r"|at character \d+|no viable alternative at character")
 _SYN_DEFAULT = r"no viable alternative|mismatched input|extraneous input|missing "
 
 # 诊断行格式（§2.4）：`[ERROR] stdin:<行>:<列>: <消息>`；文件名字段被工具硬编码为 stdin
@@ -121,9 +141,24 @@ DIAG = re.compile(r"^\[(ERROR|WARN)\]\s+stdin:(\d+):(\d+):\s*(.*)$")
 _SIGNS = None   # 惰性加载的分类正则（内置默认 + config 覆盖/追加）
 
 
+#: 「永不匹配」的正则。用于"规则集为空"的场景。
+#: ★ 为什么不是空字符串：`re.compile("")` 匹配**任何**字符串（空模式在位置 0 即匹配），
+#:   语义恰好相反 —— 空规则集应该是"什么都不匹配"，不是"全都匹配"。
+_NEVER = r"(?!)"
+
+
 def _join_pattern(base: str, extra: str) -> str:
-    """把追加规则并进基础正则（追加项本身即正则片段，供现场补规则而不改代码）。"""
-    return f"{base}|{extra}" if extra else base
+    """把追加规则并进基础正则（追加项本身即正则片段，供现场补规则而不改代码）。
+
+    ★ 2026-11-17：**必须过滤空片段**。
+      原实现 `f"{base}|{extra}"` 在 `base=""` 时得到 `"|extra"` —— 这是个
+      **带空分支的交替**，而空分支匹配一切 ⇒ 词法规则"只追加了一条"却变成"全匹配"。
+      这是上一处 bug（`_LEX_DEFAULT=r""`）的**同族第二形态**：即使默认值修好了，
+      只要有人在 config 里把 `lexical_signs` 清空、只留 `lexical_signs_extra`，
+      同样会全判词法。两处都得防。
+    """
+    parts = [p for p in (str(base or "").strip(), str(extra or "").strip()) if p]
+    return "|".join(parts) if parts else _NEVER
 
 
 def _signs():

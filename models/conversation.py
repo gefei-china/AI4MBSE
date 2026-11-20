@@ -12,6 +12,9 @@ class ConvIn(BaseModel):
     # 后端**不再**回落 `settings.default_project_id`（全局单行、不分标签页，多工程并发会串归属）。
     # 「当前工程」由前端按页面级状态显式带上。
     project_id: Optional[str] = None
+    # ★ 2026-11-19 P0-B：提交幂等键。一次 sendChat 生成一个，重放（双击/网络重试）
+    #   携带同一个 id ⇒ 后端返回原 conv_id 而不再 INSERT（治"一次发送两个会话"）。
+    client_request_id: Optional[str] = None
 
 
 class ConvProjectIn(BaseModel):

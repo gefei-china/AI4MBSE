@@ -4,6 +4,79 @@
 由 tools/split_pipeline.py 从 agent/pipeline.py 机械切分而成；⚠️ 切分脚本**已一次性执行完毕、不可重跑**—— 此后本文件按普通源码维护（方法体与其它模块一样可直接改）。"""
 from .common import *
 
+import difflib
+
+
+def _dedupe_sysml_blocks(blocks: list) -> list:
+    """同一套模型被**重生成多次**时只保留一份（2026-11-18 R1）。
+
+    ★ 为什么必须有（真库实证）：
+      msg#6979 一条回复里有两个 ```sysml 块（6849 / 6570 字符，相似度 **97.4%**，
+      第二段是同一套 CabinCoolingActivity 模型的重生成、仅少一个短语）。
+      原实现 `"\n\n".join(blocks)` **无任何去重** ⇒ 产物 ver#1000495（13419 字符）里
+      `package CabinCoolingActivity` 出现了 **2 次**。
+      更危险的是：重复拼接版**照样通过 checker.jar（rc=0，0 error）**
+      —— 校验器不查重，不能拿「校验通过」当「产物干净」的判据。
+
+    判据（两条同时满足才判重，宁漏不误杀）：
+      ① `package` 名集合**完全相同**（不同 package 的文件永不合并）
+      ② 两级相似度（实测选型见 tmp/diag_metric.py）：
+            a. 3-gram 字符集 Jaccard ≥ 0.55  —— 粗筛（重复对实测 0.714，负样本 ≤0.17）
+            b. difflib SequenceMatcher ≥ 0.90 —— 精判（重复对实测 **0.974**，
+               同包不同片段 0.542、同模型分段 0.036 ⇒ 分得很开）
+         ⚠️ **不要退回"5-gram 集合 Jaccard"**：对零星改写过敏，实测重复对只有 0.655
+            （difflib 却是 0.974）⇒ 判据失效、去重静默不生效。
+    保留**更长**的那份（重生成通常有增补，长的更完整）。
+
+    ⚠️ 永不抛：去重失败就原样返回（去重是优化，不是门禁）。
+    ⚠️ 位置纪律：本函数必须在 `class CardMixin` **之前**定义。放进类体中间会
+       （因缩进 0）提前结束 class，把后续方法变成嵌套函数，而 py_compile 不报错。
+    """
+    try:
+        if not blocks or len(blocks) < 2:
+            return blocks
+
+        def _pkgset(s: str) -> set:
+            return set(re.findall(r"^\s*package\s+([A-Za-z_]\w*)", s, re.M))
+
+        def _tri(s: str) -> set:
+            t = re.sub(r"\s+", "", s)
+            return {t[i:i + 3] for i in range(max(0, len(t) - 2))}
+
+        def _is_dup(a: str, b: str) -> bool:
+            """两级判重：便宜的先算，贵的只在疑似时算。"""
+            la, lb = len(a), len(b)
+            if not la or not lb:
+                return False
+            # ① 长度比：重生成不会差出 30%（负样本"分段"长度比 1.0 但这步只是粗筛之一）
+            if abs(la - lb) / max(la, lb) > 0.30:
+                return False
+            # ② 3-gram Jaccard 粗筛（实测：重复对 0.714 / 负样本 ≤0.17）
+            sa, sb = _tri(a), _tri(b)
+            if len(sa & sb) / (len(sa | sb) or 1) < 0.55:
+                return False
+            # ③ difflib 精判（0.53s/对，只在疑似时执行）
+            return difflib.SequenceMatcher(None, a, b, autojunk=False).ratio() >= 0.90
+
+        kept = []
+        for b in blocks:
+            pkg = _pkgset(b)
+            dup_at = -1
+            for i, k in enumerate(kept):
+                if _pkgset(k) != pkg:
+                    continue
+                if _is_dup(k, b):
+                    dup_at = i
+                    break
+            if dup_at < 0:
+                kept.append(b)
+            elif len(b) > len(kept[dup_at]):
+                # 更长的那份胜出（重生成通常带增补）
+                kept[dup_at] = b
+        return kept
+    except Exception:
+        return blocks
+
 
 class CardMixin:
     """SysML 视图抽取与富卡片（变更影响/评审）生成。"""
@@ -115,13 +188,19 @@ class CardMixin:
                               "ref": f"flows:{cd['saved_flow_id']}"})
 
         # 4) stats
+        # ★ 2026-11-20：优先读落库时的 `usage`（本轮真实 token/墙钟/工具数）。
+        #   旧实现只读 run_budget.used_tokens + exec.elapsed_ms，而编排卡片的
+        #   exec.tools 硬写 []、exec 根本没有 elapsed_ms ⇒ 用户看到"统计不见了"。
+        usage = cd.get("usage") or {}
         rb = cd.get("run_budget") or {}
-        if rb.get("used_tokens"):
-            stats["tokens"] = rb["used_tokens"]
-        if exec_meta.get("elapsed_ms"):
-            stats["elapsed_ms"] = exec_meta["elapsed_ms"]
-        stats["tool_calls"] = len(tools)
-        stats["subtasks"] = f"{len(done_items)}/{len(plan) or len(exec_meta.get('subtasks') or [])}"
+        if usage.get("tokens") or rb.get("used_tokens"):
+            stats["tokens"] = int(usage.get("tokens") or rb.get("used_tokens"))
+        if usage.get("elapsed_ms") or exec_meta.get("elapsed_ms"):
+            stats["elapsed_ms"] = int(usage.get("elapsed_ms") or exec_meta["elapsed_ms"])
+        stats["tool_calls"] = int(usage.get("tool_calls", len(tools)))
+        _sub_total = (usage.get("subtasks") or
+                      f"{len(done_items)}/{len(plan) or len(exec_meta.get('subtasks') or [])}")
+        stats["subtasks"] = _sub_total
 
         from datetime import datetime as _dt
         return {
@@ -159,6 +238,8 @@ class CardMixin:
         if not blocks:
             return None
         cleaned = [b.strip() for b in blocks if b.strip()]
+        # ★ 2026-11-18 R1：同一套模型被重生成多次 ⇒ 只留一份（真库实证 2 份拼接）
+        cleaned = _dedupe_sysml_blocks(cleaned)
         return "\n\n".join(cleaned) if cleaned else None
 
     @classmethod
@@ -209,28 +290,42 @@ class CardMixin:
         # 视图诉求信号：输入须明确出现「视图/图/diagram/view」等要图字样才认定指定视图
         if not re.search(r"视图|图|diagram|view", user_input, re.I):
             return None
-        # 关键词映射：英文缩写 → 视图类型；中文名 → 视图类型
+        # ⚠️ 2026-11-16（真机 conv 999999065，米爸报「只让生成状态机却展示 3 个视图」）：
+        #   原实现用**大小写不敏感的子串**匹配 alias，在长需求文本上必然误命中：
+        #     · 单字「包」→ PKG：命中「**包**含以下状态（State）」
+        #     · 英文缩写 PAR → PAR：命中「实例化定义（**Par**t）」「**Park**ed」
+        #     ⇒ 631 字的需求被抽成 ['PKG','PAR','STM'] ⇒ 前端展示 3 个视图。
+        #   而本函数 docstring 明明写着「避免普通词被误判」—— 实现与契约自相矛盾。
+        #
+        #   修法（最小、保持既有正向用法）：
+        #     ① 删掉单字词「包」（"包图" 仍保留，明确要图才能命中）
+        #     ② 英文缩写走 **词边界** 正则（避免 Part/Parked/action 之类子串误命中）
+        #     ③ 补「状态视图」「状态机视图」→ STM（用户原话就是"黑盒状态视图"，
+        #        原 alias 只有"状态机"/"状态图"，导致这类说法抽不到）
+        #   不删「参数/需求/用例/活动」等中文词：它们在「只看需求」这类省略说法里
+        #   仍是有效诉求，贸然删会引入新的漏判。真正的代价不对称：
+        #   **多出错误视图的代价 > 少生成视图**（用户会明确追问"为什么展示三个"）。
         alias = {
             "BDD": "BDD", "块定义图": "BDD", "块定义": "BDD", "结构图": "BDD",
             "IBD": "IBD", "内部块图": "IBD", "内部块": "IBD",
-            "PKG": "PKG", "包图": "PKG", "包": "PKG",
+            "PKG": "PKG", "包图": "PKG",
             "PAR": "PAR", "参数图": "PAR", "参数": "PAR",
             "REQ": "REQ", "需求图": "REQ", "需求": "REQ",
             "UC": "UC", "用例图": "UC", "用例": "UC",
             "ACT": "ACT", "活动图": "ACT", "活动": "ACT",
             "SEQ": "SEQ", "顺序图": "SEQ", "时序": "SEQ",
             "STM": "STM", "状态机": "STM", "状态图": "STM",
+            "状态视图": "STM", "状态机视图": "STM",
             "TRACE": "TRACE", "追溯图": "TRACE", "追溯": "TRACE",
-            "视图": None,  # 通用词
         }
         hits = []
-        text_lower = user_input.lower()
         for key, view_type in alias.items():
-            if view_type is None:
+            if view_type is None or view_type in hits:
                 continue
-            if key.lower() in text_lower:
-                if view_type not in hits:
-                    hits.append(view_type)
+            # 英文缩写（纯 ASCII）必须有词边界；中文词保持原样子串匹配
+            pat = (r"\b" + re.escape(key) + r"\b") if key.isascii() else re.escape(key)
+            if re.search(pat, user_input, re.I):
+                hits.append(view_type)
         return hits if hits else None
 
     def _infer_view_types(self, user_input: str) -> list | None:
@@ -335,6 +430,34 @@ class CardMixin:
         except Exception:
             return content
 
+    @staticmethod
+    def _has_sysml_declaration(code: str) -> bool:
+        """代码真实性闸门：这段文本里是否存在真正的 SysML v2 声明语句。
+
+        为什么需要（2026-11-18 conv 999999904 / msg#7008 米爸报「让 AI 生成提示词，
+        提示词被放代码块后却声称 2 个视图」）：
+          _extract_sysml_code 的无标签兜底路径靠「含 part def / item def 关键词」判代码，
+          而**提示词正文恰恰在教 AI 写这些语法**，于是提示词被当成代码；
+          _gen_sysml_views 在 design 意图、用户未指定视角时无条件兜底 BDD/IBD，
+          投影出 nodes=0 的空壳视图 → 前端「视图 2」+ 把提示词搬进代码 tab。
+
+        判据取「行首声明语句」而非全文关键词：SysML v2 代码必有
+        `package X {` / `part def X` / `part X :> Y {` / `requirement <id>` 等声明行；
+        提示词只在正文**提到**这些词（「各类 item def」「每方案一个 part def」），行首是
+        序号/破折号/中文说明，声明行数为 0。
+
+        已用真库 57 条有代码的 assistant 消息校准：提示词=0 行，合法代码≥3 行。
+        这是**代码事实判据**，不依赖节点数阈值，合法小模型（1 个 part def）也不误伤。
+        """
+        if not code:
+            return False
+        decl_re = re.compile(
+            r"^\s*(?:package\s+"
+            r"|(?:part|interface|port|item|attribute|action|state|constraint|occurrence|requirement|enumeration|annotation|view)\s+(?:def|usage)\b"
+            r"|(?:part|interface|port|item|attribute|action|state|requirement)\s+[^;{}]+?[:]{1,2}\s*\w"
+            r"|requirement\s*<)", re.I)
+        return any(decl_re.match(line) for line in str(code).split("\n"))
+
     def _gen_sysml_views(self, llm_content, intent=None, user_input: str = ""):
         """LLM 输出含 SysML v2 代码 → 解析并投影与用户诉求匹配的视图 ViewModel；无代码/解析失败返回 None。
 
@@ -361,6 +484,10 @@ class CardMixin:
             code = (getattr(self, "_sysml_last_pass_code", None)
                     or getattr(self, "_sysml_last_checked_code", None))
         if not code:
+            return None
+        # ★ 2026-11-18 代码真实性闸门：提示词正文含 V2 关键词会被 _extract_sysml_code
+        #   误判为代码（msg#7008），必须先确认有真正的声明语句再投影，否则产出空壳视图。
+        if not self._has_sysml_declaration(code):
             return None
         # ★ P2：生成后校验（挂诊断；失败/不可用一律降级，不影响下面的视图投影）
         _chk = self._check_generated_sysml(code)
@@ -401,6 +528,21 @@ class CardMixin:
             # P2：校验摘要挂到 views 的兄弟键（与既有 quality_check 同级；前端只迭代 views.views，零影响）
             if _chk and isinstance(views, dict):
                 views["check"] = _chk
+            # ★ 2026-11-18 出口闸门（与入口闸门互补）：**投影后所有视图都空** ⇒ 返回 None。
+            #   入口闸门挡的是「提示词被当代码」（无声明语句）；这道挡的是「代码形状对、
+            #   但投影出来一个元素都没有」（如只有 package 壳、或引用全失效）。
+            #   理由：一张 nodes=0/edges=0 的「块定义图」对用户没有任何信息量，
+            #   却会让前端声称「视图 2」并把正文搬进代码 tab —— 正是米爸报的现象。
+            #   ⚠️ **范围不许扩大**：用户**显式指定**了视图类型时保留（哪怕空）——
+            #      他要的是「需求图」，而代码里没有需求，此时 `warnings`
+            #      「视图最小输入集缺失：requirement（请先补充对应模型元素）」
+            #      正是他需要的反馈。丢弃它等于把「缺什么」也一起藏了。
+            if isinstance(views, dict):
+                _vs = views.get("views") or {}
+                if _vs and not user_views and not any(
+                        (isinstance(v, dict) and (v.get("nodes") or v.get("edges")))
+                        for v in _vs.values()):
+                    return None
             return views
         except Exception:
             return None

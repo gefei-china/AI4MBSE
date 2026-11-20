@@ -6,7 +6,11 @@ from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
-from core.deps import db_session
+from core.deps import db_session, require_permission
+# ★ B2-1（2026-11-18）：SPARQL 端点此前只挂 db_session，完全匿名。
+#   复用既有 kb_ontology 域（设计师 view / 知识工程师 edit；admin 域非空者超管放行），
+#   不新增 domain ⇒ 零 roles 迁移。require_permission 对匿名一律 401（与 enforce_login 无关），
+#   语句白名单（_ALLOWED_UPDATE_OPS）保留，二者管的是不同维度。
 
 router = APIRouter(prefix="/api/sparql", tags=["SPARQL 1.1"])
 
@@ -19,13 +23,14 @@ class SyncRequest(BaseModel):
 
 
 @router.get("/dependency")
-def dependency():
+def dependency(user=Depends(require_permission("kb_ontology", "view"))):
     from services.sparql_sync import dependency_status
     return dependency_status()
 
 
 @router.post("/sync")
-def sync(req: SyncRequest, conn=Depends(db_session)):
+def sync(req: SyncRequest, conn=Depends(db_session),
+         user=Depends(require_permission("kb_ontology", "edit"))):
     if req.with_time:
         from services.temporal_sparql import sync_to_fuseki_with_time
         return sync_to_fuseki_with_time(
@@ -44,12 +49,14 @@ def sync(req: SyncRequest, conn=Depends(db_session)):
 
 
 @router.get("/query")
-def sparql_query_get(q: str, as_of: Optional[str] = None, conn=Depends(db_session)):
+def sparql_query_get(q: str, as_of: Optional[str] = None, conn=Depends(db_session),
+                     user=Depends(require_permission("kb_ontology", "view"))):
     return _do_query(q, as_of)
 
 
 @router.post("/query")
-def sparql_query_post(body: dict, conn=Depends(db_session)):
+def sparql_query_post(body: dict, conn=Depends(db_session),
+                      user=Depends(require_permission("kb_ontology", "view"))):
     q = body.get("query") or body.get("sparql") or ""
     as_of = body.get("as_of") or body.get("asOf")
     if not q:
@@ -113,7 +120,8 @@ def _classify_update(sparql: str) -> str:
 
 
 @router.post("/update")
-def sparql_update(body: dict, conn=Depends(db_session)):
+def sparql_update(body: dict, conn=Depends(db_session),
+                  user=Depends(require_permission("kb_ontology", "edit"))):
     from services.sparql_sync import FusekiClient, FusekiUnavailable, FusekiQueryError
     s = body.get("update") or body.get("sparql") or ""
     if not s:

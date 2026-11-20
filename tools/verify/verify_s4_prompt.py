@@ -1,4 +1,4 @@
-# CI-OPTIONAL: [broken] 已知红，记账不进 CI（修好后上调 tier 并接线）；两库都红 [FAIL] FAIL  common.py 定义 _AGENT_ROLE_CAP = 1200 
+# 角色块上限门禁：断言从 common 单一真源读取（CAP=8000，2026-10-27 统一），不再写死 1200。
 """S4 验证（2026-09-17）：配置层去重 / 占位符 / Agent 角色块按意图注入。
 
 离线可跑，不依赖 8000 端口服务：
@@ -71,15 +71,19 @@ check("execute.py 不再直取 agent_def.system_prompt（改走共用实现）",
       "agent_def.system_prompt or" not in EX)
 
 print("\n[3] C3：流式路径按意图注入命中 Agent 的角色块（带上限）")
-check("common.py 定义 _AGENT_ROLE_CAP = 1200", "_AGENT_ROLE_CAP = 1200" in CM)
+check("common.py 定义 _AGENT_ROLE_CAP 且与注入上限同源",
+      re.search(r"_AGENT_ROLE_CAP\s*=\s*(\d+)", CM) is not None
+      and int(re.search(r"_AGENT_ROLE_CAP\s*=\s*(\d+)", CM).group(1))
+      == int(re.search(r"_TOOL_MODEL_CAP\s*=\s*(\d+)", CM).group(1)))
 check("_AGENT_ROLE_CAP 已在 __all__ 导出", "'_AGENT_ROLE_CAP'" in CM)
 # P1-28：`cap` 的下发点变为调用点的 `role_cap` 参数（common 内统一透传给 _build_role_block）。
 # 判据绑"参数确实被传下去了"这一结构事实，而不是某个字符串形态。
 check("common 的 role 块把 cap 参数化下发（>0 才传，形态与旧调用逐字一致）",
       'if ctx.role_cap else {}' in CM and '_role_kw' in CM)
-check("stream.py 传 role_cap=_AGENT_ROLE_CAP（流式仍按 1200 截断）",
+check("stream.py 传 role_cap=_AGENT_ROLE_CAP（与 common 同源，不再写死 1200）",
       "role_cap=_AGENT_ROLE_CAP" in ST)
-check("execute.py 传 role_cap=0（非流式路径仍不截断）", "role_cap=0" in EX)
+check("execute.py 传 role_cap=_AGENT_ROLE_CAP（2026-10-27 与流式统一）",
+      "role_cap=_AGENT_ROLE_CAP" in EX)
 check("stream.py 不再硬编码通用角色句", '"你是网络总体MBSE设计助手。当前意图' not in ST)
 
 

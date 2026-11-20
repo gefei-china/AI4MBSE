@@ -28,6 +28,25 @@ KNOWN_EVENT_TYPES = frozenset({
     #   `artifact_facts`（产物自动归档事实，execute 路径收不到才加到 blocks）
     #   `output_contract`（agents.output_schema → 提示词的结构化输出契约）
     "artifact_facts", "output_contract",
+    # ★ 2026-11-16 补登记：`artifact_baseline`（当前产物的正文基线，让迭代是
+    #   "在既有产物上增量修改"而不是从零重写）。同样 11-13 就进了 prompt 块
+    #   （common.py:326 / 698 的 `_build_artifact_baseline`），当时漏登记。
+    #   与上面两项同族：**新增 prompt 块必须同批登记**，否则读路径
+    #   `validate_event` 会抛 UnknownEventError ⇒ 会话回放失败。
+    "artifact_baseline",
+    # ★★ 2026-11-16 预设登记（**代码里有、生产库还没出现过**）。
+    #   来源：`PROMPT_BLOCK_ORDER` 全量比对（common.py:327/330/333），
+    #   这三个都是 `build_prompt_blocks` 真实构造的块（各有 `_build_*` 实现）：
+    #     · project_memory —— `_build_project_memory`（common.py:699）
+    #     · template       —— `_build_prompt_template`（:693，提示词实验室模板）
+    #     · skill_block    —— 显式指定技能正文（:692）
+    #   为什么必须现在就登记：它们**在生产库从未出现过**（各自的功能没被用到：
+    #   项目记忆 0 行 / 模板未配置 / 未显式指定技能），所以"生产库覆盖"判据
+    #   永远查不出来 —— 但功能一启用就会写入词表外的名字 ⇒ 回放失败。
+    #   ⚠️ 这条也暴露了既有判据的盲区：**只查生产库数据，漏掉"代码里有但没用过"**。
+    #   现由 `verify_prompt_block_vocab_guard.py` 的 A4 判据
+    #   （`PROMPT_BLOCK_ORDER ⊆ 词表`，纯代码级、不依赖数据）长期锁住。
+    "project_memory", "template", "skill_block",
 })
 
 

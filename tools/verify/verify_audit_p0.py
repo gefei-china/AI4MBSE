@@ -49,7 +49,8 @@ def _new_db():
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         user_name TEXT DEFAULT '', event_type TEXT NOT NULL, detail TEXT DEFAULT '',
         result TEXT DEFAULT 'success', ip_address TEXT DEFAULT '',
-        branch TEXT DEFAULT '', created_at TEXT DEFAULT CURRENT_TIMESTAMP)""")
+        branch TEXT DEFAULT '', trace_id TEXT DEFAULT '',
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP)""")
     conn.commit()
     return conn, path
 

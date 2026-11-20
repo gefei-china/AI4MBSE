@@ -139,8 +139,9 @@ check("_TOOL_RESULT_CAP 展示上限为正且 >= 4000（不许缩到看不清结
 check("_TOOL_MODEL_CAP 回填上限为正且 <= 展示上限（模型侧不该比人看到的还多）",
       isinstance(_TOOL_MODEL_CAP, int) and 0 < _TOOL_MODEL_CAP <= _TOOL_RESULT_CAP,
       "%s vs 展示 %s" % (_TOOL_MODEL_CAP, _TOOL_RESULT_CAP))
-check("_ATT_INJECT_CAP 注入上限为正且 <= 8000（附件注入不许无界）",
-      isinstance(_ATT_INJECT_CAP, int) and 0 < _ATT_INJECT_CAP <= 8000, _ATT_INJECT_CAP)
+check("_ATT_INJECT_CAP 注入上限为正且与 common 常量同源（附件注入不许无界）",
+      isinstance(_ATT_INJECT_CAP, int) and 0 < _ATT_INJECT_CAP <= _common._TOOL_MODEL_CAP,
+      _ATT_INJECT_CAP)
 check("_TOOL_MODEL_CAP 已在 common.__all__ 导出", "_TOOL_MODEL_CAP" in _common.__all__)
 check("_ATT_INJECT_CAP 已在 common.__all__ 导出", "_ATT_INJECT_CAP" in _common.__all__)
 
@@ -249,7 +250,8 @@ for rnd in range(3):
                 "content": TOOL_RESULT}]
     ns = {"messages": messages, "results": results, "pmsg": pmsg,
           "_elide_queue": _elide_queue, "json": json, "re": _re,
-          "_KEEP_TOOL_ROUNDS": _KEEP_TOOL_ROUNDS, "_rnd": rnd}
+          "_KEEP_TOOL_ROUNDS": _KEEP_TOOL_ROUNDS, "_rnd": rnd,
+          "_pg_stop_now": False, "_pg_reason": ""}
     exec(blk_b, ns)
     messages = ns["messages"]
     _elide_queue = ns["_elide_queue"]

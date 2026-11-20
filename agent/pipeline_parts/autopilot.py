@@ -205,18 +205,204 @@ class AutoPilotMixin:
                     st["guarded"] += 1     # 曾被判成 tool 但被护栏挡下（=修好了的隐患）
         return st
 
+    # ── P1（2026-11-17）编排收口「待办验收如实告知」 ──────────────
+    # 为什么不是闸（三个方案都否掉之后剩下的唯一正解）：
+    #   ① 子任务按会话自闸 ⇒ 查 0 号会话（已修成 mode='subtask' 不适用）；
+    #   ② 子任务按父会话自闸 ⇒ 会因**兄弟子任务**的待办被拦（同批互撞、空转烧额度）；
+    #   ③ 子任务按 run 自闸 ⇒ 编排批次里**所有子任务共享同一个 run_id**
+    #      （实测 conv 999999002 的 17 条待办全是 run=990231）⇒ 与 ② 同病。
+    #   ④ 父收口处拦住重跑 ⇒ 与编排自身的 resume/attempt_count 语义重复。
+    # ⇒ 折中：收口时对**本批次**（run 维度，`todo_store.run_todos`）的待办做一次
+    #   纯 parse 统计（**零执行、不拦**），有未过验收的就在汇总正文**如实告知**。
+    #   与 P0-7「不许无条件说 N 个完成」、B1-5「phase 由任务状态推导」同一条纪律：
+    #   不许把没做完的说成做完了。
+    def build_orch_todo_notice(self, run_id: int) -> tuple:
+        """构造编排收口的待办告知文本。
+
+        :returns: ``(notice, stats)``；notice 为空串 = 本批次待办全部完成（或没建过待办）。
+        ⚠️ 纯 parse：只统计"会不会被自动验收"，**不执行任何工具、不拦任何流程**。
+        """
+        if not int(run_id or 0):
+            return "", None
+        try:
+            from agent.todo_store import run_todos as _rt
+            with db_conn() as conn:
+                rows = _rt(conn, int(run_id))
+        except Exception as e:
+            # 读失败不得把编排主流程带崩，也不得编一条"全部完成"的假话 ⇒ 静默跳过
+            logger.warning("[autopilot] 编排待办统计失败（跳过告知）：%r", e)
+            return "", None
+        if not rows:
+            return "", None
+        from agent import harness_gate as _hg
+        st = {"total": len(rows), "done": 0, "pending": 0,
+              "manual": 0, "autoready": 0, "guarded": 0, "tools": {}}
+        auto_items, manual_items = [], []
+        for r in rows:
+            if str(r.get("status") or "") == "completed":
+                st["done"] += 1
+                continue
+            st["pending"] += 1
+            sp = _hg.parse_verify_spec(r.get("verify") or "",
+                                       r.get("verify_tool"), r.get("verify_args"))
+            if sp["kind"] == "tool":
+                st["autoready"] += 1
+                st["tools"][sp["tool"]] = st["tools"].get(sp["tool"], 0) + 1
+                auto_items.append(r)
+            else:
+                st["manual"] += 1
+                if sp.get("blocked_reason"):
+                    st["guarded"] += 1
+                manual_items.append(r)
+        if not st["pending"]:
+            # 全部完成 ⇒ 正文不打扰，但**统计仍落台账**（否则"编排批次收口验收全过率"
+            # 这条趋势只有失败样本，分母缺失 ⇒ 指标失真，与本仓"四个环节各写一个数字"同族）
+            self._orch_notice_observe(st)
+            return "", st
+        _lines = ["", "---", "**待办验收未全过（如实告知）**：本批次共 %d 条待办，%d 条未完成验收。"
+                  % (st["total"], st["pending"])]
+        for r in auto_items[:3]:
+            _lines.append("- 待自动验收：「%s」（%s）" % ((r.get("subject") or "?")[:40],
+                                                      r.get("verify_tool") or "?"))
+        for r in manual_items[:3]:
+            _lines.append("- 需人工确认：「%s」" % (r.get("subject") or "?")[:40])
+        if len(auto_items) + len(manual_items) > 6:
+            _lines.append("- ……其余 %d 条略" % (len(auto_items) + len(manual_items) - 6))
+        _lines.append("（这些待办未阻塞本次交付；如需补跑请在编排卡使用「重跑子任务」）")
+        # 台账：让"编排批次收口时还有多少没过验收"可统计（与 shadow/subtask 同一张表）
+        self._orch_notice_observe(st)
+        return "\n".join(_lines), st
+
+    # ── P1 修复（2026-11-18）编排主路径收口：真正执行只读验收 ──────────
+    # 为什么需要：三处编排调用（stream.py 的 resume/团队/常规分支）全部在
+    # 收口前 `return`，永远到不了 ReAct 尾部 7062 的 harness 闸 ⇒
+    # 编排会话**从未被 enforce 闸验收过**。上一轮的 `build_orch_todo_notice`
+    # 只做纯 parse 统计（"有多少条能自动验"），**一条都没有真跑**，
+    # 所以仍不是"闸"，只是台账。
+    # 本方法的边界（刻意的，避免与编排自身语义打架）：
+    #   · 只跑**只读白名单**工具（复用 `_run_verify` 的三重护栏），最多 8 条；
+    #   · 不另起 ReAct 循环、不改 agent_tasks 状态 —— 重跑/续跑归编排自己的
+    #     resume/attempt_count 管，这里只决定"能不能声称完成"；
+    #   · shadow/off 模式**零执行**（与 harness 三态语义一致）。
+    def orch_enforce_run(self, run_id: int, conversation_id: int = 0) -> str:
+        """编排收口执行只读验收；返回要并入交付正文的告知（无失败为空串）。"""
+        try:
+            from core import config as _cfg
+            _mode = str(_cfg.get("agent", "harness_mode", "") or "").strip().lower()
+        except Exception:
+            _mode = ""
+        if _mode != "enforce" or not int(run_id or 0):
+            return ""
+        try:
+            from agent.todo_store import run_todos as _rt
+            with db_conn() as conn:
+                rows = _rt(conn, int(run_id))
+        except Exception as e:
+            logger.warning("[autopilot] 编排收口验收读待办失败（跳过）：%r", e)
+            return ""
+        from agent import harness_gate as _hg
+        _cap = 8
+        try:
+            _cap = max(0, min(20, int(_cfg.get("agent", "harness_max_blocks", 8) or 8)))
+        except Exception:
+            pass
+        # 父编排实例也要有工具归属上下文（_exec_tool_call 的幂等/留痕会读）
+        try:
+            self._tool_conv_ctx = int(conversation_id or 0)
+            self._tool_run_ctx = int(run_id or 0)
+        except Exception:
+            pass
+        pending = [r for r in rows
+                   if str(r.get("status") or "") not in ("completed", "deleted")]
+        auto, blocked = [], []
+        for r in pending:
+            _sp = _hg.parse_verify_spec(r.get("verify") or "", r.get("verify_tool"),
+                                        r.get("verify_args"))
+            if _sp["kind"] != "tool":
+                # parse_verify_spec 已把"结构化但非白名单"判成 manual + blocked_reason
+                # ⇒ 必须在 continue 之前捞出来，否则这类验收会被静默放过
+                if _sp.get("blocked_reason"):
+                    blocked.append((r, _sp.get("tool") or "?"))
+                continue                       # 纯自然语言验收：本来就不自动执行
+            # ★ 写类/交互类工具不能自动执行；_run_verify 会把它们当"人工验收已确认"
+            #   返回 ok=True —— 在**闸**的语境里那就是静默放过。这里提前识别并
+            #   单独列出，至少让用户看见"这条没被机器验过"。
+            if not _hg.verify_tool_allowed(_sp["tool"]):
+                blocked.append((r, _sp["tool"]))
+            else:
+                auto.append(r)
+        auto = auto[:_cap]
+        failures = []
+        for r in auto:
+            try:
+                vr = self._run_verify(r.get("verify") or "",
+                                      r.get("verify_tool"), r.get("verify_args"))
+            except Exception as e:
+                vr = {"ok": False, "detail": "验收异常：%r" % (e,)}
+            if not vr.get("ok"):
+                failures.append("「%s」— %s" % ((r.get("subject") or "?")[:40],
+                                                str(vr.get("detail") or "")[:120]))
+        # 台账：would_block 表示"这套编排的收口验收有没有不通过"
+        try:
+            self._harness_observe(int(conversation_id or 0), "orch_enforce",
+                                  {"reason": "编排收口执行 %d 条只读验收，%d 条未通过"
+                                             % (len(auto), len(failures)),
+                                   "remaining": failures},
+                                  bool(failures),
+                                  {"pending": len(rows), "autoready": len(auto),
+                                   "manual": max(0, len(rows) - len(auto))})
+        except Exception:
+            pass
+        if not failures and not blocked:
+            return ""
+        _lines = []
+        if failures:
+            _lines += ["", "**★ 编排收口只读验收未通过（不得视为完成）**：%d 条"
+                       % len(failures)]
+            _lines += ["- " + x for x in failures[:5]]
+            if len(failures) > 5:
+                _lines.append("- ……其余 %d 条略" % (len(failures) - 5))
+        if blocked:
+            _lines += ["", "**编排收口：%d 条验收工具不在只读白名单，未自动执行**"
+                       % len(blocked)]
+            for r, tool in blocked[:3]:
+                _lines.append("- 「%s」（%s）— 需人工确认，不算机器验收通过"
+                              % ((r.get("subject") or "?")[:40], tool))
+        _lines.append("（上述待办仍未通过机器验收；请修复后重跑对应子任务）")
+        return "\n".join(_lines)
+
+    def _orch_notice_observe(self, st: dict) -> None:
+        """把编排收口的待办统计写入 `harness_decisions`（mode='orch_notice'）。
+
+        ⚠️ 观测设施故障不得变成业务故障（与 `_harness_observe` 同纪律）。
+        """
+        try:
+            self._harness_observe(0, "orch_notice",
+                                  {"reason": "编排收口：本批次 %d/%d 条待办未过验收"
+                                             % (int((st or {}).get("pending") or 0),
+                                                int((st or {}).get("total") or 0))},
+                                  False, {"pending": (st or {}).get("pending") or 0,
+                                          "manual": (st or {}).get("manual") or 0,
+                                          "autoready": (st or {}).get("autoready") or 0,
+                                          "guarded": (st or {}).get("guarded") or 0,
+                                          "tools": (st or {}).get("tools") or {}})
+        except Exception:
+            pass
+
     def _harness_observe(self, conversation_id: int, mode: str, decision: dict,
                          would_block: bool, stats: dict, extra: dict = None) -> None:
         """把一次 harness 判定写入 `harness_decisions`（观测设施故障**不得**变成业务故障）。"""
         try:
             import json as _json
             from database import db_conn
+            from core.audit import current_trace_id as _ctid_b1
+            _tid_b1 = _ctid_b1()
             with db_conn() as conn:
                 conn.execute(
                     "INSERT INTO harness_decisions (conversation_id, mode, would_block, "
                     "force_release, reason, remaining_n, pending_n, manual_n, autoready_n, "
-                    "guarded_n, tools_json, created_at) "
-                    "VALUES (?,?,?,?,?,?,?,?,?,?,?,datetime('now','localtime'))",
+                    "guarded_n, tools_json, trace_id, created_at) "
+                    "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,datetime('now','localtime'))",
                     (int(conversation_id or 0), str(mode),
                      1 if would_block else 0,
                      1 if (decision or {}).get("force_release") else 0,
@@ -225,6 +411,7 @@ class AutoPilotMixin:
                      int(stats.get("pending") or 0), int(stats.get("manual") or 0),
                      int(stats.get("autoready") or 0), int(stats.get("guarded") or 0),
                      _json.dumps((stats or {}).get("tools") or {}, ensure_ascii=False),
+                     _tid_b1,
                      ))
                 conn.commit()
         except Exception:
@@ -249,13 +436,18 @@ class AutoPilotMixin:
         spec = _hg.parse_verify_spec(verify, verify_tool, verify_args)
         if spec["kind"] != "tool":
             _why = spec.get("blocked_reason") or spec.get("parse_error") or ""
-            return {"ok": True, "kind": "manual", "origin": spec.get("origin", "manual"),
-                    "detail": ("人工验收（不可自动执行，视为已确认）"
+            # ★ B3-2（2026-11-18）：manual 不再说"视为已确认"（那是假声明——
+            #   没有任何东西被确认过）。ok 保持 True：manual 无法被工具自动改进，
+            #   拦住收口只会空转到 max_blocks（D2 拍板：不阻断，如实告知）。
+            return {"ok": True, "kind": "manual", "deferred": True,
+                    "origin": spec.get("origin", "manual"),
+                    "detail": ("待人工核验（不可自动执行；未自动确认）"
                                + ("；%s" % _why if _why else ""))}
         # ②③ 执行前的最后一道：非只读工具绝不执行
         if not _hg.verify_tool_allowed(spec["tool"]):
-            return {"ok": True, "kind": "manual", "origin": spec.get("origin", ""),
-                    "detail": "工具「%s」不在只读白名单 ⇒ 不执行，按人工验收"
+            return {"ok": True, "kind": "manual", "deferred": True,
+                    "origin": spec.get("origin", ""),
+                    "detail": "工具「%s」不在只读白名单 ⇒ 不执行，待人工核验（未自动确认）"
                               % spec["tool"]}
         try:
             res = self._exec_tool_call(spec["tool"], spec["args"])
@@ -296,6 +488,31 @@ class AutoPilotMixin:
                     "reason": "harness 闸关闭（mode=off）", "failures": [],
                     "stall_streak": 0, "stalled": False,
                     "mode": "off", "shadow": False, "would_block": False}
+        # ── 无会话归属：闸**不适用**，且不得伪装成"跑过了、通过了" ────────
+        # 真机证据（2026-11-17 核查）：`harness_decisions` 202 条里有 36 条
+        #   `conversation_id=0`，reason 一律「无待办 ⇒ 无验收条件，不拦」；
+        #   而**同一时刻**父会话 999999002 正有 17 条 pending 待办
+        #   （15:09~15:13 建待办，15:11/15:12/15:13 的判定却记成 conv=0、pending=0）。
+        # 根因：编排子任务以 `execute_stream(query, 0, session_conv_id=父会话)` 嵌套调用，
+        #   `todo_write` 走 `_tool_conv_ctx`（= session_conv_id）把待办写进**父会话**，
+        #   而本闸拿的是裸 `conversation_id`(=0) ⇒ 查 0 号会话 ⇒ `list_todos` 首行即
+        #   `if not conversation_id: return []` ⇒ 恒空 ⇒ 恒"不拦"。
+        #   ⇒ 这与 `stream.py:5380` 注释里「不要再各处写 int(conversation_id or 0)」
+        #     是同一类错误（同一语义两个口径），只是漏在了闸这一处。
+        # ⚠️ 为什么不改成传 `session_conv_id or conversation_id`：那会让**子任务**
+        #   因**父会话**的待办被拦 —— 同一批 siblings 互相阻塞、反复空转烧额度，
+        #   语义也不对（子任务的"本轮"不含父会话待办）。
+        #   ⇒ 此处判"不适用"，拦截责任在**父会话收口处**（见 verify_harness_real_effect 的
+        #     D 组：编排主路径目前提前 return，尚未经过闸 —— 已知缺口，另行处理）。
+        if not int(conversation_id or 0):
+            _reason = "无会话归属（编排子任务/未传会话号）⇒ 闸不适用，不代表验收通过"
+            self._harness_observe(0, "subtask", {"reason": _reason}, False,
+                                  {"pending": 0, "manual": 0, "autoready": 0})
+            return {"block": False, "feedback": "", "force_release": False, "notice": "",
+                    "remaining": [], "blocks_used": int(blocks_used or 0),
+                    "reason": _reason, "failures": [],
+                    "stall_streak": 0, "stalled": False,
+                    "mode": "subtask", "shadow": False, "would_block": False}
         gate = self._todo_gate(conversation_id)
         # ★ 无进展：本轮 remaining 与上轮完全相同 ⇒ stall_streak + 1
         cur_rem = list((gate or {}).get("remaining") or [])
@@ -336,6 +553,12 @@ class AutoPilotMixin:
             # ⚠️ force_release 必须**透传** decision 的值 ——
             #   写死 False 会让"已达上限"这种情况被当成普通放行
             #   （真机 E2E 实测抓到：notice 里有「达到上限 8」但 force_release=False）。
+            # ★ 2026-11-17：enforce 的"未拦截"回合**也必须落台账**。
+            #   原实现只有真拦时才写行 ⇒ 台账里 enforce 行恒为 0，
+            #   "拦截率/误拦率"的分母永远缺失，无法回答"enforce 到底有没有在用"。
+            #   与 `orch_notice` 全完成也落台账是同一条纪律：分母不能缺。
+            self._harness_observe(conversation_id, "enforce", decision, False,
+                                  self._verify_stats(conversation_id))
             return {"block": False, "feedback": "",
                     "force_release": bool(decision.get("force_release")),
                     "notice": notice, "remaining": decision["remaining"],
@@ -378,6 +601,9 @@ class AutoPilotMixin:
                     notice = _hg.build_force_release_notice(
                         decision2["remaining"], decision2["blocks_used"],
                         decision2["max_blocks"])
+                # 同上：验收实际已过 ⇒ 这是"该拦但重判后放行"的样本，也是分母的一部分
+                self._harness_observe(conversation_id, "enforce", decision2, False,
+                                      self._verify_stats(conversation_id))
                 return {"block": False, "feedback": "",
                         "force_release": bool(decision2.get("force_release")),
                         "notice": notice, "remaining": decision2["remaining"],

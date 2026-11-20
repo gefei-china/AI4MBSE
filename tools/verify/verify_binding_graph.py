@@ -81,6 +81,29 @@ def main():
          ag["total"] == raw, "有行没被判定 ⇒ 未知状态会被当成生效")
     _rec("G1b 所有状态都在枚举内", not bad, "越界状态：%s" % bad)
 
+    # ── G9 体检明细必须可下钻、可处理（2026-11-19）────────────
+    print("\n=== G9 绑定体检明细（提示点开后必须有东西可看、可做）===")
+    detail = ag.get("details") or []
+    need_fields = ("binding_id", "agent", "name", "state", "reason", "hint", "actions", "usage")
+    miss = [x for x in detail if any(k not in x for k in need_fields)]
+    _rec("G9a 每条需关注绑定都有明细字段", not miss,
+         "缺字段 %d 条：%s" % (len(miss), miss[:1]))
+    _rec("G9b attention = broken + govern（旧口径漏 inactive/bypass）",
+         ag.get("attention") == ag.get("broken", 0) + ag.get("govern", 0),
+         "attention=%s broken=%s govern=%s" % (ag.get("attention"), ag.get("broken"), ag.get("govern")))
+    non_eff = sum(v for k, v in ag["by_state"].items() if k in G.STATE and k not in G._EFFECTIVE_STATES)
+    _rec("G9c broken 覆盖全部未生效状态（含 inactive）", ag.get("broken") == non_eff,
+         "broken=%s 非生效合计=%s" % (ag.get("broken"), non_eff))
+    govern_states = set(ag.get("govern_states") or ())
+    govern_in_data = govern_states & set(ag["by_state"])
+    in_details = {x["state"] for x in detail}
+    _rec("G9d bypass/plugin_off 不再是「只有计数没明细」",
+         not (govern_in_data - in_details),
+         "只在计数里没进 details：%s" % sorted(govern_in_data - in_details))
+    no_act = [x for x in detail if not x.get("actions")]
+    _rec("G9e 每条明细至少有一条可执行动作（含解绑兜底）", not no_act,
+         "无动作 %d 条：%s" % (len(no_act), no_act[:1]))
+
     # ── G2 无悬空 ─────────────────────────────────────────────
     print("\n=== G2 悬空绑定（目标行已不存在）===")
     dangling = [p for p in ag["problems"] if p["state"] == "dangling"]

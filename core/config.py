@@ -38,6 +38,20 @@ CONFIG_PATH = os.environ.get(
 )
 
 # ── 内置默认值（三层优先级的最低层）──
+def _default_deny_roots():
+    """写操作默认禁止的系统目录（按平台动态生成，不硬编码单平台路径）。"""
+    if os.name == "nt":
+        cands = [
+            os.environ.get("SystemRoot") or "C:\\Windows",
+            os.environ.get("ProgramFiles") or "C:\\Program Files",
+            os.environ.get("ProgramFiles(x86)") or "C:\\Program Files (x86)",
+            os.environ.get("ProgramData") or "C:\\ProgramData",
+        ]
+    else:
+        cands = ["/etc", "/usr", "/bin", "/sbin", "/boot", "/System", "/Library"]
+    return ";".join([c for c in cands if c])
+
+
 DEFAULT_CONFIG = {
     "app": {
         "title": "AI赋能MBSE系统设计工具",
@@ -70,6 +84,16 @@ DEFAULT_CONFIG = {
         # 现场用法：想在不换模型的前提下放开输出上限 → 置 warn（或 off），并把
         # `refine.max_tokens` / `delegation.summary_max_tokens` 一并上调（否则那两个才是瓶颈）。
         "context_window_guard": "clamp",
+        # ── ★ 2026-11-18（R3）：输出上限钳制，防上游 400 ──────────────────────────────
+        # 背景：`max_tokens` 是**一次响应的输出 token 数**，与 `context_window`
+        #   （输入+输出的总容量）**量纲不同**。真库实测 provider 1/71/109 配成
+        #   max_tokens=112000 / context_window=128000 —— 两处已有校验
+        #   （后端 clamp 段 + 前端保存校验）都拿这两者比大小 ⇒ 双双放行 ⇒ 上游 400。
+        # 两个旋钮（出站口取 min，均在 `llm/providers/openai_compat.py` 生效并留 WARNING）：
+        #   output_ratio_cap  = 输出上限 / context_window 的比例上限（默认 0 = 不启用）
+        #   max_output_tokens = 全局输出硬上限（默认 32768；**0 = 不启用该层**）
+        "output_ratio_cap": 0,
+        "max_output_tokens": 0,
         # ── P0-a（2026-10-02）：流式 usage 采集 ────────────────────────────────────────
         # 流式（前端主路径 `/chat/stream`）此前**完全不落 token 统计**（恒 pt=0/ct=0），
         # 导致成本、截断观测、TokenCounter 三项在主路径上全失真。现在 `_stream_wrapped`
@@ -333,8 +357,26 @@ DEFAULT_CONFIG = {
     #   稳定联网检索必须配正式 API：provider=tavily（国际，免费 1000 次/月）或 bocha（国内博查）。
     #   不配置时 web_search 仍可调用，但会走免费链并在不可达时**如实报告失败**（不编造）。
     "web_search": {
+        # ★ B2-3（2026-11-18）：联网工具网络边界。默认空=不按域名限制（兼容），
+        #   deny_private=True 拒环回/私网/保留地址（SSRF 基本面）。
+        "allow_hosts": "",
+        "deny_private": True,
         "provider": "",          # tavily | bocha（空=未配置，走免费抓取链）
         "api_key": "",           # 对应 provider 的 API key
+    },
+    # ★ B2-4（2026-11-18）：文件工具受控工作区根约束（只约束写/追加/建目录/删除，读不限）。
+    #   deny_roots 默认=系统目录（默认生效，正常用法零影响）；
+    #   allow_roots 为空=不按白名单限制，受控部署可显式填（';' 分隔）。
+    "file_tools": {
+        "deny_roots": _default_deny_roots(),
+        "allow_roots": "",
+    },
+    # ★ B2-5（2026-11-18）：HIL 审批策略开关。
+    #   阻止「同一个人既发起又批准」不可逆（destructive）动作 —— 四眼原则的最小切口。
+    #   仅对 destructive 生效：可逆写仍支持用户本人一键确认（否则正常用法被卡死）；
+    #   确认单无 requested_by（旧库 / 未接线调用方）时不做判定，避免误拦存量流程。
+    "hil": {
+        "block_destructive_self_approval": True,
     },
     "embedding": {
         "enabled": True,         # 语义出口总开关；False 强制 bigram（Mock/离线确定性）
@@ -694,6 +736,17 @@ DEFAULT_CONFIG = {
         "artifact_digest_enabled": True,   # 会话产物摘要开关（false = 回退到改动前行为）
         # 2026-10-27（截断清单 P2-C7）：900 → 1500。摘要里"最近 N 个版本 + 产物标题"
         #   在 900 处常被砍到只剩前两条 ⇒ 模型看不到上一轮刚建的那份，重复产出。
+        # ★ 2026-11-19 P0-A：父会话「用户原文」注入编排子任务（conv 999999905 事故）。
+        #   子任务 conversation_id=0 ⇒ 看不到历史；artifact_digest 只有产物清单不含需求原文。
+        #   enabled=False 或 count<=0 或 max_chars<=0 ⇒ 完全不注入（逐字节回到改动前）。
+        "subtask_parent_msgs_enabled": True,
+        "subtask_parent_msgs_count": 3,      # 取最近 N 条 user 消息（不含本轮输入）
+        "subtask_parent_msgs_max_chars": 6000,  # 该段总字符预算（<=0 即不注入）
+        # ★ 2026-11-19：短输入时压低 slots（槽位）实体拼接上限。
+        #   事故 conv 999999905：6 字「我的提示词呢」被拼上 5 个上一轮实体 ⇒ 检索串 70+ 字。
+        #   short_max_chars<=0 ⇒ 关闭本机制（恒用旧上限 5，逐字节回旧行为）。
+        "slot_entity_short_max_chars": 20,   # 判定"短输入"的字数阈值
+        "slot_entity_cap_short": 2,          # 短输入时的实体上限（旧行为恒为 5）
         "artifact_digest_max_chars": 1500, # 摘要字符上限（<=0 不限）
         "artifact_digest_versions": 3,     # 摘要中列出最近 N 个 SysML 模型版本
         # P1-7（2026-10-01）：标题恰为系统性兜底名（AI 生成文档/报告、{kind}产物）的产物行整行不列。
@@ -1030,6 +1083,20 @@ DEFAULT_CONFIG = {
         "types": "stage,tool",         # 落哪几类（逗号分隔）；改这个不会让转发丢事件
         "max_per_run": 200,            # 单次编排事件数兜底（防异常循环撑爆表）
     },
+    # ── 方案B P0/P1：帧日志（断线重连可重放已生成内容，2026-11-19）────────────
+    # 与 stream_event_log 的分工：那张表回答"走了哪些阶段、调了哪些工具"（白名单
+    # stage/tool，无 token）；本组管的是**有序可重放的完整帧流**（含 token/reasoning，
+    # 合帧后落库），用来把"断线后已经滚过去的内容"再显示出来。
+    # 关掉（enabled=False）= 完全不建 run、不写帧，行为逐字节回到改动前。
+    "run_stream": {
+        "enabled": True,
+        "max_frames": 2000,          # 单 run 帧数上限；超限置 truncated=1 并停止记帧（防止异常流撑爆表）
+        "flush_frames": 40,          # 攒够多少帧批量写一次（逐帧写会打满 SQLite 单写者）
+        "flush_interval_s": 0.4,     # 或者距上次写超过该秒数就落一次（保证重连能追上进度）
+        "coalesce_tokens": True,     # 连续 token/reasoning 合并成一帧（关 = 一帧一字，帧数暴涨）
+        "tail_poll_s": 0.4,          # 订阅端等待新帧的轮询间隔（P2 换成推送总线后可置 0）
+        "tail_max_s": 60,            # 订阅端最长 tail 时长（超时后结束本次订阅，客户端可再次续传）
+    },
     "agent_assignment": {
         # ── 编排分派打分（2026-10-13，B1-7）────────────────────────────────
         # 定位：**择优与留痕，不是决策者**。planner LLM 已产出每个子任务的 agent，
@@ -1343,6 +1410,10 @@ DEFAULT_CONFIG = {
         # 既不会误杀正在长思考的批次（一次 LLM 调用超时上限 180 s + 重试，远小于此）。
         "orphan_ttl_s": 1800,
         "reap_on_startup": True,     # 启动时执行回收；排障期可置 False 临时关闭
+        # ★ 2026-11-19 P0-D：孤儿回收是否参考「批次心跳」
+        #   true（默认）= 批次心跳未超时就不判孤儿（修 93/105 条"假失败"）；
+        #   false = 逐字节回到改动前（只看 agent_tasks.updated_at）。
+        "orphan_respect_run_heartbeat": True,
         "reap_dry_run": False,       # True = 只报告不改写（上线灰度/排障用）
         # ── 2026-10-30：运行时稳定性四键 ──
         # 为什么这四个必须有默认值（不只是"补齐更规范"）：
@@ -1392,6 +1463,15 @@ DEFAULT_CONFIG = {
     #   ② 崩溃若是系统性的（如 provider 配额耗尽），自动重投会把剩余配额打得更干净。
     # 因此默认策略是「给入口，等人点」：`auto_resume_on_startup` 保持 False。
     # 真要打开，也必须同时把 `resume_include_failed` 保持 False（跳过已 failed 任务）。
+    # ★ B3-3（2026-11-18）：agent 组进 DEFAULT_CONFIG —— 此前该组只有 SCHEMA，
+    #   schema 的 default 字段不并入运行时配置（实测：干净部署 agent 整组 MISSING），
+    #   调用方 fallback 是空串 ⇒ 派生 off。默认值必须写在这里才真正生效。
+    "agent": {
+        "harness_mode": "enforce",   # 三态：off | shadow | enforce（安全侧默认；生产已以 override=enforce 实跑一天）
+        "harness_enabled": True,     # 旧开关（harness_mode 优先；True=enforce 推导兼容）
+        "harness_max_blocks": 8,     # 连续阻断上限（0=不阻断）
+        "harness_max_stall": 2,      # 无进展提前放行阈值
+    },
     "orchestration": {
         "resume_stale_s": 1800,          # 心跳超过该秒数才算"失活"（编排单任务实测上限 1155 s，取 1.5 倍）
         "resume_max_attempts": 5,        # 单批次最多恢复几次，超过不再自愈（防"恢复→再崩"死循环）
@@ -1423,6 +1503,9 @@ DEFAULT_CONFIG = {
         #   注意它与"可续跑"是两件事：超龄批次仍可在界面上人工点「继续编排」。
         "auto_resume_max_age_s": 259200,   # 3 天
         "checkpoint_enabled": True,      # 旁路开关：检查点写入失败永不阻断编排
+        # ★ 2026-11-18（G08 根因闭合）：编排评审评分/建议沉淀为 report 产物。
+        #   关掉 = 回到改动前归档行为（评审结果只留 messages.card_data）。
+        "archive_review_report": True,
     },
     # ── P0-C（2026-10-04）：异步作业队列（长任务提交即返回 job_id）──
     # 队列语义与取舍见 core/job_queue.py 顶部；此处只列运行参数。
@@ -1970,6 +2053,8 @@ CONFIG_SCHEMA = {
         "deepseek_api_key": {"type": "secret", "desc": "DeepSeek API key（无 key 时注入预置 provider）"},
         "qwen_api_key":     {"type": "secret", "desc": "Qwen API key"},
         "context_window_guard": {"type": "str", "desc": "context_window 守卫：clamp(默认，超窗截断+留痕)/warn(只告警不截断，用于放开「假天花板」)/off(不介入)"},
+        "output_ratio_cap": {"type": "float", "desc": "输出上限占上下文窗口的比例上限（默认 0=不启用）。max_tokens 是「一次响应的输出 token 数」，与上下文窗口量纲不同——原校验拿两者比大小，导致 112000/128000 被放行并触发上游 400。设 0 关闭（默认）；0<x<1 时启用"},
+        "max_output_tokens": {"type": "int", "desc": "输出硬上限（token，默认 0=不启用）。优先级：model_params.max_output_tokens（provider 级）> 本键（全局）。实测 deepseek 官方接受 112000，而内部网关拒绝 ⇒ 不设全局默认值，谁被拒只给谁配。钳制会打 WARNING 留痕"},
         "stream_include_usage": {"type": "bool", "desc": "流式请求显式带 stream_options.include_usage（默认关；DeepSeek 流式默认就发 usage 帧，仅部分兼容端点需要打开）"},
         "retry_times":          {"type": "int", "desc": "真实调用失败重试次数（指数退避；流式恒不重试）"},
         "retry_backoff_ms":     {"type": "int", "desc": "首次重试退避毫秒（第 n 次 = 该值 × 2^n）"},
@@ -2099,7 +2184,7 @@ CONFIG_SCHEMA = {
         "todo_enabled": {"type": "bool", "default": False, "desc": "★ 计划外化总开关（默认关）：开启后模型可调 todo_write 建待办清单，完成判定改为『所有待办已通过验收』；关闭则无待办、走原有评估器路径（逐字节兼容）"},
         "todo_require_verify": {"type": "bool", "default": True, "desc": "★ 待办置 completed 是否强制要有验收回执（默认开，2026-10-28）：依据官方『Only mark as passing after careful testing』；关闭则允许无回执置完成（削弱约束力，仅供排障）"},
         "harness_enabled": {"type": "bool", "default": False, "desc": "★ harness 级强制闸总开关（默认关）：对齐官方 Stop hook —— 存在未完成待办且验收未过时**不允许结束本轮**，把失败输出回灌让 AI 继续；关闭则只做判定不强制。⚠️ 2026-11-09 起建议改用 harness_mode（三态）；两者并存时 harness_mode 优先"},
-        "harness_mode": {"type": "str", "default": "", "desc": "★ harness 闸三态（2026-11-09，优先于 harness_enabled）：off=不介入 ｜ shadow=**只判定、不执行任何工具**，把『若开闸会怎样』写 harness_decisions 供观察 ｜ enforce=真执行只读验收并拦住收尾。空字符串=按旧 harness_enabled 推导（true→enforce/false→off）。★ 为什么必须 shadow 能零执行：旧实现 shadow 语义下仍会 _exec_tool_call，而 verify 里混着写类与 ask_user ⇒ 观察期本身会重复写库/主动弹问（conv 990463 已发生『未知工具: JSON』空转）"},
+        "harness_mode": {"type": "str", "default": "enforce", "desc": "★ harness 闸三态（2026-11-09，优先于 harness_enabled；★ 2026-11-18 B3-3 默认改安全侧 enforce——生产已以 override=enforce 实跑一天未打坏主链路，把隐藏依赖变成代码默认：off=不介入 ｜ shadow=**只判定、不执行任何工具**，把『若开闸会怎样』写 harness_decisions 供观察 ｜ enforce=真执行只读验收并拦住收尾。空字符串=按旧 harness_enabled 推导（true→enforce/false→off）。★ 为什么必须 shadow 能零执行：旧实现 shadow 语义下仍会 _exec_tool_call，而 verify 里混着写类与 ask_user ⇒ 观察期本身会重复写库/主动弹问（conv 990463 已发生『未知工具: JSON』空转）"},
         "harness_max_blocks": {"type": "int", "default": 8, "desc": "★ harness 强制闸连续阻断上限（默认 8，对齐官方）：达到上限后强制放行并如实说明『未完成，卡在 X』——上限是必需的（FM-1.5 该停不停 12.4% > 过早终止 6.20%，双向都要管）；0=不阻断"},
         # ── 团队内定向的能力继承（2026-10-29，conv 9754 实测）──
         # 事实：主 Agent「智源对接agent」绑 71 个智源 MCP 工具；团队路由按意图把请求
@@ -2211,6 +2296,17 @@ CONFIG_SCHEMA = {
         "budget_retrieval_ratio":  {"type": "float", "desc": "检索区占窗口比例（>0 覆盖绝对值键；0=关闭占比制；默认 0.15）"},
         "budget_history_ratio":    {"type": "float", "desc": "历史区占窗口比例（>0 覆盖绝对值键；0=关闭占比制；默认 0.35）"},
         "artifact_digest_enabled": {"type": "bool", "desc": "会话产物摘要注入开关（多轮：让后续轮次知道本会话已产出什么）"},
+        "subtask_parent_msgs_enabled": {"type": "bool",
+            "desc": "编排子任务是否注入父会话用户原文（默认 true）。子任务看不到会话历史，"
+                    "关掉后子任务只能靠产物摘要推断用户需求——实测会导致「原始提示词未取回」这类误判"},
+        "subtask_parent_msgs_count": {"type": "int",
+            "desc": "注入最近 N 条用户消息原文（默认 3；不含本轮输入）"},
+        "subtask_parent_msgs_max_chars": {"type": "int",
+            "desc": "父会话用户原文段的总字符预算（默认 6000；<=0 即不注入）"},
+        "slot_entity_short_max_chars": {"type": "int",
+            "desc": "判定「短输入」的字数阈值（默认 20）。短输入时上一轮实体视为噪音。<=0 关闭本机制（回到恒用上限 5）"},
+        "slot_entity_cap_short": {"type": "int",
+            "desc": "短输入时拼接的 slots（槽位）实体上限（默认 2；长输入恒为 5）"},
         "artifact_digest_max_chars": {"type": "int", "desc": "会话产物摘要字符上限（<=0 不限）"},
         "artifact_digest_versions": {"type": "int", "desc": "摘要中列出的最近 SysML 模型版本数"},
         "artifact_digest_skip_placeholder_only": {"type": "bool", "desc": "摘要过滤掉标题为系统兜底名的产物行（P1-7）"},
@@ -2335,6 +2431,15 @@ CONFIG_SCHEMA = {
         "enabled": {"type": "bool", "desc": "编排 SSE 关键事件落库总开关（关=不落任何事件，转发不受影响）"},
         "types": {"type": "str", "desc": "落哪几类事件（逗号分隔）。★ 刻意不含 token/reasoning：两者是逐字增量，一次真实建模可达数百帧，全量落库会撑爆表"},
         "max_per_run": {"type": "int", "desc": "单次编排（conversation_id+run_id）事件数上限，超出丢弃最旧的"},
+    },
+    "run_stream": {
+        "enabled":          {"type": "bool",  "desc": "帧日志总开关：一轮生成把每帧（含合帧后的 token/reasoning）按序号落库，用于断线重连重放。关=不建 run、不写帧，行为回到改动前"},
+        "max_frames":       {"type": "int",   "desc": "单 run 帧数上限（默认 2000）：超限置 truncated=1 并停止记帧，防异常流撑爆表"},
+        "flush_frames":     {"type": "int",   "desc": "批量写帧的帧数阈值（默认 40）：逐帧写会打满 SQLite 单写者"},
+        "flush_interval_s": {"type": "float", "desc": "批量写帧的时间阈值（秒，默认 0.4）：保证重连端能追上当前进度"},
+        "coalesce_tokens":  {"type": "bool",  "desc": "连续 token/reasoning 合帧（默认开）：关掉会让帧数按字增长"},
+        "tail_poll_s":      {"type": "float", "desc": "订阅端等待新帧的轮询间隔（秒，默认 0.4）"},
+        "tail_max_s":       {"type": "float", "desc": "订阅端单次最长 tail 时长（秒，默认 60）；超时结束订阅，客户端可凭游标再次续传"},
     },
     "kb_scope": {
         "docs_missing_fallback": {"type": "bool", "desc": "白名单文档不存在时剔除失效项；全失效则退化为不限文档"},
@@ -2587,6 +2692,9 @@ CONFIG_SCHEMA = {
         "orphan_ttl_s":           {"type": "int",   "desc": "非终态任务超过该秒数无进展 ⇒ 判孤儿（既有键，一并登记以便界面可调）"},
         "reap_on_startup":        {"type": "bool",  "desc": "启动时回收孤儿编排任务（既有键）"},
         "reap_dry_run":           {"type": "bool",  "desc": "孤儿回收只报告不改写（既有键，灰度/排障用）"},
+        "orphan_respect_run_heartbeat": {"type": "bool",
+            "desc": "孤儿回收是否参考批次心跳（默认 true）。true=批次心跳未超时就不判孤儿"
+                    "（修 93/105 条「健康跑着的批次被看门狗判死」）；false=只看任务自身 updated_at"},
         "tool_idempotency_enabled": {"type": "bool", "desc": "写类工具幂等闸总开关：同一子任务的重试/续跑不会重复执行已成功的写（关 = 回到改动前行为）"},
         "tool_idempotency_scope":  {"type": "str",   "desc": "幂等作用域：subtask=仅编排子任务（默认，有重试语义处）/ off=全关"},
         "tool_idempotency_ttl_s":  {"type": "int",   "desc": "幂等记录保留时长（秒，默认 86400=24h）"},
@@ -2622,6 +2730,7 @@ CONFIG_SCHEMA = {
         "resume_interrupted":         {"type": "bool", "desc": "放行 interrupted（进程死亡类）自动续跑；需写类工具幂等开启，关掉即退回改动前行为"},
         "auto_resume_max_age_s":      {"type": "int",  "desc": "自动重投年龄闸：批次失活超过该秒数不再自动投（转人工），0=不限"},
         "checkpoint_enabled":         {"type": "bool", "desc": "检查点写入开关（失败永不阻断编排）"},
+        "archive_review_report":      {"type": "bool", "desc": "编排 reflection 的评分/建议沉淀为 report 产物（G08 根因闭合；关=回到改动前）"},
     },
     "replanning": {
         "enabled":             {"type": "bool", "desc": "重规划总闸（差量重画/LLM 重画；默认关=零行为变更，T1 补跑不受此闸约束——由 retry_once 单独控制）"},        "retry_once":          {"type": "bool", "desc": "T1 补跑：可重试类失败（timeout/transient/internal，排除 interrupted）同 key 自动补跑一次"},
@@ -2808,8 +2917,17 @@ _EXTRA_SCHEMA = {
         "exempt_paths":            {"type": "list", "desc": "限流豁免路径前缀（健康检查/监控/静态资源等）"},
     },
     "web_search": {
+        "allow_hosts":     {"type": "str",  "desc": "web_fetch 域名白名单（逗号分隔，空=不限；支持 *.example.com）"},
+        "deny_private":    {"type": "bool", "desc": "web_fetch 拒绝环回/私网/保留地址（防 SSRF，默认开）"},
         "provider":                {"type": "str",  "desc": "联网搜索提供方（空=不启用）"},
         "api_key":                 {"type": "secret", "desc": "搜索服务密钥（脱敏显示；提交掩码值不会覆盖真值）"},
+    },
+    "file_tools": {
+        "deny_roots":  {"type": "str", "desc": "写入/删除默认禁止的目录（';' 分隔，默认含系统目录）"},
+        "allow_roots": {"type": "str", "desc": "写入/删除白名单根（';' 分隔，空=不按白名单限制）"},
+    },
+    "hil": {
+        "block_destructive_self_approval": {"type": "bool", "desc": "不可逆动作禁止发起人自批（四眼原则，默认开）"},
     },
     # ★ 2026-11-09：与 DEFAULT_CONFIG.request_invariant 同源登记，缺这一段 ⇒
     #   save_override / 影子层 / 界面都改不了三态开关（实测三处均拒绝）。

@@ -1,10 +1,10 @@
 {
  "version": 1,
- "generated_at": "2026-11-12",
+ "generated_at": "2026-11-18 08:46:36",
  "doc": "门禁清单唯一真源。由 tools/gate_runner.py 执行、tools/verify/verify_gate_manifest.py 守卫。分层依据：工具 2026-11-04 的双环境实测（真库 + 干净库）。",
  "budget": {
-  "broken": 38,
-  "backlog": 68,
+  "broken": 37,
+  "backlog": 65,
   "tolerated_steps": 39
  },
  "tiers": {
@@ -15,6 +15,66 @@
   "backlog": "从未接线的存量门禁，待评估；数量不得超过 budget"
  },
  "gates": [
+  {
+   "script": "e2e_platform_scope_no_drift.py",
+   "tier": "local",
+   "timeout": 900,
+   "reason": "2026-11-20 新增：真实 LLM 验收「只读建模请求不得越界查平台坐标/写入」（修前 28 次平台工具调用 1208s → 修后 0 次 477s）。需运行中 8000 服务 + 真库 + LLM，约 8 分钟"
+  },
+  {
+   "script": "e2e_skill_clarify_ab.py",
+   "tier": "local",
+   "timeout": 600,
+   "reason": "2026-11-20 新增：A/B 真实 LLM 会话评测「视图生成内容澄清」在含糊输入下的效果（J1命中/J2版式锚点/J3澄清优先/J4因果）。需运行中 8000 服务 + 真库 + LLM，CI 无此运行时"
+  },
+  {
+   "script": "verify_proc_badges_browser.js",
+   "tier": "local",
+   "timeout": 180,
+   "reason": "2026-11-20 新增：真实浏览器验证执行环节徽章（Agent/技能）渲染在 proc-head 内、样式生效、参与方汇总齐全。需本机 Chrome/Edge + 运行中服务"
+  },
+  {
+   "script": "verify_proc_attribution.py",
+   "tier": "local",
+   "timeout": 120,
+   "reason": "2026-11-20 新增：执行环节必须标出 Agent/技能/工具（后端字段接线 + 实时/历史两套渲染 + node 实跑徽章 + 变异自证）；静态判据为主，暂不进 CI"
+  },
+  {
+   "script": "verify_todo_batch_update.py",
+   "tier": "local",
+   "timeout": 120,
+   "reason": "2026-11-20 新增：todo_write 支持 ids 批量结项（降纯记账开销），自建临时库跑真实 handler + 变异自证；暂不进 CI"
+  },
+  {
+   "script": "verify_prose_confirm_card.py",
+   "tier": "local",
+   "timeout": 120,
+   "reason": "2026-11-20 新增：正文祈使式确认自动成卡（含陈述式误触发防护 + 变异自证）；暂不进 CI"
+  },
+  {
+   "script": "verify_orch_clarify_card.py",
+   "tier": "local",
+   "timeout": 120,
+   "reason": "2026-11-20 新增：编排子任务 ask_user 信号冒泡成唯一澄清卡 + needs_user 不可重试；纯函数+静态源码判据，热路径改动期不进 CI"
+  },
+  {
+   "script": "verify_usage_stats_persist.py",
+   "tier": "local",
+   "timeout": 120,
+   "reason": "2026-11-20 新增：usage/耗时/工具数随消息落库且速览自动显示；纯函数+静态源码判据，暂不进 CI"
+  },
+  {
+   "script": "verify_final_artifact_only.py",
+   "tier": "local",
+   "timeout": 120,
+   "reason": "2026-11-20 新增：编排正文只留最终 SysML、中间产物留过程区；纯函数+静态源码判据含变异自证，暂不进 CI"
+  },
+  {
+   "script": "verify_tool_probe_budget.py",
+   "tier": "local",
+   "timeout": 120,
+   "reason": "2026-11-20 新增：定位类工具试探次数上限 + 校验停滞短路；纯函数+静态源码判据含变异自证，暂不进 CI"
+  },
   {
    "script": "audit_dup_defs.py",
    "tier": "pr",
@@ -451,6 +511,12 @@
    "timeout": 120
   },
   {
+   "script": "verify_circuit_stream_settlement.py",
+   "tier": "pr",
+   "timeout": 60,
+   "reason": "流式熔断探针结算：必须占/拒/归还闭环（4 项代码级 + 7 项真实状态机），纯内存零服务依赖，实测 0.3s；已同步进 ci.yml"
+  },
+  {
    "script": "verify_citation_alignment.py",
    "tier": "pr",
    "timeout": 120
@@ -552,9 +618,9 @@
   },
   {
    "script": "verify_content_budget.py",
-   "tier": "backlog",
-   "timeout": 180,
-   "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+   "tier": "local",
+   "timeout": 300,
+   "reason": "真实知识库检索链路 + 向量索引，验「单条上限/注入总预算」两条判据与可关闭开关。需真实索引与真库文档 ⇒ 干净库无命中，归 local。实测 10s。★2026-11-17 由 backlog 提升为常驻"
   },
   {
    "script": "verify_context_audit.py",
@@ -784,10 +850,28 @@
    "reason": "真库绿但慢（26s > 15s）"
   },
   {
+   "script": "verify_expected_output_backstop.py",
+   "tier": "local",
+   "timeout": 120,
+   "reason": "expected_output（完成标准）落库兜底：prompt 口径一致 + create_plan 唯一收口兜底 + config 判空防误覆盖。★ 归 local：C 组读真库 11 月失败率口径（空20% vs 非空6.1%，干净库无数据必红）。实测 0.4s"
+  },
+  {
+   "script": "verify_explicit_required_guard.py",
+   "tier": "local",
+   "timeout": 120,
+   "reason": "用户点名交付物不得被 early_stop 取消（G08 事故）：纯函数 6 项 + 联动 3 项 + 真库根因 2 项，实测 0.4s；C 组读真库 ⇒ local"
+  },
+  {
    "script": "verify_fact_inference.py",
    "tier": "broken",
    "timeout": 240,
    "reason": "两库都红 [FAIL] [FAIL] F1 记录到改动前基线（evidence 本就全空，basis 无从谈起）  真库已有 473 条带 basis ⇒ 基线描述需更新"
+  },
+  {
+   "script": "verify_failed_batch_resume.py",
+   "tier": "local",
+   "timeout": 120,
+   "reason": "failed 批次「为什么不能重投」：默认路径逐字节不变 + 显式 include_failed 的三类结局 + 真库 44 条现场复算。★ 归 local：C 组读生产真库的 orch_checkpoints/agent_tasks 存量（干净库无数据 ⇒ C1 必红）。实测 0.9s"
   },
   {
    "script": "verify_failed_round_budget.py",
@@ -883,6 +967,12 @@
    "timeout": 120
   },
   {
+   "script": "verify_golden_live_limitations.py",
+   "tier": "local",
+   "timeout": 120,
+   "reason": "live 报告不得套 offline 限制说明（id=34 曾误写『offline_replay 不调用 LLM』）；纯函数 6 项 + 真库 2 项，实测 0.4s。B 组读生产 eval_reports ⇒ local"
+  },
+  {
    "script": "verify_graph_breaker.py",
    "tier": "local",
    "timeout": 240,
@@ -908,6 +998,12 @@
    "script": "verify_harness_gate_p02.py",
    "tier": "pr",
    "timeout": 120
+  },
+  {
+   "script": "verify_harness_real_effect.py",
+   "tier": "local",
+   "timeout": 120,
+   "reason": "harness 闸「真的会拦」：enforce/shadow 真机 A/B（唯一变量=mode）+ conv=0 不再假绿 + 真库台账证据。★ 归 local 而非 pr：A1 断言生产配置 harness_mode='enforce'，干净库/env 下取默认值会翻红 —— 它是「落地验收」而不是「代码回归」。实测 1.0s"
   },
   {
    "script": "verify_harness_verify_safety.py",
@@ -1134,6 +1230,12 @@
    "tier": "broken",
    "timeout": 240,
    "reason": "两库都红 [FAIL] [FAIL] D4 ★真库 'design' 使用证据非零（agent_tasks 按 name join 生效）  ← got=(13, 0)"
+  },
+  {
+   "script": "verify_live_eval_resilience.py",
+   "tier": "local",
+   "timeout": 120,
+   "reason": "live 跑批抗 429：Retry-After 退避复用会话 + 单例异常隔离 + partial 增量落盘。实现是纯内存夹具（0.5s），但脚本名含 live_ 触发清单 G8 的「pr 层不得依赖服务」启发式，且 pr 层还须同步改 ci.yml（G6a）⇒ 登记 local，避免为一条快门禁改 CI 面"
   },
   {
    "script": "verify_llm_circuit_breaker.py",
@@ -1457,6 +1559,12 @@
    "reason": "非流式编排暂存写请求必须批量入队（11 断言）。补的是静默丢弃缺陷：planner 补齐 _orch_subtask 后写工具会暂存到 subtask_artifacts，但 batch_queue_confirmations 此前只在流式路径调用 ⇒ 平台写入既不执行也不建确认单。需真库写入并精确清理 ⇒ local。2026-11-14 新增"
   },
   {
+   "script": "verify_orch_enforce_run.py",
+   "tier": "local",
+   "timeout": 120,
+   "reason": "编排主路径收口真执行只读验收：enforce/shadow 三态 + 白名单护栏 + 台账分母，16 项内存夹具实测 0.5s；属编排链路专项，登记 local"
+  },
+  {
    "script": "verify_orch_failure_class.py",
    "tier": "local",
    "timeout": 120,
@@ -1471,6 +1579,12 @@
    "script": "verify_orch_planning.py",
    "tier": "pr",
    "timeout": 120
+  },
+  {
+   "script": "verify_orch_rate_not_applicable.py",
+   "tier": "local",
+   "timeout": 120,
+   "reason": "编排完成率判据口径：无子任务=不适用（不伪造 rate=0）+ 链标注错配可见。纯内存 9 项实测 0.4s；C 组回放 tmp 报告 ⇒ local"
   },
   {
    "script": "verify_orch_reliability.py",
@@ -1497,6 +1611,12 @@
    "script": "verify_orch_supervisor.py",
    "tier": "pr",
    "timeout": 120
+  },
+  {
+   "script": "verify_orch_todo_notice.py",
+   "tier": "local",
+   "timeout": 120,
+   "reason": "编排收口「待办验收如实告知」：run 维度统计 + 零执行 + 台账 orch_notice 行。★ 归 local：C 组读生产真库的 run 990231 存量（干净库无数据必红）。实测 1.1s"
   },
   {
    "script": "verify_orch_ui_residual.py",
@@ -1697,9 +1817,9 @@
   },
   {
    "script": "verify_progress_guard.py",
-   "tier": "backlog",
+   "tier": "local",
    "timeout": 180,
-   "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+   "reason": "读生产真库的检索次数分布做事故回放（conv 86 次检索 → 23 次停，省 73%），并在真库 8~14 次会话上验「不误杀」。干净库上无历史会话 ⇒ B 组会成空断言，故归 local 而非 pr。实测 1.5s。★2026-11-17 由 backlog 提升为常驻"
   },
   {
    "script": "verify_projects_nav.py",
@@ -1987,7 +2107,7 @@
    "script": "verify_s4_prompt.py",
    "tier": "broken",
    "timeout": 240,
-   "reason": "两库都红 [FAIL] FAIL  common.py 定义 _AGENT_ROLE_CAP = 1200"
+   "reason": "角色块上限与注入口径门禁（32 项）。2026-11-18 修复两处过期断言：_AGENT_ROLE_CAP 已从 common 单一真源读取（现 8000，2026-10-27 统一），execute.py 已与流式统一传 role_cap；干净环境代码断言 30/30，但 [4] 组需真库 prompts 表只读复核，干净 checkout 必红 ⇒ 保留 broken 记账，不进 CI。"
   },
   {
    "script": "verify_s4_toolname.py",
@@ -2081,6 +2201,12 @@
    "reason": "真跑 7 个技能包脚本（含智源 MCP 手册 lookup，71 工具）。依赖 static/skill_packages 实体文件 + 真库 skills 行"
   },
   {
+   "script": "verify_skill_state_actions.py",
+   "tier": "local",
+   "timeout": 120,
+   "reason": "2026-11-20 新增：技能状态与操作项闭环（草稿≠已停用、归属落真实用户、consumable 单一判据、前端动作不跨主键空间）。R 组需真库副本 sqlite3.backup，M 组变异需写源码，干净克隆无 mbse.db ⇒ local"
+  },
+  {
    "script": "verify_skill_tool_names.py",
    "tier": "local",
    "timeout": 120,
@@ -2107,6 +2233,12 @@
    "script": "verify_stage_pipeline_agents.py",
    "tier": "pr",
    "timeout": 120
+  },
+  {
+   "script": "verify_stale_todo_cleanup.py",
+   "tier": "local",
+   "timeout": 120,
+   "reason": "陈旧待办清理：软删除/备份/回退/单一口径 16 项内存断言 + 真库 2 项（陈旧归零+deleted 留痕）。C 组读生产 agent_todos ⇒ local"
   },
   {
    "script": "verify_statemachine.py",
@@ -2237,9 +2369,9 @@
   },
   {
    "script": "verify_token_budget.py",
-   "tier": "broken",
+   "tier": "pr",
    "timeout": 240,
-   "reason": "两库都红 [FAIL] ~~~~^^^^^^^^^^^ | File \"<string>\", line 73, in <module> | NameError: name '_pg_stop_now' is not defined"
+   "reason": "S3 运行时 token 预算回归（39 项）：常量单一真源（CAP=8000）、回填封顶、只留最近一轮 tool、context_window 守卫。2026-11-18 修复夹具漂移（生产新增 _pg_stop_now 未喂进 exec 命名空间）并把断言改为从 common 读取，不再写死过期字面量；干净环境实测 39/39，零 DB/零 LLM/零网络，故从 broken 升 pr 并接线 CI。"
   },
   {
    "script": "verify_tool_arg_hint.py",
@@ -2432,6 +2564,53 @@
    "timeout": 180
   },
   {
+   "script": "verify_view_intent_extraction.py",
+   "tier": "pr",
+   "timeout": 180
+  },
+  {
+   "script": "verify_memory_eval_reanchor.py",
+   "tier": "pr",
+   "timeout": 300
+  },
+  {
+   "script": "verify_sysml_classify.py",
+   "tier": "pr",
+   "timeout": 300
+  },
+  {
+   "script": "verify_chunk_count_coherence.py",
+   "tier": "pr",
+   "timeout": 120
+  },
+  {
+   "script": "verify_orphan_chunks.py",
+   "tier": "pr",
+   "timeout": 120
+  },
+  {
+   "script": "verify_prompt_block_vocab_guard.py",
+   "tier": "pr",
+   "timeout": 120
+  },
+  {
+   "script": "verify_memory_evidence_chain.py",
+   "tier": "pr",
+   "timeout": 300
+  },
+  {
+   "script": "verify_memory_embed_freshness.py",
+   "tier": "local",
+   "timeout": 300,
+   "reason": "需真实 embedding 服务（192.168.100.202:8004）+ 真库：断言库内记忆向量与当前模型同源（自洽余弦>=0.9）。服务不可用时整组 SKIP（测不了不等于没问题）。2026-11-16 新增：该判据抓到的『换模型后旧向量没重算』使记忆评测命中率 27.3%->63.6%"
+  },
+  {
+   "script": "verify_chunk_embed_freshness.py",
+   "tier": "local",
+   "timeout": 300,
+   "reason": "需真实 embedding 服务 + 真库：断言 document_chunks 向量与当前模型同源（按 chunking.py 的 doc_title+section+content 口径重建 embed_text，比率判据 >=85% 达标）。服务不可用时整组 SKIP。2026-11-16 新增：与 verify_memory_embed_freshness 同批，防『换模型旧向量没重算』在文档侧重演（记忆侧该缺陷使召回 27.3%->63.6%）"
+  },
+  {
    "script": "verify_ontology_export_formats.py",
    "tier": "nightly",
    "timeout": 180,
@@ -2514,6 +2693,108 @@
    "tier": "local",
    "timeout": 180,
    "reason": "跨语言检索门禁：守「中文问英文规范」这条路。该能力此前是隐式的（靠 embedding 自带多语对齐 + retrieval_relevance 的相关度修正），两者都没有门禁，任何改动都可能悄悄弄坏，而症状是「库里明明有、AI 说没有」，最难归因。T1~T5 术语扩展方向性与边界（纯英文不扩 / 无关中文不扩 / min_terms / 长词覆盖短词）；F1~F5 RRF 融合（两路共同项排第一 / 无重复 / cap / 不改入参 / 缺 id 兜底）；S1~S7 源码接线（配置真被消费防死配置）+ 词表完整性；R1 真机：纯中文查询能召回 doc 798 KerML（需 DB+embedding，不可用则 SKIP）；M1~M4 变异自证。零写库、不调 LLM。2026-11-16 新增"
+  },
+  {
+   "script": "verify_review_report_archive.py",
+   "tier": "local",
+   "timeout": 120,
+   "reason": "编排评审评分/建议沉淀为 report 产物门禁（G08 根因闭合，2026-11-18）。根因：live G08 conv 999999203 的 t2「打分评估+优化建议」done、reflection.score=90、advice 非空，但 _archive_artifacts 的 is_report 只看 intent/sections/report ⇒ report 产物 0 ⇒ artifact_kind_present(report) 不可达；全库 85 条带 reflection 的 assistant 消息全部零 report 产物，属系统性缺口而非单例。修法：纯函数 review_report_signal 识别「编排+实质评分/建议」，受 config orchestration.archive_review_report 闸控制，关掉逐字节回退。纯函数 8 + 接线 5 + 真库 3 + 变异自证 2，实测 18/18，0.4s。归 local：C 组读生产真库 conv 999999203（干净库无该会话必红）。"
+  },
+  {
+   "script": "verify_trace_coverage.py",
+   "tier": "local",
+   "timeout": 120,
+   "reason": "B1 跨层 trace 覆盖门禁（2026-11-18）：T1 七表(audit_logs/graph_edit_logs/knowledge_commits/harness_decisions/orch_run_spans/query_trace/hil_confirmations)补 trace_id 列+索引；T2 已接线四表写入能力就绪；T3 audit_logs 哈希链仍 ok（trace 刻意不进哈希，避免存量 7001 行验不过）；T4 llm/tool trace 同源（共享 426 个）；M1/M2 变异自证。只读真库、零 LLM、不制造流量，非空率只作提示。15/15。"
+  },
+  {
+   "script": "verify_b2_permission_gate.py",
+   "tier": "local",
+   "timeout": 120,
+   "reason": "B2 权限门门禁（2026-11-18）：S1-S3 SPARQL 五端点挂 require_permission(kb_ontology view/edit)，匿名 401 与 enforce_login 无关；S4 五个早退内建工具在统一出口补授权门+回退开关；S5 SPARQL 白名单仍生效；S6 web_fetch 私网/环回/元数据拒绝+域名白名单（纯函数）；M1-M2 变异自证。只读源码、零 LLM、19/19。"
+  },
+  {
+   "script": "verify_harness_default_safe.py",
+   "tier": "pr",
+   "timeout": 60,
+   "reason": "B3 harness 默认安全侧门禁（2026-11-18）：H1 干净部署（屏蔽 override）默认 harness_mode=enforce（agent 组进 DEFAULT_CONFIG——此前 schema default 不并入运行时配置，干净部署整组 MISSING）；H2 manual 验收措辞诚实化（待人工核验，不再视为已确认）且全部返回块带 deferred；H3/H4 强制放行告知与无进展检测在位；M1/M2 变异自证。零 DB/零 LLM、10/10，故进 pr 层。"
+  },
+  {
+   "script": "verify_b2_file_hil.py",
+   "tier": "local",
+   "timeout": 300,
+   "reason": "B2-4/B2-5 门禁（2026-11-18）：F 组受控工作区根约束（系统目录默认拒写、allow_roots 白名单、'..' 穿越被 realpath 解掉、exec 入口真拦、读不受限）；H 组 HIL deny 档（LEVELS 最严档、策略表能裁决出 deny、escalate 不放宽、deny 分支先于入队分支）；S 组 destructive 自批闸（真库副本造单：本人批自己被拦且仍 pending、他人批放行、可逆写本人批不拦）；M1/M2 变异自证。24 项，零写生产（副本跑完即删）。归 local：S 组需真库建副本，干净 checkout 无 mbse.db 必红。"
+  },
+  {
+   "script": "find_undefined_names.py",
+   "tier": "local",
+   "timeout": 120,
+   "reason": "2026-11-20 补登记：历史漏入清单，当前按 local 手工跑；是否晋 pr 需先确认无外部依赖并同步 ci.yml（G6a）"
+  },
+  {
+   "script": "verify_attempt_trace.py",
+   "tier": "local",
+   "timeout": 120,
+   "reason": "2026-11-20 补登记：历史漏入清单，当前按 local 手工跑；是否晋 pr 需先确认无外部依赖并同步 ci.yml（G6a）"
+  },
+  {
+   "script": "verify_finalize_key_unique.py",
+   "tier": "local",
+   "timeout": 120,
+   "reason": "2026-11-20 补登记：历史漏入清单，当前按 local 手工跑；是否晋 pr 需先确认无外部依赖并同步 ci.yml（G6a）"
+  },
+  {
+   "script": "verify_p0_fixes_20261119.py",
+   "tier": "local",
+   "timeout": 120,
+   "reason": "2026-11-20 补登记：历史漏入清单，当前按 local 手工跑；是否晋 pr 需先确认无外部依赖并同步 ci.yml（G6a）"
+  },
+  {
+   "script": "verify_p1_p2_hardening.py",
+   "tier": "local",
+   "timeout": 120,
+   "reason": "2026-11-20 补登记：历史漏入清单，当前按 local 手工跑；是否晋 pr 需先确认无外部依赖并同步 ci.yml（G6a）"
+  },
+  {
+   "script": "verify_run_frame_store.py",
+   "tier": "local",
+   "timeout": 120,
+   "reason": "2026-11-20 补登记：历史漏入清单，当前按 local 手工跑；是否晋 pr 需先确认无外部依赖并同步 ci.yml（G6a）"
+  },
+  {
+   "script": "verify_single_source_content.py",
+   "tier": "local",
+   "timeout": 120,
+   "reason": "2026-11-20 补登记：历史漏入清单，当前按 local 手工跑；是否晋 pr 需先确认无外部依赖并同步 ci.yml（G6a）"
+  },
+  {
+   "script": "verify_stream_recovery.py",
+   "tier": "local",
+   "timeout": 120,
+   "reason": "2026-11-20 补登记：历史漏入清单，当前按 local 手工跑；是否晋 pr 需先确认无外部依赖并同步 ci.yml（G6a）"
+  },
+  {
+   "script": "verify_submit_idempotency.py",
+   "tier": "local",
+   "timeout": 120,
+   "reason": "2026-11-20 补登记：历史漏入清单，当前按 local 手工跑；是否晋 pr 需先确认无外部依赖并同步 ci.yml（G6a）"
+  },
+  {
+   "script": "verify_three_issue_fixes.py",
+   "tier": "local",
+   "timeout": 120,
+   "reason": "2026-11-20 补登记：历史漏入清单，当前按 local 手工跑；是否晋 pr 需先确认无外部依赖并同步 ci.yml（G6a）"
+  },
+  {
+   "script": "verify_tool_executor_registry.py",
+   "tier": "local",
+   "timeout": 120,
+   "reason": "2026-11-20 补登记：历史漏入清单，当前按 local 手工跑；是否晋 pr 需先确认无外部依赖并同步 ci.yml（G6a）"
+  },
+  {
+   "script": "verify_unclosed_round3.py",
+   "tier": "local",
+   "timeout": 120,
+   "reason": "2026-11-20 补登记：历史漏入清单，当前按 local 手工跑；是否晋 pr 需先确认无外部依赖并同步 ci.yml（G6a）"
   }
  ]
 }

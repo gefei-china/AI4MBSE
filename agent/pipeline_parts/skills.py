@@ -313,8 +313,17 @@ class SkillMixin:
                 parts.append(f"- 技能「{s.get('name','')}」已触发但**正文按需加载**：{at_body}\n")
                 _used += len(parts[-1])
                 continue
-            snippet = f"【Skill 已触发：{s.get('name','')}{src_tag}】（正文按需加载，摘要如下）\n"
-            if meta:
+            # ★ 2026-11-20：注入文案必须**如实**说明给的是全文还是摘要。
+            #   旧写法无论是否 offload 一律写「正文按需加载，摘要如下」——
+            #   实测后果（A/B 真实链路）：技能正文 587 字，远小于 cap，其实是**全量注入**，
+            #   模型却被告知"这只是摘要"，于是把它当**参考**而不是**指令**：
+            #   技能明明命中（skill 事件里在 names 中），产出却完全不按它的版式走。
+            #   ⇒ 未 offload 时明确写"完整指令，必须遵守"。
+            snippet = (f"【Skill 已触发：{s.get('name','')}{src_tag}】"
+                       + ("（正文较长，已按需加载：需要细节时调 skill_body_fetch 取全文，以下为摘要）"
+                          if _off else "（以下是本技能的**完整指令**，本轮产出必须遵守其格式与步骤）")
+                       + "\n")
+            if meta and meta not in ("{}", "null"):
                 snippet += f"元数据：{meta}\n"
             # ★ 2026-10-09：把**真实的工具轮次预算**告诉模型（单一真源 = 配置）。
             #   为什么必须注入：8 个视图 skill 正文里写着「轮次上限为 3，耗尽即中断」
@@ -341,7 +350,10 @@ class SkillMixin:
                             f"优先换通道（草稿态用 branchId=0 / draft 通道）而非同参数重试。\n")
             except Exception:
                 pass
-            snippet += f"正文摘要：{at_body}"
+            # ★ 2026-11-20（同上一处修复的残留）：标签必须与载体一致。
+            #   此前无条件写「正文摘要：」，即使 at_body 是**全量正文**也标成摘要；
+            #   与上一行的「完整指令，必须遵守」自相矛盾，模型仍会把它降级为参考。
+            snippet += ("正文摘要：" if _off else "正文（全文）：") + at_body
             # D4 渐进披露：仅披露资源清单（文件名/标题），正文按需加载省 token
             res_refs = [str(r) if isinstance(r, str) else str(r.get("title") or r.get("path") or r)
                         for r in (s.get("references") or [])]

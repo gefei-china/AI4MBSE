@@ -66,8 +66,12 @@ __all__ = [
     "load_policies", "evaluate", "escalate", "default_decision",
 ]
 
-#: 四级裁决。顺序即严格程度，**不要重排**（多处按索引比较）。
-LEVELS = ("auto", "notify", "approve", "confirm")
+#: 五级裁决。顺序即严格程度，**不要重排**（多处按索引比较）。
+#: ★ 2026-11-18 追加 "deny"（最严，rank 最高）：
+#:   approve/confirm 都还是「人可能点头」，deny 是「系统直接拒绝、不入队、不给批准入口」——
+#:   用于「无论谁批都不许做」的动作（如删除审计链、导出全量密钥）。
+#:   语义差异必须在消费侧体现：deny 分支**先于** confirm/approve 处理且不创建确认单。
+LEVELS = ("auto", "notify", "approve", "confirm", "deny")
 
 LEVEL_RANK = {name: i for i, name in enumerate(LEVELS)}
 

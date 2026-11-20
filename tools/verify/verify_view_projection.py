@@ -16,10 +16,12 @@
     I2 反向：代码里**没有**结构元素时，**不得**凭空补结构视图（防退化成无条件兜底）
     I3 用户**显式指定**视图时，代码兜底不得覆盖用户诉求
     I4 既有回归不变（impact → None；无代码 → None）
+    I5 ★2026-11-18：正文含 V2 关键词但无声明语句的**提示词**不得被当成代码投影视图
+       （conv 999999904 / msg#7008：让 AI 写提示词，提示词被放代码块后却声称 2 个视图）
 
 **变异自证（强制）**：每组不变式同时对「旧写法 / 错误写法」跑一遍，**必须失败**。
     按工程纪律（skill §6.2）：断言"跑通了"证明不了它有效，能抓住旧写法才算数。
-    本脚本内置 4 组变异，任一变异未被抓住 → 判为 VACUOUS（空转）并 rc=1。
+    本脚本内置 5 组变异，任一变异未被抓住 → 判为 VACUOUS（空转）并 rc=1。
 
 用法（**裸跑自身即完整口径，无需额外参数**）：
     <repo>\\.venv\\Scripts\\python.exe -X utf8 tools/verify/verify_view_projection.py
@@ -112,6 +114,26 @@ package Req {
 }
 ```"""
 
+# ★2026-11-18 msg#7008 真案：AI 让写「提示词」，提示词正文被放无标签代码块。
+#   正文里大量出现 `item def` / `part def` 字样（在教 AI 怎么写代码）→ 命中旧抽取器的
+#   V2 语态兜底 → 被当成代码 → 投影 BDD/IBD 空壳视图。判据：无「行首声明语句」。
+PROMPT_FAKE = """**结论**：提示词已按三方案各出视图重写完毕。
+
+```
+【角色】你是 SysML v2 多方案建模专家。
+【可用素材】
+- 流动项词汇：冷媒流 / 空气流 各类 item def
+- 每方案一个空调基型 part def，多重特化
+【硬约束】构件族严格递减，每方案落在 5~10 族。
+```"""
+
+# 合法最小模型：只有 1 个 part def 声明行 → 闸门必须放行（防误伤小模型）
+MINI_MODEL = """```sysml
+package Mini {
+    part def 单部件;
+}
+```"""
+
 
 def _views(inst, content, intent, ui):
     r = inst._gen_sysml_views(content, intent, ui)
@@ -128,6 +150,8 @@ def _cases(msg):
         ("c3 显式指定视图 → 代码兜底不覆盖", STRUCT, "design", "只看需求图", {"REQ"}),
         ("c4 回归：impact → None", STRUCT, "impact", "影响分析", None),
         ("c5 回归：无代码 → None", "这是一段普通回答。", "design", "", None),
+        ("c6 ★提示词含V2关键词但无声明行 → None（msg#7008）", PROMPT_FAKE, "design", "生成提示词", None),
+        ("c7 合法最小模型1个part def → 仍出视图（防误伤）", MINI_MODEL, "design", "生成结构视图", {"BDD", "IBD", "PKG"}),
     ]
 
 
@@ -156,6 +180,17 @@ def _variants():
                            "            if user_views:\n                view_types = user_views",
                            "            if False:\n                view_types = user_views", "M4"),
          "c3 显式指定视图 → 代码兜底不覆盖"),
+        ("M5 ★两道闸门都去掉（提示词又被投影成视图）",
+         lambda s: _mutate(
+             _mutate(s,
+                     "        if not self._has_sysml_declaration(code):\n            return None",
+                     "        if False:\n            return None", "M5a-入口"),
+                     "                if _vs and not user_views and not any(\n"
+                     "                        (isinstance(v, dict) and (v.get(\"nodes\") or v.get(\"edges\")))\n"
+                     "                        for v in _vs.values()):\n"
+                     "                    return None",
+                     "                if False:\n                    return None", "M5b-出口"),
+         "c6 ★提示词含V2关键词但无声明行 → None（msg#7008）"),
     ]
 
 
@@ -216,6 +251,33 @@ def main():
             _rec(PASS, vtag, "已抓住 %s（变异后 %s ≠ 期望 %s）"
                  % (catch, sorted(got) if got else got,
                     sorted(c[4]) if c[4] else c[4]))
+
+    # ── [3] 分层承重自证 ────────────────────────────────────────────────────
+    # 假视图有两道闸门（入口「有无声明语句」/ 出口「投影是否全空」）。
+    # 只验「两道都拆才失守」是不够的 —— 那可能意味着一道是死代码。
+    # 这里分别拆一道，**另一道必须独立拦住**，否则说明它从未起作用。
+    print("\n[3] 分层承重：分别只拆一道闸门，另一道必须独立拦住（防死代码）")
+    ENTRY_OLD = ("        if not self._has_sysml_declaration(code):\n"
+                 "            return None")
+    EXIT_OLD = ("                if _vs and not user_views and not any(\n"
+                "                        (isinstance(v, dict) and (v.get(\"nodes\") or v.get(\"edges\")))\n"
+                "                        for v in _vs.values()):\n"
+                "                    return None")
+    c6 = by_tag["c6 ★提示词含V2关键词但无声明行 → None（msg#7008）"]
+    for ltag, old, new, keep in (
+            ("S1 只拆入口闸门 → 出口闸门必须独立拦住",
+             ENTRY_OLD, "        if False:\n            return None", "出口"),
+            ("S2 只拆出口闸门 → 入口闸门必须独立拦住",
+             EXIT_OLD, "                if False:\n                    return None", "入口"),
+    ):
+        try:
+            sinst = _load(_mutate(SRC, old, new, ltag), "layer")
+        except Exception as e:                                   # noqa: BLE001
+            _rec(FAIL, ltag, "变异失败：%s" % e)
+            continue
+        got = _views(sinst, c6[1], c6[2], c6[3])
+        _rec(PASS if got == c6[4] else FAIL, ltag,
+             "%s仍在：%s（期望 None）" % (keep, sorted(got) if got else "None"))
 
     return _finish()
 

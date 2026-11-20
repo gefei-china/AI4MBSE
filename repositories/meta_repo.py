@@ -166,7 +166,7 @@ class MetaRepo(BaseRepo):
         )
 
     def delete_document(self, doc_id: int) -> None:
-        """删除文档（含原件副本）。
+        """删除文档（含原件副本 + **全部派生数据**）。
 
         ⚠️ `domain_review_queue.document_id` 是**无外键**的普通列
         （建表见 `database/migrations/glossary.py::_migrate_glossary_tables`），
@@ -181,10 +181,42 @@ class MetaRepo(BaseRepo):
         该目录此前只增不减，实测 34 份副本中 27 份是孤儿（文档已删、副本还在）。
         清理失败**不阻断删除**（用户意图是删文档，不能被残留文件挡住），
         但要留痕 —— 否则下一轮又会有人去追"不存在的偶发"。
+
+        ★★★ 2026-11-17（实测事故，补漏两张表）：本函数此前**只删
+        `domain_review_queue` + `documents`**，漏掉了派生数据：
+
+        | 表 | 后果 |
+        |---|---|
+        | `document_chunks` | 🔴 **孤儿 chunk 会被检索到并注入 prompt**，但用户点引用溯源时 documents 里找不到 ⇒ 给了**无法核实的证据**（比少召回严重得多）。实测存量 2 条（2026-10-30 上传测试残留），已由 `tools/cleanup_orphan_chunks.py` 清理 |
+        | `doc_metadata` | 元数据行悬挂，污染文档列表 join。实测存量 8 条 |
+
+        ⚠️⚠️ 为什么这个漏能长期存在：`tools/_dedupe_documents.py:18` 的注释
+        写着「`MetaRepo.delete_document` 会连带删 chunks / metadata / 复核队列 / 源副本」
+        —— **注释说做了、代码没做**。而我上一批写的
+        `verify_orphan_chunks.py` B1 判据搜的是 `search.py:243` 那条
+        `DELETE FROM document_chunks`，那其实在 `retry_document`（重新解析时清旧 chunk）
+        里，**不是删除路径** ⇒ 判据搜到它就 PASS，等于把"重试路径"当成了"删除路径"。
+        ⇒ 两处都已修：本函数补删；判据改为**直接检查本函数体内的 DELETE 语句集合**。
+
+        关于 `document_lifecycle_log`：**故意不删**。它是审计链 ——
+        记录"这份文档何时被谁改成什么状态"。删了就无法回答"它何时被删的"。
+        若要留删除痕迹，应由调用方先写一条 lifecycle 记录再删（见 `transition_lifecycle`）。
         """
         self.execute("DELETE FROM domain_review_queue WHERE document_id=?", (doc_id,))
+        # ★ 2026-11-17：派生数据必须与文档同生命周期清理。
+        #   顺序无关（都是按 doc_id 删），但必须在 DELETE documents **之前或之后都行**
+        #   —— 因为这里删的是"以 doc_id 为键"的行，不依赖 documents 里是否还有该行。
+        self.execute("DELETE FROM document_chunks WHERE document_id=?", (doc_id,))
+        self.execute("DELETE FROM doc_metadata WHERE document_id=?", (doc_id,))
         row = self.one("SELECT filename FROM documents WHERE id=?", (doc_id,))
         self.execute("DELETE FROM documents WHERE id=?", (doc_id,))
+        # 向量索引缓存必须失效，否则内存里还留着被删 chunk 的向量（进程内实测）
+        try:
+            from vector_index import ChunkVectorIndex
+            ChunkVectorIndex.invalidate()
+        except Exception as e:
+            print(f"[meta_repo] 删除文档 #{doc_id} 后失效向量缓存失败（不阻断）: {e}",
+                  flush=True)
         # 副本清理放最后：即使抛错，DB 侧的删除已经完成，不会出现"文件没了、行还在"
         if row:
             try:

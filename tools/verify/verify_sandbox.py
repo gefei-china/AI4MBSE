@@ -180,8 +180,29 @@ _names = [n for n, _ in _cmds]
 _oe = [a for n, a in _cmds if n == "verify_orchestration_e2e"]
 check("A6a CI 门禁命令非空且无重名", len(_cmds) > 100 and len(_names) == len(set(_names)),
       "n=%d" % len(_cmds))
-check("A6b ★带 CI 原参数（orchestration_e2e 必须 --static-only，防 live 烧钱）",
-      bool(_oe) and "--static-only" in _oe[0], _oe)
+# ★ 2026-11-18 修正判据（原判据在现行 CI 架构下恒假，属存量红）：
+#   原断言要求「CI 里必须有 verify_orchestration_e2e --static-only」。
+#   但 47145a9 已把非 pr 层门禁整体移出主 job（清单成为唯一真源），
+#   该门禁在 gates_manifest.json 里登记为 local 层 ⇒ 不进 CI 是**设计决定**，
+#   不是遗漏；主 job 里也不再有这一步（实测 _oe == []）。
+#   要防的风险只有一个：**live 模式进 CI 烧真钱**。据此改成两分支不变量：
+#     ① 在 CI 里 ⇒ 每一条都必须带 --static-only（绝不允许 live）；
+#     ② 不在 CI 里 ⇒ 它在清单里不能是 pr 层（排除必须是有记录的，不能是被悄悄删掉）。
+_oe_in_ci = bool(_oe)
+# 清单层从 gates_manifest.json 直接读（`core.sandbox.select_gates` 的 scope 是
+# 评估集 full/referenced，不是清单层，不能混用——实测按 pr 传会 ValueError）。
+try:
+    import json as _json
+    with open(os.path.join(ROOT, "tools", "gates_manifest.json"), encoding="utf-8") as _f:
+        _mf = _json.load(_f)
+    _oe_in_pr = any(g.get("script") == "verify_orchestration_e2e.py" and g.get("tier") == "pr"
+                    for g in (_mf.get("gates") or []))
+except Exception as _mfe:
+    _oe_in_pr = True      # 读不到清单 ⇒ 按"在 pr 层"处理（保守：判红而非放过）
+    print("  ! 读清单失败（按保守口径判）：%s" % (_mfe,))
+check("A6b ★orchestration_e2e 不跑 live（CI 必带 --static-only / 不在 CI 则层非 pr）",
+      (all("--static-only" in a for a in _oe) if _oe_in_ci else not _oe_in_pr),
+      "in_ci=%s args=%s in_pr=%s" % (_oe_in_ci, _oe, _oe_in_pr))
 
 # A7 scope
 _full = S.select_gates("full")

@@ -115,11 +115,25 @@ def _protocol_digest(sm) -> str:
     return "\n".join(parts)
 
 
+def _pum_budget() -> int:
+    """父会话用户原文的总字符预算（配置：context.subtask_parent_msgs_max_chars）。
+
+    为什么单独一个函数：渲染循环需要"剩余预算"，而配置读取失败必须降级到安全默认值，
+    不能让上下文构建因配置异常而失败（与 build_subtask_context 的既有降级口径一致）。
+    """
+    try:
+        from core import config as _cfg
+        return max(0, int(_cfg.get("context", "subtask_parent_msgs_max_chars", 6000) or 0))
+    except Exception:
+        return 6000
+
+
 def build_subtask_context(tk: dict, goal: str, done_items: list = None,
                           artifact_digest: str = "",
                           offload_map: dict = None, plan: list = None,
                           digest_cap: int | None = None,
-                          include_rules: bool = True) -> str:
+                          include_rules: bool = True,
+                          parent_user_msgs: list = None) -> str:
     """T7 子任务上下文快照：任务定义 + 前置结果摘要 + 会话既有产物 + 交付规范（最小充分上下文）。
 
     供 _run_task 与 _stream_orchestrated_flow 复用，保证会话编排/画布路径行为一致。
@@ -217,10 +231,285 @@ def build_subtask_context(tk: dict, goal: str, done_items: list = None,
             parts.append(_rr())
         except Exception:
             pass
+    # ★★ 2026-11-19 P0-A：**父会话用户原文**（子任务唯一能看到"用户到底要什么"的通道）。
+    #   为什么必须有（conv 999999905 实测）：子任务走 `execute_stream(query, 0)` ⇒
+    #   `_load_history` 为空，`artifact_digest` 只有**产物清单**（版本/元素名/关系数），
+    #   对 msg#7011 的 8 个需求独有短语命中 **0/8** ⇒ t2 只能反推，
+    #   自报「原始提示词未取回」⇒ 最终报告里没有提示词 ⇒ 用户追问"我的提示词呢"。
+    #   ⚠️ 只放**用户**消息（助手的中间输出已由 done_items 承担，且噪音大）；
+    #     每条截断、总长受配置上限，避免长会话把上下文挤爆。
+    if parent_user_msgs:
+        _pum_lines = []
+        _pum_left = int(_pum_budget())
+        for _it in parent_user_msgs:
+            if _pum_left <= 0:
+                break
+            _txt = str((_it or {}).get("content") or "").strip()
+            if not _txt:
+                continue
+            if len(_txt) > _pum_left:
+                _txt = _txt[:_pum_left] + "…（已截断）"
+            _pum_left -= len(_txt)
+            _tag = str((_it or {}).get("label") or "").strip()
+            _pum_lines.append(("【%s】" % _tag if _tag else "") + _txt)
+        if _pum_lines:
+            parts.append(
+                "- **用户在本会话中的原始请求原文**（以下逐条照抄，是需求的唯一权威来源；\n"
+                "  凡与之冲突的推断一律以原文为准，禁止声称'原始请求未取回'）：")
+            for _ln in _pum_lines:
+                parts.append("  · " + _ln)
     if artifact_digest:
         parts.append(str(artifact_digest))
     return "\n".join(parts)
 
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 交付体裁：**索取类目标必须有「直接答案区」**
+#
+# 事故（conv 999999905，2026-11-19）：用户问「帮我优化提示词并验证效果」，
+# 计划里 t3 的验收判据明写「优化版提示词模板**全文**（分节…），**可直接投喂使用**」；
+# 但 t5 是「汇报体」任务，汇总 LLM 按报告体裁整合 ⇒ 最终 10,304 字报告里
+# 「## 二、设计：优化后提示词模板（t3）」只有「2.1 模板结构 / 2.2 核心约束条款」，
+# **成品全文一个字都没有**。紧接着用户追问「我的提示词呢」（msg#7015）——
+# 这是「汇总把主交付物写丢了」，不是模型没产出（t3 的 result 里是完整的）。
+#
+# 修法分两层（缺一不可）：
+#   ① 提示词层：明确告诉汇总「必须先给直接交付区」，并要求逐字完整；
+#   ② **代码层兜底**：LLM 不听话是常态（本仓反复验证过），所以汇总出口要判
+#      「成品到底在不在里面」—— 用**行级覆盖率**做判据，低到阈值以下就把原文
+#      前置成一个独立小节。判据是「摘要里出现了原文的行」，与体裁、措辞无关。
+# ══════════════════════════════════════════════════════════════════════════════
+
+#: 验收判据里出现这些词 ⇒ 该子任务承诺的是「**成品本体**」（而非分析/摘要）。
+#: 刻意不收录「报告/清单/表格」——那些是汇总本来就会写的体裁，收录会把普通任务也判成
+#: "必须有直接交付区"，等于每轮都前置原文（既冗余又推高成本）。
+_DIRECT_DELIVER_MARKS = ("全文", "完整版", "完整内容", "完整原文", "原文",
+                         "逐字", "可直接使用", "可直接投喂", "可直接复制",
+                         "可直接运行", "成品")
+
+#: 成品的最短长度。低于它不可能是「一个可用的成品」（一句话结论不适用本节）。
+_DIRECT_DELIVER_MIN_CHARS = 400
+
+#: 流式路径给汇总的交付物是「结构化摘要 + 【完整交付物】正文」（见 stream.py），
+#: 覆盖率必须只算**正文**部分，否则摘要里那些「状态/风险/证据」行会把覆盖率虚高。
+_DELIVER_MARKER = "【完整交付物】"
+
+#: **层 1（最强）**：明确的「可交付」承诺 —— 用户拿它就能直接用。
+#: 与体裁无关（代码/提示词/清单/表格都算），所以它是跨场景最稳的信号。
+_DIRECT_READY_MARKS = ("可直接使用", "可直接投喂", "可直接导入", "可直接复制",
+                       "可直接运行", "可直接投", "直接投喂", "拿来即用", "开箱即用")
+
+#: **层 2**：完整性承诺 —— 说明要的是「本体全文」而不是摘要。
+#: ⚠️ 刻意不收录「清单/表格/报告」：那些是汇总本来就会写的体裁，收了会把普通任务也判成
+#:   「必须有直答区」，等于每轮都前置原文（真库实测：会从 5 条涨到 100+ 条）。
+_DIRECT_FULL_MARKS = ("全文", "完整版", "完整内容", "完整原文", "完整代码",
+                      "完整清单", "逐字", "定稿", "最终版", "最终稿", "原文照录")
+
+#: **层 3（形态）**：大体量代码交付。阈值来自真库分布 —— 交付型代码块的
+#: 代码占比中位数 0.74，而「带代码示例的报告」在 0.4~0.5 徘徊。
+#: 标定：真库交付型代码块 code 占比中位数 0.74；「带代码示例的报告」0.4~0.5。
+#: 体量下限取 1500 字 —— 真库最短的真代码交付是 1356 字，原来取 3000 会把
+#: 2000 字左右的代码交付漏掉（门禁 B4 就是被这个门槛卡出来的）。
+_CODE_HEAVY_RATIO = 0.55
+_CODE_HEAVY_MIN_CHARS = 1500
+#: 成品**代码文件**几乎不含 markdown 标题（真库 #3065 head=0.02、#3056 head=0.00），
+#: 而「报告里的代码段」标题密度高（head 中位数 0.13）⇒ head 比体量更稳。
+_CODE_HEAVY_MAX_HEAD = 0.15
+
+#: 报告体小节标题词。命中多 ⇒ 这是分析/汇报体裁，**不是成品**（层 1/2 也否决）。
+_REPORT_SECTION_WORDS = ("摘要", "结论", "建议", "归因", "复盘", "风险",
+                         "后续", "总结", "背景", "体会", "下一步", "行动项", "对比说明")
+
+
+def _task_meta_for(plan, key) -> dict:
+    """按 task_key 从 plan 里取 (expected_output, title)。plan 的键可能是 key/task_key。"""
+    for t in (plan or []):
+        if not isinstance(t, dict):
+            continue
+        if str(t.get("key") or t.get("task_key") or "") != str(key or ""):
+            continue
+        cfg = t.get("config") if isinstance(t.get("config"), dict) else {}
+        eo = cfg.get("expected_output") or t.get("expected_output") or ""
+        return {"expected_output": str(eo), "title": str(t.get("title") or "")}
+    return {"expected_output": "", "title": ""}
+
+
+def _deliver_body(text: str) -> str:
+    """取出交付物正文（剥掉流式摘要前缀）。"""
+    t = str(text or "")
+    i = t.find(_DELIVER_MARKER)
+    return (t[i + len(_DELIVER_MARKER):] if i >= 0 else t).strip()
+
+
+def _form_profile(text: str) -> dict:
+    """交付物的文本形态画像（**与措辞无关**，只看结构）。
+
+    返回 `{code, head, report}`：
+      · `code`   围栏代码块占比（含围栏行本身）—— 交付型代码块真库实测中位数 0.74；
+      · `head`   标题行占比；
+      · `report` 标题里含「结论/建议/归因/复盘…」的比例 —— 报告体的强特征。
+
+    为什么不用它当**主**判据：本系统子任务天然产出 SysML 代码，
+    `code>=0.35` 会命中 76% 的样本（实测），失去区分度。它只用于**层 3 兜底**与**报告体否决**。
+    """
+    lines = [l for l in str(text or '').splitlines() if l.strip()]
+    if not lines:
+        return {"code": 0.0, "head": 0.0, "report": 0.0}
+    inside = False
+    code = 0
+    for l in lines:
+        s = l.strip()
+        if s.startswith("```"):
+            inside = not inside
+            code += 1
+            continue
+        if inside:
+            code += 1
+    heads = [l for l in lines if re.match(r"^#{1,4}\s", l)]
+    report = (sum(1 for l in heads if any(k in l for k in _REPORT_SECTION_WORDS))
+              / float(len(heads))) if heads else 0.0
+    return {"code": code / float(len(lines)), "head": len(heads) / float(len(lines)),
+            "report": report}
+
+
+def _is_report_body(prof: dict) -> bool:
+    """报告体：小节大半是「结论/建议/归因/复盘」，且几乎没有代码。
+
+    真库例：`#3066「校验报告：verdict=pass…」` code=0.04 report=1.00；
+            `#3064「结构化报告：…归因、…结论与…建议」` code=0.00 report=0.50。
+    这两个都**不该**被前置（前置等于把 5000 字分析塞到正文顶部）。
+    """
+    return prof["report"] >= 0.5 and prof["code"] < 0.2
+
+
+def pick_direct_deliverable(done_items, plan):
+    """挑出「必须逐字出现在最终正文里」的那份成品。无则 None。
+
+    ## 分层判据（顺序即优先级，命中高层就不再往低层找）
+      层 1 `_DIRECT_READY_MARKS`  —— 「可直接使用/投喂/导入/复制/运行」：最精确；
+      层 2 `_DIRECT_FULL_MARKS`   —— 「全文/完整版/逐字/定稿」：说得清要本体；
+      层 3 形态                  —— 代码占比 ≥0.55 且 ≥3000 字（大体量代码交付）；
+      否决                       —— 报告体（小节大半是结论/建议），层 1/2 也否决。
+
+    ## 为什么必须分层而不是加权求和（实测两次翻车）
+      · 只按「代码占比」取最高 ⇒ 事故轮会选 t1（10711 字 SysML 补齐代码）
+        而不是用户追问的 t3（5556 字提示词模板）——因为本系统到处都是代码；
+      · 只按「汇总覆盖率最低」⇒ 会选 t2（7945 字问题清单，cov=0.000）
+        ——它比 t3 更长，但用户要的不是它。
+      ⇒ 只有「**可交付**」这个措辞（用户拿起来就能用）能精确指向「用户要的那个东西」。
+
+    同层多个候选：取更长的（信息量更大），再取代码占比更高的（更像成品）。
+    """
+    cands = []
+    for it in (done_items or []):
+        if not isinstance(it, dict):
+            continue
+        body = _deliver_body(it.get("result") or "")
+        if len(body) < _DIRECT_DELIVER_MIN_CHARS:
+            continue
+        meta = _task_meta_for(plan, it.get("task_key"))
+        eo = meta["expected_output"]
+        prof = _form_profile(body)
+        if _is_report_body(prof):
+            continue
+        lvl = 0
+        marks = []
+        if any(m in eo for m in _DIRECT_READY_MARKS):
+            lvl = 1
+            marks = [m for m in _DIRECT_READY_MARKS if m in eo]
+        elif any(m in eo for m in _DIRECT_FULL_MARKS):
+            lvl = 2
+            marks = [m for m in _DIRECT_FULL_MARKS if m in eo]
+        elif (prof["code"] >= _CODE_HEAVY_RATIO
+              and len(body) >= _CODE_HEAVY_MIN_CHARS
+              and prof["head"] <= _CODE_HEAVY_MAX_HEAD
+              # ★ 2026-11-19 实测**否决过一版**：曾允许「eo 为空时只凭形态判」，
+              #   放开后全库前置率从 28.9% 飙到 **69.4%**（L3 命中 78/121）——
+              #   因为本系统子任务天然产出 SysML 代码，「代码占比高」在这里**没有区分度**
+              #   （前面已量化：code≥0.35 命中 76%）。盲目把 20000 字代码前置到正文顶部，
+              #   比「不前置」更糟：正文会被代码淹没，用户反而看不到结论。
+              #   ⇒ eo 为空 = **没有承诺** ⇒ 不判（宁缺不乱）。
+              #   这是**已知保护盲区**：历史 280 条 eo 空的任务不在兜底范围内；
+              #   新数据已由 `create_plan` 从 title 推导最小验收判据（task_queue.py 的
+              #   _noexp 兜底），不会再空。正确修法是补数据，不是让判据瞎猜。
+              and eo.strip()
+              and any(m in eo for m in ("代码", "源码", "片段", "包"))):
+            lvl = 3
+            marks = ["code:%.2f" % prof["code"]]
+        if not lvl:
+            continue
+        cands.append({"task_key": it.get("task_key"),
+                      "title": meta["title"] or it.get("title") or it.get("task_key"),
+                      "text": body, "marks": marks, "level": lvl,
+                      "code_ratio": round(prof["code"], 3),
+                      "expected_output": eo, "chars": len(body)})
+    if not cands:
+        return None
+    cands.sort(key=lambda c: (c["level"], -c["chars"], -c["code_ratio"]))
+    return cands[0]
+
+def _norm_for_match(s: str) -> str:
+    """覆盖率比较用的归一化：去 markdown 修饰符与全部空白。
+
+    为什么去 markdown：汇总 LLM 会重排加粗/列表标记，同一句话因此「看起来不一样」；
+    只比**文字本身**才稳定。副作用是 `REQ-1` 与 `REQ1` 等价 —— 两侧同等处理，不影响判定。
+    """
+    s = str(s or "")
+    for ch in "*`_>#|\u3000":
+        s = s.replace(ch, "")
+    return "".join(s.split())
+
+
+def deliverable_coverage(primary_text: str, summary_text: str, sample: int = 40) -> float:
+    """成品正文的**行级覆盖率**：正文里有多少比例的实质行出现在汇总中。"""
+    lines = []
+    for ln in str(primary_text or "").splitlines():
+        if len(_norm_for_match(ln)) >= 10:
+            lines.append(ln)
+    if not lines:
+        return 0.0
+    if len(lines) > sample:
+        step = max(1, len(lines) // sample)
+        lines = lines[::step][:sample]
+    hay = _norm_for_match(summary_text)
+    hit = sum(1 for ln in lines if _norm_for_match(ln) in hay)
+    return hit / float(len(lines))
+
+
+def _direct_min_cov() -> float:
+    try:
+        from core import config as _c
+        return float(_c.get("delegation", "direct_delivery_min_cov", 0.6) or 0.6)
+    except Exception:
+        return 0.6
+
+
+def ensure_direct_delivery(content: str, primary, min_cov: float = None):
+    """汇总出口兜底：成品没进正文 ⇒ 把原文前置成「直接交付物」小节。
+
+    返回 (新正文, 决策记录)。决策记录进 `self._last_direct_delivery`（观测/门禁用）。
+    """
+    info = {"applied": False, "coverage": 0.0, "reason": ""}
+    if not content or not primary:
+        info["reason"] = "no_content_or_primary"
+        return content, info
+    body = _deliver_body(primary.get("text") or "")
+    if len(body) < _DIRECT_DELIVER_MIN_CHARS:
+        info["reason"] = "primary_too_short"
+        return content, info
+    cov = deliverable_coverage(body, content)
+    info["coverage"] = round(cov, 3)
+    if cov >= (min_cov if min_cov is not None else _direct_min_cov()):
+        info["reason"] = "present"
+        return content, info
+    _title = str(primary.get("title") or primary.get("task_key") or "交付物").strip()
+    head = ("## 直接交付物：%s\n\n"
+            "> 本小节是该交付物的**完整原文**（未改写、未压缩），可直接使用；"
+            "后文为分析与验证说明，同一内容不再重复展开。\n\n%s\n\n---\n\n"
+            % (_title, body))
+    info.update({"applied": True, "reason": "low_coverage",
+                 "chars": len(body), "task_key": primary.get("task_key")})
+    return head + str(content), info
 
 class FlowPlannerMixin:
     """FlowExecutor 编排规划器拆分（解耦拆分：原 workflows.py 单体类方法）。"""
@@ -426,6 +715,20 @@ class FlowPlannerMixin:
         #   ⇒ 汇总前查一次库，把真实产物列成清单贴进 prompt，并明确要求"以清单为准"。
         #   分界用 `artifact_mark`（本轮开始前的 MAX(id)），精确锁定本轮新增。
         _art_facts = self._archived_artifacts_facts(done_items)
+        # ★ 2026-11-19：先判「本轮有没有承诺过成品全文」（事故见模块级 HELPERS 段）。
+        _primary = pick_direct_deliverable(done_items, plan)
+        _direct_rule = ""
+        if _primary:
+            _direct_rule = (
+                "7) 【交付体裁·硬要求】子任务「%s」的验收判据要求交付"
+                "**%s**（原判据：%s）。报告的**第一个小节**必须是 "
+                "`## 直接交付物：<标题>`，把该成品**逐字完整**贴出；"
+                "禁止用「结构说明」「要点摘录」「见上文」替代、禁止只贴片段；"
+                "后续小节只做分析与验证，不得重复粘贴同一成品。\n"
+                % (str(_primary.get("title") or _primary.get("task_key") or "")[:40],
+                   {1: "可直接使用的成品", 2: "完整本体（全文）", 3: "大体量代码交付"}
+                   .get(int(_primary.get("level") or 2), "完整本体"),
+                   str(_primary.get("expected_output") or "（未写）")[:80]))
         try:
             from llm import llm_client
             items_txt = "\n".join(
@@ -441,6 +744,7 @@ class FlowPlannerMixin:
                 "最后一个确定版本的完整代码；早期版本用一句话说明演进关系即可，**不要重复粘贴**"
                 "（各版本已在执行过程卡的实时输出中可见）。\n\n"
                 # ↓ P1 注入段：产物事实优先于子任务自述
+                + _direct_rule
                 + (_art_facts and (
                     "【产物库事实 · 以此为准，优先级高于任何子任务自述】\n"
                     + _art_facts
@@ -469,21 +773,51 @@ class FlowPlannerMixin:
             if content and len(content) > 80:
                 # ★ 2026-11-02：LLM 整合也可能把各版本的代码原样带出来（prompt 只是软约束）⇒ 出口统一收敛
                 from agent.final_content import (dedupe_interim_code_blocks as _dedupe,
+                                                 collapse_restated_sections as _collapse,
                                                  normalize_ordinal_headings as _ordfix)
                 content, _n = _dedupe(content)
+                # ★ 2026-11-19（msg#7039）：段级收敛重复的「结论」小节。
+                #   续跑/重规划会把同一件事用不同措辞讲几遍，块级去重管不到正文。
+                content, _nsec = _collapse(content)
                 # ★ 2026-11-04：整合退化成拼接时，各份报告会各自从「一、」重开
                 #   （真库 msg 5761：`## 一、结论先行` 出现 2 次、`二` 排在 `六` 之后）
                 #   ⇒ 只重排**序号**，不删任何标题文字（判据见函数文档）。
                 content, _no = _ordfix(content)
+                # ★ 2026-11-19：体裁兜底 —— LLM 仍可能按「报告体」把成品写丢
+                #   （conv 999999905 实证：10,304 字报告里没有提示词全文）。
+                #   这里按**行级覆盖率**判「成品在不在」，低就把原文前置。
+                #   ⚠️ 必须放在 dedupe/ordfix **之后**：那两步会改正文，先算覆盖率会失真。
+                if _primary:
+                    try:
+                        content, _dd = ensure_direct_delivery(content, _primary)
+                        # 前置后可能和报告里已有的（截断）同一份代码并存 ⇒ 再收敛一次。
+                        # dedupe 保留**更长**的那份，所以留下的一定是全文；不重跑就会
+                        # 出现「同一模型两份代码块」（本仓 2026-11-02 已固化的不变式）。
+                        if _dd.get("applied"):
+                            content, _n2 = _dedupe(content)
+                            if _n2:
+                                _dd["deduped"] = int(_n2)
+                        self._last_direct_delivery = _dd
+                    except Exception as _de:
+                        self._last_direct_delivery = {
+                            "applied": False, "reason": "error:%s" % str(_de)[:80]}
+                else:
+                    self._last_direct_delivery = {"applied": False, "reason": "no_primary"}
                 return content.strip()
         except Exception:
             pass
+        # 降级出口：拼接会把每份交付物**原文全量**带出 ⇒ 不需前置直答区，但要留痕
+        self._last_direct_delivery = {"applied": False, "reason": "degraded_join",
+                                      "primary": bool(_primary)}
         # 拼接降级出口：各交付物的完整代码必然全量带入 ⇒ 必须收敛（同上）
         try:
             from agent.final_content import (dedupe_interim_code_blocks as _dedupe,
+                                             collapse_restated_sections as _collapse,
                                              normalize_ordinal_headings as _ordfix)
             _joined = "\n\n".join(f"## {it.get('title')}\n{(it.get('result') or '').strip()}" for it in done_items)
             _joined, _n = _dedupe(_joined)
+            # 拼接降级同样可能堆出多份「结论」⇒ 段级再收一次（幂等，命中才动）
+            _joined, _nsec = _collapse(_joined)
             # 拼接降级**必然**产生序号回退（每份交付物自带「一、二、三」）⇒ 这里最需要重排
             _joined, _no = _ordfix(_joined)
             return _joined
@@ -565,6 +899,28 @@ class FlowPlannerMixin:
                 pool = [x.strip() for x in pool.split(",") if x.strip()]
             if pool:
                 agents = list(pool)
+        # ★ 2026-11-19（写入范围治理，见 core/write_scope.py 模块头）：
+        #   真机 conv 999999905 —— 用户只要文本，planner 却把 t4 分派给
+        #   「智源数据读写agent」⇒ 该子任务去查工程三元组、尝试写入 ⇒ MCP 502
+        #   ⇒ 整轮变成「⏸ 暂停等你确认」，用户要的提示词全文始终没拿到。
+        #   根因是**候选池里有一个名字带「读写」却零专长描述的 Agent**（id=1032，
+        #   capabilities=[]），模型只能凭名字猜。靠提示词说不听（本仓反复验证），
+        #   所以在**池这一层**做确定性剔除。
+        #   ⚠️ 剔除只影响「模型看到哪些候选」：被剔除的 Agent 仍是 active，
+        #      模型若执意点名它，`create_plan` 不会因此失败（不会连带整批降级）。
+        from core.write_scope import scan_write_intent as _swi
+        from core.write_scope import split_pool as _split_pool
+        from core.write_scope import readonly_task_note as _rtn
+        _wr = _swi(goal)
+        _wr_verdict = str(_wr.get("verdict") or "unknown")
+        _write_why = str(_wr.get("reason") or "")
+        _write_dropped = []
+        # ★ 2026-11-19 三态：**只有 no 才剔除**。
+        #   unknown（真库 74%）里仍有 1.2% 是真写入（「把那个包删掉」这类口语指令
+        #   没写「删除」二字）⇒ 剔除池会让它找不到能干活的 Agent；
+        #   而剔池对 unknown 的收益本来就小（写类 Agent 只是「可能被误派」，不是必然）。
+        if _wr_verdict == "no":
+            agents, _write_dropped = _split_pool(agents, False)
         pool_txt = "、".join(agents)
         max_tasks = max(1, min(int(max_tasks or 6), 12))
 
@@ -607,7 +963,7 @@ class FlowPlannerMixin:
             '{{"tasks": [{{"key": "t1", "title": "子任务描述", "agent": "Agent 名",'
             ' "deps": ["前置任务key列表，无则[]"], "task_type": "agent",'
             ' "context": "子任务必需上下文(精简事实，不复制用户全文，可空)",'
-            ' "expected_output": "完成标准/期望输出格式(可空)",'
+            ' "expected_output": "完成标准/期望输出格式(必填：写清**可核查**的验收判据，如「validate 返回 n_hard=0」或「输出包含 5 个用例视图」)",'
             ' "config": {{"required": true}},'
             ' "tools": ["允许的工具白名单(可空，空=继承该 Agent 默认绑定)"],'
             ' "skills": ["指定技能(可空)"]}}]}}\n'
@@ -621,6 +977,29 @@ class FlowPlannerMixin:
             "不要输出其他文字。\n"
             f"目标：{goal}"
         ).format(n=max_tasks)
+        # ★ 2026-11-19：把「本轮要不要写入平台」明说给规划器（判定见 core/write_scope）。
+        #   为什么仍要说一遍（既然池里已剔除）：模型可能凭常识补一个写类 Agent 名字，
+        #   而任务标题里的「增量验证/写入」措辞会一路透传到子任务提示词。
+        if _wr_verdict == "yes":
+            prompt += (
+                "\n★ 本轮用户**明确要求写入平台**（识别到「%s」）⇒ 涉及写入的任务必须写明"
+                "目标工程/分支与写入对象，expected_output 写清「确认单里要看到什么」，"
+                "并标 config.required=true；写入会被暂存到人工确认，不要把它当成已生效。"
+                % _write_why)
+        elif _wr_verdict == "no":
+            prompt += (
+                "\n★ 本轮用户**明确不需要写入平台**（识别到否定「%s」）⇒ **禁止**规划任何"
+                "「写入/导入/同步到智源/落库/上传到平台」类任务；也不要派给「读写」类 Agent。"
+                "用户要的是**文本交付**：把成品写进正文即可，平台侧一律只读。"
+                "（若某任务确需平台数据，只能只读查询，并在 expected_output 里说明如何降级；"
+                "不得因取不到数据而中断整轮。）" % _write_why)
+        else:
+            prompt += (
+                "\n★ 本轮用户**没有说明**是否要写入平台 ⇒ **默认只读**：不要为了「取基线/拿坐标」"
+                "去规划查询工程三元组、包树、模型元素这类前置任务；"
+                "用户要什么就交什么文本，平台数据只是可选参考。"
+                "（若某任务确实必须写入，先在 plan 里把该任务 title 写成「写入 …」并在"
+                "expected_output 里说明确认单要看到什么，让它显式可见，不要藏在「验证」名义下。）")
         # P0-6：摘要追加在 `.format()` **之后** —— 摘要里可能含 { }（元素名/JSON 片段），
         # 放进被 format 的模板会 KeyError。无产物 → 不加段落。
         if artifact_digest:
@@ -679,6 +1058,13 @@ class FlowPlannerMixin:
 
         # 3) 计划后技能校验（P1-2）
         warnings = []
+        # 写入范围剔除必须可见（本仓纪律：静默丢弃 = bug）
+        if _write_dropped:
+            warnings.append(
+                "写入范围：本轮未要求写入平台，已把 %d 个写类 Agent 从候选池剔除（%s）"
+                % (len(_write_dropped), "、".join(_write_dropped[:3])))
+            logging.getLogger("mbse.planner").info(
+                "[write_scope] 剔除写类 Agent: %s", ", ".join(_write_dropped))
         for t in plan:
             sk = t.get("skill") or (t.get("config") or {}).get("skill")
             if sk:
@@ -687,6 +1073,35 @@ class FlowPlannerMixin:
                     warnings.append(f"技能 {sk} 不存在（任务 {t.get('key')}）")
                 elif row["status"] != "published":
                     warnings.append(f"技能 {sk} 未发布（任务 {t.get('key')}）")
+
+        # 3c) 写入范围守卫（2026-11-19 三态版）。
+        #
+        #     为什么从「只给写类 Agent 的任务加约束」改成「**所有任务**都加」：
+        #     真机 t4 的 Agent（id=1032）绑定工具 write=0，写能力走 **MCP**
+        #     （MCP 工具不在 tools 表）⇒ 按 Agent 判断永远判不出来。
+        #     而任何 Agent 都可能继承主 Agent 的 MCP（`_orch_main_agent`）⇒
+        #     只读约束必须落在**任务**上，而不是落在「谁执行」上。
+        _ro_note = _rtn(_wr_verdict)
+        if plan and _ro_note:
+            _wa = []
+            for _t in plan:
+                if not isinstance(_t, dict):
+                    continue
+                _cfg_t = _t.get("config") if isinstance(_t.get("config"), dict) else {}
+                _ctx_old = str(_cfg_t.get("context") or "")
+                if "【写入范围" in _ctx_old or "【写入范围" in str(_t.get("context") or ""):
+                    continue
+                _cfg_t["context"] = (_ctx_old + _ro_note).strip()
+                _t["config"] = _cfg_t
+                from core.write_scope import is_write_agent as _iwa
+                if _iwa(_t.get("agent")):
+                    _wa.append(str(_t.get("agent") or ""))
+            if _wa:
+                warnings.append(
+                    "计划含写类 Agent 任务（%s）—— 本轮写入范围为「%s」，已注入只读约束"
+                    "（执行侧会拒写，不会静默落库）" % ("、".join(sorted(set(_wa))[:3]), _wr_verdict))
+                logging.getLogger("mbse.planner").warning(
+                    "[write_scope] verdict=%s 计划含写类 Agent: %s", _wr_verdict, _wa)
 
         # 3b) 计划**语义**校验（2026-11-04）：阶段序 / 完备性 / 覆盖性 / 路由声明。
         #
@@ -758,7 +1173,9 @@ class FlowPlannerMixin:
         #   （真机实测：确认单 #104 的 conversation_id=0 ⇒ 用户在 UI 里根本看不到这张单）。
         #   同一轮内 run_id/conv_id 恒定，并行子任务共享 ⇒ 存实例属性无竞态。
         self._orch_ctx = {"run_id": int(run_id or 0),
-                          "conv_id": int(conversation_id or 0)}
+                          "conv_id": int(conversation_id or 0),
+                          # 写入范围三态（子任务执行侧据此决定拦不拦；见 core/write_scope）
+                          "write_verdict": _wr_verdict}
         # ★ 2026-11-13（P1）：记录本轮**开始前**的产物最大 id 作为分界。
         #   为什么用 id 分界而不是时间窗：时间戳精度只到秒，同一秒内多轮会串；
         #   而 artifacts.id 单调递增，`id > mark` 精确等于"本轮新增的产物"。
@@ -1096,6 +1513,10 @@ class FlowPlannerMixin:
                 pipe._tool_run_ctx = int(_oc.get("run_id") or tk.get("run_id") or 0)
                 pipe._tool_task_key = str(tk.get("task_key") or "")
                 pipe._orch_conv_id = int(_oc.get("conv_id") or 0)   # execute 里兜底成 _tool_conv_ctx
+                # ★ 2026-11-19（写入范围，执行侧确定性闸）：`no` 时子任务的写类工具
+                #   直接拒执行（不暂存、不入队、不落库）。依据：真库 12 条判 no 的消息
+                #   之后**零**平台写入 ⇒ 硬拦零误伤。`unknown` 不拦（1.2% 会误伤）。
+                pipe._orch_readonly = (_oc.get("write_verdict") == "no")
                 # P1-2：任务 config.skill 指定技能 → 强制注入（仅当技能存在且已发布）
                 skill_name = cfg.get("skill") or None
                 if skill_name:
@@ -1136,6 +1557,7 @@ class FlowPlannerMixin:
                 pipe._tool_run_ctx = int(_oc.get("run_id") or tk.get("run_id") or 0)
                 pipe._tool_task_key = str(tk.get("task_key") or "")
                 pipe._orch_conv_id = int(_oc.get("conv_id") or 0)   # execute 里兜底成 _tool_conv_ctx
+                pipe._orch_readonly = (_oc.get("write_verdict") == "no")
                 _react_agent = str(tk.get("agent_id") or cfg.get("agent") or "").strip()
                 # ⚠️ 不要写 `int(cfg.get("max_steps") or 5)`：`0` 是 falsy ⇒ 显式传 0 会被
                 #    静默变成 5（"猜一个默认值"），而调用方本意是"最小轮次"。

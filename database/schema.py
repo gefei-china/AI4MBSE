@@ -89,6 +89,7 @@ from .migrations import (
     _migrate_curriculum_p22,  # 2026-10-19 失败驱动任务提案队列（P2-2，只提议不自动执行）
     _migrate_agent_archive_p23,  # 2026-10-19 Agent 变体台账 + 死路记忆（P2-3，只记录不切换生效版本）
     _migrate_event_tables,  # 2026-11-01 事件驱动底座三表（Super-agent 落地 P0-2/P0-4）
+    _migrate_run_stream,    # 2026-11-19 方案B P0：帧日志地基（run_sessions/run_frames）
 )
 from .seeds import (
     _seed,
@@ -415,6 +416,15 @@ def init_db():
         main_agent TEXT DEFAULT '',      -- 2026-10-16 R1：会话级主 Agent（执行主体持久化；请求未带 team 时回读）
         created_at TEXT DEFAULT CURRENT_TIMESTAMP,
         updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+    )""")
+
+    # ★ 2026-11-19 P0-B：提交幂等表（一次 sendChat = 一个 client_request_id）。
+    #   CREATE TABLE IF NOT EXISTS：老库 init_db 启动时自动补建，零迁移、零回填。
+    #   占位与会话创建在**同一请求事务**内（db_session 末尾 commit）⇒ 重放请求串行化。
+    c.execute("""CREATE TABLE IF NOT EXISTS client_request_dedup (
+        request_id TEXT PRIMARY KEY,
+        conv_id INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP
     )""")
 
     c.execute("""CREATE TABLE IF NOT EXISTS messages (
@@ -1669,6 +1679,21 @@ def init_db():
     except Exception:
         pass
 
+    # FINALIZE_KEY_UNIQUE_V1 P3 根治（2026-11-19 conv 999999938 双写竞态）：
+    #   前端 /messages/partial 与服务端 SSE 兜底是两条独立写入路径，各自 check-then-write，
+    #   跨连接竞态导致同一轮写两条固化消息（已停止生成 + 连接已中断）。
+    #   根治靠 DB 唯一约束：finalize_key=会话末条 user 消息 id（两条路径都能独立算出）。
+    #   部分索引只对非空键生效 ⇒ 历史行(默认'')不受约束、存量库零影响。
+    try:
+        c.execute("ALTER TABLE messages ADD COLUMN finalize_key TEXT DEFAULT ''")
+    except Exception:
+        pass
+    try:
+        c.execute("CREATE UNIQUE INDEX IF NOT EXISTS ux_messages_finalize "
+                  "ON messages(finalize_key) WHERE finalize_key<>''")
+    except Exception:
+        pass
+
     # ── 需求实体表（2026-11-07）：需求条目的**唯一事实源** ──
     # 为什么必须有这张表：`requirement_itemize` 自 2026-10-08 起只做**纯函数**返回
     # （items[] 随对话消失），全库不存在任何需求实体 ⇒ 追溯链
@@ -1759,6 +1784,23 @@ def init_db():
     )""")
     c.execute("CREATE INDEX IF NOT EXISTS idx_sa_run ON subtask_artifacts(run_id, task_key)")
 
+    # ── ★ 2026-11-18（重启不吞已生成内容）：流式输出节流检查点 ──────────────
+    # 背景（真库事故 conv 999999207）：user 消息已落库、chat/stream 已启动，
+    #   33 秒后服务被 taskkill /F **强制终止** ⇒ 进程没有任何执行收尾代码的机会：
+    #   前端 /messages/partial 来不及调、后端 GeneratorExit / CancelledError
+    #   固化也不会跑 ⇒ 用户已看到的数千字输出**全部蒸发**，且不可恢复
+    #   （服务端不记 SSE 正文，前端只缓存输入框草稿）。
+    # 方案：转发层逐帧攒正文时**节流写这里**（默认每 5s / 2000 字符一次），
+    #   正常收口（finally）删除；只有进程被强杀才会留下记录，下次启动统一固化。
+    # ⚠️ 一轮一个会话：前端新消息会 abort 上一轮，不存在同会话并发两轮流。
+    c.execute("""CREATE TABLE IF NOT EXISTS stream_checkpoints (
+        conversation_id INTEGER PRIMARY KEY,
+        content TEXT NOT NULL DEFAULT '',
+        exec_json TEXT NOT NULL DEFAULT '{}',
+        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )""")
+
     # ── 架构优化：意图路由规则配置化（触发关键词 → 路由意图，权重/启停）──
     c.execute("""CREATE TABLE IF NOT EXISTS intent_rules (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1774,6 +1816,17 @@ def init_db():
 
     # ── 幂等列迁移（老库补 P0-1 新增的 project_id 列，回填默认项目）──
     _migrate_columns(conn)
+    # ── B1 跨层 trace 索引（2026-11-18）：七表 trace_id 由 _migrate_columns 补齐，
+    #    索引必须建在补列之后；放在建表段会让老库启动报 no such column。
+    # ⚠️ **必须逐表判在不在**（2026-11-18 回归修复）：`CREATE INDEX IF NOT EXISTS`
+    #   不会因为"表不存在"而跳过，而是直接抛 `no such table`。
+    #   干净库 / 只预建了部分表的夹具库（verify_curriculum 等）走不到建表段，
+    #   整条 init_db 会在这里崩 —— 实测三处夹具门禁因此转红。
+    for _bt in ("audit_logs", "graph_edit_logs", "knowledge_commits", "harness_decisions",
+                "orch_run_spans", "query_trace", "hil_confirmations"):
+        if c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
+                     (_bt,)).fetchone():
+            c.execute("CREATE INDEX IF NOT EXISTS idx_%s_trace ON %s(trace_id)" % (_bt, _bt))
     # ── 依赖「迁移后才有」的列的索引，**必须**建在这一步之后 ──────────────
     # 幂等查询专用索引（§06）：(idem_key, status) 命中即返回，窗口判定在 SQL 里做。
     # ⚠️ 原先建在上面的建表段里 ⇒ 老库（无 idem_key 列）启动即崩
@@ -1981,6 +2034,11 @@ def init_db():
     #   同批放这里是有意的：中断要靠 run_id 定位批次，去重要靠内容指纹判同，
     #   三者都是「judge 面缺一列/缺一张表」型缺口，分开加会出现半成品。
     _migrate_run_dimension(conn)
+    # ── 2026-11-19 方案B P0：帧日志地基（run_sessions / run_frames + messages 两列）──
+    #    与 _migrate_run_dimension 同批位置：两者都属"run 维度"落点，且都必须在
+    #    messages / conversations 建表之后（本段已是 init_db 尾部）。
+    #    纯新表 + 补列，幂等；关掉 run_stream.enabled 即完全不写（行为回到改动前）。
+    _migrate_run_stream(conn)
     _migrate_doc_dedupe(conn)
     _migrate_orch_interrupts(conn)
     # ── 2026-11-10 需求验收标准（P0-1）：验收标准填充率曾为 0/24，直接卡验收 ──

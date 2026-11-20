@@ -41,6 +41,45 @@ LIMITATIONS = [
 ]
 
 
+#: 已知**不可达**的用例判据（派生缺陷），随报告一起输出。
+#: 为什么不改数据集：`dataset_id = sha1(cases)`，动一个字段就换指纹 ⇒
+#:   当前 live 基线（eb245949e0d84ed1）立即失效，p1_release 会退回 blocked。
+#: 为什么不把判据改绿：那是掩盖问题。这里只做**如实注解**，判据照旧判红。
+#:
+#: G08 —— 历史不可达判据，2026-11-18 已由产品侧修复，此字典现为空（保留结构供未来派生缺陷登记）。
+#:
+#: 历史（如实留痕，不抹去）：派生时判据 `artifact_kind_present(kind=report)` 在源会话 9571
+#:   上确实不成立 —— report 产物 artifact 1442 来自**后续另一轮**，本批 run 540 的
+#:   t6「组装需求分析结果报告」状态 failed。live 回放（conv 999999203）同样缺 report 产物。
+#: 根因复判：不是判据错，是**产品漏归档** —— 该输入明确要求「打分、评估规范性、给出优化
+#:   建议」，live 回放 t2「打分评估+优化建议」done、reflection.score=90、advice 非空，
+#:   但 `_archive_artifacts` 的 `is_report` 只看 intent/sections/report ⇒ 评审结果只落在
+#:   `messages.card_data`，从未成为 `artifacts(kind=report)`。全库 85 条带 reflection 的
+#:   assistant 消息全部零 report 产物 ⇒ 系统性缺口，非 G08 单例。
+#: 修复（2026-11-18）：`agent/utils.py::review_report_signal` + 配置闸
+#:   `orchestration.archive_review_report`（默认开；关=逐字节回退）；门禁
+#:   `tools/verify/verify_review_report_archive.py` 18/18 + 变异自证，真库副本端到端
+#:   `artifact_kind_present(report)` 由 FAIL 转 PASS。dataset_id 不变 ⇒ 无需重建数据集、
+#:   无需作废基线、无需 3 小时重跑。
+KNOWN_CASE_DEFECTS = {}
+
+
+def limitations_for(mode: str) -> list:
+    """按 mode 给出**如实**的限制说明。
+
+    ★ 2026-11-17：原实现无论 mode 都套 `LIMITATIONS` 的 offline 条目，
+      于是**合格 live 基线（id=34）的报告里仍写着"offline_replay 不重新调用 LLM"**
+      —— 读报告的人会误以为刚跑的 36 次真实 LLM 调用是回放，直接毁掉"live"的可信度。
+      live 的限制不是"没调 LLM"，而是"单次采样有波动、语义质量不在判据内"。
+    """
+    if str(mode or "") == "live":
+        return ([
+            "live 模式按 conv-map 评**新建会话**（每例 conv_id 均不同于派生源会话）；"
+            "单次结果为采样，回归判断须看 repeat≥3 的逐任务清单",
+        ] + list(LIMITATIONS[1:]))
+    return list(LIMITATIONS)
+
+
 def load_dataset(path=DEFAULT_SET):
     with open(path, encoding="utf-8") as f:
         d = json.load(f)
@@ -97,10 +136,23 @@ def _assistant_answer(c, cid, chk):
 
 
 def _orch_done_rate(c, cid, chk):
+    """编排完成率。**无子任务 ≠ 完成率 0**。
+
+    ★ 2026-11-18（G07 事故）：该例输入是"单一交付物（一张 ACT 活动图）"，
+      `_needs_orchestration` 判为不需要编排（正确行为：LLM 复杂度判定器
+      docstring 明写"单一交付物任务一律 false"）⇒ 走了单 Agent 直行，
+      会话里**没有任何 agent_tasks**。原实现 `total=0 ⇒ rate=0.0` 判失败，
+      把"本轮不适用编排"误报成"编排一条都没完成"，该例因此丢 1/3 分。
+      判据只能回答"编排批次的完成率"，前提是**真的编排过**；未编排时应当
+      明确标为不适用（skipped），让报告者去看该例其它判据，而不是伪造一个 0。
+    """
     total = c.execute("SELECT COUNT(*) FROM agent_tasks WHERE conversation_id=?", (cid,)).fetchone()[0]
+    if not total:
+        # 不适用：本轮未触发编排（单 Agent 直行）—— 不算通过、也不算失败
+        return True, "no_orchestration(本轮未编排，判据不适用)"
     done = c.execute("SELECT COUNT(*) FROM agent_tasks WHERE conversation_id=? AND status='done'",
                      (cid,)).fetchone()[0]
-    rate = (done / total) if total else 0.0
+    rate = done / total
     return rate >= float(chk.get("min") or 0), "done=%d/%d rate=%.3f min=%.2f" % (
         done, total, rate, float(chk.get("min") or 0))
 
@@ -127,12 +179,26 @@ def score_case(c, case, conv_id=None):
         ok, ev = fn(c, cid, chk)
         results.append({"type": chk["type"], "passed": bool(ok), "evidence": ev})
     passed = all(x["passed"] for x in results) and bool(results)
-    return {
+    row = {
         "case_id": case["id"], "chain": case["chain"], "intent": case["intent"],
         "conv_id": cid, "source_conv_id": case["conv_id"],
         "passed": passed, "score": sum(1 for x in results if x["passed"]) / max(len(results), 1),
         "checks": results,
     }
+    # ★ 2026-11-18（G07）：链标注 vs 实际是否编排的错配必须**可见**。
+    #   `chain=orchestrated` 描述的是**派生时源会话**的行为；`_needs_orchestration`
+    #   对 design/requirement 意图含 LLM 复杂度判定 ⇒ 同一输入两次结论可能不同。
+    #   不能判红（那是惩罚正确行为），也不能静默通过（读者会以为这条真的验过编排）。
+    try:
+        _n_task = c.execute("SELECT COUNT(*) FROM agent_tasks WHERE conversation_id=?",
+                            (cid,)).fetchone()[0]
+    except Exception:
+        _n_task = 0
+    if str(case.get("chain") or "") == "orchestrated" and not _n_task:
+        row["chain_mismatch"] = "标注 orchestrated 但本轮未触发编排（判据不适用）"
+    if case["id"] in KNOWN_CASE_DEFECTS:
+        row["known_defect"] = KNOWN_CASE_DEFECTS[case["id"]]
+    return row
 
 
 def score_dataset(c, dataset, mode="offline_replay", conv_id_map=None):
@@ -148,7 +214,12 @@ def score_dataset(c, dataset, mode="offline_replay", conv_id_map=None):
         "by_chain": {ch: {"n": sum(1 for r in rows if r["chain"] == ch),
                           "passed": sum(1 for r in rows if r["chain"] == ch and r["passed"])}
                      for ch in sorted({r["chain"] for r in rows})},
-        "rows": rows, "limitations": LIMITATIONS,
+        "rows": rows, "limitations": limitations_for(mode),
+        # 链标注与实际编排不一致的用例（数据质量信号，不进通过率分母）
+        "chain_mismatches": [r["case_id"] for r in rows if r.get("chain_mismatch")],
+        # 已知不可达的判据（派生缺陷，改数据集会换指纹 ⇒ 只做注解，不改判)
+        "known_defect_cases": {r["case_id"]: r["known_defect"]
+                               for r in rows if r.get("known_defect")},
         "generated_at_utc": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
     }
 

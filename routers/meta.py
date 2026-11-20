@@ -395,7 +395,7 @@ def download_document(doc_id: int, conn=Depends(db_session), user=Depends(curren
     from urllib.parse import quote as _q   # HTTP 头仅允许 latin-1：中文文件名须 URL 编码
     return Response(content=result.get("content") or "",
                     media_type="text/plain; charset=utf-8",
-                    headers={"Content-Disposition": f"attachment; filename*=UTF-8''{_q(safe)}.txt"})
+                    headers={"Content-Disposition": f"attachment; filename*=UTF-8''{_q(_safe_doc_name(doc['filename']))}.txt"})
 
 
 @router.get("/api/documents/{doc_id}/source")

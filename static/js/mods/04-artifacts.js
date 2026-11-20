@@ -598,7 +598,9 @@ function artOpenFromMsg(msgId){
   if(!entry){ renderPreviewPanel({title:'该消息无产物数据', kind:'other', preview_content:''}); return; }
   const cd = entry.cd || {};
   const codeBlk = _firstCodeBlock(entry.content||'');
-  const hasSysml = !!(cd.sysml_views && cd.sysml_views.views);
+  // ★ 2026-11-18：空壳视图不按 SysML 预览（否则打开的是空白画布）
+  const hasSysml = (typeof sysmlViewsUsable === 'function') ? sysmlViewsUsable(cd)
+                                                            : !!(cd.sysml_views && cd.sysml_views.views);
   const isReport = !!(cd.sections || cd.report);
   const kind = hasSysml ? 'sysml' : (isReport ? 'report' : 'code');
   const previewContent = hasSysml ? '' : (isReport ? (entry.content||'') : (codeBlk||entry.content||''));

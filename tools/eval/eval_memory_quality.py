@@ -115,6 +115,48 @@ N_CASES = [
 ]
 
 
+# ══════════════════════════════════════════════════════════════════════
+# ★ 2026-11-16：评测集**重锚表**（解决"锚死 10-07 id ⇒ 库涨到 295 条后假红"）
+#
+# 起因：实跑 4 PASS / 10 FAIL / 1 SKIP（28.6%），但逐条诊断发现
+#   21 个期望 id 里 8 个 forgotten、1 个已删除，且其中 5 个用例**在当前库里
+#   根本没有语义等价的 alive 记忆**（T01/T05/T06/T08/M02）。
+#   ⇒ 拿"已经被有意遗忘的内容"判"召回失败"，是把**库内容变化**误读成
+#     **算法退化**——与本仓反复出现的「验证器也会错」同族。
+#
+# 口径（不删判据、不放松阈值）：
+#   · 有等价 alive id ⇒ 用它评测（真判据仍生效）
+#   · 无等价 alive id ⇒ 显式 SKIP，理由写清"能力已不在当前库"，
+#     区别于"召回不到"（FAIL）。SKIP 计入报告、不计入命中率分母。
+#
+# 取值来源：tmp/_find_reeval_anchors.py 实测扫当前库 alive 记忆得到。
+# ⚠️ 这是一张**快照**，库继续演进后要重扫；不要再把它当永久真值。
+# ══════════════════════════════════════════════════════════════════════
+REANCHOR_ALIVE = {
+    "T01": [81],                  # 旧锚 81 仍 alive —— 不能 SKIP，召回不到就是真 FAIL
+    "T02": [284, 285, 186],       # satisfy/verify 追溯（186 仍 alive，284/285 更强）
+    "T03": [265],                 # 需求导入红线（alive）
+    "T04": [284, 285],            # satisfy 引用 usage（原 165/166 已无等价）
+    "T05": [],                    # 端口保留字陷阱：145 已 forgotten，无等价 alive
+    "T06": [],                    # 锚点 266 已删除
+    "T07": [268],                 # 涉众追溯（alive）
+    "T08": [],                    # 182 已 forgotten，无等价 alive
+    "M01": [216, 180],            # MBSE 方法论骨架（alive）
+    "M02": [],                    # 150/146 均已 forgotten
+    "M03": [91],                  # 90 forgotten，91 alive
+    "C01": [133, 134, 135],       # 追溯链五环节（alive）
+}
+REANCHOR_SKIP_WHY = "期望记忆已被遗忘/删除且当前库无等价 alive —— 不是召回失败"
+
+
+def _effective_expect(case, alive_ids):
+    """返回本用例实际用于判定的 id 集合；空集表示应 SKIP。"""
+    reanchor = REANCHOR_ALIVE.get(case["id"])
+    if reanchor is None:
+        return set(case.get("expect", [])) & set(alive_ids)
+    return set(reanchor) & set(alive_ids)
+
+
 def _fid_set(hits):
     """召回结果 → id 集合。
 
@@ -136,8 +178,12 @@ def _fid_set(hits):
     return out
 
 
-def run_case(conn, case, kind):
-    """跑单条，返回 (pass, detail)。"""
+def run_case(conn, case, kind, expect=None):
+    """跑单条，返回 (pass, detail)。
+
+    `expect` 由调用方传入**重锚后的有效 id 集合**（2026-11-16）；
+    不传则退回用例原始 expect（兼容旧调用者）。
+    """
     hits = recall_memories(conn, case["q"], agent_id=case["intent"],
                           scopes=None, project_id="")
     got_ids = _fid_set(hits)
@@ -151,7 +197,8 @@ def run_case(conn, case, kind):
             "leaked": sorted(leaked), "why": case["why"], "top1_text": snippet}
     # 命中组：期望 id 至少出现 want_min 条
     want_min = case.get("want_min", 1)
-    hit = got_ids & set(case["expect"])
+    effective = set(case["expect"]) if expect is None else set(expect)
+    hit = got_ids & effective
     # ★ 2026-10-22 新增：可选的**污染上限** max_hits（同 topic 最多召回几条）。
     #   为什么需要它：C01 声明测"同 topic 多条是否污染排序"，但只有 want_min=1
     #   ⇒ 实测 matched=[133,134,135]（三条同源**全部**召回）也判 PASS。
@@ -199,17 +246,27 @@ def main():
                                ("N 拒答/噪音", N_CASES, "N")):
         print("\n== %s ==" % group)
         for cs in cases:
-            if kind != "N" and not (set(cs["expect"]) & alive):
-                print("  SKIP %s （锚定记忆已不在库中）" % cs["id"])
+            # ★ 2026-11-16：用**重锚后的有效 id**判 SKIP/评测，不再拿 10-07 的
+            #   已遗忘锚点判"召回失败"（那是库内容变化，不是算法退化）。
+            # N 组用 `forbid` 而非 `expect`（拒答组没有"期望命中"），
+            # 这里给它空集即可 —— run_case 的 N 分支只读 forbid。
+            effective = (_effective_expect(cs, alive) if kind != "N"
+                         else set(cs.get("expect") or []))
+            if kind != "N" and not effective:
+                print("  SKIP %s （%s）" % (cs["id"], REANCHOR_SKIP_WHY))
                 n_skip += 1
                 # 也要落进 results：否则汇总处的 SKIP 明细取不到，
                 # 且 JSON 报告里看不到"哪条失效了"（静默缩水）。
                 results.append({"id": cs["id"], "kind": kind, "status": "skip",
-                                "passed": None, "why": cs.get("why", ""),
+                                "passed": None, "why": REANCHOR_SKIP_WHY,
                                 "want": cs.get("expect", []),
-                                "matched": sorted(set(cs["expect"]) & alive)})
+                                "matched": [],
+                                "reanchor": REANCHOR_ALIVE.get(cs["id"])})
                 continue
-            ok, d = run_case(conn, cs, kind)
+            ok, d = run_case(conn, cs, kind, expect=effective)
+            if kind != "N" and REANCHOR_ALIVE.get(cs["id"]) is not None:
+                d["reanchor"] = sorted(effective)
+                d["original_expect"] = cs.get("expect", [])
             results.append(dict(case=cs["id"], kind=kind, passed=ok, **d))
             if ok:
                 n_pass += 1

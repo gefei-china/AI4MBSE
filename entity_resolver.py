@@ -32,6 +32,21 @@ logger = logging.getLogger(__name__)
 _ENTITY_MERGE_DEFAULTS = {"auto": 0.92, "flag": 0.62, "auto_merge_enabled": True}
 
 
+def _log_graph_edit(conn, op: str, node_id, payload: dict, operator: str) -> None:
+    """graph_edit_logs 写入收口（★ 2026-11-18：补 trace_id，列不存在则降级）。
+
+    此前 4 处调用各自拼 SQL，且**一处都没写 trace_id** ⇒ 图谱变更事件无法关联到
+    "哪一轮对话 / 哪次模型调用"（B1 覆盖率门禁里这三张表恒 0% 的直接原因）。
+    收敛成一个函数，避免下次再加列时又漏一处。
+    """
+    from core.audit import with_trace as _wt
+    cols, vals = _wt(conn, "graph_edit_logs",
+                     ["op", "node_id", "payload", "operator"],
+                     [op, node_id, json.dumps(payload or {}, ensure_ascii=False), operator])
+    conn.execute("INSERT INTO graph_edit_logs (%s) VALUES (%s)"
+                 % (", ".join(cols), ",".join("?" * len(cols))), tuple(vals))
+
+
 def _entity_merge_thresholds(conn=None) -> dict:
     """读取实体归一/消歧阈值与自动合并总开关。
 
@@ -392,11 +407,9 @@ def merge_entities(conn, keep_id: str, dup_id: str, operator: str = "知识工�
         conn.execute("UPDATE entity_aliases SET entity_id=? WHERE entity_id=?", (keep_id, dup_id))
 
         # 审计：graph_edit_logs + entity_merges
-        conn.execute(
-            "INSERT INTO graph_edit_logs (op, node_id, payload, operator) VALUES (?,?,?,?)",
-            ("merge_entity", dup_id,
-             json.dumps({"into": keep_id, "props_merged": new_keys, "aliases": aliases, "score": score},
-                        ensure_ascii=False), operator))
+        _log_graph_edit(conn, "merge_entity", dup_id,
+                        {"into": keep_id, "props_merged": new_keys, "aliases": aliases,
+                         "score": score}, operator)
         if save_audit:
             conn.execute(
                 "INSERT INTO entity_merges (keep_id,dup_id,score,method,operator,props_merged,relations_redirected,status) "
@@ -454,11 +467,9 @@ def merge_relation(conn, keep_id: int, dup_id: int, operator: str = "知识工�
         (operator, dup_id))
 
     # 审计留痕（graph_edit_logs + CommitRepo 打点，失败仅打印不阻断业务）
-    conn.execute(
-        "INSERT INTO graph_edit_logs (op, node_id, payload, operator) VALUES (?,?,?,?)",
-        ("merge_relation", str(dup_id),
-         json.dumps({"into": keep_id, "props_merged": new_keys, "keep_source": keep["source_doc"] or ""},
-                    ensure_ascii=False), operator))
+    _log_graph_edit(conn, "merge_relation", str(dup_id),
+                    {"into": keep_id, "props_merged": new_keys,
+                     "keep_source": keep["source_doc"] or ""}, operator)
     try:
         from repositories.commit_repo import CommitRepo
         row = conn.execute("SELECT branch FROM relations WHERE id=?", (keep_id,)).fetchone()
@@ -518,10 +529,8 @@ def rollback_merge(conn, merge_id: int, operator: str = "知识工程师") -> di
                      (json.dumps(keep_props, ensure_ascii=False), row["keep_id"]))
         conn.execute("UPDATE entity_merges SET status='rolled_back', rollback_at=CURRENT_TIMESTAMP WHERE id=?",
                      (merge_id,))
-        conn.execute(
-            "INSERT INTO graph_edit_logs (op, node_id, payload, operator) VALUES (?,?,?,?)",
-            ("rollback_merge", row["dup_id"],
-             json.dumps({"from": row["keep_id"], "merge_id": merge_id}, ensure_ascii=False), operator))
+        _log_graph_edit(conn, "rollback_merge", row["dup_id"],
+                        {"from": row["keep_id"], "merge_id": merge_id}, operator)
         if not in_tx:
             conn.commit()
     except Exception as e:
@@ -715,11 +724,9 @@ def conflict_adjudicate(conn, conflict_id: int, decision: str,
         "UPDATE knowledge_conflicts SET status='resolved', decision=?, decided_by=?,"
         " decided_at=CURRENT_TIMESTAMP WHERE id=?",
         (decision, operator, conflict_id))
-    conn.execute(
-        "INSERT INTO graph_edit_logs (op, node_id, payload, operator) VALUES (?,?,?,?)",
-        ("conflict_adjudicate", str(conflict_id),
-         json.dumps({"subject": subject, "decision": decision, "canonical": canonical},
-                    ensure_ascii=False), operator))
+    _log_graph_edit(conn, "conflict_adjudicate", str(conflict_id),
+                    {"subject": subject, "decision": decision, "canonical": canonical},
+                    operator)
     conn.commit()
     return {"ok": True, "action": "resolved", "decision": decision, "canonical": canonical}
 

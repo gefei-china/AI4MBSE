@@ -37,6 +37,7 @@ import json
 import os
 import sqlite3
 import sys
+import urllib.error
 import urllib.request
 from datetime import datetime, timezone
 
@@ -49,6 +50,14 @@ import golden_e2e as G  # noqa: E402
 
 RUN_SCHEMA = "p0/arch-ab-run@1"
 CMP_SCHEMA = "p0/arch-ab-compare@1"
+
+#: live 跑批遇到 HTTP 429 的重试上限（2026-11-17 真机事故驱动）。
+#: 服务 chat 桶默认 5 次/分钟（core/rate_limit.py），而 eval 客户端**匿名**请求
+#: 与真人聊天共用 `anon` 桶 —— 一次长跑批中途撞上别人的聊天就 429。
+#: 原实现让 HTTPError 直接冒出 main ⇒ **3 小时进度、全部用例一起丢**（实测
+#: 15 个会话后全灭，且产物只在最后一次性写）。尊重 Retry-After 退避重试。
+MAX_429_RETRY = 3
+
 DEFAULT_SET = G.DEFAULT_SET
 DB = os.path.join(ROOT, "mbse.db")
 MIN_REPEAT = 3
@@ -85,10 +94,35 @@ def _no_proxy_opener():
     return urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
 
+def _eval_headers() -> dict:
+    """给 eval 请求一个**独立限流桶**，避免与真人聊天抢 5 次/分钟的 anon 桶。
+
+    2026-11-17 真机事故：长跑批第 15 例撞 429 的根因就是 `core.rate_limit._identity`
+    对无凭据请求一律归 `anon`，而 eval 客户端从不带身份头 —— 真人正在聊天时
+    eval 就被挤爆。这里用 `X-User-Id: 0` 只做**分桶**：
+      · `rate_limit._identity` 取 uid ⇒ 落到 `u:0`，与 `anon`/真实用户彻底分开；
+      · `deps.current_user` 查 uid=0 查不到任何用户 ⇒ **仍是匿名**，
+        当前 `auth.enforce_login=False` 下与不带头的行为逐字节一致（不提权）。
+    ⚠️ 若将来开启强制登录，则**不带头**并明示告警 —— 那时 eval 必须走正式
+       登录凭据，而不是继续用一个不存在的 uid 冒充（严格优先级：认证 > 分桶）。
+    """
+    try:
+        from core import config as _c
+        if _c.as_bool("auth", "enforce_login", False):
+            print("!! auth.enforce_login=True：eval 不使用匿名分桶头；"
+                  "请先配置正式凭据，否则本次跑批可能与真人共用限流桶")
+            return {}
+    except Exception:
+        return {}
+    return {"X-User-Id": "0"}
+
+
 def _http_json(opener, url, payload, timeout=60):
+    _headers = {"Content-Type": "application/json"}
+    _headers.update(_eval_headers())
     req = urllib.request.Request(
         url, data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
-        headers={"Content-Type": "application/json"}, method="POST")
+        headers=_headers, method="POST")
     with opener.open(req, timeout=timeout) as resp:
         return json.loads(resp.read().decode("utf-8", "replace"))
 
@@ -108,23 +142,43 @@ def _live_case(opener, base_url, case, timeout_s):
         id_base = c0.execute("SELECT COALESCE(MAX(id),0) FROM llm_usage_stats").fetchone()[0]
     finally:
         c0.close()
+    _headers = {"Content-Type": "application/json"}
+    _headers.update(_eval_headers())
     req = urllib.request.Request(
         base_url + "/api/conversations/%d/chat/stream" % cid,
         data=json.dumps({"message": _case_input(case)}, ensure_ascii=False).encode("utf-8"),
-        headers={"Content-Type": "application/json"}, method="POST")
+        headers=_headers, method="POST")
     done = False
-    with opener.open(req, timeout=timeout_s) as resp:
-        for raw in resp:
-            line = raw.decode("utf-8", "replace").strip()
-            if not line.startswith("data: "):
-                continue
+    # ★ 2026-11-17：429 退避重试。**复用同一个会话**（会话已建好、评分也按 cid），
+    #    不要重新建会话 —— 那会污染 conv_map 的"每例一个新会话"判据。
+    #    Retry-After 由服务端给出（core/rate_limit.py 的标准响应头），
+    #    取不到时按 5/10/15 秒递增，上限 120 秒（不让退避本身变成卡死）。
+    _retry = 0
+    while True:
+        try:
+            with opener.open(req, timeout=timeout_s) as resp:
+                for raw in resp:
+                    line = raw.decode("utf-8", "replace").strip()
+                    if not line.startswith("data: "):
+                        continue
+                    try:
+                        ev = json.loads(line[6:])
+                    except Exception:
+                        continue
+                    if ev.get("event") == "done" or ev.get("type") == "done":
+                        done = True
+                        break
+            break
+        except urllib.error.HTTPError as _he:
+            if int(getattr(_he, "code", 0)) != 429 or _retry >= MAX_429_RETRY:
+                raise
+            _retry += 1
             try:
-                ev = json.loads(line[6:])
+                _wait = max(1, min(120, int(_he.headers.get("Retry-After") or 0)
+                                   or (5 * _retry)))
             except Exception:
-                continue
-            if ev.get("event") == "done" or ev.get("type") == "done":
-                done = True
-                break
+                _wait = 5 * _retry
+            time.sleep(_wait)
     c = _ro_conn()
     try:
         res = G.score_case(c, case, cid)
@@ -152,30 +206,134 @@ def _live_case(opener, base_url, case, timeout_s):
     return res
 
 
+def _write_partial(out_path: str, all_runs: list, conv_hist: dict, *,
+                   variant: str, label: str, mode: str, dataset: dict,
+                   total_cases: int) -> None:
+    """每跑完一例就增量落盘 `<out>.partial`（2026-11-17 事故驱动）。
+
+    为什么必须增量：原实现只在**全部**用例跑完后写一次 out —— 实测第 15 例撞 429
+    后 main 抛栈退出，3 小时进度 + 15 个真实会话的评分**全部丢失**，
+    连"跑到哪、哪些 conv 已换新"都无法追溯。partial 不是正式报告
+    （不能拿去宣称基线），只是**可恢复的进度快照**。
+    """
+    if not out_path or mode != "live":
+        return
+    try:
+        cmap = {}
+        for cid, hist in conv_hist.items():
+            picked = [x for x in hist if x[1]] or hist
+            if picked:
+                cmap[cid] = picked[-1][0]
+        # ★ 同一 repeat 只留一份：续跑时 `cases` 本就是 all_runs 里那个 list，
+        #   中途快照用 `all_runs + [temp]` 会产生两个 repeat=3 段；若下次再从
+        #   这份快照续跑，同一 (case_id, repeat) 会被算两次 ⇒ 基线样本重复。
+        #   最终报告写的是 all_runs（无重复），但快照必须同样干净。
+        _merged = {}
+        for _r in (all_runs or []):
+            _merged[int(_r.get("repeat_index") or 0)] = _r
+        _clean_runs = [_merged[k] for k in sorted(_merged)]
+        payload = {"phase": "running", "schema": RUN_SCHEMA + "-partial",
+                   "variant": variant, "label": label, "mode": mode,
+                   "dataset_id": dataset.get("dataset_id", ""),
+                   "completed_cases": sum(len(x["cases"]) for x in _clean_runs),
+                   "total_cases": int(total_cases), "conv_map": cmap,
+                   "runs": _clean_runs, "generated_at_utc": _utc()}
+        with open(str(out_path) + ".partial", "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False, indent=1)
+    except Exception:
+        pass        # 观测设施故障不得变成业务故障（与本仓门禁同一纪律）
+
+
 def run_batch(dataset, variant, label, repeat, mode, cfg_overrides,
-             opener=None, base_url="", timeout_s=900):
+             opener=None, base_url="", timeout_s=900, out_path: str = "",
+             resume_state: dict = None):
+    """跑一批；`resume_state` 为上次 `.partial` 的快照时**跳过已完成用例**。
+
+    ★ 2026-11-17：长跑批被服务重启/429 打断后，原实现只能从第 0 例重跑 ——
+      实测 10/36 例（约 50 分钟 + 大量 token）白烧。partial 里每例都带
+      `case_id`/`repeat_index`/`sse_done`/`invalid_reason`，足以精确恢复。
+      **只复用 sse_done 且无 invalid_reason 的样本**（作废样本必须重跑，
+      不能把"没收到 done 帧"的错误结果当基线）。
+    """
     c = _ro_conn()
     conv_hist = {}  # case_id -> [(conv_id, passed), ...]；live 下据此生成 conv_map
+    all_runs = []
+    done_keys = set()
+    if resume_state:
+        if str(resume_state.get("dataset_id") or "") != str(dataset.get("dataset_id") or ""):
+            raise ValueError("resume 快照的 dataset_id 与当前数据集不一致（指纹漂移，拒绝续跑）")
+        if str(resume_state.get("mode") or "") != str(mode):
+            raise ValueError("resume 快照的 mode 与本次 mode 不一致")
+        # 按 repeat 合并：旧 runner 写出的中途快照可能含重复的 repeat 段，
+        # 加载时不去重 ⇒ 最终报告里同一 (case_id, repeat) 出现两次，
+        # per_case 分母被污染（本仓"同一语义两处各写一份"的同族）。
+        _by_rep = {}
+        for _r in resume_state.get("runs") or []:
+            _rep = int(_r.get("repeat_index") or 0)
+            # 快照可能来自 repeat=3 的旧批次；本次只跑 repeat=1 时不能把
+            # 第 2/3 轮的样本混进报告（否则总例数超预算、分母漂移）
+            if _rep < 1 or _rep > int(repeat):
+                continue
+            _slot = _by_rep.setdefault(_rep, [])
+            for _case in _r.get("cases") or []:
+                if not _case.get("sse_done") or _case.get("invalid_reason"):
+                    continue
+                _key = (str(_case.get("case_id")), _rep)
+                if _key in done_keys:
+                    continue
+                done_keys.add(_key)
+                _slot.append(_case)
+                if _case.get("conv_id"):
+                    conv_hist.setdefault(str(_case["case_id"]), []).append(
+                        (int(_case["conv_id"]), bool(_case.get("passed"))))
+        all_runs.extend({"repeat_index": _rep, "cases": cases}
+                        for _rep, cases in sorted(_by_rep.items()))
+        print("RESUME 复用 %d 例（跳过已完成，作废样本重跑）" % len(done_keys))
     try:
-        all_runs = []
+        _total = repeat * len(dataset.get("cases") or [])
         for rep in range(1, repeat + 1):
-            cases = []
+            # resume 时该轮可能已存在（含复用样本）—— 就地续填，别新建一份重复 run
+            cases = next((x["cases"] for x in all_runs
+                          if x["repeat_index"] == rep), None)
+            if cases is None:
+                cases = []
+                all_runs.append({"repeat_index": rep, "cases": cases})
             for case in dataset["cases"]:
-                if mode == "live":
-                    r = _live_case(opener, base_url, case, timeout_s)
-                    if r.get("conv_id"):
-                        conv_hist.setdefault(case["id"], []).append(
-                            (int(r["conv_id"]), bool(r.get("passed"))))
-                else:
-                    r = G.score_case(c, case)
-                    # offline 是确定性回放：不编延迟/token，也不假装是独立采样
-                    r["latency_ms"] = None
-                    r["tokens"] = None
+                if (str(case["id"]), rep) in done_keys:
+                    continue          # 已有效完成 ⇒ 不重跑（省 token、不换会话）
+                try:
+                    if mode == "live":
+                        r = _live_case(opener, base_url, case, timeout_s)
+                        if r.get("conv_id"):
+                            conv_hist.setdefault(case["id"], []).append(
+                                (int(r["conv_id"]), bool(r.get("passed"))))
+                    else:
+                        r = G.score_case(c, case)
+                        # offline 是确定性回放：不编延迟/token，也不假装是独立采样
+                        r["latency_ms"] = None
+                        r["tokens"] = None
+                except Exception as _e:
+                    # ★ live 单例失败**不得炸掉整批**：与 `_run_verify` 同纪律 ——
+                    #   失败只是一种"不通过"，不是崩溃。写成同形错误行继续跑，
+                    #   分数 0 / passed=False 如实计入，不编造 latency/token。
+                    if mode != "live":
+                        raise
+                    r = {"case_id": case["id"], "score": 0.0, "passed": False,
+                         "latency_ms": None, "tokens": None, "sse_done": False,
+                         "invalid_reason": "live_error",
+                         "error": "%s: %s" % (type(_e).__name__, str(_e)[:200]),
+                         "checks": []}
                 r["repeat_index"] = rep
                 cases.append(r)
-            all_runs.append({"repeat_index": rep, "cases": cases})
+                _write_partial(out_path, all_runs + [{"repeat_index": rep, "cases": cases}],
+                               conv_hist, variant=variant, label=label, mode=mode,
+                               dataset=dataset, total_cases=_total)
     finally:
         c.close()
+    all_runs.sort(key=lambda x: int(x.get("repeat_index") or 0))
+    _write_partial(out_path, all_runs, conv_hist,
+                   variant=variant, label=label, mode=mode,
+                   dataset=dataset, total_cases=_total)
     flat = [x for run in all_runs for x in run["cases"]]
     per_case = {}
     for case in dataset["cases"]:
@@ -612,6 +770,9 @@ def main():
     p.add_argument("--out", required=True)
     p.add_argument("--emit-conv-map", default="",
                    help="live 下把 case_id→conv_id 写成 JSON，供 golden_e2e --conv-map 消费")
+    p.add_argument("--resume-from", default="",
+                   help="从上次 <out>.partial 续跑：跳过已有效完成的 (case_id, repeat)，"
+                        "作废样本重跑；数据集指纹不一致则拒绝")
     p.add_argument("--base-url", default="http://127.0.0.1:8000")
     p.add_argument("--timeout", type=int, default=900)
     p.add_argument("--cfg", action="append", default=[],
@@ -651,8 +812,15 @@ def main():
                 pass
         ds = G.load_dataset(args.set)
         opener = _no_proxy_opener() if args.mode == "live" else None
+        resume_state = None
+        if getattr(args, "resume_from", ""):
+            with open(args.resume_from, encoding="utf-8") as _rf:
+                resume_state = json.load(_rf)
+            if not isinstance(resume_state, dict):
+                raise ValueError("--resume-from 必须是 .partial 的 JSON 对象")
         rep = run_batch(ds, args.variant, args.label or ("变体 %s" % args.variant),
-                        args.repeat, args.mode, cfg, opener, args.base_url, args.timeout)
+                        args.repeat, args.mode, cfg, opener, args.base_url, args.timeout,
+                        out_path=args.out, resume_state=resume_state)
         os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)
         with open(args.out, "w", encoding="utf-8", newline="\n") as f:
             json.dump(rep, f, ensure_ascii=False, indent=2)

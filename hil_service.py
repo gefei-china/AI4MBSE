@@ -266,7 +266,8 @@ class HILService:
                            preview: str = "", conversation_id: int = 0,
                            run_id: int = 0, task_key: str = "",
                            tool_type: str = "", level: str = "",
-                           batch_id: str = "", timeout_min: int = 0) -> dict | None:
+                           batch_id: str = "", timeout_min: int = 0,
+                           requested_by: str = "") -> dict | None:
         """L2 写操作拦截：写入待确认队列。返回确认记录（含 id）。
 
         task_key：所属子任务键（默认 ''，既有调用方零改动）；
@@ -365,16 +366,42 @@ class HILService:
         _tmo = int(timeout_min or 0) or DEFAULT_TIMEOUT_MIN
         _timeout_at = (datetime.now() + timedelta(minutes=_tmo)).strftime("%Y-%m-%d %H:%M:%S")
         try:
+            # ★ B2-5（2026-11-18）：requested_by 列存在才写（旧库自动降级，不阻断入队）
+            _rb_cols = set()
+            try:
+                _rb_cols = {r[1] for r in conn.execute(
+                    "PRAGMA table_info(hil_confirmations)").fetchall()}
+            except Exception:
+                _rb_cols = set()
+            # ★ 2026-11-18：trace_id / requested_by 两列都**先查在不在**再决定写不写。
+            #   此前 trace_id 是硬写在 INSERT 里的 ⇒ 缺该列的库（老库、夹具库）必抛异常
+            #   落到下面的降级分支，而降级分支的提示语把原因误报成"tool_type/level/batch_id
+            #   将为空"（2026-11-18 实测：verify_idempotency 被这条误报掩盖成 C3 失败）。
+            #   改为同 requested_by 一样的条件拼接，缺列即不写、不触发降级。
+            _opt_cols, _opt_vals = [], []
+            if "trace_id" in _rb_cols:
+                _opt_cols.append("trace_id")
+                try:
+                    from core.audit import current_trace_id as _ctid_b1
+                    _opt_vals.append(_ctid_b1())
+                except Exception:
+                    _opt_vals.append("")
+            if "requested_by" in _rb_cols:
+                _opt_cols.append("requested_by")
+                _opt_vals.append(str(requested_by or ""))
+            _rb_sql = "".join([", " + _c for _c in _opt_cols])
+            _rb_val = _opt_vals
             cur = conn.execute(
-                "INSERT INTO hil_confirmations (agent_id, conversation_id, run_id, action, payload, preview, status, task_key, idem_key, tool_type, level, batch_id, batch_count, timeout_at, batch_items) "
-                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                "INSERT INTO hil_confirmations (agent_id, conversation_id, run_id, action, payload, preview, status, task_key, idem_key, tool_type, level, batch_id, batch_count, timeout_at, batch_items"
+                + _rb_sql + ") "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?" + (",?" * len(_rb_val)) + ")",
                 (agent_id or "", conversation_id or 0, run_id or 0, action,
                  json.dumps(payload or {}, ensure_ascii=False),
                  (preview or "")[:_PREVIEW_LEN], "pending", task_key or "", _idem,
                  tool_type or "", level or "", batch_id or "", 1, _timeout_at,
                  json.dumps([{"tool": action, "preview": (preview or "")[:300],
                               "target": _batch_target(payload or {}),
-                              "args": payload or {}}], ensure_ascii=False)))
+                              "args": payload or {}}], ensure_ascii=False)) + tuple(_rb_val))
             conn.commit()
             out = HILService.get(conn, cur.lastrowid)
             if isinstance(out, dict):
@@ -422,7 +449,12 @@ class HILService:
                     "INSERT INTO hil_confirmations (%s) VALUES (%s)"
                     % (", ".join(_names), ",".join("?" * len(_names))), tuple(_vals))
                 conn.commit()
-                return HILService.get(conn, cur.lastrowid)
+                _out2 = HILService.get(conn, cur.lastrowid)
+                # 契约补齐（2026-11-18）：降级分支也必须带 `idempotent_hit` 标记，
+                # 否则调用方按标记判断"新建/命中"时拿到 None ⇒ 误判成重复提交。
+                if isinstance(_out2, dict):
+                    _out2["idempotent_hit"] = False
+                return _out2
             except Exception:
                 return None
 
@@ -532,6 +564,29 @@ class HILService:
             return {"status": "not_found", "payload": {}}
         if row["status"] != "pending":
             return {"status": row["status"], "payload": row["payload"], "row": row}
+        # ★ B2-5（2026-11-18）：destructive 动作的**自批闸**（四眼原则最小切口）。
+        #   判据三条同时成立才拦：开关开 / 发起人已记录 / 批准人与发起人同一人。
+        #   只对 kind=destructive 生效 —— 可逆写仍允许本人一键确认，
+        #   否则「用户让助手改个文件、自己点通过」会被误拦，正常用法直接断。
+        if approve:
+            try:
+                from core import config as _cfg5
+                _guard_on = bool(_cfg5.get("hil", "block_destructive_self_approval", True))
+            except Exception:
+                _guard_on = True
+            _req = str(row.get("requested_by") or "").strip()
+            _dec = str(decided_by or "").strip()
+            if _guard_on and _req and _dec and _req == _dec:
+                try:
+                    _k = classify_action(
+                        str(row.get("action") or ""),
+                        is_mcp=(str(row.get("tool_type") or "") == "mcp")).get("kind")
+                except Exception:
+                    _k = "write"
+                if _k == "destructive":
+                    return {"status": "self_approval_blocked",
+                            "payload": row.get("payload") or {}, "row": row,
+                            "requested_by": _req, "decided_by": _dec}
         # ① 乐观锁校验（**递归**取坐标：智源是嵌套 version:{...}，见 _extract_version 注释）
         if expected_version:
             _pv = _extract_version(row.get("payload") or {})

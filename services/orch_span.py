@@ -173,13 +173,15 @@ class SpanCollector:
                 sp["status"] = "error"
                 sp["meta"].setdefault("note", "unclosed_at_flush")
             lat = max(0, int((sp["t1"] - sp["t0"]) * 1000))
+            from core.audit import current_trace_id as _ctid_b1
             cur = conn.execute(
                 "INSERT INTO orch_run_spans (conversation_id, run_id, kind, name, parent_id,"
-                " status, started_at, ended_at, latency_ms, meta_json, created_at)"
-                " VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                " status, started_at, ended_at, latency_ms, meta_json, trace_id, created_at)"
+                " VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
                 (self._conversation_id, self._run_id, sp["kind"], sp["name"],
                  id_map.get(sp["parent"], 0), sp["status"], sp["started_at"], now,
-                 lat, json.dumps(sp["meta"], ensure_ascii=False)[:2000], now))
+                 lat, json.dumps(sp["meta"], ensure_ascii=False)[:2000],
+                 _ctid_b1(), now))
             id_map[sp["id"]] = int(cur.lastrowid or 0)
             n += 1
         return n

@@ -5,16 +5,6 @@
 from routers.studio_parts.shared import *
 
 
-def _bump_version(v):
-    """技能版本 patch 级递增（P2-3）。容忍 'v' 前缀与非标写法，绝不返回空。"""
-    import re
-    v = (v or "").strip() or "1.0.0"
-    _m = re.match(r"^(v?)(\d+)\.(\d+)\.(\d+)$", v)
-    if _m:
-        return "%s%s.%s.%d" % (_m.group(1), _m.group(2), _m.group(3), int(_m.group(4)) + 1)
-    return v + ".1"
-
-
 def _normalize_trg(triggers):
     """triggers 规范化 → `(列表, 警告列表, 是否变化)`。
 
@@ -68,6 +58,9 @@ def create_skill(body: SkillIn, conn=Depends(db_session), user=Depends(current_u
         references=json.dumps(body.references or [], ensure_ascii=False),
         examples=json.dumps(body.examples or [], ensure_ascii=False),
         scripts=json.dumps(body.scripts or [], ensure_ascii=False),
+        # ★ 2026-11-20：记录创建者，供同步桥解析 plugins.author_id。
+        #   未登录（兼容期匿名自检请求）不写 "未登录" 这种假归属，留空 ⇒ 维持本地创建口径。
+        owner=str((user or {}).get("username") or ""),
     )
     audit(audit_user(user), "skill_create", f"创建Skill: {body.name}", conn=conn)
     return {"ok": True, "id": sid, "trigger_warnings": _trg_warn}
@@ -80,6 +73,22 @@ def update_skill(sid: int, body: SkillIn, conn=Depends(db_session), user=Depends
         return JSONResponse({"error": "Skill not found"}, 404)
     # ★ 2026-10-29（P1-4）：同 create，编辑时也规范化（老脏数据经一次编辑即被修好）
     _trg, _trg_warn, _trg_changed = _normalize_trg(body.triggers)
+    # ★ 2026-11-20 归属自愈：2026-11-20 之前创建的技能没有 owner（skills 表该列从未写入）
+    #   ⇒ 同步桥只能给 plugins.author_id=0 ⇒ 创建者本人也不是「作者」（is_mine=False）
+    #   ⇒ 卡片上没有编辑/发布/删除，只有一个「停用」按钮（用户本轮投诉的死锁态）。
+    #   规则：**仅私有（personal/private）且当前无归属**时，由本次编辑者接管 ——
+    #   私有条目本来只有他自己能看到，不存在"抢别人作品"的问题；public/pending 不动。
+    #   ⚠️ 两个词表不一致：`skills.scope` 用 private，`plugins.scope` 用 personal，
+    #      两边都要认（此前只写 personal，实测本表默认值是 private ⇒ 永不命中）。
+    #   必须在 repo.update_skill 之前写，它内部的 _sync 才会带上新 owner。
+    _who = str((user or {}).get("username") or "").strip()
+    if _who:
+        try:
+            conn.execute(
+                "UPDATE skills SET owner=? WHERE id=? AND scope IN ('personal','private') "
+                "AND (owner IS NULL OR owner='')", (_who, sid))
+        except Exception:
+            pass
     repo.update_skill(
         sid, body.name, body.description, body.skill_type,
         json.dumps(_trg, ensure_ascii=False), body.category,
@@ -93,11 +102,11 @@ def update_skill(sid: int, body: SkillIn, conn=Depends(db_session), user=Depends
         actor=audit_user(user), source="api",
     )
     # P2-3（2026-10-27）：编辑技能即 bump 版本（patch 级），让"哪个版本表现如何"可观测
-    #   （文章 7 项可观测要求之一：Skill 及版本）。registry 已投影 skills.version。
-    try:
-        conn.execute("UPDATE skills SET version=? WHERE id=?", (_bump_version(s.get("version")), sid))
-    except Exception:
-        pass
+    #   —— 该职责由 studio_repo.update_skill 内的 asset_audit.audited_update 承担
+    #   （按真实 diff 计算 version_from→version_to，无 diff 不递增）。
+    # ★ 2026-11-20 修：此处原有 `_bump_version(s.get("version"))`，但 `s` 在本作用域
+    #   从未定义 ⇒ 恒 NameError → 被 except 静默吞掉。后果不是"版本多跳一次"，
+    #   而是"这行代码从来没跑过"，却让人误以为这里有第二处递增。删除死代码。
     audit(audit_user(user), "skill_update", f"更新Skill#{sid}: {body.name}", conn=conn)
     return {"ok": True}
 

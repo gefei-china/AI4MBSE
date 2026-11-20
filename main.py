@@ -67,6 +67,30 @@ from routers import (
 async def lifespan(app: FastAPI):
     """应用生命周期（替代已弃用的 @app.on_event("startup")，语义等价）。"""
     init_db()
+    # ★★ 2026-11-18：**强杀恢复** —— 把上次进程异常终止时留下的流式检查点固化成消息。
+    #   必须紧跟 init_db()（表刚建好），且在所有后台守护线程启动之前。
+    #   正常收口的流已在 finally 里删除检查点 ⇒ 这里扫到的只可能是强杀残留。
+    try:
+        from services.stream_checkpoint import recover_all as _ck_recover
+        _n_ck = _ck_recover()
+        if _n_ck:
+            print("[startup] 流式中检查点恢复：固化 %d 条被中断的输出" % _n_ck, flush=True)
+    except Exception as _e_ck:
+        print("[startup] 检查点恢复跳过：%s" % str(_e_ck)[:120], flush=True)
+    # ★ 2026-11-20（方案B 遗留）：把上次进程留下的 `status='running'` 一次性收口。
+    #   单进程部署 + SQLite 单写者 ⇒ 启动瞬间库里任何 running 都属已死进程。
+    #   否则用户"只重开会话、不再提问"时那行永远 running：/recovery 报运行中、
+    #   /subscribe 白等 tail_max_s=60s（new_run 的 stale_owner 清理要等到下一轮才触发）。
+    try:
+        from database import db_conn as _dbc
+        from services.run_frame_store import reap_restarted_runs as _reap
+        with _dbc() as _c:
+            _n_run = _reap(_c)
+        if _n_run:
+            print("[startup] 帧日志：%d 个残留 run 标记为 cancelled/process_restart" % _n_run,
+                  flush=True)
+    except Exception as _e_run:
+        print("[startup] 帧日志残留 run 清理跳过：%s" % str(_e_run)[:120], flush=True)
     # P1-4（2026-10-02）：工具结果 offload 过期清理（TTL 默认 30 天，context.offload_ttl_days）
     try:
         from agent.pipeline_parts import tool_offload as _toff

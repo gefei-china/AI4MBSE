@@ -122,6 +122,50 @@ def clear_trace() -> None:
     _trace_ctx.set({})
 
 
+# ── 通用落库助手：给任意审计类表补 trace_id（★ 2026-11-18，B1 收尾）──────
+#: 已确认「有 trace_id 列」的表缓存。键用 id(conn) 而非 conn 本身（sqlite3.Connection
+#: 可哈希但不同连接同一库会重复查 PRAGMA，代价很小；用 id 只是省一次往返）。
+_TRACE_COL_OK = {}
+
+
+def table_has_trace_col(conn, table: str) -> bool:
+    """表是否存在 trace_id 列（结果缓存，异常一律按"没有"处理）。
+
+    为什么必须判而不能直接写：`init_db` 会给七表补列，但**验证门禁的夹具库**
+    与老库不经过 `init_db`（实测 `verify_commit_hash` / `verify_trace_raw_query`
+    自建表且不含该列）⇒ 硬写会整条 INSERT 失败、连带业务写入丢失。
+    """
+    key = (id(conn), table)
+    if key in _TRACE_COL_OK:
+        return _TRACE_COL_OK[key]
+    ok = False
+    try:
+        cols = {r[1] for r in conn.execute('PRAGMA table_info("%s")' % table).fetchall()}
+        ok = "trace_id" in cols
+    except Exception:
+        ok = False
+    _TRACE_COL_OK[key] = ok
+    return ok
+
+
+def with_trace(conn, table: str, cols, vals):
+    """给 INSERT 的列名/值列表追加 trace_id（列不存在则原样返回）。
+
+    用法：
+        cols, vals = with_trace(conn, "graph_edit_logs", ["op","node_id"], [op, nid])
+        conn.execute("INSERT INTO graph_edit_logs (%s) VALUES (%s)"
+                     % (",".join(cols), ",".join("?" * len(cols))), tuple(vals))
+    """
+    cols = list(cols)
+    vals = list(vals)
+    if "trace_id" in cols:
+        return cols, vals
+    if table_has_trace_col(conn, table):
+        cols.append("trace_id")
+        vals.append(current_trace_id())
+    return cols, vals
+
+
 def submit_with_ctx(pool, fn, *args):
     """把 `fn` 提交到线程池，并**显式继承当前线程的链路上下文**。
 
@@ -220,16 +264,21 @@ def audit(user, event, detail, result="success", conn=None, branch=""):
         # 宁可记未脱敏的原文，也不能丢审计——但要留下痕迹让人知道脱敏没生效。
         detail = f"[redact-failed] {detail}"
 
+    # ★ B1（2026-11-18）：trace_id 只作关联元数据，**刻意不进 _row_hash** ——
+    #   哈希链覆盖的 9 字段是已认证内容；把 trace 加进去会让存量 7001 行全部
+    #   验不过（verify_chain 按固定字段重算）。trace 由 begin_trace 生成，
+    #   可与 llm_usage_stats / tool_call_logs JOIN 即可，不需要哈希背书。
     sql = ("INSERT INTO audit_logs (user_name, event_type, detail, result, branch, "
-           "ip_address, user_agent, request_id, prev_hash, hash) "
-           "VALUES (?,?,?,?,?,?,?,?,?,?)")
+           "ip_address, user_agent, request_id, trace_id, prev_hash, hash) "
+           "VALUES (?,?,?,?,?,?,?,?,?,?,?)")
 
     def _write(c):
         # 哈希链：先取链尾再算本行摘要，全程持锁（进程内写串行）
         with _chain_lock:
             prev = _last_hash(c)
             h = _row_hash(prev, user, event, detail, result, branch or "", ip, ua, rid)
-            c.execute(sql, (user, event, detail, result, branch or "", ip, ua, rid, prev, h))
+            c.execute(sql, (user, event, detail, result, branch or "", ip, ua, rid,
+                            current_trace_id(), prev, h))
             return h
 
     def _write_degrade(c):

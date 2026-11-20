@@ -894,6 +894,10 @@ async function selectConv(id) {
       _bindStickDetach();
       _reattachLiveStream(area, id);
       pinChatBottom(area, 8000);
+      // ★ 2026-11-19 方案B P1：末条是用户消息=上一轮没有任何回应 ⇒ 帧日志可能是唯一副本，
+      //   给一个「回放上一轮输出」的入口（不自动回放）。必须放在全部消息渲染完之后，
+      //   否则 `area.querySelectorAll('.msg')` 拿不到末条，判据会静默失效。
+      try{ if(typeof maybeOfferRunReplay === 'function') maybeOfferRunReplay(id, area); }catch(_e){}
     });
   }
   // 2026-09-29（用户反馈）：状态栏不再写「已加载」——零信息量却让蓝色状态条常驻不消失

@@ -133,3 +133,68 @@ def _migrate_event_tables(conn):
 
     conn.commit()
     print("[init_db] 迁移: ev_sources / ev_triggers / ev_workitems 已建立（事件驱动底座）")
+
+
+# ── RUN_STREAM_SCHEMA_V1（2026-11-19，方案B P0 地基）──────────────────────────
+# 为什么要有这张表（而不是复用 orch_stream_events）：
+#   `orch_stream_events` 刻意只落 stage/tool 两类（token/reasoning 是逐字增量，
+#   一次真实建模数百上千帧，全量写会撑爆表），它回答的是"走过哪些阶段、调了哪些工具"。
+#   而"断线重连后把已生成的正文接着显示出来"需要的是**有序、可寻址、可按游标重放**
+#   的完整帧日志 —— 含 token，且每帧有单调序号。两者用途不同、保留策略不同，
+#   合表会让"排障事件"被 token 淹没，也会让"重放"受 stage/tool 白名单限制。
+#
+# 为什么序号由服务端单调分配、且与帧写入**同事务**：
+#   重连端用 `seq > cursor` 取帧。若序号推进与插入分两次提交，崩溃点会落在两者之间
+#   ⇒ 要么重复帧（用户看到重复文字），要么丢帧（文字缺口）。同事务是唯一安全的形态
+#   （对标 `mark_summary_written` 的同事务纪律）。
+#
+# 为什么 run_id 用 AUTOINCREMENT 而不是复用 agent_tasks.run_id：
+#   `TaskQueue.new_run_id()` 取的是 `MAX(agent_tasks.run_id)+1`，而**直答路径根本不写
+#   agent_tasks** ⇒ 两个并发的直答轮会拿到同一个号，撞本表主键、后一轮静默无帧。
+#   自增主键由 SQLite 保证唯一，且不干预编排批次号的既有语义（两者只是"恰好都叫
+#   run_id"，互不约束）。
+#
+# 幂等：CREATE TABLE IF NOT EXISTS + 补列守卫，空库/老库均可启动。
+def _migrate_run_stream(conn):
+    """帧日志地基：run_sessions / run_frames 两表 + messages 两列（幂等）。"""
+    c = conn.cursor()
+    c.execute("""CREATE TABLE IF NOT EXISTS run_sessions (
+        run_id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        conversation_id INTEGER NOT NULL DEFAULT 0,
+        status          TEXT NOT NULL DEFAULT 'running',  -- running | done | error | cancelled
+        cancel_reason   TEXT DEFAULT '',                  -- client_gone / user_stop / deadline / exception:*
+        last_seq        INTEGER DEFAULT 0,                -- 已落库的最大帧序号
+        frame_count     INTEGER DEFAULT 0,                -- 已落库帧数（= last_seq，除截断场景）
+        truncated       INTEGER DEFAULT 0,                -- 1 = 超上限后停止记帧
+        owner_pid       INTEGER DEFAULT 0,                -- 宿主进程（进程重启后判孤儿）
+        message_id      INTEGER DEFAULT 0,                -- 本轮最终落库的 assistant 消息（收口回填）
+        heartbeat_at    TEXT,
+        started_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+        ended_at        TEXT,
+        meta_json       TEXT DEFAULT '{}'
+    )""")
+    c.execute("CREATE INDEX IF NOT EXISTS ix_rs_conv ON run_sessions(conversation_id, run_id)")
+    c.execute("CREATE INDEX IF NOT EXISTS ix_rs_status ON run_sessions(status)")
+
+    c.execute("""CREATE TABLE IF NOT EXISTS run_frames (
+        run_id     INTEGER NOT NULL,
+        seq        INTEGER NOT NULL,
+        event_type TEXT NOT NULL,
+        payload    TEXT NOT NULL,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (run_id, seq)
+    )""")
+    # 主键 (run_id, seq) 已是回放查询的最佳索引（范围扫描 seq>? 有序），无需重复建索引。
+
+    # messages 两列：让"落库消息"能反查到它属于哪个 run / 产到第几帧。
+    # 为什么不改 2~3 处插入路径去写它：插入点分散（服务端兜底固化、前端 partial、
+    #   正常收口），且任何一处漏写都会造成"消息有、run 关联空"的半成品。
+    #   改为**收口时一次 UPDATE**（run 关闭时按本轮新增 assistant 行回填），
+    #   判据只依赖"本轮开始后的消息基线"这一条事实，不依赖各插入路径的自觉。
+    _m_cols = [r[1] for r in c.execute("PRAGMA table_info(messages)").fetchall()]
+    for _col, _ddl in (("run_id", "INTEGER DEFAULT 0"), ("last_seq", "INTEGER DEFAULT 0")):
+        if _col not in _m_cols:
+            c.execute("ALTER TABLE messages ADD COLUMN `%s` %s" % (_col, _ddl))
+            print("[init_db] 迁移: messages 增加列 %s" % _col)
+
+    conn.commit()

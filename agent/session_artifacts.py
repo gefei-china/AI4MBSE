@@ -293,3 +293,76 @@ def build_digest(conn, conversation_id, max_chars=None, versions=None,
         logging.getLogger(__name__).warning(
             "[artifact_digest] 会话产物摘要生成失败（conv=%s）：\n%s", conversation_id, traceback.format_exc())
         return ""
+
+def load_parent_user_msgs(conn, conversation_id, count=None, max_chars=None,
+                          exclude_latest: bool = True) -> list:
+    """读**父会话最近 N 条 user 消息原文**，供编排子任务上下文注入。
+
+    ★★★ 2026-11-19 P0-A 新增（conv 999999905 / msg#7013 → #7014 事故）。
+
+    为什么必须有它（本模块顶部 ④ 条断链的直接后果）：
+      编排子任务以 `execute_stream(query, conversation_id=0)` 运行 ⇒ `_load_history` 为空。
+      既有补偿只有 `artifact_digest`，而它是**产物清单**（版本名/元素名/关系数），
+      **不含用户需求原文**。实测对 msg#7011 的 8 个需求独有短语命中 **0/8**。
+      于是子任务 t2「诊断用户原始提示词的模糊点」只能反推，自报「原始提示词未取回」，
+      最终 10304 字报告里**没有提示词**，用户追问「我的提示词呢」。
+
+    exclude_latest（默认 True）：
+      前端 `/chat/stream` 是**先落 user 消息、再跑 execute_stream** ⇒ id 最大的 user 消息
+      就是本轮输入，它已通过 `goal` / `query` 进子任务，重复注入会让子任务误当成"另一条需求"。
+      ⚠️ 已知取舍：`resume_run_id`（断点续跑不新增 user 消息）时，最新一条是**上一轮**输入，
+      会被排除 ⇒ 少一条。宁可少一条也不要制造"同一条需求出现两次"的歧义。
+
+    返回：[{"label": "第N轮" 或 "更早", "content": "原文"} ...]（按时间正序）
+    任何异常都返回 []（绝不阻断编排主链路），与 build_digest 的降级口径一致。
+    """
+    try:
+        from core import config as _cfg
+        if count is None:
+            count = int(_cfg.get("context", "subtask_parent_msgs_count", 3) or 0)
+        if max_chars is None:
+            max_chars = int(_cfg.get("context", "subtask_parent_msgs_max_chars", 6000) or 0)
+        enabled = _cfg.as_bool("context", "subtask_parent_msgs_enabled", True)
+    except Exception:
+        count, max_chars, enabled = 3, 6000, True
+    if not enabled or int(count) <= 0 or int(max_chars) <= 0:
+        return []
+    try:
+        limit = int(count) + (1 if exclude_latest else 0)
+        rows = conn.execute(
+            "SELECT id, content FROM messages WHERE conversation_id=? AND role='user' "
+            "ORDER BY id DESC LIMIT ?", (conversation_id, limit)).fetchall()
+        items = []
+        for r in (rows or []):
+            try:
+                mid, content = r[0], r[1]
+            except Exception:
+                mid, content = r["id"], r["content"]
+            txt = (content or "").strip()
+            if not txt:
+                continue
+            items.append({"id": mid, "content": txt})
+        if exclude_latest and items:
+            items = items[1:]                 # 去掉最新一条 = 本轮输入
+        items.reverse()                       # 时间正序
+        if not items:
+            return []
+        # 逐条均分预算（避免第一条把预算吃光、后面的全被截成空）
+        per = max(200, int(max_chars) // max(len(items), 1))
+        out = []
+        n = len(items)
+        for i, it in enumerate(items):
+            txt = it["content"]
+            if len(txt) > per:
+                txt = txt[:per] + "…（已截断）"
+            # 标签：越早越靠前的轮次，统一叫「更早」；最近一条叫「上一轮」
+            label = "上一轮" if i == n - 1 else ("更早第%d条" % (n - i))
+            out.append({"label": label, "content": txt})
+        return out
+    except Exception:
+        import logging
+        import traceback
+        logging.getLogger(__name__).warning(
+            "[parent_user_msgs] 父会话用户原文读取失败（conv=%s）：\n%s",
+            conversation_id, traceback.format_exc())
+        return []

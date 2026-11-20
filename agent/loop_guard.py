@@ -284,6 +284,20 @@ def tokens_of(resp) -> int:
 
 
 
+#: ★ 2026-11-20（conv 999999952 实证）：**同工具不同参数的试探式检索**。
+#:   已有 `probe_dup` 只挡"语义等价"的重复；t4 用 A8E/A8/整车/热管理/混动…
+#:   连续调了 17 次 `query_projects`（外加 11 次 query_data_tree），每次参数都不同
+#:   ⇒ 一次都没被挡。对"定位类"只读工具设**同轮次数上限**，到点回喂明确结论，
+#:   逼模型基于已有回执作答或换工具，而不是继续猜关键词。
+#:   为什么会扭伤：这类工具只读、无副作用，模型习惯"再换个词试试"，而每试一次
+#:   都是一次完整 LLM 轮次（真机 t4 单独占 4 分钟）。
+PROBE_TOOL_LIMITS = {
+    "query_projects": 5, "query_data_tree": 8,
+    "query_branches": 4, "query_model_versions": 4,
+    "search_model_elements": 6,
+}
+
+
 class LoopGuard:
     """一次 loop 的护栏状态（纯状态机，便于在测试里直接构造各种进度）。"""
 
@@ -311,6 +325,9 @@ class LoopGuard:
         #:   （用不完整的结果冒充答案，比多跑一次更糟）。
         self._complete: dict = {}
         self.dup_short_circuits = 0
+        self.probe_cap_hits = 0          # 试探式检索撞上限次数（2026-11-20）
+        self.validation_sigs: dict = {}  # 校验回执签名 -> 次数（停滞短路）
+        self.validation_stalls = 0
         self.timeouts = 0
         self.stop_reason = ""
         # ── 失败轮预算（2026-10-09）：**只扣失败轮**，成功推进不扣。
@@ -333,6 +350,62 @@ class LoopGuard:
         if not self._complete.get(k, True):
             return 0
         return dedup_hit(self._seen, k, self.dup_threshold)
+
+    def probe_cap(self, name: str) -> int:
+        """定位类只读工具的本轮调用次数是否已到上限（0 = 放行）。"""
+        limit = PROBE_TOOL_LIMITS.get(str(name or ""))
+        if not limit:
+            return 0
+        n = sum(1 for nm, _ar, _ok, _ms in self.calls if nm == name)
+        return n if n >= limit else 0
+
+    def probe_cap_payload(self, name: str, n: int) -> dict:
+        """撞上限时的**可行动回执**：带上已有结果摘要，而不是只说"不许查了"。"""
+        limit = PROBE_TOOL_LIMITS.get(str(name or ""), n)
+        prior = []
+        for nm, ar, ok, _ms in reversed(self.calls):
+            if nm != name or not ok:
+                continue
+            txt = str(self._results.get(call_key(nm, ar), "") or "").strip()
+            if txt:
+                prior.append(txt[:220])
+            if len(prior) >= 3:
+                break
+        hint = ("【检索次数上限】本轮已调用 `%s` %d 次（上限 %d），系统不再执行新的关键词试探。"
+                "请**基于下面已有的回执**给出结论；若都未命中，就如实写「未找到」并说明已试过的关键词，"
+                "不要继续换词重试。\n\n已取得的回执（最近 3 条）：\n%s"
+                % (name, n, limit, "\n---\n".join(prior) if prior else "（无有效回执）"))
+        return {"ok": True, "result": hint, "_probe_cap": True, "cap": limit}
+
+    def validation_stalled(self, name: str, result) -> bool:
+        """校验结果**连续 3 次完全同签名** ⇒ 再跑也不会变（2026-11-20）。
+
+        真机 t3 连跑 8 次 `sysml_v2_validate`，语义错始终 120 条、判据 report ——
+        根因是校验器标准库未加载（假错），重试不解决问题，只烧 3 分钟。
+        签名一致 2 次后下一次就不再执行，直接回喂"停滞"说明。
+        """
+        if str(name or "") != "sysml_v2_validate":
+            return False
+        import re as _re
+        txt = str(result if isinstance(result, str) else
+                  (result or {}).get("result") or "")
+        sigs = tuple(sorted(_re.findall(
+            r"(?:词法|语法|语义|ERROR|判据)\s*[:：]?\s*([A-Za-z0-9]+)", txt)))
+        if not sigs:
+            return False
+        key = "|".join(sigs)
+        n = int(self.validation_sigs.get(key, 0)) + 1
+        self.validation_sigs[key] = n
+        return n >= 3
+
+    @staticmethod
+    def validation_stall_payload() -> dict:
+        return {"ok": True, "_validation_stall": True,
+                "result": ("【校验停滞，已短路】连续多次校验得到完全相同的错误签名"
+                           "（例如语义错条数不下降），说明根因不在本次代码改动，"
+                           "而是环境级问题（如校验器标准库未加载）。"
+                           "请不要再用同样参数重跑；按已有结论如实标注未验证项，"
+                           "或换一个能改变根因的动作。")}
 
     def mark_done(self, name: str, args, ok: bool, weak: bool = False,
                   elapsed_ms: int = 0) -> None:

@@ -4,6 +4,17 @@
  */
 function procBlocksHtml(ex, mid){
   if(!ex) return '';
+  // ★ 2026-11-20（用户要求「调用的 agent/skill/tool 在对应环节标识出来」）：
+  //   历史回放走的是 card_data.exec 重建，与实时路径是**两套代码**，必须成对维护。
+  //   这里提供与 11-pipeline.js 同名的徽章函数（全局作用域，后加载者覆盖，实现逐字一致）。
+  const _bd = (kind, name) => {
+    if(!name) return '';
+    const t = String(name);
+    const c = kind === 'agent' ? 'ba' : (kind === 'skill' ? 'bs' : 'bm');
+    const ic = kind === 'agent' ? '🤖' : (kind === 'skill' ? '🧩' : '🔌');
+    const lbl = kind === 'agent' ? 'Agent' : (kind === 'skill' ? '技能' : 'MCP');
+    return `<span class="proc-badge ${c}" title="${lbl}：${esc(t)}">${ic} ${esc(t)}</span>`;
+  };
   const now = new Date().toLocaleTimeString('zh-CN',{hour12:false,hour:'2-digit',minute:'2-digit',second:'2-digit'});
   const uid = (mid || 'h' + Math.random().toString(36).slice(2,8));
   let steps = [];
@@ -39,7 +50,44 @@ function procBlocksHtml(ex, mid){
                   sub:'系统进度提示（非模型思考）', body:_ntBody, cls:'notice'});
     }
   }
-  if(ex.agent) steps.push({icon:'🤖', title:`子智能体：${esc(ex.agent)}`, status:'done', sub:'✓ 已完成', cls:'agent', noBody: true});
+  /* ★ 2026-11-19（结构对齐标杆）：历次生成尝试收进过程区，**正文一律不折叠**。
+     数据源 = card_data.exec.attempts（产生时打标，见 core/attempt_trace.py）；
+     老消息无该字段 ⇒ 不产生该行，刷新后与旧版逐字节一致。
+     ⚠️ 用原生 <details> 折叠尝试正文，不给 .proc-body / .msg.ai .body 加任何
+        max-height / overflow-y —— 门禁 verify_answer_no_inner_scroll 守着这条。 */
+  const _attempts = Array.isArray(ex.attempts) ? ex.attempts : [];
+  if(_attempts.length > 1){
+    const _kLabel = {answer:'首次', continuation:'续写', retry:'重跑'};
+    const _aBody = _attempts.map(a=>{
+      const idx = Number((a && a.index) || 0) + 1;
+      const k = _kLabel[(a && a.kind)] || ((a && a.kind) || '生成');
+      const n = Number((a && a.chars) || 0);
+      const txt = esc((a && a.content) || '');
+      return `<details style="margin:5px 0;"><summary style="cursor:pointer;font-size:12.5px;color:var(--mut);">第 ${idx} 次 · ${esc(k)}${n?' · '+n+' 字':''}${(a && a.truncated)?'（已截断）':''}</summary><div style="white-space:pre-wrap;font-size:12px;line-height:1.6;padding:6px 2px;">${txt}</div></details>`;
+    }).join('');
+    steps.push({icon:'↻', title:`生成尝试（${_attempts.length}）`, status:'done', cls:'attempts',
+      sub:_attempts.map(a=>_kLabel[(a && a.kind)] || '生成').join(' → '), body:_aBody});
+  }
+  /* ★ 2026-11-20：编排正文只留最终 SysML，中间版本/包树/确认单随消息落在
+     card_data.exec.process_artifacts，这里以折叠块还原——过程可见但不抢正文。
+     老消息无该字段 ⇒ 不产生该行，逐字节兼容。 */
+  const _folded = Array.isArray(ex.process_artifacts) ? ex.process_artifacts : [];
+  if(_folded.length){
+    const _fBody = _folded.map((a,i)=>{
+      const lang = esc((a && a.lang) || '文本');
+      const txt = esc((a && a.text) || '');
+      return `<details style="margin:5px 0;"><summary style="cursor:pointer;font-size:12.5px;color:var(--mut);">中间产物 ${i+1} · ${lang}${txt.length?' · '+txt.length+' 字':''}</summary><pre style="white-space:pre-wrap;font-size:12px;line-height:1.6;padding:6px 2px;margin:0;">${txt}</pre></details>`;
+    }).join('');
+    steps.push({icon:'🗂', title:`过程产物（${_folded.length}）`, status:'done', cls:'artifacts',
+      sub:'中间版本/包树/确认单（正文只保留最终版本）', body:_fBody});
+  }
+  /* ★ 2026-11-19 P1-3：编排路径显式标记。此前用户只能从"attempts 为空"反推，
+     很容易误以为是漏标；现在直接说明"本轮走的是多子任务编排，不适用单次尝试回放"。 */
+  if(ex.flow_kind === 'orchestrated'){
+    steps.push({icon:'🧩', title:'执行方式：多子任务编排', status:'done', cls:'flowkind',
+      sub:'由多个子任务协作完成，不适用单次生成尝试回放', noBody: true});
+  }
+  if(ex.agent) steps.push({icon:'🤖', title:`子智能体：${esc(ex.agent)}`, status:'done', sub:'✓ 已完成', cls:'agent', noBody: true, badges: _bd('agent', ex.agent)});
   const subs = ex.subtasks||[];
   if(subs.length){
     const doneN = subs.filter(s=>s.status==='done').length;
@@ -76,6 +124,9 @@ function procBlocksHtml(ex, mid){
       </div>`;
       window._orchRerunDefault = _bad ? (_bad.key || '') : '';
     }
+    // ★ 2026-11-20：历史侧子任务卡补 skills（落库字段 subtasks[].skills），
+    //   让展开体里也能看到"这一步用了哪些技能"。
+    subs.forEach(s=>{ if(s && !Array.isArray(s.skills)) s.skills = []; });
     const body = planList + subs.map(s=>subtaskCardHtml(s)).join('') + rerunHtml;
     steps.push({icon:'📋', title:`计划清单（${subs.length} 任务：${doneN} 完成${failN?` / ${failN} 失败`:''}）`, status:'done', sub:`${doneN}/${subs.length}`, body, cls:'orchestrate'});
   }
@@ -122,10 +173,40 @@ function procBlocksHtml(ex, mid){
     }
     // P0-1 历史工具耗时（exec 持久化 elapsed_ms 时显示）
     const elapsedSub = t.elapsed_ms ? ` · ⏱ ${(t.elapsed_ms/1000).toFixed(1)}s` : '';
-    steps.push({icon:'🛠', title:`调用 ${esc(t.name)}`, status:t.ok===true?'done':(t.ok===false?'error':'run'), sub:statusText+elapsedSub+subTxt, body, cls, badge: statusText, badgeCls: statusCls});
+    steps.push({icon:'🛠', title:`调用 ${esc(t.name)}`, status:t.ok===true?'done':(t.ok===false?'error':'run'), sub:statusText+elapsedSub+subTxt, body, cls, badge: statusText, badgeCls: statusCls,
+      // ★ 2026-11-20：历史回放同样标出「谁调的 / 哪个技能指导的」，与实时路径一致。
+      badges: _bd('agent', t.agent) + _bd('skill', t.skill || t.skill_guide)});
   });
+  // ★ 2026-11-20：历史侧补「执行参与方」汇总（与实时路径 _participantsHtml 同口径，
+  //   数据源换成已落库的 exec.agent / exec.subtasks[].agent / exec.tools[].agent|skill）。
+  try{
+    const _ag = new Set(), _sk = new Set(), _tl = new Set();
+    if(ex.agent) _ag.add(String(ex.agent));
+    (ex.subtasks||[]).forEach(s=>{ if(s.agent) _ag.add(String(s.agent)); });
+    (ex.tools||[]).forEach(t=>{
+      if(t.agent) _ag.add(String(t.agent));
+      if(t.skill || t.skill_guide) _sk.add(String(t.skill || t.skill_guide));
+      if(t.name) _tl.add(String(t.name));
+    });
+    (ex.subtasks||[]).forEach(s=>{
+      ((s.summary&&typeof s.summary==='object'&&s.summary.skills)||[]).forEach(x=>_sk.add(String(x)));
+    });
+    if(_ag.size + _sk.size + _tl.size){
+      const _lst = (arr, kind) => arr.length
+        ? `<div style="display:flex;flex-wrap:wrap;gap:4px;margin-top:4px;">${arr.map(x=>_bd(kind, x)).join('')}</div>`
+        : '<div style="font-size:12px;color:var(--mut);margin-top:4px;">无</div>';
+      steps.unshift({icon:'🧭', cls:'participants',
+        title:`执行参与方（Agent ${_ag.size} · 技能 ${_sk.size} · 工具 ${_tl.size}）`,
+        status:'done', sub:'本轮用到',
+        body:`<div style="font-size:12.5px;color:var(--mut);line-height:1.6;">`
+          + `<div><b>Agent（${_ag.size}）</b></div>${_lst([..._ag],'agent')}`
+          + `<div style="margin-top:6px;"><b>技能（${_sk.size}）</b></div>${_lst([..._sk],'skill')}`
+          + `<div style="margin-top:6px;"><b>工具（${_tl.size}）</b></div>${_lst([..._tl],'tool')}`
+          + `</div>`});
+    }
+  }catch(e){}
   // V2.6 历史消息执行过程：统一收口条（默认收起）+ 时间线容器（点击展开按层级回看）
-  const timeline = steps.map((s,i)=>`<div class="proc-block collapsed ${s.cls||''}"><div class="proc-head" onclick="toggleProc(this)"><span>${s.icon}</span><span class="proc-title">${s.title}</span>${s.sub?`<span class="proc-sub">${s.sub}</span>`:''}${s.badge?`<span class="tool-status ${s.badgeCls}">${s.badge}</span>`:''}<span class="chev">▾</span><span class="proc-time">${now}</span></div>${s.noBody?'':`<div class="proc-body">${s.body||''}</div>`}</div>`).join('');
+  const timeline = steps.map((s,i)=>`<div class="proc-block collapsed ${s.cls||''}"><div class="proc-head" onclick="toggleProc(this)"><span>${s.icon}</span><span class="proc-title">${s.title}</span>${s.sub?`<span class="proc-sub">${s.sub}</span>`:''}${s.badges||''}${s.badge?`<span class="tool-status ${s.badgeCls}">${s.badge}</span>`:''}<span class="chev">▾</span><span class="proc-time">${now}</span></div>${s.noBody?'':`<div class="proc-body">${s.body||''}</div>`}</div>`).join('');
   if(!steps.length) return '';
   const failN = (ex.tools||[]).filter(t=>t.ok===false).length;
   const sumTxt = `✓ 已完成 · ${steps.length} 环节${failN?` · ${failN} 失败`:''}`;
@@ -403,6 +484,19 @@ function svmVmFromEl(el){
   if(k && _svmVmStore.has(k)) return _svmVmStore.get(k);
   try{ return JSON.parse(decodeURIComponent(el.dataset.v||'')); }catch(e){ return null; }
 }
+/* ★ 2026-11-16（米爸报「视图需要展示对应的名称，和代码同样的逻辑，不能只给个笼统的描述」）：
+   视图模型里 `view.name` 是**图类型名**（"状态机图"），所有人都一样；
+   真正标识"这是哪个视图"的是 nodes[0].name —— 真机 conv 999999065 里是
+   「驾驶员生命周期状态机」，而代码 pane 里写的也是 `state '驾驶员生命周期状态机'`。
+   ⇒ 取 nodes 里的主定义名作为视图的**具体名称**，让代码 tab 与视图 tab 对得上。 */
+function svmViewSubject(vm){
+  if(!vm) return '';
+  for(const n of (vm.nodes||[])){
+    const nm = String((n && n.name) || '').trim();
+    if(nm) return nm;
+  }
+  return String((vm.view && vm.view.name) || '').trim();
+}
 function svmThumbsHtml(sv) {
   const entries = Object.entries(sv.views||{});
   if(!entries.length) return '';
@@ -412,9 +506,12 @@ function svmThumbsHtml(sv) {
     const thumbId = 'svm-thumb-'+t+'-'+_ts;
     const vk = 'vmk-' + (_svmVmSeq++);
     _svmVmStore.set(vk, v);             // 视图数据入内存 store（DOM 只带轻量 key）
-    return `<div class="sv-thumb${cnt?'':' empty'}" title="${esc(v.view.name)}（${esc(v.view.v1)}）· 点击查看大图" data-vk="${vk}" onclick="openSvmPreview(this)">
+    const _type = String((v.view && v.view.name) || t).split('（')[0];
+    const _subj = svmViewSubject(v);
+    const _cap = (_subj && _subj !== _type) ? (_type + ' · ' + _subj) : _type;
+    return `<div class="sv-thumb${cnt?'':' empty'}" title="${esc(_cap)}（${esc((v.view||{}).v1||'')}）· 点击查看大图" data-vk="${vk}" onclick="openSvmPreview(this)">
       <div class="sv-thumb-svg" id="${thumbId}" style="height:170px;"></div>
-      <div class="sv-thumb-cap"><b>${t}</b><span>${esc(v.view.name.split('（')[0])}</span><i class="sv-cnt">${cnt} 元素</i></div>
+      <div class="sv-thumb-cap"><b>${t}</b><span title="${esc(_cap)}">${esc(_cap)}</span><i class="sv-cnt">${cnt} 元素</i></div>
     </div>`;
   }).join('');
   // 懒挂载：缩略图进入视口才创建 Cytoscape（消息流内大量缩略图不再一次性全挂）
@@ -464,19 +561,35 @@ function stripFencedCode(text) {
 function cardSysmlTabs(cd, content) {
   const sv = cd.sysml_views;
   if(!sv || !sv.views) return '';
+  // ★ 2026-11-18：空壳视图（所有视图 nodes/edges 皆空）不渲染视图卡。
+  //   与 sysmlViewsUsable 同判据 —— 与 05-markdown.js 的正文剥离保持一致，
+  //   避免「正文剥走了、卡又不画」导致内容消失（msg#7008 现象）。
+  if(!sysmlViewsUsable(cd)) return '';
   const entries = Object.entries(sv.views);
   if(!entries.length) return '';
   const parsed = sv.parsed || {nodes:0, edges:0};
+  // 视图栏展示**具体名称**（如「驾驶员生命周期状态机」），不再是
+  // 「按 view_expansion 意图投影」那种对所有消息都一样的笼统描述。
+  const _viewNames = entries.map(([k,v])=>{
+    const _type = String((v.view && v.view.name) || k).split('（')[0];
+    const _subj = svmViewSubject(v);
+    return (_subj && _subj !== _type) ? _subj : _type;
+  }).filter(Boolean).slice(0,3).join(' / ') || 'SysML 视图';
   const code = extractSysmlCode(content) || '';
-  const codeCnt = content ? Math.floor((String(content).match(/```/g)||[]).length / 2) : 0;
+  // ★ 2026-11-16（米爸报「代码块中数字显示 2，不合理，就是一段代码，不存在多个的说法」）：
+  //   原实现 `codeCnt = 正文里所有 ``` 围栏数 / 2` —— 把 A 方案两段式输出里的
+  //   **json 结论块**和 **sysml 代码块**都算成"代码"，tab 上就显示「代码 2」。
+  //   但整合卡里的代码 pane 只有 `extractSysmlCode()` 拼出来的**那一段** SysML 代码，
+  //   json 是给人看的结论、不是第二段代码 ⇒ 数字与内容根本对不上。
+  //   既然只有一段，**不显示数字**（视图 tab 的数字保留：那确实可能有多个视图）。
   const codePane = code
     ? `<pre class="svm-code"><code>${escMd(code)}</code></pre>`
     : `<div style="color:var(--mut);font-size:13.5px;padding:14px;text-align:center;">未检测到 SysML v2 代码块</div>`;
   return `<div class="sv-card svm-card-wrap">
     <div class="svm-tabs">
-      <span class="svm-tab active" data-tab="code" onclick="svmTabSwitch(this)" title="SysML v2 代码">代码<i class="sv-cnt">${codeCnt>0?codeCnt:''}</i></span>
-      <span class="svm-tab" data-tab="view" onclick="svmTabSwitch(this)" title="按「${esc(sv.intent||'模型')}」意图即时投影">视图<i class="sv-cnt">${entries.length}</i></span>
-      <span style="flex:1;display:flex;align-items:center;justify-content:flex-end;font-size:12px;color:var(--mut);padding-right:6px;">按「${esc(sv.intent||'模型')}」意图投影 · ${parsed.nodes} 元素 / ${parsed.edges} 关系</span>
+      <span class="svm-tab active" data-tab="code" onclick="svmTabSwitch(this)" title="SysML v2 代码">代码</span>
+      <span class="svm-tab" data-tab="view" onclick="svmTabSwitch(this)" title="本轮生成的视图">视图<i class="sv-cnt">${entries.length}</i></span>
+      <span style="flex:1;display:flex;align-items:center;justify-content:flex-end;font-size:12px;color:var(--mut);padding-right:6px;" title="${esc(_viewNames)}">${esc(_viewNames)} · ${parsed.nodes} 元素 / ${parsed.edges} 关系</span>
       <button class="btn sm ghost" style="padding:1px 8px;font-size:12px;flex:none;" onclick="svmCopyCode(this)" title="复制本消息全部 SysML v2 代码">📋 复制</button>
     </div>
     <div class="svm-pane" data-pane="code">${codePane}</div>

@@ -354,12 +354,14 @@ function capRender(page) {
 // 真库实测 178 条绑定里 45 条挂在已停用的 Agent 上、11 条目标已停用、
 // 17 条"停用了但仍会被注入"——这些都**没有任何界面提示**，
 // 用户只能靠"AI 行为不对"倒推。判据在 services/capability_graph.py（单一真源）。
-let _bindHealth = null, _bindHealthAt = 0;
+let _bindHealth = null, _bindHealthAt = 0, _bindHealthFilter = 'attention';
+let _bindHealthKw = '', _bindHealthPage = '';
 async function capBindHealth(page) {
   // ⚠️ 插在**卡片网格之前**，不是图例之后：图例在网格下方（页面底部），
   //   实测插在那里时 top=1533px，用户根本看不到 —— "加了等于没加"。
   const grid = document.getElementById('cap-' + page + '-grid');
   if (!grid || !grid.parentNode) return;
+  _bindHealthPage = page;
   if (!_bindHealth || Date.now() - _bindHealthAt > 60000) {
     try { _bindHealth = await api('/api/studio/bindings/audit'); _bindHealthAt = Date.now(); }
     catch (e) { return; }
@@ -370,18 +372,116 @@ async function capBindHealth(page) {
     el.id = 'cap-bind-health';
     grid.parentNode.insertBefore(el, grid);
   }
-  el.style.cssText = 'font-size:12.5px;color:var(--mut,#8a96ad);padding:2px 0 8px;line-height:1.6;';
   const d = _bindHealth, bs = d.by_state || {};
+  const attention = Number(d.attention != null ? d.attention : ((d.broken || 0) + (d.govern || 0)));
+  const bad = Number(d.broken || 0), gov = Number(d.govern || 0);
+  el.style.cssText = 'font-size:12.5px;color:var(--mut,#8a96ad);padding:2px 0 8px;line-height:1.6;';
   el.innerHTML =
-    '🔗 绑定关系：<b>' + d.total + '</b> 条 · 生效 <b style="color:#2e7d32">' + d.effective + '</b> · '
-    + '需处理 <b style="color:' + (d.broken ? '#c92a2a' : '#2e7d32') + '">' + d.broken + '</b>'
-    + '（悬空 ' + (bs.dangling || 0) + ' · 目标停用 ' + (bs.off || 0) + ' · MCP 离线 ' + (bs.offline || 0)
-    + ' · 未就绪 ' + (bs.unready || 0) + ' · 所属 Agent 停用 ' + (bs.inactive || 0) + '）'
-    + ((bs.bypass || 0) ? '；<span style="color:#c9821a" title="「停用」对这类绑定不生效：内置工具按名字注入、插件「自动消费」通道不看 tools.status">'
-        + bs.bypass + ' 条「已停用但仍会被注入」</span>' : '')
-    + ((bs.plugin_off || 0) ? '；<span style="color:#c9821a" title="插件侧已下架/停用，但旧表仍 enabled=1，绑定注入不看插件状态">'
-        + bs.plugin_off + ' 条「插件已下架但旧表仍启用」</span>' : '')
-    + '<br><span style="color:#8a96ad">生效=这一轮会进模型上下文；「有用过没有」看能力卡片的调用次数，二者不是一回事。</span>';
+    '<div onclick="capOpenBindHealth()" title="点击查看每一条绑定的原因、影响面，并就地处理"'
+    + ' style="cursor:pointer;border:1px solid var(--line,#d9dfe8);border-radius:6px;'
+    + 'padding:6px 10px;background:var(--panel,#fff);">'
+    + '🔗 绑定关系：<b>' + d.total + '</b> 条 · 生效 <b style="color:#2e7d32">' + d.effective + '</b> · '
+    + '需关注 <b style="color:' + (attention ? '#c92a2a' : '#2e7d32') + '">' + attention + '</b>'
+    + '（未生效 ' + bad + '：悬空 ' + (bs.dangling || 0) + ' · 目标停用 ' + (bs.off || 0)
+    + ' · MCP 离线 ' + (bs.offline || 0) + ' · 未就绪 ' + (bs.unready || 0)
+    + ' · 所属 Agent 停用 ' + (bs.inactive || 0)
+    + '；仍会注入 ' + gov + '：旁路 ' + (bs.bypass || 0) + ' · 下架旧表 ' + (bs.plugin_off || 0) + '）'
+    + '<span style="float:right;color:var(--pri,#3478f6);font-weight:600;">查看明细并处理 →</span>'
+    + '<br><span style="color:#8a96ad">生效=这一轮会进模型上下文；用量=能力卡片调用次数，二者不是一回事。</span>'
+    + '</div>';
+}
+
+/* ── 绑定体检：右侧明细/处置面板（2026-11-19）──────────────────
+ * 判据完全来自 /api/studio/bindings/audit（services/capability_graph 单一真源）。
+ * 前端只做三件事：筛选、解释、调用后端给出的 actions；不重算状态。
+ */
+async function capOpenBindHealth(filter) {
+  if (typeof filter === 'string') _bindHealthFilter = filter;
+  openPanel('🔗 绑定关系体检 · 明细与处理', '<div class="loading">加载中…</div>');
+  try {
+    if (!_bindHealth || Date.now() - _bindHealthAt > 60000) {
+      _bindHealth = await api('/api/studio/bindings/audit');
+      _bindHealthAt = Date.now();
+    }
+    capRenderBindHealthPanel();
+  } catch (e) {
+    const b = document.getElementById('panel-body');
+    if (b) b.innerHTML = '<div class="fempty">加载失败：' + esc(String(e && e.message || e)) + '</div>';
+  }
+}
+function capBindSetFilter(f) { capOpenBindHealth(f); }
+function capBindSearch(v) { _bindHealthKw = String(v || '').trim().toLowerCase(); capRenderBindHealthPanel(); }
+function capRenderBindHealthPanel() {
+  const body = document.getElementById('panel-body');
+  if (!body || !_bindHealth) return;
+  const d = _bindHealth;
+  const f = _bindHealthFilter;
+  const kw = _bindHealthKw;
+  const counts = { attention: Number(d.attention || 0), broken: Number(d.broken || 0),
+                   govern: Number(d.govern || 0) };
+  const chips = [['attention', '全部需关注'], ['broken', '未生效'], ['govern', '仍会注入']]
+    .map(function (x) {
+      const on = f === x[0];
+      return '<button class="btn sm ' + (on ? '' : 'ghost') + '" onclick="capBindSetFilter(\'' + x[0] + '\')"'
+        + ' style="margin-right:6px;' + (on ? 'background:#3478f6;color:#fff;border-color:#3478f6;' : '') + '">'
+        + x[1] + ' ' + counts[x[0]] + '</button>';
+    }).join('');
+  let rows = (d.details || []).filter(function (x) {
+    if (f === 'broken' && x.effective) return false;
+    if (f === 'govern' && !x.effective) return false;
+    if (!kw) return true;
+    return [x.agent, x.name, x.state, x.state_label, x.reason, x.hint]
+      .some(function (v) { return String(v || '').toLowerCase().indexOf(kw) >= 0; });
+  });
+  const color = { bad: '#c92a2a', warn: '#c9821a', muted: '#8a96ad', info: '#3478f6', ok: '#2e7d32' };
+  const cards = rows.length ? rows.map(function (x) {
+    const i = (d.details || []).indexOf(x);
+    const lv = color[x.level] || color.muted;
+    const acts = (x.actions || []).map(function (a, ai) {
+      return '<button class="btn sm ' + (a.id === 'unbind' ? 'ghost' : '') + '"'
+        + ' onclick="capBindAct(' + i + ',' + ai + ')"'
+        + ' title="' + esc(a.risk || '') + '" style="margin:2px 4px 0 0;font-size:12px;padding:1px 8px;">'
+        + esc(a.label) + '</button>';
+    }).join('') || '<span style="color:#8a96ad">无可用动作</span>';
+    const usage = x.usage || {};
+    const tgt = x.target || {};
+    const plug = x.plugin || {};
+    return '<div style="border:1px solid var(--line,#d9dfe8);border-radius:6px;padding:8px 10px;margin-bottom:8px;">'
+      + '<div style="font-size:13.5px;font-weight:600;color:' + lv + ';">'
+      + esc(x.agent) + ' → ' + esc(x.kind_label || x.kind) + '「' + esc(x.name) + '」'
+      + '<span style="float:right;font-size:12px;font-weight:400;">' + esc(x.state_label || x.state) + '</span></div>'
+      + '<div style="font-size:12.5px;line-height:1.65;margin-top:4px;">'
+      + '<b>原因</b>：' + esc(x.reason)
+      + '<br><b>怎么处理</b>：' + esc(x.hint)
+      + '<br><b>用量</b>：调用 ' + (usage.call_count || 0) + ' 次'
+      + (usage.last_used_at ? '（最近 ' + esc(usage.last_used_at) + '）' : '')
+      + ' · 生效=会进上下文，用量=真被调用，两者不同'
+      + '<br><b>目标</b>：' + (tgt.id ? esc(tgt.table) + '#' + esc(tgt.id) + ' · ' + esc(tgt.status || '') : '已不存在')
+      + (plug.plugin_id ? ' · 插件 ' + esc(plug.plugin_id) + '(' + esc(plug.status || '') + ')' : '')
+      + '</div><div style="margin-top:4px;">' + acts + '</div></div>';
+  }).join('') : '<div class="fempty">当前筛选下没有需关注项</div>';
+  body.innerHTML = '<div style="padding:14px 16px 24px;font-size:13px;line-height:1.7;">'
+    + '<div style="margin-bottom:8px;">' + chips + '</div>'
+    + '<input id="cap-bind-kw" placeholder="搜索 Agent / 能力 / 原因" value="' + esc(kw) + '"'
+    + ' oninput="capBindSearch(this.value)"'
+    + ' style="width:100%;box-sizing:border-box;padding:6px 8px;margin-bottom:8px;border:1px solid var(--line,#d9dfe8);border-radius:5px;">'
+    + '<div style="font-size:12px;color:#8a96ad;margin-bottom:8px;">共 ' + rows.length
+    + ' 条。动作由后端按绑定状态生成；解绑只删关系，不删能力本体。</div>'
+    + cards + '</div>';
+}
+async function capBindAct(i, ai) {
+  const x = (_bindHealth && _bindHealth.details || [])[i];
+  const a = x && (x.actions || [])[ai];
+  if (!a) { toast('动作已失效，请刷新面板'); return; }
+  if (a.confirm && !confirm(a.confirm)) return;
+  try {
+    const r = await api(a.api, { method: a.method });
+    if (r && r.error) { toast('处理失败：' + r.error); return; }
+    toast('✓ 已执行：' + a.label);
+    _bindHealth = null; _bindHealthAt = 0;
+    if (typeof capBindHealth === 'function' && _bindHealthPage) await capBindHealth(_bindHealthPage);
+    await capOpenBindHealth(_bindHealthFilter);
+  } catch (e) { toast('处理失败：' + String(e && e.message || e)); }
 }
 
 function capFilterCat(page, c) {
@@ -545,16 +645,41 @@ function capEdit(pid) {
   for (let i = 0; i < all.length; i++) {
     if (_capPid(all[i]) === pid) { x = all[i]; break; }
   }
+  const _route = { skills: 'editSkill', agents: 'editAgent', tools: 'showToolForm',
+                   mcp_servers: 'editMCP', prompts: 'editPrompt' };
+  // ★ 2026-11-20：当前视图没加载该条目时（例如从「Skills 列表」卡进来的），
+  //   现取插件详情再路由。旧实现在这种情况下 rt 为空 ⇒ 掉到「插件清单 JSON 表单」，
+  //   用户点"编辑技能"却要填 manifest —— 同一动作两种表单，属状态-动作不闭环。
+  if (!x) {
+    api('/api/plugins/' + encodeURIComponent(pid)).then(function (d) {
+      const rt = (d && d.manifest && d.manifest.runtime) || {};
+      const route = _route[rt.legacy_table];
+      const lid = parseInt(rt.legacy_id, 10);
+      if (route && typeof window[route] === 'function' && lid > 0) window[route](lid);
+      else openUnifiedPluginForm(pid);
+    }).catch(function () { openUnifiedPluginForm(pid); });
+    return;
+  }
   // 映射键：manifest.runtime.legacy_table / legacy_id（迁移与同步桥共用的同一把钥匙）
   const rt = (x && x.manifest && x.manifest.runtime) || {};
-  const route = { skills: 'editSkill', agents: 'editAgent', tools: 'showToolForm',
-                  mcp_servers: 'editMCP', prompts: 'editPrompt' }[rt.legacy_table];
+  const route = _route[rt.legacy_table];
   const lid = parseInt(rt.legacy_id, 10);
   if (route && typeof window[route] === 'function' && lid > 0) {
     window[route](lid);
     return;
   }
   openUnifiedPluginForm(pid);
+}
+
+/* 发布态文案（唯一来源）。
+ * ★ 2026-11-20：必须与「个人安装态」措辞区分开。旧实现两处都用「已启用/已停用」，
+ *   于是同一条草稿卡片上出现「已停用（发布态）… 已启用（个人态）」两个相反的词，
+ *   用户无法判断到底能不能用。分开写之后，再加一个 consumable 综合结论。
+ */
+function _capStatusText(x) {
+  const m = { draft: '草稿（未发布）', rejected: '已驳回', submitted: '待审核',
+              published: '已发布', disabled: '已停用（不可消费）', removed: '已删除' };
+  return m[x.status] || x.status_label || x.status || '';
 }
 
 /* 紧凑能力卡片（对齐 WorkBuddy：图标 + 名称 + 动作 + 2 行描述 + 底部元信息） */
@@ -596,7 +721,16 @@ function capCard(x, tab, page) {
   if (x.can_cancel_share) {
     actions += `<button class="btn sm ghost" title="撤回后仅自己可见，能力照常可用" onclick="capCancelShare('${esc(pid)}','${page}')">↩ 撤回申请</button>`;
   }
-  actions += `<button class="btn sm ghost" onclick="capSetInstalled('${esc(pid)}',${enabled ? 'false' : 'true'},'${page}')">${enabled ? '停用' : '启用'}</button>`;
+  // ★ 2026-11-20 修状态-动作闭环：个人启停**只在「已发布」时才有意义**。
+  //   旧实现无条件渲染 `${enabled ? '停用' : '启用'}`：
+  //   草稿态/被下架态（status≠published）的条目根本不可消费，却挂一个「停用」按钮 ——
+  //   用户点下去什么也不会变（它本来就不可用），而真正需要的"发布"入口又按权限藏着。
+  //   实测样本：新建技能 status=disabled、installed_enabled=True ⇒
+  //   卡片写「已停用」+ 按钮写「停用」+ 没有任何「启用/发布」入口（用户本轮投诉）。
+  const published = (x.status === 'published');
+  if (published) {
+    actions += `<button class="btn sm ghost" title="只影响你自己：停用后你不再消费它，他人不受影响" onclick="capSetInstalled('${esc(pid)}',${enabled ? 'false' : 'true'},'${page}')">${enabled ? '停用' : '启用'}</button>`;
+  }
   // 2026-09-17：从市场安装的副本直接给卸载入口（内置除外——后端拒绝卸载内置，引导用停用）；
   // 卸载后插件市场对应条目的「安装」入口自动恢复，可随时重装。
   // 2026-09-29（动作语义二轮定稿）：来源决定按钮 —— 市场安装的（非自己创建）→ 卸载；
@@ -654,10 +788,11 @@ function capCard(x, tab, page) {
     <div class="capmeta">
       <span>${isBuiltin ? '内置' : (isMine ? '我创建' : '他人共享')}</span>
       <span>v${esc(x.current_version || '—')}</span>
-      <span class="${x.status === 'disabled' ? 'warn' : ''}">${x._from_server ? 'MCP 服务' : esc(x.status_label || x.status || '')}</span>
+      <span class="${x.status === 'disabled' ? 'warn' : ''}" title="发布态：决定「能否被 AI 消费」">${x._from_server ? 'MCP 服务' : esc(_capStatusText(x))}</span>
       ${!isBuiltin ? `<span title="可见范围 —— 与「能否被 AI 消费」无关">${pubShare ? '已上架市场' : (pendingShare ? '申请上架中' : '仅自己')}</span>` : ''}
       ${belong}
-      ${installed ? `<span class="capbadge ${enabled ? 'on' : 'off'}" title="个人启用状态 —— 仅影响你自己，不影响他人">${enabled ? '已启用' : '已停用'}</span>` : ''}
+      ${installed ? `<span class="capbadge ${enabled ? 'on' : 'off'}" title="个人安装态 —— 仅影响你自己，不影响他人；与上面的发布态是两个维度">${enabled ? '个人已启用' : '个人已停用'}</span>` : ''}
+      <span class="capbadge ${x.consumable ? 'on' : 'off'}" title="综合判定 = 已发布 且 个人已启用 且 已安装；这是 AI 会不会真的用它的唯一判据">${x.consumable ? 'AI 可用' : 'AI 不可用'}</span>
     </div>
     <div class="capacts">${actions}</div>
   </div>`;

@@ -102,6 +102,14 @@ jobs:
         if: ${{ !cancelled() }}
         run: python tools/verify/verify_orch_summary_budget.py
 
+      - name: Guard S3 运行时 token 预算（39 项，零 DB）
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_token_budget.py
+
+      - name: Guard harness 默认安全侧（10 项，零 DB）
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_harness_default_safe.py
+
       - name: Guard S4 调用契约（采样参数优先级，48 项）
         if: ${{ !cancelled() }}
         run: python tools/verify/verify_s4_calls.py
@@ -631,6 +639,74 @@ jobs:
         if: ${{ !cancelled() }}
         run: python tools/verify/verify_citation_clause_link.py
 
+      # ── 2026-11-16 新增：要一个视图就只给一个 + 代码/视图卡显示具体名称 ────
+      #   真机 conv 999999065：用户明确只要「黑盒状态视图」，产物面板却展示
+      #   包图/参数图/状态机图 3 个。根因是 alias 把单字「包」和英文缩写 PAR
+      #   拿去做大小写不敏感子串匹配 ⇒「包含」「Part」「Parked」全被误命中。
+      #   同条消息还抱怨代码 tab 显示数字 2（数了 json 结论块+sysml 块）、
+      #   视图只有「按 view_expansion 意图投影」这种笼统描述。
+      - name: Guard 视图意图抽取与名称（19 项；无 node/无库时 SKIP）
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_view_intent_extraction.py
+
+      # ── 2026-11-16 新增：记忆评测集重锚判据自洽 ──────────────────────
+      #   评测集硬锚 2026-10-07 的 id 快照，库涨到 295 条（97 条 forgotten）后
+      #   实跑 28.6%，一度被误读成"记忆召回退化"。
+      #   逐条诊断：5 个用例的期望记忆已遗忘/删除且无等价 alive ⇒ 应 SKIP，
+      #   不是 FAIL。重锚表让"有等价就评、没有就显式 SKIP"，SKIP 计数落报告。
+      - name: Guard 记忆评测集重锚判据（8 项，含变异自证；干净库 SKIP）
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_memory_eval_reanchor.py
+
+      # ── 2026-11-16 新增：记忆证据链必须真的通电 ────────────────────────
+      #   真机实测：295 条记忆全 `unverifiable`、`evidence_ref` 全空 ——
+      #   校验机制（_verify_claim 否定优先两遍判定）建好了，但没有 apply 入口，
+      #   等于「建好了没通电」。dream() 扫 80 条就能产出 84 个候选、75 条带证据。
+      #   本门禁锁：① dream 能产出且只读 ② 落库只改状态列（content/tier 不变）
+      #   ③ 默认分级不含 contradicted（它会被召回侧排除，误判即丢真记忆）。
+      - name: Guard 记忆证据链通电（13 项，含变异自证）
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_memory_evidence_chain.py
+
+      # ── 2026-11-16 新增：prompt 块词表的**运行期**守卫 ──────────────────
+      #   `context_audit.block_name` 的读路径（validate_event）遇到词表外类型会抛
+      #   UnknownEventError ⇒ 会话回放失败。而写路径此前从不校验 ⇒ 漏登记只在
+      #   很久之后以"回放失败"暴露。
+      #   同一形态实测发生三次（artifact_facts / output_contract / artifact_baseline），
+      #   根因是"加块"与"登记词表"两个动作无强耦合 ⇒ 改成写入那一刻就上报观测。
+      - name: Guard prompt 块词表运行期守卫（12 项，含变异自证）
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_prompt_block_vocab_guard.py
+
+      # ── 2026-11-17 新增：检索底座不得有孤儿 chunk ──────────────────────
+      #   检索是 `SELECT * FROM document_chunks WHERE content != ''`，**不 join documents**
+      #   ⇒ doc_id 悬空的片段会被正常检索到并注入 prompt，但用户点引用溯源时
+      #   documents 里找不到 ⇒ 给了**无法核实的证据**（比少召回几条严重得多）。
+      #   实测存量 2 条（2026-10-30 上传测试残留），来自更早的删除路径。
+      - name: Guard 检索底座无孤儿 chunk（6 项，含删除路径接线判据）
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_orphan_chunks.py
+
+      # ── 2026-11-17 新增：documents.chunk_count 必须与实际 chunk 数一致 ──
+      #   chunk_count 是**展示值**（列表里"这份文档切了多少块"），document_chunks 是**事实**。
+      #   不一致时：显示 855 实际 800 ⇒ 用户以为搜得到其实搜不到；
+      #   做"按 chunk 数排序/筛选"时结果全错。
+      #   判据不设容差（整数计数，任何偏差都是真错误：写入漏了或删除没同步）。
+      - name: Guard chunk_count 与实际一致（6 项，含变异自证）
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_chunk_count_coherence.py
+
+      # ── 2026-11-17 新增：SysML 诊断三路分类真的在分类 ──────────────────
+      #   米爸报「检验逻辑要细化结果，不能统一标记为词法错误」。
+      #   根因：`sysml_v2_check.py::_LEX_DEFAULT` 在 cf33d3e 被改成 `r""`
+      #   （**提交说明里完全没提**），而 `re.compile("").search(x)` 恒为真
+      #   ⇒ classify() 第一句永远命中 ⇒ 20 条 ERROR 全归「词法」，
+      #   语法 2 / 语义 18 全部消失（与基线差 4 项、verify_sysml_check_gate 16 项红）。
+      #   A/B 组是纯函数（不需要 java/jar），CI 可全套跑；C 组无校验器时 SKIP。
+      - name: Guard SysML 诊断三路分类（12 项，含变异自证）
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_sysml_classify.py
+
       # ── 2026-11-15 新增：SHACL 独立校验交叉验证 ────────────────────────
       # 本工程所有实例校验都靠自研实现；若自研有 bug，**没有任何人能发现**。
       # 接 pySHACL（W3C SHACL 参考实现之一）做独立校验，与自研逐维度比对：
@@ -677,6 +753,12 @@ jobs:
       - name: Guard LLM 熔断降级
         if: ${{ !cancelled() }}
         run: python tools/verify/verify_llm_circuit_breaker.py
+
+      # 2026-11-17 生产事故：流式请求占 HALF_OPEN 探针位却因 `not stream`
+      # 不结算，导致整个 LLM 链路永久卡死 7 分钟以上（36 个 live eval 全灭）。
+      - name: Guard 流式熔断探针结算
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_circuit_stream_settlement.py
 
       - name: Guard 记忆冲突门禁
         if: ${{ !cancelled() }}

@@ -360,9 +360,21 @@ body.nr-full-lock{overflow:hidden;}
    ⚠️ 只作用于「执行过程」容器；**正文 .body 不设任何高度限制** ——
       按 B5-8（米爸原话「最终输出结果不要收起来，也不允许收起来」），正文必须完整展开。
    反查：本机 1600x900 视口下 44vh ≈ 396px，正好容纳一个满高思考块 + 2~3 个阶段行。 */
-.proc{max-height:44vh;overflow-y:auto;overscroll-behavior:auto;padding-right:2px;}
-.proc::-webkit-scrollbar{width:6px;}
-.proc::-webkit-scrollbar-thumb{background:var(--line,#dde3ec);border-radius:3px;}
+/* ★ 2026-11-18（米爸反馈：「输出内容被最外层的容器框着…建议把最外层的滚动条去掉」）：
+   执行过程区**取消整区限高与内滚** ⇒ 与会话流 (#chat-area) 合成**单层滚动**。
+   此前 44vh 限高是 2026-10-27 为「别把页面拉太长」加的，但代价是
+   「外层滚 + 每环节再滚」两层嵌套滚动条 —— 鼠标在内层滚、外层不动，
+   观感就是「被框住、看不完、拖不动」。
+   ⚠️ 范围：只改执行过程区；**代码块 .code-fold .md-code (340px)** 与
+      **整合卡 .svm-code (440px)** 保持限高不动（米爸 2026-11-03 明确要求）。
+   滚动条样式规则一并删除（无滚动容器时是死规则）。 */
+/* ★ 2026-11-18 18:00（米爸：「只针对思考过程这个节点进行容器化，现在是把整个执行过程都收到容器里」）—— 判据三次收敛：
+   · 撤销整区限高：.proc / .proc-timeline 不再限高，所有执行环节正常展开、随页面滚动；
+   · 只把**思考过程节点**容器化：.proc-block.thinking .proc-body 限高 36vh + 区内滚动，
+     内容一条不丢（可滚动看完）；其他环节的 .proc-body 一律不限高、不内滚；
+   · 正文 / 代码块(340px) / 整合卡(440px) 保持各自现状，不扩大范围。
+   36vh 是当前默认假设（1600x900≈324px，思考是推理过程、不需独占太多高度），可按反馈只调这一个数。 */
+.proc{overscroll-behavior:auto;padding-right:2px;}
 /* 意图理解明细（procAddStage 的 body；2026-10-27）：回答"你到底把我理解成什么" */
 .ib-brief{display:flex;flex-direction:column;gap:3px;white-space:normal;font-size:12.5px;line-height:1.6;}
 .ib-brief .ib-row{display:flex;gap:6px;align-items:flex-start;min-width:0;}
@@ -379,6 +391,12 @@ body.nr-full-lock{overflow:hidden;}
 .load-earlier:hover{background:var(--blue);color:#fff;}
 .proc-block{border:1px solid var(--line);border-radius:8px;background:#fbfcfe;overflow:hidden;transition:max-height .3s ease,opacity .2s ease;}
 .proc-block.thinking{background:linear-gradient(135deg,#fffdf5 0%,#fffbf0 100%);border-color:#f0e6c8;}
+/* 思考过程节点专用容器：只限思考正文，其他环节正文照常全量展开。 */
+.proc-block.thinking .proc-body{max-height:36vh;overflow-y:auto;overscroll-behavior:contain;}
+.proc-block.thinking .proc-body::-webkit-scrollbar{width:8px;}
+.proc-block.thinking .proc-body::-webkit-scrollbar-thumb{background:#d6c78f;border-radius:4px;}
+.proc-block.thinking .proc-body::-webkit-scrollbar-thumb:hover{background:#bda95f;}
+
 .proc-block.agent{background:#f4f8ff;border-color:#d6e4ff;}
 .proc-block.tool{background:#f8fafc;}
 .proc-block.tool.success{background:linear-gradient(135deg,#f0fdf4 0%,#ecfdf5 100%);border-color:#86efac;}
@@ -410,6 +428,23 @@ body.nr-full-lock{overflow:hidden;}
   border-left:6px solid var(--mut);
   margin-right:4px;opacity:.5;
 }
+/* ── 2026-11-20 归属徽章（Agent / 技能 / MCP）───────────────────────────────
+   用户要求：「执行过程中调用的 agent、skill、tool 等，需要在对应的环节标识出来」。
+   缩进只说"挂在哪"，说不出"是谁"；徽章把名字直接写在每个环节标题旁，折叠态也可见。
+   三色区分：Agent(紫) / 技能(青) / MCP(橙)，与左侧层级线互补而不冲突。 */
+.proc-badge{
+  display:inline-flex;align-items:center;gap:3px;
+  font-size:11.5px;font-weight:600;line-height:1.5;
+  padding:1px 6px;border-radius:10px;white-space:nowrap;
+  max-width:220px;overflow:hidden;text-overflow:ellipsis;
+  border:1px solid transparent;
+}
+.proc-badge.ba{background:#f3e8ff;color:#6b21a8;border-color:#e9d5ff;}
+.proc-badge.bs{background:#e0f2fe;color:#075985;border-color:#bae6fd;}
+.proc-badge.bm{background:#ffedd5;color:#9a3412;border-color:#fed7aa;}
+/* 参与方汇总行：与业务环节视觉区分（虚线边框、略灰底），避免被当成执行步骤 */
+.proc-block.participants{border-style:dashed;background:rgba(0,0,0,.012);}
+.proc-block.participants .proc-title{font-weight:600;}
 /* 思考图标脉冲动画 */
 @keyframes think-pulse{0%,100%{opacity:1;}50%{opacity:.45;}}
 .proc-block.thinking .think-icon{animation:think-pulse 1.3s ease-in-out infinite;}
@@ -424,7 +459,11 @@ body.nr-full-lock{overflow:hidden;}
 .proc-head:hover{background:rgba(0,0,0,.02);}
 .proc-head .chev{font-size:12px;color:var(--mut);transition:transform .2s ease;display:inline-block;}
 .proc-block.collapsed .chev{transform:rotate(-90deg);}
-.proc-body{display:block;padding:4px 10px 10px;white-space:pre-wrap;word-break:break-word;line-height:1.65;font-size:12.5px;color:var(--fg);max-height:340px;overflow-y:auto;transition:max-height .3s ease;}
+/* ★ 2026-11-18（米爸反馈「里面每个环节有自己滚动条，体验不好」）：
+   环节正文**取消 340px 限高与内滚** —— 展开即全量，与正文 .msg.ai .body 同一口径。
+   折叠态仍由 .proc-block.collapsed 的 max-height:0 控制（收放是显式动作，不是被截断）。
+   transition 保留（折叠动画仍生效）。 */
+.proc-body{display:block;padding:4px 10px 10px;white-space:pre-wrap;word-break:break-word;line-height:1.65;font-size:12.5px;color:var(--fg);transition:max-height .3s ease;}
 .proc-block.collapsed .proc-body{max-height:0;padding-top:0;padding-bottom:0;overflow:hidden;}
 /* V2.6 执行中动态效果 + 统一收口条（与会话页 chat.css 同步） */
 @keyframes proc-spin{to{transform:rotate(360deg);}}
@@ -456,8 +495,9 @@ body.nr-full-lock{overflow:hidden;}
    实测 conv 9686 的历史消息 exec.reasoning 8000 字，展开后单条消息高达 2966px。
    历史容器是 .hist-proc（不是 .proc）—— 只给 .proc 加限高，只能治「正在跑的那条」，
    回看旧消息照旧被拉长（前端两条渲染路径必须成对改，本仓已多次踩到）。 */
+/* ★ 2026-11-18：与 .proc 同步取消限高内滚（历史回看是另一条渲染路径，必须成对改）。 */
 .hist-proc.open .proc-timeline{display:flex;flex-direction:column;gap:6px;margin-top:6px;
-  max-height:44vh;overflow-y:auto;overscroll-behavior:auto;padding-right:2px;}
+  overscroll-behavior:auto;padding-right:2px;}
 /* ★★ 2026-10-28（用户反馈「截断卡片重叠在一起、相互挤压」「不允许滑动页面或展开查看」）
    实测 conv 9726（22 个工具卡片 / 1600x900）：`.proc-block` 默认 flex-shrink:1 被压缩，
    真实需要 34px 却只有 12px；压缩后总高 264px < 容器 396px ⇒ 连滚动条都不出现
@@ -471,12 +511,15 @@ body.nr-full-lock{overflow:hidden;}
 .proc-title{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .proc-sub{color:var(--mut);font-weight:400;font-size:12px;margin-left:4px;}
 .proc-line{display:flex;align-items:center;gap:6px;padding:6px 10px;font-size:12.5px;color:var(--blue-d);font-weight:600;}
-.proc-tool-param{font-size:12px;color:var(--mut);white-space:pre-wrap;word-break:break-all;max-height:60px;overflow:auto;margin-bottom:4px;}
+/* ★ 2026-11-18：工具参数同样去掉内滚条（截断 + 悬停看全文）。 */
+.proc-tool-param{font-size:12px;color:var(--mut);white-space:pre-wrap;word-break:break-all;max-height:52px;overflow:hidden;margin-bottom:4px;}
 /* P0-2 工具结果：头部（结果/展开/复制）+ 正文（截断可展开） */
 .proc-tool-result{font-size:12px;color:var(--mut);margin-top:2px;}
 .proc-tool-result .pr-head{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--mut);margin-bottom:2px;}
 .proc-tool-result .pr-act{cursor:pointer;color:var(--blue-d);text-decoration:underline;user-select:none;}
-.proc-tool-result .pr-body{white-space:pre-wrap;word-break:break-all;max-height:90px;overflow:auto;}
+/* ★ 2026-11-18：工具结果**去掉内滚条**，改为「默认截断若干行 + 展开全文」
+   （与 Claude Code / Codex 的「… +N lines」同思路：靠截断提示，不靠嵌套滚动条）。 */
+.proc-tool-result .pr-body{white-space:pre-wrap;word-break:break-all;max-height:64px;overflow:hidden;}
 .proc-tool-result.open .pr-body{max-height:none;overflow:visible;}
 /* P1-3 思考轮次分隔 */
 .proc-round{font-size:12px;color:var(--blue-d,#3478f6);font-weight:600;margin:6px 0 2px;border-left:2px solid #cfe0ff;padding-left:6px;}

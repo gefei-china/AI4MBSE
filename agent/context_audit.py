@@ -64,6 +64,67 @@ _BUF_LOCK = threading.Lock()
 #: 单次请求内累计的块级 token（供调用方读取"这轮拼了多少"而不必查库）
 _LAST: dict = {}
 
+#: 已上报过的"词表外 block_name"（每个名字只报一次，避免热路径刷屏）
+_VOCAB_UNKNOWN_SEEN: set = set()
+_VOCAB_LOCK = threading.Lock()
+
+
+def _audit_block_vocab(blocks: dict) -> list:
+    """校验即将写入 `context_audit` 的 `block_name` 是否都已在事件词表内。
+
+    ## 为什么要在**写路径**校验（2026-11-16）
+
+    `context_audit.block_name` 的消费方是 `core.event_vocabulary.validate_event` ——
+    读路径遇到词表外类型且无 `ignorable` 会**抛 `UnknownEventError` ⇒ 会话回放失败**。
+    而写路径此前**从不校验**，于是"漏登记"只会在很久之后以"回放失败"的形式暴露。
+
+    实测发生过**三次**，全都是同一个形态（新增 prompt 块时忘了登记）：
+      · `artifact_facts` / `output_contract`（2026-11-15 由门禁抓到）
+      · `artifact_baseline`（2026-11-16 由门禁抓到，common.py:326/698 早就有了）
+
+    ⇒ 根因不是"记性不好"，而是**"加块"与"登记"分属两个动作且无强耦合**。
+      门禁能抓，但**抓在事后**（要等有人跑全量）。这里改成运行期即时上报：
+      漏登记的那一刻就进观测台账，不用等到门禁/回放失败。
+
+    ## 三条纪律
+    1. **绝不阻断主流程**：整个函数包在 try 里，任何异常吞掉。
+       校验的价值是"看见"，不是"拦截"——拦住会让一次拼写错误变成整轮对话不可用，
+       代价远大于收益（与 `context_audit` 整体"观测绝不阻断"一致）。
+    2. **每个名字只报一次**：`record_blocks` 是每轮热路径，若每次都记会让台账被同一个
+       名字刷爆、反而盖住别的问题。去重后"首次出现即报警"。
+    3. **上报不落库、不加表**：走 `core.observe_fail`（既有观测通道），
+       与 `rag.route_stat` / `trace_query` 同族，不新增 schema。
+
+    :returns: 本次新发现的未登记名字列表（供门禁/单测断言；正常为空列表）
+    """
+    try:
+        # ⚠️ 必须是 dict：若传进来字符串，`for n in blocks` 会**逐字符**迭代
+        #   ⇒ 把 'a'/'c'/'x' 当成 block_name 上报（实测踩到）。
+        #   `record_blocks` 的调用方都传 dict，但这是热路径上的公共函数，
+        #   不该假设调用方永远正确 —— 类型不符直接当"无可校验"返回。
+        if not isinstance(blocks, dict) or not blocks:
+            return []
+        from core.event_vocabulary import KNOWN_EVENT_TYPES
+        unknown = [n for n in blocks if n and n not in KNOWN_EVENT_TYPES]
+        if not unknown:
+            return []
+        with _VOCAB_LOCK:
+            fresh = [n for n in unknown if n not in _VOCAB_UNKNOWN_SEEN]
+            _VOCAB_UNKNOWN_SEEN.update(unknown)
+        for name in fresh:
+            try:
+                from core.observe_fail import note
+                note("prompt_block_vocab",
+                     ValueError("block_name 未登记进 core/event_vocabulary.py 的 "
+                                "KNOWN_EVENT_TYPES: %r（读路径 validate_event 会拒绝它）"
+                                % name),
+                     block=name)
+            except Exception:
+                pass
+        return fresh
+    except Exception:
+        return []
+
 
 def _enabled() -> bool:
     try:
@@ -104,6 +165,10 @@ def record_blocks(blocks: dict, phase: str = "system", extra: dict | None = None
         return 0
     if not _enabled():
         return 0
+    # ★ 2026-11-16：写路径即时校验 block_name 词表覆盖（只上报，不阻断）——
+    #   把这个反复出现三次的"漏登记"从事后（门禁/回放失败）提前到**写入那一刻**。
+    #   放在 _enabled() 之后：审计关掉时不产生观测噪音（关审计就是不要这些）。
+    _audit_block_vocab(blocks or {})
     try:
         from core.token_counter import count_tokens
         from core.audit import trace_context

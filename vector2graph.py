@@ -72,13 +72,18 @@ def _survivorship_apply(conn, target_id: str, cand, operator: str) -> dict:
     if not row["source_doc"] and (cand["source_doc"] or ""):
         conn.execute("UPDATE entities SET source_doc=? WHERE id=?",
                      (cand["source_doc"], target_id))
-    conn.execute(
-        "INSERT INTO graph_edit_logs (op, node_id, payload, operator) VALUES (?,?,?,?)",
-        ("survivorship_align", target_id,
-         json.dumps({"candidate": cand_name,
-                     "candidate_id": cand["id"],
-                     "props_merged": merged_keys, "alias_added": alias_added},
-                    ensure_ascii=False), operator))
+    # ★ 2026-11-18：graph_edit_logs 补 trace_id（列不存在自动降级）
+    from core.audit import with_trace as _wt_sa
+    _gcols, _gvals = _wt_sa(conn, "graph_edit_logs",
+                            ["op", "node_id", "payload", "operator"],
+                            ["survivorship_align", target_id,
+                             json.dumps({"candidate": cand_name,
+                                         "candidate_id": cand["id"],
+                                         "props_merged": merged_keys,
+                                         "alias_added": alias_added},
+                                        ensure_ascii=False), operator])
+    conn.execute("INSERT INTO graph_edit_logs (%s) VALUES (%s)"
+                 % (",".join(_gcols), ",".join("?" * len(_gcols))), tuple(_gvals))
     # P2（2026-09-07）entity_aliases 写入侧：mention 原文 → canonical 别名映射
     # （此前只写 properties.aliases，实体别名表空转；写入后供检索召回 + sync-aliases 同步词典）
     try:

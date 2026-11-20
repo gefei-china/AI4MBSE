@@ -93,15 +93,19 @@ class StudioRepo(BaseRepo):
                      frontmatter: str, package_path: str, status: str = "draft",
                      dependencies: str = "[]", allowed_roles: str = "[]",
                      allowed_tools: str = "[]", references: str = "[]",
-                     examples: str = "[]", scripts: str = "[]") -> int:
+                     examples: str = "[]", scripts: str = "[]",
+                     *, owner: str = "") -> int:
+        # ★ 2026-11-20：`owner` 落库（用户名/显示名）。此前 skills 没有归属，
+        #   同步桥只能给 plugins.author_id=0 ⇒ 创建者本人也不被认作作者（is_mine=False）
+        #   ⇒ 卡片上没有编辑/发布/删除，只剩「卸载」。见 legacy_sync._resolve_author。
         rid = self.execute(
             """INSERT INTO skills (name, description, skill_type, triggers, category,
                content, frontmatter, package_path, status, version, dependencies,
-               allowed_roles, allowed_tools, `references`, examples, scripts)
-               VALUES (?,?,?,?,?,?,?,?,?,'v1.0',?,?,?,?,?,?)""",
+               allowed_roles, allowed_tools, `references`, examples, scripts, owner)
+               VALUES (?,?,?,?,?,?,?,?,?,'v1.0',?,?,?,?,?,?,?)""",
             (name, description, skill_type, triggers, category, content, frontmatter,
              package_path, status, dependencies, allowed_roles, allowed_tools,
-             references, examples, scripts),
+             references, examples, scripts, (owner or "")),
         )
         self._sync("skills", rid)
         return rid

@@ -942,13 +942,26 @@ class LLMClient:
             resp, n = self._chat_with_retry(
                 impl, messages, impl_kw, stream, tools, thinking,
                 provider.get("name", "-"), provider.get("model_name", "-"))
-            if _br and not stream:
+            # ★ 2026-11-17 修（流式探针卡死，生产事故）：
+            #   原条件 `if _br and not stream` 让**流式请求从不结算熔断状态**，
+            #   但上面的 `allow()` 对流式**照样占用 HALF_OPEN 探针位**
+            #   （`probe_inflight=True`）。后果：一次熔断后，第一个流式请求拿走探针位、
+            #   成功却不归还 ⇒ 之后**所有**请求（流式 + 非流式）永久得到
+            #   「熔断半开试探中（已有探针在飞）」，整个 LLM 链路停摆。
+            #   真机证据：16:45~16:52 连续 7 分钟、36 个 eval 用例全部被这条拒绝，
+            #   每个 12 秒失败（正常 4~15 分钟）。
+            #   口径：下游已接受本次请求（拿到 resp）= 健康信号，流/非流一视同仁。
+            #   生成器后续迭代失败属于客户端消费阶段，不在这里计入 provider 失败。
+            if _br:
                 _br.record_success(_pkey)
             return resp, n, provider
         except Exception as e:  # noqa: BLE001
             last = e
-            # P1-4：非流式失败计入熔断（见约束③）
-            if _br and not stream and self._retryable(e):
+            # P1-4：失败计入熔断（见约束③）。
+            # ★ 2026-11-17：去掉 `not stream` —— 与上面的 record_success 对称，
+            #   否则流式探针失败也不结算，`probe_inflight` 同样永久卡住。
+            #   `_retryable(e)` 仍挡参数类 4xx，不会把客户端错误算到 provider 头上。
+            if _br and self._retryable(e):
                 try:
                     _br.record_failure(_pkey, f"{type(e).__name__}: {str(e)[:150]}")
                 except Exception:
