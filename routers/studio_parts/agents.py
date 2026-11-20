@@ -461,3 +461,35 @@ def bindings_usage_map(conn=Depends(db_session)):
     """{kind: {name: 绑定 Agent 数}} —— 批量标注用（能力中心卡片一次取全）。"""
     from services import capability_graph as _cg
     return _cg.usage_map(conn)
+
+
+@router.post("/api/studio/bindings/judge")
+def bindings_judge(body: dict, conn=Depends(db_session)):
+    """2026-11-20：编辑 Agent **勾选绑定时**的即时预检（尚未落库的候选）。
+
+    与 /agents/{aid}/bindings 的区别：那个只判"已保存"的绑定；这里判的是用户此刻
+    在编辑弹窗里正要勾选的候选，回答"这条绑上去会不会生效、要不要就地处理"。
+
+    判据仍走 services/capability_graph.judge_binding（单一真源），前端不重算。
+    入参 {"items":[{"kind":"mcp","name":"xxx"}, ...]}
+    返回 {"results":[{"kind","name","state","effective","reason","hint","actions",...}]}
+    其中 actions 是 _fix_actions 生成的"就地处理"动作（无 binding_id ⇒ 不含解绑）。
+    """
+    from services import capability_graph as _cg
+    items = (body or {}).get("items") or []
+    results = []
+    for it in items:
+        if not isinstance(it, dict):
+            continue
+        kind = it.get("kind")
+        name = it.get("name")
+        if kind not in ("skill", "mcp", "tool") or not name:
+            continue
+        # 候选尚未落库：bind_enabled=1、agent_status=active（只判目标能力本身是否可用）
+        j = _cg.judge_binding(conn, kind, name, agent_status="active", bind_enabled=1)
+        j["state_label"], j["level"] = _cg.STATE.get(j["state"], (j["state"], "muted"))
+        # 就地处理动作：agent_id=0（未保存），故不会生成依赖 agent 的解绑/启用 Agent，
+        # 只保留"启用目标 / 测试 MCP 连通"这类与目标能力直接相关的动作。
+        j["actions"] = _cg._fix_actions(0, j)
+        results.append(j)
+    return {"results": results}

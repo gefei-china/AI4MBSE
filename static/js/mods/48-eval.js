@@ -28,15 +28,30 @@
  *      一律渲染成说明文字，不给点了没反应的按钮。
  */
 (function () {
-  const _KIND_ORDER = ['rag_retrieval', 'memory_quality', 'intent_routing', 'trace_consistency', 'doc_extract', 'generation_quality', ''];
+  const _KIND_ORDER = ['rag_retrieval', 'memory_quality', 'intent_routing', 'trace_consistency', 'doc_extract', 'generation_quality', 'golden_e2e', ''];
 
   function _kindLabel(k) {
     const m = { rag_retrieval: 'RAG 检索评测', memory_quality: '记忆质量评测',
                 intent_routing: '意图路由评测', trace_consistency: 'Trace 一致性评测',
                 doc_extract: '文档抽取评测',
                 generation_quality: '生成质量评测',
+                golden_e2e: '端到端黄金集评测',
                 '': '历史记录（未标注类型）' };
     return m[k] || (k || '未标注类型');
+  }
+
+  /* 数据新鲜度：页面展示的是"最近一次跑批快照"，不是实时质量。
+     超过 3 天显黄、7 天显红，提醒用户"这个分数是旧的"，避免拿过期快照
+     当当前系统质量（2026-11-20 米爸反馈：RAG 停在 10-23 却看不出旧）。 */
+  function _dataAge(createdAt) {
+    if (!createdAt) return '';
+    const t = Date.parse(String(createdAt).replace(' ', 'T') + 'Z');
+    if (isNaN(t)) return '';
+    const days = Math.floor((Date.now() - t) / 86400000);
+    if (days < 3) return `<span style="font-size:11.5px;color:var(--grn);margin-left:6px;">数据 ${days} 天前</span>`;
+    const col = days >= 7 ? 'var(--red)' : 'var(--amb)';
+    const tip = days >= 7 ? '该分数已过期一周以上，请重跑评测' : '该分数已超过 3 天，建议重跑';
+    return `<span style="font-size:11.5px;color:${col};margin-left:6px;" title="${tip}">⚠ 数据 ${days} 天前（旧）</span>`;
   }
 
   function _kindBadge(k) {
@@ -68,15 +83,20 @@
   }
 
   /* 可信度徽章：这是本页最该被看见的东西。
-     trustworthy = 有负对照 且 无语料漂移。缺任一 ⇒ 这个分数不能当依据。 */
+     ★ 2026-11-20 三态化（此前只有可信/不可信，把 golden_e2e 等
+     **没有负对照范式**的评测也冤枉成"不可信"）：
+       · trust_applicable=false ⇒ "不适用"（该范式无负对照概念，不是不可信）
+       · trustworthy=true ⇒ 可信
+       · 否则 ⇒ 不可信，title 给出后端判定的具体原因 trust_reason */
   function _trustBadge(item) {
+    if (item.trust_applicable === false) {
+      return '<span class="st" title="该评测范式无负对照概念，可信度判据不适用">不适用</span>';
+    }
     if (item.trustworthy) {
       return '<span class="st ok" title="有负对照且无语料漂移 ⇒ 该分数可作依据">可信</span>';
     }
-    const why = [];
-    if (!item.negative_control) why.push('无负对照（无法排除假绿）');
-    if (item.fingerprint_drift && item.fingerprint_drift.length) why.push('语料已漂移');
-    return `<span class="st r" title="${esc(why.join('；') || '未知原因')}">不可信</span>`;
+    const why = item.trust_reason || '未知原因';
+    return `<span class="st r" title="${esc(why)}">不可信</span>`;
   }
 
   /* ══ 段 ⓪：人工操作（T1：立即跑批，走 jobs 队列）══
@@ -88,14 +108,12 @@
        按钮下方就是作业卡片（进度条 + 阶段 + 终态），页面打开即显示
        最近评测作业并在非终态时自动轮询；③ 提交带 job_key=kind：
        空键不去重，实测手抖双击会排出两个 nightly（#17/#18 双跑）。 */
-  const _EVAL_JOBS = [
-    ['eval_trace', 'Trace 一致性', '~15s'],
-    ['eval_gen', '生成质量+LLM 忠实度', '~80s'],
-    ['eval_rag', 'RAG 检索（三域）', '2~4min'],
-    ['build_evalset', '重建评测集', '~40s'],
-    ['eval_nightly', 'nightly 全批', '4~8min'],
-  ];
-  const _EVKIND_LABEL = Object.fromEntries(_EVAL_JOBS.map(j => [j[0], j[1]]));
+  /* ★ 2026-11-20（根治"同一枚举写两份必然漂移"）：评测域作业也改为
+     从 /api/jobs/kinds 动态取（group='eval'），不再硬编码。
+     后端 describe() 的 label 已含耗时（如"~15s"），前端直接用。
+     _JOB_LABEL 由全量 kinds 填充 ⇒ 自进化作业也能进作业卡片（此前只填
+     eval 硬编码 + evo 动态，evo 作业有 kind 却无 label 被卡片过滤掉）。 */
+  let _ALL_JOBS = null;           // {kind: {label, group, required}}
   let _evmPollTimer = null;
 
   /* ══ 自进化域作业（2026-10-29）══
@@ -104,27 +122,29 @@
        （后端 describe() 的 group='evolution'），后端注册即前端可见。
      这三个作业的共同点：**只提议、不自动应用**（技能草稿 / 提案队列 / 待标注队列），
      真改动一律等人工裁决。 */
-  let _EVO_KINDS = null;          // [[kind, label], ...]
-  const _JOB_LABEL = Object.assign({}, _EVKIND_LABEL);   // kind → 中文名（含动态装载的自进化作业）
-
-  async function _loadEvoKinds(){
-    if(_EVO_KINDS) return _EVO_KINDS;
+  const _JOB_LABEL = {};          // kind → 中文名（全量动态填充，含 eval/evo）
+  async function _loadAllJobs(){
+    if(_ALL_JOBS) return _ALL_JOBS;
     try{
       const r = await api('/api/jobs/kinds');
-      const items = (r && r.items) || {};
-      _EVO_KINDS = Object.keys(items)
-        .filter(k => items[k] && items[k].group === 'evolution')
-        .map(k => { _JOB_LABEL[k] = items[k].label || k; return [k, items[k].label || k]; });
+      _ALL_JOBS = (r && r.items) || {};
+      Object.keys(_ALL_JOBS).forEach(k => { _JOB_LABEL[k] = _ALL_JOBS[k].label || k; });
     }catch(e){
-      _EVO_KINDS = [];
+      _ALL_JOBS = {};
     }
-    return _EVO_KINDS;
+    return _ALL_JOBS;
+  }
+  function _jobsOf(group){
+    return Object.keys(_ALL_JOBS || {})
+      .filter(k => _ALL_JOBS[k] && _ALL_JOBS[k].group === group)
+      .map(k => [k, _JOB_LABEL[k] || k]);
   }
 
   async function _renderEvoButtons(){
     const box = document.getElementById('evo-jobs');
     if(!box) return;
-    const kinds = await _loadEvoKinds();
+    await _loadAllJobs();
+    const kinds = _jobsOf('evolution');
     if(!kinds.length){
       box.innerHTML = '<span style="font-size:12.5px;color:var(--mut);">（后端未注册自进化作业）</span>';
       return;
@@ -135,11 +155,12 @@
       + '<span style="font-size:12px;color:var(--mut);margin-left:6px;">只提议不自动应用 · 产出待人工裁决</span>';
   }
 
-  function _renderActions() {
-    const btns = _EVAL_JOBS.map(([kind, label, eta]) =>
+  async function _renderActions() {
+    await _loadAllJobs();
+    const btns = _jobsOf('eval').map(([kind, label]) =>
       `<button class="btn" style="font-size:12.5px;padding:4px 10px;"
-        onclick="submitEvalJob('${kind}')">${esc(label)}
-        <span style="color:var(--mut);font-size:11.5px;">${eta}</span></button>`).join(' ');
+        onclick="submitEvalJob('${kind}')">${esc(label)}</button>`).join(' ')
+      || '<span style="font-size:12.5px;color:var(--mut);">（后端未注册评测作业）</span>';
     return `<div class="panel" style="margin-bottom:14px;">
       <div class="ph">⓪ 人工操作 <span class="tag">走作业队列 · 进度在此卡片实时刷新 · 可关页续跑</span></div>
       <div class="pb">
@@ -166,8 +187,15 @@
     return '<span class="st g">排队中</span>';
   }
 
+  // 作业卡片只显示本页相关域（eval + evolution）——ops 域（文档入库等）不在此显示。
+  // 2026-11-20：原用 _EVKIND_LABEL 过滤导致自进化作业被漏；改为按后端 group 判断。
+  function _isRelevantJob(j) {
+    const meta = (_ALL_JOBS || {})[j.kind];
+    return !!meta && (meta.group === 'eval' || meta.group === 'evolution');
+  }
+
   function _jobCardHTML(items) {
-    const ev = (items || []).filter(j => _EVKIND_LABEL[j.kind]);
+    const ev = (items || []).filter(_isRelevantJob);
     if (!ev.length) {
       return '<div style="font-size:12.5px;color:var(--mut);">暂无评测作业记录 —— 点上方按钮发起第一次跑批。</div>';
     }
@@ -186,7 +214,7 @@
       return `<div style="padding:7px 0;border-bottom:1px solid var(--line);">
         <div style="display:flex;gap:8px;align-items:center;font-size:12.5px;">
           <b style="font-weight:600;">作业 #${j.id}</b>
-          <span>${esc(_EVKIND_LABEL[j.kind] || j.kind)}</span>
+          <span>${esc(_JOB_LABEL[j.kind] || j.kind)}</span>
           ${_jobChip(j.status)}
           <span style="flex:1"></span>
           <span style="font-size:12px;color:var(--mut);">${esc(String(j.updated_at || j.created_at || '').slice(5, 16))}</span>
@@ -210,7 +238,7 @@
       items = (r && r.items) || [];
     } catch (e) { /* 网络抖动：保 last 渲染，下轮再试 */ }
     box.innerHTML = _jobCardHTML(items);
-    const active = items.some(j => _EVKIND_LABEL[j.kind]
+    const active = items.some(j => _isRelevantJob(j)
       && (j.status === 'queued' || j.status === 'running'));
     if (active && !_evmPollTimer) {
       _evmPollTimer = setInterval(_refreshJobCard, 2500);
@@ -226,10 +254,10 @@
   }
 
   async function submitEvalJob(kind) {
-    const meta = _EVAL_JOBS.find(j => j[0] === kind) || [kind, (_JOB_LABEL[kind] || kind), '~1min'];
+    // 2026-11-20：label 来自后端 describe()（已含耗时），不再依赖前端硬编码 eta
+    const label = _JOB_LABEL[kind] || kind;
     const ok = await confirmDialog(
-      '提交「' + meta[1] + '」作业？\n预计耗时 ' + meta[2]
-      + '，进度在下方卡片实时刷新；可关页，作业继续跑。',
+      '提交「' + label + '」作业？\n进度在下方卡片实时刷新；可关页，作业继续跑。',
       { title: '提交评测作业', okText: '提交' });
     if (!ok) return;
     const r = await api('/api/jobs', {
@@ -381,7 +409,7 @@
         <div class="l" style="display:flex;justify-content:space-between;gap:6px;align-items:center;">
           <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(it.kind_label || _kindLabel(k))}</span>
           ${_trustBadge(it)}</div>
-        <div class="l" style="font-size:12px;color:var(--mut);">${esc(it.created_at || '')}</div>
+        <div class="l" style="font-size:12px;color:var(--mut);">${esc(it.created_at || '')}${_dataAge(it.created_at)}</div>
         <div style="margin-top:6px;">${metrics}</div>
         ${drift}
         <div class="l" style="font-size:12px;color:var(--mut);margin-top:4px;">${esc(it.doc_name || '')}</div>
@@ -846,8 +874,9 @@
         return;
       }
       const g = ov && ov.gates ? ov.gates : null;
+      const actionsHtml = await _renderActions();   // 2026-11-20：动态作业需 await
       _mount(
-        _renderActions() +
+        actionsHtml +
         _renderLatest(ov || {}) +
         _renderTrends(hist || {}) +
         _renderGates(g) +
@@ -856,7 +885,7 @@
         + '带 schema 校验与台账；历史三色不受影响）。触发走作业队列（jobs），'
         + '手动 nightly 不自动提交快照。详细用法见 <code>docs/评测工具使用指南-20261022.md</code>。</div>'
       );
-      // 自进化作业按钮组（动态取后端注册项，见 _loadEvoKinds）
+      // 自进化作业按钮组（动态取后端注册项，见 _loadAllJobs）
       _renderEvoButtons();
       // 作业卡片：最近评测作业 + 非终态自动轮询（_refreshJobCard 内部管理定时器）
       _refreshJobCard();

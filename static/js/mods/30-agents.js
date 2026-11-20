@@ -1153,6 +1153,85 @@ async function loadBindEffectiveness(aid){
   });
 }
 
+// ══ 2026-11-20：勾选绑定时**即时预检**（用户第2点要求「关系判断在操作时就提示」）══
+// 判据走后端 /api/studio/bindings/judge（services/capability_graph 单一真源），
+// 前端不重算。勾选 → 防抖批量预检 → 在绑定下拉的 eff 条里当场显示"会不会生效 + 就地处理"。
+let _bindJudge = {skill:{}, mcp:{}, tool:{}};   // kind -> name -> judge结果
+let _bindJudgeSeq = 0;                          // 防抖序号：只应用最后一次结果
+function _bindJudgeBox(kind){
+  let box = document.getElementById('f-bind-'+kind+'-judge');
+  if(box) return box;
+  const dd = document.getElementById('f-bind-'+kind+'-dd');
+  if(!dd || !dd.parentNode) return null;
+  box = document.createElement('div');
+  box.id = 'f-bind-'+kind+'-judge';
+  box.style.cssText = 'margin-top:4px;';
+  // 紧贴 eff 条之后；没有 eff 条就放 dd 之后
+  const eff = document.getElementById('f-bind-'+kind+'-eff');
+  (eff && eff.parentNode ? eff : dd).parentNode.insertBefore(box,
+    (eff && eff.nextSibling) || dd.nextSibling);
+  return box;
+}
+function _renderBindJudge(kind){
+  const box = _bindJudgeBox(kind);
+  if(!box) return;
+  const set = _agentBindSets[kind] || new Set();
+  const problems = [...set].map(n=>_bindJudge[kind][n]).filter(j=>j && (!j.effective || j.state!=='effective'));
+  if(!problems.length){ box.innerHTML=''; return; }
+  let html = '<div style="border:1px solid #e0b96a;background:rgba(201,130,26,.07);border-radius:6px;padding:6px 9px;font-size:12px;line-height:1.6;">'
+    + '<div style="color:#a8760f;font-weight:600;margin-bottom:3px;">⚠ 已勾选 '+problems.length+' 项需关注（绑上去也不一定生效）</div>';
+  problems.forEach(function(j){
+    const col = j.effective ? '#c9821a' : '#c92a2a';
+    html += '<div style="margin-top:3px;">· <b style="color:'+col+';">'+esc(j.name)+'</b> '
+      + '<span class="capbadge '+(j.effective?'off':'off')+'" style="margin-left:4px;">'+esc(j.state_label||j.state)+'</span>'
+      + '<div style="color:var(--mut);margin-left:10px;">'+esc(j.reason)+'</div>'
+      + '<div style="color:var(--mut);margin-left:10px;">处理：'+esc(j.hint)+'</div>';
+    // 就地处理动作（启用目标 / 测试 MCP）—— 点一下直接执行，不用来回切页面
+    const acts = (j.actions||[]).filter(function(a){ return a.id==='enable_target' || a.id==='test_mcp'; });
+    if(acts.length){
+      html += '<div style="margin:3px 0 2px 10px;display:flex;gap:6px;flex-wrap:wrap;">'
+        + acts.map(function(a,ai){
+            return '<button class="btn sm ghost" style="font-size:11.5px;padding:1px 8px;"'
+              + ' onclick="bindJudgeAct(\''+kind+'\',\''+escA(j.name)+'\','+ai+')">'+esc(a.label)+'</button>';
+          }).join('') + '</div>';
+    }
+    html += '</div>';
+  });
+  html += '</div>';
+  box.innerHTML = html;
+}
+async function bindJudgeAct(kind, name, ai){
+  const j = _bindJudge[kind][name];
+  const a = j && (j.actions||[]).filter(function(v){ return v.id==='enable_target'||v.id==='test_mcp'; })[ai];
+  if(!a) return;
+  if(a.confirm && !(await confirmDialog(a.confirm,{title:'就地处理'}))) return;
+  try{
+    const r = await api(a.api,{method:a.method});
+    if(r && r.error){ toast('处理失败：'+r.error); return; }
+    toast('✓ '+a.label+' 已执行');
+    // 重新预检这一条（状态可能已变）
+    await runBindJudge([[kind,name]]);
+  }catch(e){ toast('处理失败：'+String(e&&e.message||e)); }
+}
+async function runBindJudge(pairs){
+  if(!pairs || !pairs.length) return;
+  const seq = ++_bindJudgeSeq;
+  let res = null;
+  try{
+    res = await api('/api/studio/bindings/judge',{method:'POST',body:JSON.stringify({
+      items: pairs.map(function(p){ return {kind:p[0], name:p[1]}; })
+    })});
+  }catch(e){ return; }
+  if(seq!==_bindJudgeSeq || !res || !res.results) return;   // 过期结果丢弃
+  res.results.forEach(function(j){
+    if(!_bindJudge[j.kind]) _bindJudge[j.kind]={};
+    _bindJudge[j.kind][j.name]=j;
+  });
+  const byKind={};
+  pairs.forEach(function(p){ (byKind[p[0]]=byKind[p[0]]||[]).push(p[1]); });
+  Object.keys(byKind).forEach(function(k){ _renderBindJudge(k); });
+}
+
 // ══ 停用/删除前的影响面提示 ══════════════════════════════════════════
 // 反向关系：这个能力被哪些 Agent 绑着。以前停用是"静默生效"——用户不知道
 // 一按下去有几个 Agent 会当场失去该能力（实测 `变更影响分析` 绑了 4 个 Agent）。
@@ -1253,6 +1332,14 @@ async function loadAgentBindOptions(selected){
       if(box) box.innerHTML = '<div style="padding:8px 10px;color:var(--red);font-size:12.5px;">候选加载失败</div>';
     });
   }
+  // 2026-11-20：打开编辑时，对**已回填的勾选**也即时预检一次（不只是新勾的）
+  _bindJudge = {skill:{}, mcp:{}, tool:{}};
+  const allPairs = [];
+  _BIND_KINDS.forEach(function(k){
+    (_agentBindSets[k]||[]).forEach(function(n){ allPairs.push([k,n]); });
+    _renderBindJudge(k);
+  });
+  if(allPairs.length) runBindJudge(allPairs);
 }
 // 头部摘要：未选=占位灰字；已选=前 2 个 + 剩余计数（与团队面板口径完全一致）
 function _bindSumRefresh(kind){
@@ -1312,6 +1399,15 @@ function bindToggle(kind, value, checked){
   //   只有动过才允许 syncAgentBindings 做**删除**（见那里的护栏）。
   _agentBindDirty = true;
   _bindSumRefresh(kind);
+  // 2026-11-20：勾选即时预检（操作时就提示，不让用户事后才发现死绑定）
+  if(checked){
+    clearTimeout(_bindJudge._t);
+    (_bindJudge._pending=_bindJudge._pending||[]).push([kind,value]);
+    const pending = _bindJudge._pending;
+    _bindJudge._t = setTimeout(function(){ _bindJudge._pending=[]; runBindJudge(pending); }, 180);
+  } else {
+    if(_bindJudge[kind]) { delete _bindJudge[kind][value]; _renderBindJudge(kind); }
+  }
 }
 function bindDdToggle(kind, ev){
   if(ev) ev.stopPropagation();

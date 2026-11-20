@@ -16,6 +16,22 @@
     '.capchips span{padding:3px 10px;border-radius:20px;font-size:12.5px;cursor:pointer;border:1px solid var(--line,#d5dce6);color:var(--mut,#5a6678);background:transparent;}',
     '.capchips span.on{background:var(--blue-d,#0C447C);border-color:var(--blue-d,#0C447C);color:#fff;}',
     '.capgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(268px,1fr));gap:10px;}',
+    /* 2026-11-20 视图切换：列表态 = 真正的表格（带列头），不是压扁的卡片。 */
+    '.capgrid.cap-list{display:block;}',
+    '.captbl{width:100%;border-collapse:collapse;font-size:12.5px;}',
+    '.captbl th{text-align:left;padding:7px 10px;border-bottom:2px solid var(--line,#d5dce6);color:var(--mut,#5a6678);font-weight:500;white-space:nowrap;background:var(--bg2,#f7f9fc);position:sticky;top:0;z-index:2;}',
+    '.captbl td{padding:7px 10px;border-bottom:1px solid var(--line,#e9edf3);vertical-align:middle;}',
+    '.captbl tr:hover td{background:var(--bg-hover,#f4f7fb);}',
+    '.captbl .ct-name{font-weight:500;color:var(--ink,#1a2332);min-width:130px;}',
+    '.captbl .ct-desc{color:var(--mut,#5a6678);max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}',
+    '.captbl .ct-acts{white-space:nowrap;text-align:right;}',
+    '.captbl .ct-acts .btn.sm{padding:2px 8px;font-size:12px;margin-left:4px;}',
+    '.captbl .ct-group td{background:var(--bg2,#f7f9fc);font-weight:500;color:var(--ink,#1a2332);padding:6px 10px;}',
+    /* 视图切换按钮组（胶囊二态） */
+    '.capview{display:inline-flex;border:1px solid var(--line,#d5dce6);border-radius:6px;overflow:hidden;}',
+    '.capview button{border:none;background:transparent;color:var(--mut,#5a6678);font-size:12.5px;padding:3px 10px;cursor:pointer;line-height:1.5;}',
+    '.capview button.on{background:var(--blue-d,#0C447C);color:#fff;}',
+    /* 插件市场列表态用 .captbl 表格（见 28-studio.js marketTableHtml），此处无需额外样式 */
     '.capcard{position:relative;background:var(--bg-card,#fff);border:1px solid var(--line,#d5dce6);border-radius:10px;padding:12px 14px;display:flex;flex-direction:column;gap:6px;transition:border-color .15s;}',
     '.capcard:hover{border-color:var(--blue,#185FA5);}',
     '.capcard.mine{border-left:3px solid var(--green,#3B6D11);}',
@@ -77,9 +93,25 @@ const _capSt = {};   // pageId -> {type, tab, q, cat, market:[], mine:[]}
 let _capCur = 'st-agent';   // 当前渲染页（供新建/编辑路由到对应专用表单）
 
 function _capS(page, type) {
-  if (!_capSt[page]) _capSt[page] = { type: type, q: '', cat: '', st: '', mine: [] };
+  if (!_capSt[page]) _capSt[page] = { type: type, q: '', cat: '', st: '', view: 'card', mine: [] };
+  // 视图默认卡片：老状态对象（切页前已建、无 view 键）补默认值，避免 undefined 被当成 list 判断
+  if (!_capSt[page].view) _capSt[page].view = 'card';
   if (type && !CAP_PAGES[page].includes(_capSt[page].type)) _capSt[page].type = type;
   return _capSt[page];
+}
+/* 2026-11-20 视图切换：只切 class + 按钮高亮，不重新拉数据（数据已在 s.mine）。
+   默认 card；状态按页保存，切 tab 回来仍保持用户上次选择。 */
+function capSetView(page, view) {
+  const s = _capS(page);
+  s.view = (view === 'list') ? 'list' : 'card';
+  const grid = document.getElementById('cap-' + page + '-grid');
+  if (grid) grid.classList.toggle('cap-list', s.view === 'list');
+  const bc = document.getElementById('cap-' + page + '-vcard');
+  const bl = document.getElementById('cap-' + page + '-vlist');
+  if (bc) bc.classList.toggle('on', s.view !== 'list');
+  if (bl) bl.classList.toggle('on', s.view === 'list');
+  // 表格/卡片是两套 DOM，必须重渲染才能切换（只切 class 无法把卡片变表格）
+  capRender(page);
 }
 
 /* 渲染整个能力区骨架 */
@@ -96,6 +128,11 @@ async function capMount(page) {
       <div class="capbar">
       ${typeTabs}
       <input id="cap-${page}-q" placeholder="搜索名称 / 描述…" style="border:1px solid var(--line,#d5dce6);border-radius:6px;padding:4px 10px;font-size:13.5px;width:190px;" oninput="capSearch('${page}',this.value)">
+      <!-- 2026-11-20 视图切换：卡片 / 列表，默认卡片；状态按页记在 _capSt[page].view -->
+      <span class="capview" role="group" aria-label="视图切换">
+        <button id="cap-${page}-vcard" class="${s.view !== 'list' ? 'on' : ''}" onclick="capSetView('${page}','card')" title="卡片视图">▦ 卡片</button>
+        <button id="cap-${page}-vlist" class="${s.view === 'list' ? 'on' : ''}" onclick="capSetView('${page}','list')" title="列表视图">☰ 列表</button>
+      </span>
       <button class="btn sm ghost" onclick="capRefresh('${page}')">刷新</button>
       <span style="flex:1"></span>
       <!-- 2026-10-29：能力中心 → 能力账本 的**实体级互链**。
@@ -275,6 +312,63 @@ async function capLoad(page) {
   capRender(page);
 }
 
+/* ══ 2026-11-20：列表视图 = 真正的表格（带列头）══════════════════
+ * 卡片视图仍走 capCard；列表视图走这里。列的语义与卡片底部 capmeta 一致：
+ * 名称 / 类型 / 描述 / 来源 / 发布态 / 个人态 / AI可用 / 版本 / 操作。
+ * 动作只放高频且语义明确的几个（启停/编辑/卸载/删除 + 更多），避免表格被按钮撑爆。
+ */
+function capTableRow(x, page) {
+  const t = x.type || 'skill';
+  const m = CAP_META[t] || { abbr: '?', label: t, color: '#5F5E5A' };
+  const label = capLabel(x);
+  const pid = _capPid(x);
+  const desc = x.description || (x.manifest && x.manifest.description) || '—';
+  const installed = !!x.installed;
+  const enabled = x.enabled !== false;
+  const isBuiltin = !!x.is_builtin, isMine = !!x.is_mine;
+  const published = (x.status === 'published');
+  const source = isBuiltin ? '内置' : (isMine ? '我创建' : (installed ? '他人共享' : '—'));
+  const scope = !!x.is_public ? '已上架' : (x.pending_share ? '申请中' : '仅自己');
+  let acts = '';
+  if (x._from_server && x.legacy_id) {
+    acts += `<button class="btn sm ghost" onclick="testMCP(${Number(x.legacy_id)})" title="测试连通+发现">🔌 测试</button>`;
+  }
+  if (x.can_publish_self) acts += `<button class="btn sm" onclick="capPublish('${esc(pid)}','${page}')">发布</button>`;
+  if (published) acts += `<button class="btn sm ghost" onclick="capSetInstalled('${esc(pid)}',${enabled ? 'false' : 'true'},'${page}')">${enabled ? '停用' : '启用'}</button>`;
+  if (x.can_edit) acts += `<button class="btn sm ghost" onclick="capEdit('${esc(pid)}')">编辑</button>`;
+  if (installed && !x.is_builtin && !x.is_mine) acts += `<button class="btn sm ghost" onclick="capUninstall('${esc(pid)}','${page}')">卸载</button>`;
+  if (x.can_delete && !isBuiltin && !(installed && !isMine)) {
+    acts += `<button class="btn sm ghost" style="color:var(--red,#A32D2D);" onclick="capDelete('${esc(pid)}','${esc(String(label).replace(/'/g, ''))}','${page}')">删除</button>`;
+  }
+  acts += capMoreBtn(x, page);
+  const badge = (on, txt, tip) => `<span class="capbadge ${on ? 'on' : 'off'}" title="${tip}">${txt}</span>`;
+  return '<tr>'
+    + `<td class="ct-name"><span style="color:${m.color};font-weight:600;">${m.abbr}</span> ${esc(label)}</td>`
+    + `<td>${esc(m.label)}</td>`
+    + `<td class="ct-desc" title="${esc(desc)}">${esc(desc)}</td>`
+    + `<td>${esc(source)}${!isBuiltin ? ' · ' + esc(scope) : ''}</td>`
+    + `<td>${x._from_server ? 'MCP 服务' : esc(_capStatusText(x))}</td>`
+    + `<td>${installed ? badge(enabled, enabled ? '个人已启用' : '个人已停用', '个人安装态，仅影响你自己') : '—'}</td>`
+    + `<td>${badge(!!x.consumable, x.consumable ? 'AI 可用' : 'AI 不可用', '综合判定：已发布 且 个人已启用 且 已安装')}</td>`
+    + `<td>v${esc(x.current_version || '—')}</td>`
+    + `<td class="ct-acts">${acts}</td>`
+    + '</tr>';
+}
+function capTableHtml(list, page, groups) {
+  const head = '<thead><tr><th>名称</th><th>类型</th><th>描述</th><th>来源</th><th>发布态</th>'
+    + '<th>个人态</th><th>AI 判定</th><th>版本</th><th style="text-align:right;">操作</th></tr></thead>';
+  let body = '';
+  if (groups && groups.length) {
+    groups.forEach(function (g) {
+      body += `<tr class="ct-group"><td colspan="9">${esc(g.title)} <span style="color:var(--mut);font-weight:400;">· ${g.list.length}</span></td></tr>`;
+      body += g.list.map(function (x) { return capTableRow(x, page); }).join('');
+    });
+  } else {
+    body = list.map(function (x) { return capTableRow(x, page); }).join('');
+  }
+  return `<table class="captbl">${head}<tbody>${body}</tbody></table>`;
+}
+
 function capRender(page) {
   _capCur = page;
   const s = _capS(page);
@@ -283,6 +377,8 @@ function capRender(page) {
   const cats = document.getElementById('cap-' + page + '-cats');
   const sum = document.getElementById('cap-' + page + '-sum');
   if (!grid) return;
+  // 2026-11-20：重建/切类型后同步视图 class（grid 元素被 capMount 重建时会丢 class）
+  grid.classList.toggle('cap-list', s.view === 'list');
 
   // [3] 筛选 chips：状态 + 分类 —— 均从当前集合实时聚合，非写死（2026-09-17 定稿：单区通用）
   if (cats) {
@@ -318,8 +414,23 @@ function capRender(page) {
     const filtered = s.st || s.cat;
     grid.innerHTML = `<div class="capempty">${filtered ? '没有符合筛选条件的能力' :
       '还没有可用能力：去「插件市场」安装，或点「＋ 新建能力」自己创建'}</div>`;
+  } else if (s.view === 'list') {
+    // 2026-11-20 列表态：真正的表格（列头+行）；Agent 仍按主/子分组
+    if (s.type === 'agent') {
+      const mains = [], subs = [];
+      list.forEach(function (x) {
+        const r = (x.manifest && x.manifest.agent_role) || '';
+        (r === 'main' ? mains : subs).push(x);
+      });
+      const groups = [];
+      if (mains.length) groups.push({ title: '编排 Agent（主）', list: mains });
+      if (subs.length) groups.push({ title: '专业 Agent（子）', list: subs });
+      grid.innerHTML = capTableHtml(list, page, groups);
+    } else {
+      grid.innerHTML = capTableHtml(list, page, null);
+    }
   } else if (s.type === 'agent') {
-    // [2] Agent 主子分栏：上下两栏
+    // [2] Agent 主子分栏：上下两栏（卡片态）
     const mains = [], subs = [];
     list.forEach(function (x) {
       const r = (x.manifest && x.manifest.agent_role) || '';
@@ -356,6 +467,8 @@ function capRender(page) {
 // 用户只能靠"AI 行为不对"倒推。判据在 services/capability_graph.py（单一真源）。
 let _bindHealth = null, _bindHealthAt = 0, _bindHealthFilter = 'attention';
 let _bindHealthKw = '', _bindHealthPage = '';
+// 2026-11-20 批量操作：选中项的原始索引集合（capBindAct 用的就是 d.details 的索引）
+let _bindSel = new Set();
 async function capBindHealth(page) {
   // ⚠️ 插在**卡片网格之前**，不是图例之后：图例在网格下方（页面底部），
   //   实测插在那里时 top=1533px，用户根本看不到 —— "加了等于没加"。
@@ -433,10 +546,17 @@ function capRenderBindHealthPanel() {
     return [x.agent, x.name, x.state, x.state_label, x.reason, x.hint]
       .some(function (v) { return String(v || '').toLowerCase().indexOf(kw) >= 0; });
   });
+  // 2026-11-20：记录当前筛选下可见项的原始索引，供"全选本页"用
+  _bindVisibleIdx = rows.map(function (x) { return (d.details || []).indexOf(x); });
   const color = { bad: '#c92a2a', warn: '#c9821a', muted: '#8a96ad', info: '#3478f6', ok: '#2e7d32' };
   const cards = rows.length ? rows.map(function (x) {
     const i = (d.details || []).indexOf(x);
     const lv = color[x.level] || color.muted;
+    const chk = (x.actions || []).some(function (a) { return a.id === 'unbind'; })
+      ? '<input type="checkbox" class="cap-bind-cb" data-i="' + i + '" ' + (_bindSel.has(i) ? 'checked' : '')
+        + ' onclick="capBindToggleSel(' + i + ',this.checked)" title="勾选以批量解绑"'
+        + ' style="width:15px;height:15px;flex:none;margin-right:8px;cursor:pointer;">'
+      : '';
     const acts = (x.actions || []).map(function (a, ai) {
       return '<button class="btn sm ' + (a.id === 'unbind' ? 'ghost' : '') + '"'
         + ' onclick="capBindAct(' + i + ',' + ai + ')"'
@@ -447,9 +567,10 @@ function capRenderBindHealthPanel() {
     const tgt = x.target || {};
     const plug = x.plugin || {};
     return '<div style="border:1px solid var(--line,#d9dfe8);border-radius:6px;padding:8px 10px;margin-bottom:8px;">'
-      + '<div style="font-size:13.5px;font-weight:600;color:' + lv + ';">'
-      + esc(x.agent) + ' → ' + esc(x.kind_label || x.kind) + '「' + esc(x.name) + '」'
-      + '<span style="float:right;font-size:12px;font-weight:400;">' + esc(x.state_label || x.state) + '</span></div>'
+      + '<div style="font-size:13.5px;font-weight:600;color:' + lv + ';display:flex;align-items:center;">'
+      + chk
+      + '<span style="flex:1;">' + esc(x.agent) + ' → ' + esc(x.kind_label || x.kind) + '「' + esc(x.name) + '」</span>'
+      + '<span style="font-size:12px;font-weight:400;">' + esc(x.state_label || x.state) + '</span></div>'
       + '<div style="font-size:12.5px;line-height:1.65;margin-top:4px;">'
       + '<b>原因</b>：' + esc(x.reason)
       + '<br><b>怎么处理</b>：' + esc(x.hint)
@@ -460,20 +581,107 @@ function capRenderBindHealthPanel() {
       + (plug.plugin_id ? ' · 插件 ' + esc(plug.plugin_id) + '(' + esc(plug.status || '') + ')' : '')
       + '</div><div style="margin-top:4px;">' + acts + '</div></div>';
   }).join('') : '<div class="fempty">当前筛选下没有需关注项</div>';
+  // 2026-11-20 批量工具栏：全选 / 计数 / 动作下拉（启用Agent·启用目标·测试MCP·解绑）/ 批量执行
+  const allChecked = rows.length > 0 && _bindVisibleIdx.every(function (i) { return _bindSel.has(i); });
+  const bulkbar = '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;'
+    + 'padding:7px 10px;margin-bottom:10px;border:1px solid var(--line,#d9dfe8);border-radius:6px;background:var(--bg2,#f7f9fc);">'
+    + '<label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:12.5px;">'
+    + '<input type="checkbox" id="cap-bind-all" ' + (allChecked ? 'checked' : '')
+    + ' onchange="capBindSelAll(this.checked)" style="width:15px;height:15px;cursor:pointer;">全选本页</label>'
+    + '<span id="cap-bind-selcnt" style="font-size:12.5px;color:var(--mut);">已选 <b>' + _bindSel.size + '</b> 条</span>'
+    + '<span style="flex:1;"></span>'
+    + '<select id="cap-bind-bulk-act" style="border:1px solid var(--line);border-radius:6px;padding:3px 8px;font-size:12.5px;">'
+    + '<option value="enable_agent">▶ 启用所属 Agent</option>'
+    + '<option value="enable_target">▶ 启用目标能力</option>'
+    + '<option value="test_mcp">🔌 测试 MCP 连通</option>'
+    + '<option value="unbind">🗑 解绑</option>'
+    + '</select>'
+    + '<button class="btn sm" onclick="capBindBatch()" style="font-size:12px;">批量执行</button>'
+    + '<button class="btn sm ghost" onclick="capBindSelClear()" style="font-size:12px;">取消选择</button>'
+    + '</div>';
   body.innerHTML = '<div style="padding:14px 16px 24px;font-size:13px;line-height:1.7;">'
     + '<div style="margin-bottom:8px;">' + chips + '</div>'
     + '<input id="cap-bind-kw" placeholder="搜索 Agent / 能力 / 原因" value="' + esc(kw) + '"'
     + ' oninput="capBindSearch(this.value)"'
     + ' style="width:100%;box-sizing:border-box;padding:6px 8px;margin-bottom:8px;border:1px solid var(--line,#d9dfe8);border-radius:5px;">'
+    + bulkbar
     + '<div style="font-size:12px;color:#8a96ad;margin-bottom:8px;">共 ' + rows.length
-    + ' 条。动作由后端按绑定状态生成；解绑只删关系，不删能力本体。</div>'
+    + ' 条。<b style="color:#c92a2a;">未生效</b>（失效/停用/离线/Agent停用）= 可修复，执行对应动作即可；'
+    + '<b style="color:#c9821a;">仍会注入</b>（旁路/插件下架但仍生效）= 结构性提示，'
+    + '因内置工具按名字注入、插件自动消费通道绕过 status，这类<b>不会因"处理"消失</b>，'
+    + '只能解绑或改变能力本身的状态。动作由后端按绑定状态生成；解绑只删关系，不删能力本体。</div>'
     + cards + '</div>';
+}
+/* ── 批量选择 / 批量解绑（2026-11-20）──────────────────────── */
+let _bindVisibleIdx = [];
+function capBindToggleSel(i, checked) {
+  if (checked) _bindSel.add(Number(i)); else _bindSel.delete(Number(i));
+  const c = document.getElementById('cap-bind-selcnt');
+  if (c) c.innerHTML = '已选 <b>' + _bindSel.size + '</b> 条';
+  const all = document.getElementById('cap-bind-all');
+  if (all) all.checked = _bindVisibleIdx.length > 0 && _bindVisibleIdx.every(function (x) { return _bindSel.has(x); });
+}
+function capBindSelAll(checked) {
+  _bindVisibleIdx.forEach(function (i) { if (checked) _bindSel.add(i); else _bindSel.delete(i); });
+  capRenderBindHealthPanel();   // 重绘以同步所有复选框与计数
+}
+function capBindSelClear() { _bindSel.clear(); capRenderBindHealthPanel(); }
+const _BATCH_ACT_LABEL = { enable_agent: '启用所属 Agent', enable_target: '启用目标能力',
+                           test_mcp: '测试 MCP 连通', unbind: '解绑' };
+async function capBindBatch() {
+  if (!_bindSel.size) { toast('请先勾选要处理的绑定'); return; }
+  const sel = document.getElementById('cap-bind-bulk-act');
+  const actId = sel ? sel.value : 'unbind';
+  const rows = (_bindHealth && _bindHealth.details || []);
+  // 只取勾选且确实带该动作的项；不具备该动作的项跳过（统计后提示）
+  const targets = [], skipped = [];
+  _bindSel.forEach(function (i) {
+    const x = rows[i];
+    if (!x) return;
+    const a = (x.actions || []).find(function (v) { return v.id === actId; });
+    if (a) targets.push({ i: i, a: a, label: x.agent + ' → ' + x.name });
+    else skipped.push(x.agent + ' → ' + x.name);
+  });
+  if (!targets.length) {
+    toast('勾选的 ' + _bindSel.size + ' 条都不支持「' + (_BATCH_ACT_LABEL[actId] || actId) + '」，请换动作或改勾选');
+    return;
+  }
+  const risk = actId === 'unbind' ? '\n\n解绑只删关系，不删能力本体，其他 Agent 的绑定保留。'
+    : (actId === 'enable_target' ? '\n\n启用目标对所有引用它的 Agent 都会恢复。'
+    : (actId === 'enable_agent' ? '\n\n启用 Agent 会让它重新参与路由。' : '\n\n只读探测，不改动配置。'));
+  const ok = await confirmDialog(
+    '将对 ' + targets.length + ' 条绑定执行「' + (_BATCH_ACT_LABEL[actId] || actId) + '」：\n'
+    + targets.slice(0, 8).map(function (t) { return '· ' + t.label; }).join('\n')
+    + (targets.length > 8 ? '\n· 其余 ' + (targets.length - 8) + ' 条…' : '')
+    + (skipped.length ? '\n\n另 ' + skipped.length + ' 条不具备该动作，本次跳过。' : '')
+    + risk + '确定继续？',
+    { title: '批量处理确认', danger: actId === 'unbind', okText: '确认' + (_BATCH_ACT_LABEL[actId] || actId) + ' ' + targets.length + ' 条' });
+  if (!ok) return;
+  let done = 0, fail = 0;
+  for (const t of targets) {
+    try {
+      const r = await api(t.a.api, { method: t.a.method });
+      if (r && r.error) fail++; else done++;
+    } catch (e) { fail++; }
+  }
+  toast('批量' + (_BATCH_ACT_LABEL[actId] || actId) + '完成：成功 ' + done + ' 条'
+    + (fail ? '，失败 ' + fail + ' 条' : '') + (skipped.length ? '，跳过 ' + skipped.length + ' 条' : ''));
+  _bindSel.clear(); _bindHealth = null; _bindHealthAt = 0;
+  if (_bindHealthPage) await capBindHealth(_bindHealthPage);
+  await capOpenBindHealth(_bindHealthFilter);
+}
+// 兼容旧调用
+async function capBindBatchUnbind() {
+  const sel = document.getElementById('cap-bind-bulk-act');
+  if (sel) sel.value = 'unbind';
+  return capBindBatch();
 }
 async function capBindAct(i, ai) {
   const x = (_bindHealth && _bindHealth.details || [])[i];
   const a = x && (x.actions || [])[ai];
   if (!a) { toast('动作已失效，请刷新面板'); return; }
-  if (a.confirm && !confirm(a.confirm)) return;
+  // 2026-11-20：操作确认一律用自定义 confirmDialog，不用浏览器原生 confirm（系统默认样式）
+  if (a.confirm && !(await confirmDialog(a.confirm, { title: '绑定关系处理', danger: a.id === 'unbind' }))) return;
   try {
     const r = await api(a.api, { method: a.method });
     if (r && r.error) { toast('处理失败：' + r.error); return; }

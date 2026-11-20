@@ -290,6 +290,33 @@ class CardMixin:
         # 视图诉求信号：输入须明确出现「视图/图/diagram/view」等要图字样才认定指定视图
         if not re.search(r"视图|图|diagram|view", user_input, re.I):
             return None
+        # ★ 2026-11-20（真机 conv 999999977，米爸报"只要需求图却生成 3 个视图"）：
+        #   用户在**喂视图含义规范**（"需求图回答…""读者是…""下游消费者：参数视图…"
+        #   "追溯来源…"）——文本里出现多个视图词只是被描述的对象，不是请求生成。
+        #   旧实现用中文词子串匹配 ⇒ 抽成 PAR/REQ/TRACE 三类全投影。
+        #   修法：识别"规范/定义语境"信号 ⇒ 默认不是生成请求；
+        #   但若同时有明确请求动词（生成/画出/只看…）则仍按请求处理，避免误伤真诉求。
+        _spec_ctx = re.search(
+            r"视图含义|回答[「\"：:]|读者是|上游输入|下游消费者|"
+            r"在建模流程中的位置|本视图回答|它不是把", user_input)
+        # 请求动词必须**紧邻视图词**（间隔≤3字）才算真诉求：
+        # "生成需求图"/"只看状态机图" ✅；规范文本里零散的"生成可验证需求" ❌
+        # （旧版只查全文是否有"生成"，被规范文本里的"生成"推翻排除 → 仍抽 3 视图）
+        _view_word = r"(BDD|IBD|PKG|PAR|REQ|UC|ACT|SEQ|STM|TRACE|需求图|参数图|结构图|状态图|用例图|活动图|顺序图|时序图|追溯图|视图)"
+        _ask_near = re.search(
+            r"(?:生成|画出|画个|给我|只看|只要|请建|请创建|来一个|输出一个).{0,3}" + _view_word,
+            user_input, re.I)
+        if _spec_ctx:
+            if not _ask_near:
+                return None
+            # 规范语境下确有紧邻请求（如"…规范…请生成需求图"）⇒ **只返回紧邻的那一个**，
+            # 不能再用下面的别名子串匹配（那会把规范正文里被描述的其它视图也抽出来）。
+            _asked_word = _ask_near.group(1)
+            _word2type = {"需求图": "REQ", "参数图": "PAR", "结构图": "BDD",
+                          "状态图": "STM", "用例图": "UC", "活动图": "ACT",
+                          "顺序图": "SEQ", "时序图": "SEQ", "追溯图": "TRACE"}
+            _t = _word2type.get(_asked_word, _asked_word.upper() if _asked_word.isascii() and len(_asked_word) <= 5 else None)
+            return [_t] if _t else None
         # ⚠️ 2026-11-16（真机 conv 999999065，米爸报「只让生成状态机却展示 3 个视图」）：
         #   原实现用**大小写不敏感的子串**匹配 alias，在长需求文本上必然误命中：
         #     · 单字「包」→ PKG：命中「**包**含以下状态（State）」

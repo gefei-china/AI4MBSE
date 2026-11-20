@@ -279,8 +279,9 @@ function procRender(){
   }
   const hideBody = _procS.done && _procS.summaryCollapsed;
   if(!hideBody){
-    // ★ 2026-11-20：参与方汇总固定在时间线最上方（纯 HTML，不走 procUpsert 防递归）
-    try{ h += _participantsHtml(); }catch(e){}
+    // 2026-11-20（米爸二次反馈）：移除"执行参与方"集中汇总块——它默认展开、纵向间距大，
+    // 且与逐环节的归属徽章重复。谁在干活由每个环节自身的 badge / 意图识别的 via 行回答。
+    // _participantsHtml() 保留但不调用（数据流 agentsUsed 等仍可留作他用），避免动结构。
     _procS.timeline.forEach(s=>{
       const run = s.status==='run';
       // 五轮反馈5：stopped（已终止）用黄色警示但不转圈；只有 run 才有 spinner/呼吸

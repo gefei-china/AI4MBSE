@@ -2,6 +2,55 @@
  * 由 static/index.html 巨型 inline script 机械切分而来
  * 原行号 16689-17705  ·  全局作用域（非 module），内联 onclick 依赖全局函数名
  */
+/* 2026-11-20：插件市场列表视图 = 真正的表格（带列头）。动作与卡片态同源同口径。 */
+function marketTableHtml(items, can){
+  const _micon = {skill:'🧩', mcp:'🔌', tool:'🛠', agent:'🤖', prompt:'📝', bundle:'📦'};
+  const _mlabel = {skill:'技能', mcp:'MCP', tool:'工具', agent:'Agent', prompt:'Prompt', bundle:'Bundle'};
+  const head = '<thead><tr><th>名称</th><th>类型</th><th>来源</th><th>状态</th><th>分类</th><th>版本</th><th>安装</th><th style="text-align:right;">操作</th></tr></thead>';
+  const rows = items.map(it=>{
+    const isBuiltin = !!it.builtin;
+    const off = (it.status||'published')==='disabled';
+    const inst = !!it.installed || !!it.is_mine;
+    const ori = isBuiltin ? '平台内置' : ((it.origin||'')==='share' ? '个人分享' : '管理员创建');
+    const _nm = esc(String(it.name).replace(/'/g, "\\'"));
+    const _pid = esc(it.plugin_id || '');
+    const cons = off
+      ? (can ? `<button class="btn sm ok" title="恢复为已发布" onclick="marketGlobalToggle('${_pid}', true)">▶ 恢复发布</button>` : '')
+      : (inst
+          ? `<span class="st ok" title="已在你的能力清单中">✓ 已安装</span>`
+          : ((it.kind==='skill'||it.kind==='mcp') && !isBuiltin
+              ? `<button class="btn sm" onclick="marketInstall('${it.kind}','${_nm}',this)">＋ 添加</button>`
+              : `<button class="btn sm" onclick="unifiedToggleInstall('${_pid}', true)">＋ 安装</button>`));
+    const gov = can ? `${off ? '' : `<button class="btn sm ghost" title="全局停用" onclick="marketGlobalToggle('${_pid}', false)">⛔ 停用</button>`}
+       <button class="btn sm ghost" title="编辑" onclick="marketEditUnified('${_pid}')">✏️</button>
+       <button class="btn sm ghost" title="${it.pinned?'取消置顶':'置顶'}" onclick="marketPin('${it.kind}','${_nm}')">📌</button>
+       ${isBuiltin ? '' : `<button class="btn sm ghost" title="下架" onclick="marketUnpublish('${_pid}','${_nm}')">↩ 下架</button>
+       <button class="btn sm red" title="删除本体" onclick="marketDeletePlugin('${_pid}','${_nm}')">🗑</button>`}` : '';
+    return '<tr>'
+      + `<td class="ct-name">${_micon[it.kind]||'🧩'} ${esc(it.name)}</td>`
+      + `<td>${esc(_mlabel[it.kind]||it.kind||'—')}</td>`
+      + `<td>${esc(ori)}</td>`
+      + `<td>${off ? '<span class="st r">已停用</span>' : '<span class="st ok">已发布</span>'}</td>`
+      + `<td>${esc(it.category||'—')}</td>`
+      + `<td>${esc(it.version||'—')}</td>`
+      + `<td>${it.install_count||0} 次</td>`
+      + `<td class="ct-acts">${cons}${gov}</td>`
+      + '</tr>';
+  }).join('');
+  return `<table class="captbl">${head}<tbody>${rows}</tbody></table>`;
+}
+// 2026-11-20 视图切换：插件市场 卡片/列表，默认卡片。切视图需重渲染（表格/卡片两套 DOM）。
+let _mktView = 'card';
+function mktSetView(view){
+  _mktView = (view === 'list') ? 'list' : 'card';
+  const box = document.getElementById('market-manage-sections');
+  if (box) box.classList.toggle('mkt-list', _mktView === 'list');
+  const bc = document.getElementById('mm-vcard'), bl = document.getElementById('mm-vlist');
+  if (bc) bc.classList.toggle('on', _mktView !== 'list');
+  if (bl) bl.classList.toggle('on', _mktView === 'list');
+  // 表格/卡片两套 DOM，必须重渲染
+  if (typeof loadMarketManage === 'function') loadMarketManage();
+}
 function loadStudioTab(id) {
   // 2026-09-16：能力中心接管四个类型页（市场 / 我安装的双区，读 /api/plugins）
   if(typeof capMountForTab === 'function' && capMountForTab(id)) return;
@@ -535,6 +584,7 @@ const _MANAGE_TYPE_ORDER = ['skill','mcp','tool','agent','prompt','bundle'];
 async function loadMarketManage(){
   const box = document.getElementById('market-manage-sections');
   if(!box) return;
+  box.classList.toggle('mkt-list', _mktView === 'list');   // 2026-11-20 视图切换状态同步
   // 2026-09-17：目录对所有人可见（浏览 + 安装）；管理动作（编辑/置顶/停用/删除/恢复/审核/策略）仅市场管理员渲染
   const can = await canManageMarket();
   const kind = document.getElementById('mm-kind')?.value || 'all';
@@ -557,6 +607,9 @@ async function loadMarketManage(){
     if(sum) sum.textContent = `共 ${items.length} 条 · 平台内置 ${builtinN} · 管理员创建 ${adminN} · 个人分享 ${shareN} · 已停用 ${offN}`;
     if(!items.length){
       box.innerHTML = '<div style="padding:24px;text-align:center;color:var(--mut);font-size:13.5px;">暂无符合条件的市场插件（「＋ 新建插件」创建即上架；个人分享需通过审核后入市场）</div>';
+    } else if(_mktView === 'list'){
+      // 2026-11-20 列表态：真正的表格（列头 + 行）
+      box.innerHTML = marketTableHtml(items, can);
     } else {
       // 按类型分组，纵向按区域铺开
       const groups = {};

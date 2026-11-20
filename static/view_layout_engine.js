@@ -409,7 +409,11 @@ function computeViewLayout(viewType, nodes, edges) {
  * 调用：computeViewLayoutAsync() 返回 null = 不适用/失败，调用方沿用
  *       computeViewLayout() 的同步初排，绝不阻断渲染。
  */
-const VIEW_ELK_TYPES = new Set(['BDD', 'PKG', 'TRACE', 'IBD', 'REQ']);
+/* 2026-11-20 方案1：ELK 覆盖面从 5 类扩到 7 类——新增 PAR（约束图）与 ACT（活动流水线）。
+ * REQ/UC/SEQ/STM 仍保留自研语义布局：ELK 不理解"actor 居外/生命线按时间"等
+ * SysML 约定，强行精排会"好看但不符合规范"（见文件头 406-408 行）。
+ * ACT 用 LEFT→RIGHT（流水线横向更自然），其余维持 DOWN。 */
+const VIEW_ELK_TYPES = new Set(['BDD', 'PKG', 'TRACE', 'IBD', 'REQ', 'PAR', 'ACT']);
 let _elkInstance = null;
 
 function _elkEdgePriority(kind) {
@@ -418,13 +422,14 @@ function _elkEdgePriority(kind) {
   return 1;
 }
 
-function _elkLayoutOptions() {
+function _elkLayoutOptions(viewType) {
   return {
     'elk.algorithm': 'layered',
-    'elk.direction': 'DOWN',
+    // ACT 是自上而下的活动流水线，但横向铺开（LEFT→RIGHT）更贴合泳道阅读习惯
+    'elk.direction': viewType === 'ACT' ? 'RIGHT' : 'DOWN',
     'elk.layered.crossingMinimization.strategy': 'LAYER_SWEEP',
-    'elk.spacing.nodeNode': '46',
-    'elk.layered.spacing.nodeNodeBetweenLayers': '70',
+    'elk.spacing.nodeNode': String(LAYOUT_CONFIG.elkNodeNode),
+    'elk.layered.spacing.nodeNodeBetweenLayers': String(LAYOUT_CONFIG.elkBetweenLayers),
     'elk.edgeRouting': 'ORTHOGONAL',
   };
 }
@@ -462,17 +467,47 @@ function _elkIbdGraph(nodes, edges) {
   return { id: 'root', layoutOptions: _elkLayoutOptions(), children, edges: edgs };
 }
 
-/* 节点尺寸：与 Cytoscape 样式表**逐类对齐**。
- * 此前一律 150x60，而实际样式里 requirement 是 150x54、constraint 170x48、
- * actor 62x74 —— 尺寸不一致会让布局器"以为"放得下的两点在屏幕上重叠。 */
+/* ══════════════ 布局单一真源（2026-11-20 方案2+3）══════════════
+ * 尺寸口径此前分裂在两处：本文件 _elkNodeSize（requirement 150x54、actor 62x74）
+ * 与 25-graphview.js 的 SVM_NODE_STYLE（requirement 140x52、actor 34x56）——
+ * 布局器"以为"放得下的两点，渲染时因实际尺寸不同而重叠。
+ * 现在统一到 SVM_NODE_SIZE（全局，渲染器也引用它）；布局参数集中到 LAYOUT_CONFIG。
+ * 改尺寸只改这一处，布局与渲染同步生效。
+ */
+const SVM_NODE_SIZE = {
+  block:      { w: 150, h: 54 },
+  part:       { w: 150, h: 54 },
+  requirement:{ w: 150, h: 54 },
+  constraint: { w: 170, h: 48 },
+  usecase:    { w: 130, h: 46 },
+  action:     { w: 130, h: 46 },
+  state:      { w: 130, h: 46 },
+  package:    { w: 160, h: 52 },
+  actor:      { w: 62,  h: 74 },
+  port:       { w: 70,  h: 28 },
+};
+const LAYOUT_CONFIG = {
+  cellW: 180, cellH: 110, padX: 30, gapX: 18, perRow: 6,   // 自研布局
+  elkNodeNode: 46, elkBetweenLayers: 70,                    // ELK 精排
+  fitPadding: 40,                                            // cy.fit 留白
+  labelMaxWidth: 150, labelFontSize: 12,                     // 文字（长名自适应基准）
+};
+/* 尺寸自适应：布局器与渲染器**共用此函数**，杜绝"算尺寸的地方和画节点的地方
+ * 各写一份"再次错位。策略保守：基础尺寸来自 SVM_NODE_SIZE，长名按字数小幅加宽
+ * （上限 +60px，避免图幅暴走），超过两行的名字加高一行。 */
+function svmNodeSizeFor(kind, name) {
+  const base = SVM_NODE_SIZE[String(kind || 'block')] || SVM_NODE_SIZE.block;
+  const nm = String(name || '');
+  const chars = nm.length;
+  // 中文约 13px/字；基础宽可容纳的字数为基准，超出按每行补宽、最多 +60
+  const baseChars = Math.max(6, Math.floor((base.w - 20) / 13));
+  const extraW = chars > baseChars ? Math.min(60, Math.ceil((chars - baseChars) * 13 / 2)) : 0;
+  const extraH = chars > baseChars * 2 ? 16 : 0;  // 超两行 → 加高一行
+  return { w: base.w + extraW, h: base.h + extraH };
+}
 function _elkNodeSize(n) {
-  const k = String((n && n.kind) || 'block');
-  if (k === 'requirement') return { width: 150, height: 54 };
-  if (k === 'constraint') return { width: 170, height: 48 };
-  if (k === 'usecase' || k === 'action' || k === 'state') return { width: 130, height: 46 };
-  if (k === 'package') return { width: 160, height: 52 };
-  if (k === 'actor') return { width: 62, height: 74 };
-  return { width: 150, height: 60 };
+  const s = svmNodeSizeFor((n && n.kind) || 'block', (n && n.name) || '');
+  return { width: s.w, height: s.h };
 }
 
 /* 平铺图（BDD/PKG/TRACE）：只排**叶子节点**分层。
@@ -483,7 +518,7 @@ function _elkNodeSize(n) {
  *   现在：以 parent 字段识别父节点 → 排除出分层 → 相关边一并丢弃
  *   （父节点的连线在复合视图里本就由子节点承载，丢弃不会丢语义）。
  */
-function _elkFlatGraph(nodes, edges) {
+function _elkFlatGraph(nodes, edges, viewType) {
   const all = nodes || [];
   const parentIds = new Set(all.map(n => n.parent).filter(Boolean).map(String));
   const leaves = all.filter(n => !parentIds.has(String(n.id)));
@@ -492,7 +527,7 @@ function _elkFlatGraph(nodes, edges) {
     e => leafIds.has(String(e.source)) && leafIds.has(String(e.target)));
   return {
     id: 'root',
-    layoutOptions: _elkLayoutOptions(),
+    layoutOptions: _elkLayoutOptions(viewType),
     children: leaves.map(n => {
       const sz = _elkNodeSize(n);
       return { id: String(n.id), width: sz.width, height: sz.height };
@@ -512,7 +547,7 @@ async function computeViewLayoutAsync(viewType, nodes, edges) {
     if (!_elkInstance) _elkInstance = new ELK();
     const graph = viewType === 'IBD'
       ? _elkIbdGraph(nodes || [], edges || [])
-      : _elkFlatGraph(nodes || [], edges || []);
+      : _elkFlatGraph(nodes || [], edges || [], viewType);
     const out = await _elkInstance.layout(graph);
     const pos = {};
     (out.children || []).forEach(c => {

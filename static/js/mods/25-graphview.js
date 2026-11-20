@@ -264,9 +264,13 @@ function svmToElements(vm) {
     if (val) extras.push(val);
     if (a.ports && a.ports.length) extras.push('端口:' + a.ports.slice(0, 3).join(','));
     const label = nd.name + (extras.length ? '\n' + extras.join(' / ') : '');
+    // 2026-11-20 方案2：尺寸由布局引擎统一算（与 _elkNodeSize 共用 svmNodeSizeFor），
+    // 布局与渲染同一口径，消除"以为放得下却重叠"；长名小幅加宽不截断。
+    const sz = (typeof svmNodeSizeFor === 'function')
+      ? svmNodeSizeFor(nd.kind||'block', nd.name||'') : {w:150,h:60};
     return {
       data: {id: String(nd.id), label, name: nd.name||'', kind: nd.kind, type: nd.type||'',
-             attrs: a, isPort: nd.kind === 'port'},
+             attrs: a, isPort: nd.kind === 'port', svmW: sz.w, svmH: sz.h},
       classes: 'n-'+ (nd.kind||'block')
     };
   });
@@ -350,6 +354,7 @@ async function svmArchiveLayoutCheck(vm) {
 // 流程：同步引擎初排先上屏（保底）→ ELK 交叉最小化精排覆盖坐标 → 更新指标并重新回传落库
 async function svmElkRelayout(cy, vm) {
   const vmRef = vm;
+  if (cy) cy.__elkDone = false;   // 2026-11-20 方案3：精排完成信号，导出前可等待
   try {
     const vt = (vm.view && vm.view.type) || '';
     // ★ 2026-11-09：把 parent（所属包/组合）一起传给布局内核。
@@ -361,7 +366,11 @@ async function svmElkRelayout(cy, vm) {
       attrs: nd.attrs||{}, parent: nd.parent || '', isParent: !!nd.isParent }));
     const viewEdges = (vm.edges||[]).map(e => ({source: e.source, target: e.target, kind: e.kind||'dependency'}));
     const pos = await computeViewLayoutAsync(vt, viewNodes, viewEdges);
-    if (!pos || _lastViewLayout.vm !== vmRef || !cy || cy.destroyed()) return;  // 视图已切换则放弃
+    // 不适用类型（pos=null）也算"已完成"——没有待处理的精排，导出可立即进行
+    if (!pos || _lastViewLayout.vm !== vmRef || !cy || cy.destroyed()) {
+      if (cy && !cy.destroyed()) cy.__elkDone = true;
+      return;  // 视图已切换或无精排则放弃
+    }
     let _skipped = 0, _placed = 0;
     cy.nodes().forEach(n => {
       // 复合节点（包）的位置由 Cytoscape 依据子节点包围盒自动确定；
@@ -375,8 +384,12 @@ async function svmElkRelayout(cy, vm) {
     // ELK 精排后图幅可能超出可视区（初排 fit 坐标已失效），重新适配
     try { cy.resize(); cy.fit(undefined, 40); } catch(e) {}
     _lastViewLayout.posMap = pos;
+    if (cy) cy.__elkDone = true;   // 精排落位完成
     svmArchiveLayoutCheck(vmRef);  // 用精排后坐标重新回传（meta 只保留最新一条）
-  } catch(e) { console.warn('[ELK-relayout]', e.message); }
+  } catch(e) {
+    if (cy && !cy.destroyed()) cy.__elkDone = true;  // 失败也算完成，别让导出卡住
+    console.warn('[ELK-relayout]', e.message);
+  }
 }
 // 容器内渲染 Cytoscape 视图（返回实例；容器需已挂载）
 function svmRenderCytoscape(container, vm) {
@@ -399,10 +412,13 @@ function svmRenderCytoscape(container, vm) {
         'content':'data(label)',
         'background-color':'#EAF3DE','border-color':'#3B6D11','border-width':1.5,
         'color':'#1F2D3D','font-size':12,'text-valign':'center','text-halign':'center',
-        'text-wrap':'wrap','text-max-width':130,
+        'text-wrap':'wrap','text-max-width':function(el){
+          // 长名自适应：宽度跟随节点实际宽度（留 12px 内边距），不再固定 130 截断
+          return Math.max(90, (el.data('svmW')||150) - 12);
+        },
         // canvas 文字必须显式给 CJK 字体栈：缺省字体在部分环境缺中文字形会渲染成 tofu（菱形问号）
         'font-family':'"Microsoft YaHei","PingFang SC","Noto Sans CJK SC",sans-serif',
-        'width':150,'height':60,'shape':'round-rectangle','text-margin-y':-2
+        'width':'data(svmW)','height':'data(svmH)','shape':'round-rectangle','text-margin-y':-2
       }},
       // 复合节点（父节点：包住子节点，SysML BDD/PKG 标准层级视觉）
       {selector:'node:parent', style:{
@@ -413,23 +429,23 @@ function svmRenderCytoscape(container, vm) {
         'text-valign':'top','text-halign':'center','font-size':10.5,'color':'#185FA5',
         'font-weight':'700','text-margin-y':-6
       }},
-      {selector:'node[?isPort]', style:{'width':70,'height':28,'background-color':'#fff','border-color':'#185FA5','shape':'round-rectangle','font-size':9,'content':'data(label)'}},
-      // 按 kind 配色（复用 SVM_NODE_STYLE 语义）
-      {selector:'.n-requirement', style:{'background-color':'#FFF7E0','border-color':'#BA7517','shape':'round-rectangle','width':150,'height':54}},
+      {selector:'node[?isPort]', style:{'background-color':'#fff','border-color':'#185FA5','shape':'round-rectangle','font-size':9,'content':'data(label)'}},
+      // 按 kind 配色（尺寸统一走基础规则的 data(svmW/svmH)，此处只管配色/形状）
+      {selector:'.n-requirement', style:{'background-color':'#FFF7E0','border-color':'#BA7517','shape':'round-rectangle'}},
       {selector:'.n-part', style:{'background-color':'#E6F1FB','border-color':'#185FA5','shape':'round-rectangle'}},
       {selector:'.n-block', style:{'background-color':'#EAF3DE','border-color':'#3B6D11','shape':'round-rectangle'}},
       {selector:'.n-actor', style:{
         'background-color':'transparent','border-width':0,
         'background-image':'url("data:image/svg+xml;utf8,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 48 64%27%3E%3Ccircle cx=%2724%27 cy=%2711%27 r=%277%27 fill=%27%235F5E5A%27/%3E%3Cline x1=%2724%27 y1=%2718%27 x2=%2724%27 y2=%2744%27 stroke=%27%235F5E5A%27 stroke-width=%273%27/%3E%3Cline x1=%2724%27 y1=%2726%27 x2=%279%27 y2=%2738%27 stroke=%27%235F5E5A%27 stroke-width=%273%27/%3E%3Cline x1=%2724%27 y1=%2726%27 x2=%2739%27 y2=%2738%27 stroke=%27%235F5E5A%27 stroke-width=%273%27/%3E%3Cline x1=%2724%27 y1=%2744%27 x2=%2711%27 y2=%2761%27 stroke=%27%235F5E5A%27 stroke-width=%273%27/%3E%3Cline x1=%2724%27 y1=%2744%27 x2=%2737%27 y2=%2761%27 stroke=%27%235F5E5A%27 stroke-width=%273%27/%3E%3C/svg%3E")',
         'background-fit':'contain','background-repeat':'no-repeat',
-        'width':62,'height':74,'shape':'rectangle',
+        'shape':'rectangle',
         'color':'#5F5E5A','text-valign':'bottom','text-halign':'center','font-size':10,'text-margin-y':2,'text-wrap':'wrap','text-max-width':90
       }},
-      {selector:'.n-usecase', style:{'background-color':'#F1E8F9','border-color':'#6B4FA1','shape':'ellipse','width':130,'height':46}},
-      {selector:'.n-action', style:{'background-color':'#F1E8F9','border-color':'#6B4FA1','shape':'round-rectangle','width':130,'height':46}},
-      {selector:'.n-state', style:{'background-color':'#FDF0F0','border-color':'#A32D2D','shape':'round-rectangle','width':130,'height':46}},
-      {selector:'.n-constraint', style:{'background-color':'#F2F4F8','border-color':'#5F5E5A','shape':'round-rectangle','width':170,'height':48}},
-      {selector:'.n-package', style:{'background-color':'#E6F1FB','border-color':'#185FA5','shape':'round-rectangle','width':160,'height':52}},
+      {selector:'.n-usecase', style:{'background-color':'#F1E8F9','border-color':'#6B4FA1','shape':'ellipse'}},
+      {selector:'.n-action', style:{'background-color':'#F1E8F9','border-color':'#6B4FA1','shape':'round-rectangle'}},
+      {selector:'.n-state', style:{'background-color':'#FDF0F0','border-color':'#A32D2D','shape':'round-rectangle'}},
+      {selector:'.n-constraint', style:{'background-color':'#F2F4F8','border-color':'#5F5E5A','shape':'round-rectangle'}},
+      {selector:'.n-package', style:{'background-color':'#E6F1FB','border-color':'#185FA5','shape':'round-rectangle'}},
       // 边：默认灰虚线
       {selector:'edge', style:{
         'curve-style':'bezier','width':1.4,'line-color':'#5F5E5A','line-style':'dashed',

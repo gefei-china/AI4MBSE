@@ -1230,6 +1230,11 @@
               <input id="mm-search" placeholder="搜索名称/描述…" style="border:1px solid var(--line);border-radius:6px;padding:3px 8px;font-size:12.5px;width:180px;" oninput="loadMarketManage()" data-page-node-id="yCWACLhWG8RmLRbz5BLAHH">
               <span style="font-size:12.5px;color:var(--mut);" data-page-node-id="fHxQR7RzbHMBnncMQCCJEz">插件市场 = 全量市场插件统一管理；只有「已发布」状态可被个人安装</span>
               <span style="flex:1" data-page-node-id="XZ0tTiZUm8C9sHC21l5xKi"></span>
+              <!-- 2026-11-20 视图切换：卡片 / 列表，默认卡片（与能力中心其余 tab 一致） -->
+              <span class="capview" role="group" aria-label="视图切换">
+                <button id="mm-vcard" class="on" onclick="mktSetView('card')" title="卡片视图">▦ 卡片</button>
+                <button id="mm-vlist" onclick="mktSetView('list')" title="列表视图">☰ 列表</button>
+              </span>
               <button class="btn sm ghost" onclick="loadMarketManage()" data-page-node-id="VbUmOXRCPEi9GFYb6MMd3E">刷新</button>
               <span id="mm-summary" style="font-size:12.5px;color:var(--mut);" data-page-node-id="ODeyo11HLK9nIdBz9fXmej"></span>
             </div>

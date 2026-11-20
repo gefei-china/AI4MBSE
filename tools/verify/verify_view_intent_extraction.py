@@ -147,6 +147,25 @@ def group_a(sample):
     chk("A5 变异自证：旧子串匹配仍会命中 PAR/包（证明 A2/A3 有牙齿）",
         bool(hit_old), "旧命中=%s" % hit_old)
 
+    # ── A6/A7：2026-11-20 conv 999999977「喂视图含义规范却生成 3 视图」──
+    #   规范文本里出现需求图/参数视图/追溯来源只是被描述对象，不是生成请求。
+    spec = None
+    try:
+        con = sqlite3.connect(DB, timeout=15)
+        row = con.execute("SELECT content FROM messages WHERE id=7198").fetchone()
+        con.close()
+        spec = row[0] if row else None
+    except Exception:
+        pass
+    spec = spec or ("【视图含义】需求图回答「系统要做到什么」。它不是把整车需求抄一遍。"
+                    "读者是设计者。上游输入：整车需求。下游消费者：结构视图、参数视图。"
+                    "【本视图回答的核心问题】追溯来源…")
+    chk("A6 真机视图含义规范 ⇒ 不抽视图（修掉 PAR/REQ/TRACE 误命中）",
+        m._extract_view_types(spec) is None, str(m._extract_view_types(spec)))
+    chk("A7 规范里明确「请生成需求图」⇒ 仍抽 REQ（不误伤真诉求）",
+        m._extract_view_types(spec + "\n请生成需求图") == ["REQ"],
+        str(m._extract_view_types(spec + "\n请生成需求图")))
+
 
 def group_b(sample):
     if not sample or not sample["code"]:

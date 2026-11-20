@@ -85,6 +85,19 @@ class ToolRegistry:
         #   直接返回「未知工具」，分支写在下面对**登记缺失**的名字是**不可达**的。
         "requirement_itemize": {"desc": "需求条目化 + 需求视图骨架（参数 text:原文, domain, source_ref, project；只读）", "handler": "requirement_itemize_tools.exec_tool"},
         "requirement_commit": {"desc": "需求条目入库（参数 items 或 text, gaps, project, version_id, source_ref；幂等，写操作）", "handler": "requirement_itemize_tools.exec_tool"},
+        # ★ 2026-11-20（米爸报障：system_mgmt 绑定的 sys_query_* 在编辑页显示「失效绑定」）：
+        #   这 6 个工具在 tools 表里 source=builtin/status=active、执行分发也早有
+        #   `name.startswith("sys_query_")` 分支（agent/pipeline_parts/tools.py），
+        #   却**从未登记进 BUILTINS** ⇒ ToolRegistry.list() 第一段只遍历 BUILTINS，
+        #   第二段只收 source!='builtin' ⇒ 被静默丢弃 ⇒ /api/studio/agent-tools 候选没有
+        #   它们 ⇒ 编辑页 orphan 逻辑把已勾的标成「失效绑定·点击取消」（UI 误报）。
+        #   与 save_artifact / code_exec 漏登记是同一个坑（登记三处缺一不可）。
+        "sys_query_users": {"desc": "查询用户列表（按角色/部门/状态过滤），只读", "handler": "sysadmin_tools.exec_tool"},
+        "sys_query_roles": {"desc": "查询角色与成员数、权限数，只读", "handler": "sysadmin_tools.exec_tool"},
+        "sys_query_perms": {"desc": "查询权限域与角色授权，只读", "handler": "sysadmin_tools.exec_tool"},
+        "sys_query_audit": {"desc": "查询审计日志与最近操作轨迹，只读", "handler": "sysadmin_tools.exec_tool"},
+        "sys_query_monitor": {"desc": "系统运行统计（本体/文档/会话/工具调用数），只读", "handler": "sysadmin_tools.exec_tool"},
+        "sys_query_convs": {"desc": "会话统计与最近会话列表，只读", "handler": "sysadmin_tools.exec_tool"},
     }
 
     def __init__(self, conn=None):

@@ -673,7 +673,7 @@ async function artDownloadFmt(id, fmt){
 }
 
 // ── Q5：预览区产物下载（代码/文档/图片/SysML，样式与报告下载按钮一致）──
-function previewDownloadProxy(){
+async function previewDownloadProxy(){
   const tb = _previewTabs.find(t=>t.key===_previewActiveKey);
   if(!tb){ toast('无预览数据'); return; }
   try{
@@ -683,9 +683,15 @@ function previewDownloadProxy(){
       // 现优先把已挂载的视图画布导出 PNG（多视图逐张导出）；一张都没挂载上再走旧路径兜底。
       const cvs = document.querySelectorAll('#preview-sysml-canvas .svm-canvas');
       let exported = 0;
-      cvs.forEach(cv=>{
+      for (const cv of cvs){                        // 2026-11-20：改 for-of 以便 await 精排
         const cy = _pvCyFor.get(cv);
-        if(!cy) return;                             // 懒挂载未完成 → 跳过
+        if(!cy) continue;                           // 懒挂载未完成 → 跳过
+        // 方案3：等 ELK 精排完成再截图（最多 ~1.6s），避免导出到初排坐标的旧布局
+        if (cy.__elkDone === false) {
+          for (let i=0; i<16 && cy.__elkDone === false; i++) {
+            await new Promise(r=>setTimeout(r,100));
+          }
+        }
         try{
           const png = cy.png({full:true, bg:'#ffffff'});
           const a = document.createElement('a');
@@ -693,7 +699,7 @@ function previewDownloadProxy(){
           document.body.appendChild(a); a.click(); a.remove();
           exported++;
         }catch(e){}
-      });
+      }
       if(exported){ toast('🖼 已导出 ' + exported + ' 张视图 PNG'); return; }
       if(tb.id){ artDownload(tb.id); return; }      // 画布未挂载 → 回退产物下载
       toast('视图画布尚未渲染完成，请稍候再试'); return;

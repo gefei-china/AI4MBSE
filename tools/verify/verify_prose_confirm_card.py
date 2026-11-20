@@ -51,6 +51,13 @@ def main():
     check("P7 尾部命中（长正文）仍然有效",
           bool(det("正文" * 600 + "\n最后请你确认是否继续。")))
     check("P8 空输入不崩", det("") is None and det(None) is None)
+    # 2026-11-20 误报修复：模型在解释自己的确认规则时不该成卡
+    check("P9 规则元说明「等你确认后才执行」不误触发",
+          det("我是系统管理助手。等你确认后才执行写操作。以上是我的工作方式。") is None)
+    check("P10 规则元说明「需要你确认…技术故障不会拿来问你」不误触发",
+          det("需要你确认\n\n技术故障（工具报错、超时、授权失效、数据取不到）不会拿来问你怎么办——我会自行降级或跳过，") is None)
+    check("P11 真交互请求「请你确认后执行」仍命中（防排除过宽）",
+          bool(det("模型与校验已完成。\n\n以上为写入确认单，请你确认后执行。")))
 
     print("\n=== S 源码接线 ===")
     s = open(os.path.join(ROOT, "agent/pipeline_parts/stream.py"), encoding="utf-8").read()

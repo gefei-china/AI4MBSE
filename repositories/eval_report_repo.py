@@ -40,6 +40,8 @@ EVAL_KIND_LABELS = {
     "doc_extract": "文档抽取评测",
     "generation_quality": "生成质量评测",
     "trace_consistency": "Trace 一致性评测",
+    # 2026-11-20 补：端到端评测此前有数据却无中文标签，页面显示原始字符串
+    "golden_e2e": "端到端黄金集评测",
     "": "历史记录（未标注类型）",
 }
 
@@ -97,12 +99,19 @@ KIND_METRIC_COLUMNS = {
     ],
 }
 
-#: 未设门禁阈值的指标给"参考线"（仅用于三色提示，不参与门禁判定）
+#: 未设门禁阈值的指标给"参考线"（仅用于三色提示 warn，不参与门禁 alert 判定）
 _REFERENCE_LINES = {
     "doc_mrr_at_10": ("high", 0.70),
     "doc_ndcg_at_10": ("high", 0.60),
     "doc_pool_recall": ("high", 0.95),
     "doc_recall_miss_rate": ("low", 0.15),
+    # ★ 2026-11-20（米爸反馈：valid_rate=1.0 全绿却一半引用断号）：
+    #   gen_citation_valid_rate 只判"编号是否在范围内"，断号看不见；
+    #   contiguity 补这个盲区。历史仅 1 个样本(0.542)，**不配硬门禁阈值**
+    #   （只有 1 个点就定线是臆造，会假红）。给观察参考线 0.90：低于它显
+    #   warn 黄灯提示"引用编号不连续"，但不进门禁红——保留"模型选择性引用
+    #   正常、断号率不是缺陷率"的原设计判断。等样本够了再升级为 eval_gates。
+    "gen_citation_contiguity_rate": ("high", 0.90),
 }
 
 #: `eval_reports` 里用于"该类型存在哪些指标列"的探测（判断库是否已迁移）
@@ -251,11 +260,44 @@ def is_migrated(conn):
     return "eval_kind" in cols and all(c in cols for c in _DOC_COLUMNS)
 
 
+def trust_verdict(kind, detail_obj, drift):
+    """纯函数：按评测类型给出"这个分数能不能当依据"的判定。
+
+    返回 `(trustworthy: bool, applicable: bool, reason: str, ctrl)`。
+    不同评测类型的负对照**存放路径不同**：
+      · rag_retrieval / trace_consistency 及未来沿用顶层契约者：
+        顶层 negative_control.recall + fingerprint_drift
+      · generation_quality：summary.control.discriminates（负对照是否有判别力）
+      · golden_e2e / 空类型 / memory / doc / intent：无负对照范式 ⇒ applicable=False
+    抽成纯函数便于单测与变异自证（判据类改动不可靠肉眼看代码验收）。
+    """
+    obj = detail_obj or {}
+    drift = drift or None
+    nc = obj.get("negative_control") or {}
+    ctrl = nc.get("recall") if isinstance(nc, dict) else None
+    if kind == "generation_quality":
+        gc = (obj.get("summary") or {}).get("control") or {}
+        discriminates = bool(gc.get("discriminates"))
+        ctrl = gc.get("pooled_grounded_rate")
+        ok = discriminates and not drift
+        reason = ("生成质量负对照有判别力且无漂移" if ok else
+                  ("生成质量负对照无判别力（control.discriminates=false）"
+                   if not discriminates else "语料已漂移"))
+        return (bool(ok), True, reason, ctrl)
+    if kind in ("golden_e2e", "", "memory_quality", "doc_extract", "intent_routing"):
+        return (True, False, "该评测范式无负对照概念，可信度判据不适用", ctrl)
+    ok = bool(ctrl) and not drift
+    reason = ("有负对照且无漂移" if ok else
+              ("无负对照（无法排除假绿）" if not ctrl else "语料已漂移"))
+    return (bool(ok), True, reason, ctrl)
+
+
 def fetch_history(conn, eval_kind="", limit=20):
     """按类型分组取评测历史。
 
     返回 `{ok, kinds, counts, history, note, migrated}`。
-    `history[kind]` 每项含各指标 + `trustworthy`（有负对照且无漂移才为 True）。
+    `history[kind]` 每项含各指标 + `trustworthy`（有负对照且无漂移才为 True）
+    + `trust_applicable`（判据是否适用于该类型）+ `trust_reason`（判定理由）。
     """
     cols = _columns(conn)
     if not cols:
@@ -313,11 +355,21 @@ def fetch_history(conn, eval_kind="", limit=20):
             c: metric_status_for(k, c, item.get(c), thr)
             for c, _l, _d, _g in KIND_METRIC_COLUMNS.get(k, KIND_METRIC_COLUMNS.get("", []))
         }
-        # 从 detail JSON 里取负对照与漂移标记 —— 决定这个分数能不能当依据
+        # 从 detail JSON 里取负对照与漂移标记 —— 决定这个分数能不能当依据。
+        # ★ 2026-11-20（米爸反馈评测管理"可信度"误判）：不同评测类型的负对照
+        #   **存放路径不同**，旧实现只读顶层 negative_control/fingerprint_drift，
+        #   于是 generation_quality（负对照在 summary.control）与 golden_e2e
+        #   （根本无负对照范式）都被判"不可信"。这里按类型分支：
+        #     · rag_retrieval / trace_consistency：顶层 negative_control.recall + drift（原口径）
+        #     · generation_quality：summary.control.discriminates（负对照是否有判别力）
+        #     · golden_e2e / 空类型/其它：该范式不适用"负对照"判据 ⇒ trust_applicable=False
+        #   保持 trustworthy 为 bool（兼容 B10 门禁），另加 trust_applicable + trust_reason
+        #   让前端能把"不适用"与"不可信"分开显示，不再用错判据冤枉一批评测。
         drift, ctrl = None, None
+        obj = {}
         if "detail" in cols:
             try:
-                obj = json.loads(r["detail"] or "{}")
+                obj = json.loads(r["detail"] or "{}") or {}
                 drift = obj.get("fingerprint_drift") or None
                 nc = obj.get("negative_control") or {}
                 ctrl = nc.get("recall") if isinstance(nc, dict) else None
@@ -326,17 +378,26 @@ def fetch_history(conn, eval_kind="", limit=20):
                 # 解析失败只说明"取不到负对照"，不该让整个接口失败。
                 drift, ctrl = None, None
         item["fingerprint_drift"] = drift
-        item["negative_control"] = ctrl
-        # ★ trustworthy = 有负对照 且 无漂移。没有负对照就没有
-        #   "指标在测真实对齐关系"的证据（那是本工程评测体系的核心纪律）。
-        item["trustworthy"] = bool(ctrl) and not drift
+        _tw, _applicable, _reason, _ctrl = trust_verdict(k, obj, drift)
+        item["negative_control"] = _ctrl
+        item["trust_applicable"] = _applicable
+        item["trust_reason"] = _reason
+        item["trustworthy"] = _tw
         # O3：快照表里的键值并入 item（静态列没有的键在此透出 —— 扩展通道）。
         # 一次一查（每报告 ≤10 行），避免跨报告大 JOIN 的复杂度。
         for m in fetch_metrics(conn, r["id"]):
             mk = m["metric_key"]
             if mk not in item or item.get(mk) is None:
                 item[mk] = m["value"]
-            item.setdefault("metric_status", {})[mk] = m["status"] or \
+            # 2026-11-20：O3 扩展指标（如 gen_citation_contiguity_rate 只在快照表）
+            # 落库时 status 冻结为 ""（无门禁阈值），但参考线是**后来加的**。
+            # 若快照 status 为空，用当前 metric_status_for 重算一次，让新配的参考线
+            # 能透出 warn（如 contiguity 0.542 < 0.90 ⇒ warn），而不是永远灰色"不适用"。
+            # 门禁阈值行为不变（thresholds 仍来自 eval_gates 唯一真源）。
+            snap_status = m["status"] or ""
+            if not snap_status:
+                snap_status = metric_status_for(k, mk, item.get(mk), thr)
+            item.setdefault("metric_status", {})[mk] = snap_status or \
                 item["metric_status"].get(mk, "")
         bucket.append(item)
 

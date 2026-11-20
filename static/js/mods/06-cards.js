@@ -177,34 +177,9 @@ function procBlocksHtml(ex, mid){
       // ★ 2026-11-20：历史回放同样标出「谁调的 / 哪个技能指导的」，与实时路径一致。
       badges: _bd('agent', t.agent) + _bd('skill', t.skill || t.skill_guide)});
   });
-  // ★ 2026-11-20：历史侧补「执行参与方」汇总（与实时路径 _participantsHtml 同口径，
-  //   数据源换成已落库的 exec.agent / exec.subtasks[].agent / exec.tools[].agent|skill）。
-  try{
-    const _ag = new Set(), _sk = new Set(), _tl = new Set();
-    if(ex.agent) _ag.add(String(ex.agent));
-    (ex.subtasks||[]).forEach(s=>{ if(s.agent) _ag.add(String(s.agent)); });
-    (ex.tools||[]).forEach(t=>{
-      if(t.agent) _ag.add(String(t.agent));
-      if(t.skill || t.skill_guide) _sk.add(String(t.skill || t.skill_guide));
-      if(t.name) _tl.add(String(t.name));
-    });
-    (ex.subtasks||[]).forEach(s=>{
-      ((s.summary&&typeof s.summary==='object'&&s.summary.skills)||[]).forEach(x=>_sk.add(String(x)));
-    });
-    if(_ag.size + _sk.size + _tl.size){
-      const _lst = (arr, kind) => arr.length
-        ? `<div style="display:flex;flex-wrap:wrap;gap:4px;margin-top:4px;">${arr.map(x=>_bd(kind, x)).join('')}</div>`
-        : '<div style="font-size:12px;color:var(--mut);margin-top:4px;">无</div>';
-      steps.unshift({icon:'🧭', cls:'participants',
-        title:`执行参与方（Agent ${_ag.size} · 技能 ${_sk.size} · 工具 ${_tl.size}）`,
-        status:'done', sub:'本轮用到',
-        body:`<div style="font-size:12.5px;color:var(--mut);line-height:1.6;">`
-          + `<div><b>Agent（${_ag.size}）</b></div>${_lst([..._ag],'agent')}`
-          + `<div style="margin-top:6px;"><b>技能（${_sk.size}）</b></div>${_lst([..._sk],'skill')}`
-          + `<div style="margin-top:6px;"><b>工具（${_tl.size}）</b></div>${_lst([..._tl],'tool')}`
-          + `</div>`});
-    }
-  }catch(e){}
+  // 2026-11-20（米爸二次反馈）：移除历史侧「执行参与方」集中汇总块——
+  //   与逐环节徽章（178 行的 badges）重复，且集中展示不需要。
+  //   "谁在干活"由每个环节自身的 badge 回答，不再单列一张汇总卡。
   // V2.6 历史消息执行过程：统一收口条（默认收起）+ 时间线容器（点击展开按层级回看）
   const timeline = steps.map((s,i)=>`<div class="proc-block collapsed ${s.cls||''}"><div class="proc-head" onclick="toggleProc(this)"><span>${s.icon}</span><span class="proc-title">${s.title}</span>${s.sub?`<span class="proc-sub">${s.sub}</span>`:''}${s.badges||''}${s.badge?`<span class="tool-status ${s.badgeCls}">${s.badge}</span>`:''}<span class="chev">▾</span><span class="proc-time">${now}</span></div>${s.noBody?'':`<div class="proc-body">${s.body||''}</div>`}</div>`).join('');
   if(!steps.length) return '';
