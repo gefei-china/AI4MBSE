@@ -57,6 +57,19 @@ function procBlocksHtml(ex, mid){
     steps.push({icon:'↻', title:`生成尝试（${_attempts.length}）`, status:'done', cls:'attempts',
       sub:_attempts.map(a=>_kLabel[(a && a.kind)] || '生成').join(' → '), body:_aBody});
   }
+  /* ★ 2026-11-20：编排正文只留最终 SysML，中间版本/包树/确认单随消息落在
+     card_data.exec.process_artifacts，这里以折叠块还原——过程可见但不抢正文。
+     老消息无该字段 ⇒ 不产生该行，逐字节兼容。 */
+  const _folded = Array.isArray(ex.process_artifacts) ? ex.process_artifacts : [];
+  if(_folded.length){
+    const _fBody = _folded.map((a,i)=>{
+      const lang = esc((a && a.lang) || '文本');
+      const txt = esc((a && a.text) || '');
+      return `<details style="margin:5px 0;"><summary style="cursor:pointer;font-size:12.5px;color:var(--mut);">中间产物 ${i+1} · ${lang}${txt.length?' · '+txt.length+' 字':''}</summary><pre style="white-space:pre-wrap;font-size:12px;line-height:1.6;padding:6px 2px;margin:0;">${txt}</pre></details>`;
+    }).join('');
+    steps.push({icon:'🗂', title:`过程产物（${_folded.length}）`, status:'done', cls:'artifacts',
+      sub:'中间版本/包树/确认单（正文只保留最终版本）', body:_fBody});
+  }
   /* ★ 2026-11-19 P1-3：编排路径显式标记。此前用户只能从"attempts 为空"反推，
      很容易误以为是漏标；现在直接说明"本轮走的是多子任务编排，不适用单次尝试回放"。 */
   if(ex.flow_kind === 'orchestrated'){

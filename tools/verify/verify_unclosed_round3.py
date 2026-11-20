@@ -81,6 +81,19 @@ def group_a():
        scan_write_intent("帮我新增一条待办")["verdict"] == "unknown")
     ck("A6b 「删除临时文件」不误判为写平台",
        scan_write_intent("删除临时文件")["verdict"] == "unknown")
+    # ★ 2026-11-20（真机 conv 999999952 误判）：弱动词 + **仅建模对象** ⇒ 不是写平台。
+    #   原文判 yes ⇒ 规划器派出「定位智源平台坐标」「向草稿版本写入」两个子任务，
+    #   白跑 17 次 query_projects + 11 次 query_data_tree（≈8 分钟），
+    #   而用户只要一段 SysML 代码。判据：写入需要**位置锚点**（工程里/包中/平台/分支…），
+    #   建模对象（模型/包/元素/视图/需求）本身不构成锚点。
+    _BUILD_GOAL = ("为 A8E 串并联混动整车建立顶层运行需求集 '热管理相关需求集'，"
+                   "生成符合 SysML v2 规范的需求视图代码")
+    ck("A6c 「建立…需求集 + 生成视图代码」⇒ unknown（不派平台写入子任务）",
+       scan_write_intent(_BUILD_GOAL)["verdict"] == "unknown",
+       scan_write_intent(_BUILD_GOAL)["reason"])
+    ck("A6d 同一句话只要加上位置锚点就仍是写入 ⇒ yes（判据没被放宽）",
+       scan_write_intent(_BUILD_GOAL + "，并写入工程里的整车IR需求包中")["verdict"] == "yes",
+       scan_write_intent(_BUILD_GOAL + "，并写入工程里的整车IR需求包中")["reason"])
     ck("A7 写类 Agent 识别（真机 id=1032 名字带读写）",
        is_write_agent("智源数据读写agent") is True)
     ck("A7b 普通 Agent 不误判",

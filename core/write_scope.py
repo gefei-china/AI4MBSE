@@ -76,10 +76,33 @@ WEAK_WRITE_VERBS = (
     "导入", "同步", "上传", "提交", "发布", "部署", "推", "写",
 )
 
-#: 宾语侧的「平台/工程」信号：出现即视为"目标在平台上"。
+#: 宾语侧的「平台/工程」信号（旧口径，保留供 `is_write_agent` 等历史调用）。
 PLATFORM_OBJECTS = (
     "智源", "平台", "工程", "项目", "分支", "版本", "模型", "包", "元素", "视图",
     "projectid", "branchid", "versionid", "sysml", "zhiyuan", "mcp",
+)
+
+#: ★ 2026-11-20：**位置/平台锚点** —— 弱动词只有配上它才算"写入平台"。
+#:   why（真机 conv 999999952 误判）：输入是
+#:   「为 A8E 串并联混动整车建立顶层运行需求集…生成符合 SysML v2 规范的需求视图代码」，
+#:   「建立」是弱动词、「视图」在旧 PLATFORM_OBJECTS 里 ⇒ 判 `yes`
+#:   ⇒ 规划器据此派出 t4「定位智源平台坐标」+ t5「向草稿版本写入」两个子任务，
+#:   白跑 17 次 query_projects / 11 次 query_data_tree（≈8 分钟），
+#:   而用户要的只是**一段 SysML 代码**，从未说要写平台。
+#:   ⇒ 区分两件事：**建模对象**（模型/包/元素/视图/需求 —— 在回答里产出即可）
+#:     与**平台位置**（智源/平台/工程里/包中/分支/版本 —— 才意味着要动平台数据）。
+#:   反向校验：门禁 verify_unclosed_round3 的 A5「在**工程里**的…**包中**新增测试包」
+#:   含两个位置锚点 ⇒ 仍判 yes，判据不被放宽。
+PLATFORM_LOCATORS = (
+    "智源", "平台", "工程", "项目", "分支", "版本", "projectid", "branchid",
+    "versionid", "zhiyuan", "mcp",
+    "包里", "包中", "包下", "工程里", "工程中", "工程下", "平台上", "平台里",
+    "模型里", "模型上", "草稿版本", "画布",
+)
+
+#: **建模对象**（不构成位置锚点）：产出文本/代码即满足，不需要动平台。
+MODEL_OBJECTS = (
+    "模型", "包", "元素", "视图", "需求", "sysml", "用例", "活动", "状态", "参数", "接口",
 )
 
 #: Agent 名称里出现这些字样 ⇒ **辅助信号**（不是主判据，理由见模块头表格）。
@@ -110,8 +133,16 @@ def scan_write_intent(text: str) -> dict:
     weak = [v for v in WEAK_WRITE_VERBS if v.lower() in s]
     obj = [o for o in PLATFORM_OBJECTS if o.lower() in s]
     if weak and obj:
+        # ★ 2026-11-20：弱动词必须配**平台位置锚点**才判 yes。
+        #   只有建模对象（模型/包/元素/视图/需求…）时，"建立/新增/生成"指的是
+        #   **在回答里产出代码**，不是写平台 —— 判 yes 会派出查平台坐标的无效子任务。
+        loc = [x for x in PLATFORM_LOCATORS if x.lower() in s]
+        if not loc:
+            out["reason"] = ("weak+model_object:%s/%s（无平台位置锚点，按建模产出处理）"
+                             % (weak[0], obj[0]))
+            return out
         out.update({"verdict": "yes", "hits": weak[:4],
-                    "reason": "weak+object:%s/%s" % (weak[0], obj[0])})
+                    "reason": "weak+locator:%s/%s" % (weak[0], loc[0])})
         return out
     if weak and not obj:
         out["reason"] = "weak_only:%s（无平台宾语，按本地动作处理）" % weak[0]

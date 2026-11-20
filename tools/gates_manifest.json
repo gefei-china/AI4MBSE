@@ -22,6 +22,30 @@
    "reason": "2026-11-20 新增：A/B 真实 LLM 会话评测「视图生成内容澄清」在含糊输入下的效果（J1命中/J2版式锚点/J3澄清优先/J4因果）。需运行中 8000 服务 + 真库 + LLM，CI 无此运行时"
   },
   {
+   "script": "verify_orch_clarify_card.py",
+   "tier": "local",
+   "timeout": 120,
+   "reason": "2026-11-20 新增：编排子任务 ask_user 信号冒泡成唯一澄清卡 + needs_user 不可重试；纯函数+静态源码判据，热路径改动期不进 CI"
+  },
+  {
+   "script": "verify_usage_stats_persist.py",
+   "tier": "local",
+   "timeout": 120,
+   "reason": "2026-11-20 新增：usage/耗时/工具数随消息落库且速览自动显示；纯函数+静态源码判据，暂不进 CI"
+  },
+  {
+   "script": "verify_final_artifact_only.py",
+   "tier": "local",
+   "timeout": 120,
+   "reason": "2026-11-20 新增：编排正文只留最终 SysML、中间产物留过程区；纯函数+静态源码判据含变异自证，暂不进 CI"
+  },
+  {
+   "script": "verify_tool_probe_budget.py",
+   "tier": "local",
+   "timeout": 120,
+   "reason": "2026-11-20 新增：定位类工具试探次数上限 + 校验停滞短路；纯函数+静态源码判据含变异自证，暂不进 CI"
+  },
+  {
    "script": "audit_dup_defs.py",
    "tier": "pr",
    "timeout": 120

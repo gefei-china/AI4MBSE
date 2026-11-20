@@ -188,13 +188,19 @@ class CardMixin:
                               "ref": f"flows:{cd['saved_flow_id']}"})
 
         # 4) stats
+        # ★ 2026-11-20：优先读落库时的 `usage`（本轮真实 token/墙钟/工具数）。
+        #   旧实现只读 run_budget.used_tokens + exec.elapsed_ms，而编排卡片的
+        #   exec.tools 硬写 []、exec 根本没有 elapsed_ms ⇒ 用户看到"统计不见了"。
+        usage = cd.get("usage") or {}
         rb = cd.get("run_budget") or {}
-        if rb.get("used_tokens"):
-            stats["tokens"] = rb["used_tokens"]
-        if exec_meta.get("elapsed_ms"):
-            stats["elapsed_ms"] = exec_meta["elapsed_ms"]
-        stats["tool_calls"] = len(tools)
-        stats["subtasks"] = f"{len(done_items)}/{len(plan) or len(exec_meta.get('subtasks') or [])}"
+        if usage.get("tokens") or rb.get("used_tokens"):
+            stats["tokens"] = int(usage.get("tokens") or rb.get("used_tokens"))
+        if usage.get("elapsed_ms") or exec_meta.get("elapsed_ms"):
+            stats["elapsed_ms"] = int(usage.get("elapsed_ms") or exec_meta["elapsed_ms"])
+        stats["tool_calls"] = int(usage.get("tool_calls", len(tools)))
+        _sub_total = (usage.get("subtasks") or
+                      f"{len(done_items)}/{len(plan) or len(exec_meta.get('subtasks') or [])}")
+        stats["subtasks"] = _sub_total
 
         from datetime import datetime as _dt
         return {

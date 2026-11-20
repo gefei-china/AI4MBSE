@@ -20,6 +20,70 @@ import asyncio  # ★ 2026-10-29：`except asyncio.CancelledError`（客户端�
 from contextlib import nullcontext  # P0-b：_turn_cm 无 tracer 时的零开销占位
 
 
+def _collapse_intermediate_artifacts(content: str) -> tuple:
+    """编排正文只留**最终产物**；中间版本移入过程区（2026-11-20）。
+
+    真机 conv 999999952：汇总正文里同时出现两个 SysML 围栏（174 行旧版 +
+    138 行最终版）、两棵包树、一张写入确认单 —— 用户要的是"最终正文只给最终正确
+    的，中间环节作为过程性内容展示"。
+
+    规则（保守，只处理明显过程物，不碰普通 Markdown 代码）：
+      · ≥2 个 ```sysml 围栏 ⇒ 只保留**最后一个**（汇总/反思后它即最终交付），
+        前面的替换为一行折叠提示；
+      · 树形缩进围栏（`├──` / `└──`）与带"确认单"字样的 json 围栏也折叠；
+      · 被折叠的原文**一字不丢**地返回，供 card_data.exec.process_artifacts 保存。
+    """
+    import re as _re
+    text = str(content or "")
+    pattern = _re.compile(r"```([A-Za-z0-9_+-]*)\n([\s\S]*?)```")
+    blocks = list(pattern.finditer(text))
+    if not blocks:
+        return text, []
+    sysml_idx = [i for i, m in enumerate(blocks)
+                 if str(m.group(1) or "").lower() in ("sysml", "sysml v2")]
+    _last_sysml = sysml_idx[-1] if len(sysml_idx) >= 2 else -1
+    saved, out, last = [], [], 0
+    for i, m in enumerate(blocks):
+        lang = str(m.group(1) or "")
+        body = m.group(2) or ""
+        # 多块 sysml：除**最后一块**（最终版）外全部折叠
+        fold = bool(_last_sysml >= 0 and i in sysml_idx and i != _last_sysml)
+        if lang == "" and ("├──" in body or "└──" in body):
+            fold = True
+        if lang.lower() == "json" and "确认单" in body:
+            fold = True
+        out.append(text[last:m.start()])
+        if fold:
+            saved.append({"lang": lang, "text": body, "index": i})
+            out.append("> 【中间版本已折叠：完整内容见「执行过程」】")
+        else:
+            out.append(m.group(0))
+        last = m.end()
+    out.append(text[last:])
+    return "".join(out), saved
+
+
+def _attach_usage_summary(card_obj: dict, content: str, usage: dict) -> dict:
+    """把本轮 usage + 结论速览**在落库前**写进 card_data（2026-11-20）。
+
+    为什么不能只靠前端 done 事件：done 是一次性 SSE，刷新后就没了；而此前
+    `build_message_summary` 只在用户手点「生成结论」时才写库 ⇒ 用户反馈
+    「输出完成后整体时间与 token 统计不见了」。这里让统计随消息一起固化，
+    刷新/历史还原都能看到，且失败时只丢诊断信息、不影响正文落库。
+    """
+    if not isinstance(card_obj, dict):
+        return card_obj
+    card_obj["usage"] = dict(usage or {})
+    try:
+        from agent.pipeline_parts.cards import CardMixin
+        _sum = CardMixin.build_message_summary(card_obj, content)
+        if _sum:
+            card_obj["summary"] = _sum
+    except Exception:
+        pass
+    return card_obj
+
+
 def _gates_safe():
     """执行闸生效值快照（**诊断用，永不抛**）。
 
@@ -1407,6 +1471,18 @@ class StreamMixin:
                                 e2 = dict(ev); e2["name"] = f"{tkey}:{e2.get('name','')}"
                                 evs.append(e2)
                                 _evq.put(e2)
+                            elif _et in ("clarify_ask", "hil_confirm"):
+                                # ★ 2026-11-20：子任务的确认/澄清事件此前**无分支 ⇒ 被丢弃**。
+                                #   不直接转发到前端（5 个子任务同时问会弹 5 张卡），
+                                #   只登记到 run 级 pending，由编排层汇总后发唯一一张。
+                                with _orch_pending_lock:
+                                    if tkey not in _orch_pending:
+                                        _orch_pending[tkey] = {
+                                            "questions": list(ev.get("questions") or []),
+                                            "title": str(ev.get("title") or ""),
+                                            "kind": "clarify" if _et == "clarify_ask" else "confirm",
+                                            "source": str(ev.get("source") or "ask_user"),
+                                        }
                             elif _et == "done":
                                 ddata = ev.get("data") or {}
                                 # ★★ 2026-11-13（conv 990727 / run 990225 归因）：
@@ -1427,6 +1503,16 @@ class StreamMixin:
                                     _pend_kind = "clarify"
                                 if _pend_kind:
                                     _sub_pending = _pend_kind
+                                    # 兜底：某些路径只发 done 不发 clarify_ask（如 execute
+                                    # 的 dry_run 直返），问题清单只能从 done.data 里取。
+                                    with _orch_pending_lock:
+                                        if tkey not in _orch_pending:
+                                            _orch_pending[tkey] = {
+                                                "questions": list(ddata.get("questions") or []),
+                                                "title": "",
+                                                "kind": "confirm" if _pend_kind == "confirm" else "clarify",
+                                                "source": str(ddata.get("clarify_source") or "ask_user"),
+                                            }
                                     _pcid = int(ddata.get("confirmation_id") or 0)
                                     if _pend_kind == "confirm":
                                         _sub_pending_note = (
@@ -2931,6 +3017,19 @@ class StreamMixin:
                 #   **取用有据可查**；Anthropic 则要求交接内容"足以判断"。
                 #   本表不改变任何产出，只把"仅凭摘要下结论"这件事**显式带到汇总与评审面前**。
                 _sub_meta = {}
+                # ★ 2026-11-20（conv 999999952 实证）：子任务里 ask_user 发出的 clarify_ask
+                #   事件此前在 `_run_subtask` 的事件 switch 中**没有分支 ⇒ 被静默丢弃**；
+                #   而 done 的 clarify_asked 只把任务标成 pending，worker 又按普通失败重试
+                #   （t5 重试 2 次），最终模型改写成"请你确认"的散文，卡片永远出不来。
+                #   这里显式收集"等用户"信号，等整批收敛后由**编排层发唯一一张卡**。
+                #   key = task_key，value = {questions, title, kind}；只写一次（首次中断优先）。
+                _orch_pending = {}
+                _orch_pending_lock = _import_threading.Lock()
+                # 工具调用计数（★ 2026-11-20）：此前 card.exec.tools 硬写 []，
+                # 前端「🛠 0 工具调用」与 1661 帧里的 198 次真实调用严重不符。
+                _orch_tool_counts = {}
+                _orch_probe_caps = 0   # 命中"定位类工具次数上限"的次数
+                _orch_val_stalls = 0   # 命中"校验停滞"的次数
 
                 def _drain():
                     """取出队列里**已到达**的子任务事件；把**连续的 token 合并成一条**再吐。
@@ -2943,6 +3042,7 @@ class StreamMixin:
                     ⚠️ 只合并**签名相同**的连续 token：带 key/round 的事件混在一起时若跨签名合并，
                     会把某个子任务的内容算到另一个头上。
                     """
+                    nonlocal _orch_probe_caps, _orch_val_stalls
                     _now = []
                     try:
                         while True:
@@ -2951,6 +3051,14 @@ class StreamMixin:
                         pass
                     _buf = None
                     for _e in _now:
+                        if _e.get("type") == "tool":
+                            _tk = str(_e.get("key") or "main")
+                            _orch_tool_counts[_tk] = _orch_tool_counts.get(_tk, 0) + 1
+                            _rs = str(_e.get("result") or "")
+                            if "【检索次数上限】" in _rs:
+                                _orch_probe_caps += 1
+                            if "【校验停滞，已短路】" in _rs:
+                                _orch_val_stalls += 1
                         if _e.get("type") == "token":
                             _sig = (_e.get("key"), _e.get("round"))
                             if _buf is None:
@@ -3392,6 +3500,45 @@ class StreamMixin:
                         _sum_items.append(_it)  # 兼容旧数据：回退原 result 文本
             except Exception:
                 _agg_status, _missing_keys, _sum_items = "full", [], list(done_items)
+            # ★★ 2026-11-20（conv 999999952 实证）：编排层**统一收口"等用户"**。
+            #   子任务里的 ask_user / 写前确认会在 `_run_subtask` 登记到 `_orch_pending`，
+            #   但不直接发卡（5 个子任务同问会弹 5 张）。整批收敛后在这里只发一张卡、
+            #   落一次 pending_clarify，并结束本轮 —— 不再做汇总/评审/最终生成。
+            #   为什么必须早于摘要：摘要会把"请确认"写成散文正文（实测 t5 重试 2 次后
+            #   就是这么收场的），用户既看不到卡也无法作答。
+            if _orch_pending:
+                _pk = sorted(_orch_pending)[0]
+                _pi = _orch_pending[_pk]
+                _pqs = [dict(q) for q in (_pi.get("questions") or []) if isinstance(q, dict)]
+                if not _pqs:
+                    _pqs = [{"id": "q_wait_user", "question": "请确认后继续本次建模",
+                             "options": ["继续", "取消"], "allow_custom": True}]
+                _pkind = str(_pi.get("kind") or "clarify")
+                _pdone = [str(t.get("title") or t.get("task_key") or "")
+                          for t in (orch_tasks or []) if str(t.get("status")) == "done"]
+                _pcontent = ("⏸ **暂停等你确认**（来自子任务 %s）：%s\n\n"
+                             "本批已完成：%s。回答后我会继续未完成的部分。"
+                             % (_pk, str((_pqs[0] or {}).get("question") or "")[:300],
+                                "、".join(_pdone[:5]) or "无"))
+                _pmid = 0
+                try:
+                    _pmid = self._persist_clarify(
+                        conversation_id, user_input, intent, branch, attachments,
+                        forced_intent, skill_name, team, _pqs, content=_pcontent) or 0
+                except Exception as _pe:
+                    print("[orch_clarify] 落库失败：%r" % (_pe,), flush=True)
+                yield {"type": "clarify_ask", "questions": _pqs, "intent": intent,
+                       "title": ("❓ 执行中需要你确认" if _pkind == "clarify"
+                                 else "❓ 写入前需要你确认"),
+                       "message": str(user_input)[:200],
+                       "source": str(_pi.get("source") or "ask_user"),
+                       "task_key": _pk}
+                yield {"type": "done", "data": {
+                    "ok": True, "clarify_asked": True, "intent": intent,
+                    "content": _pcontent, "msg_type": "clarify", "usage": {},
+                    "questions": _pqs, "message_id": _pmid,
+                    "clarify_source": str(_pi.get("source") or "ask_user")}}
+                return
             # ── P0-3 补（2026-09-19，端到端取证）：**未完成子任务必须反映到聚合状态** ──
             # 上一段只统计 `done_items`（成功交付物）→ 失败/阻塞的子任务被整体忽略。
             # 实测（会话 360，4 子任务）：t2 超时两次 → failed，t3/t4 依赖失败 → blocked，
@@ -4078,6 +4225,9 @@ class StreamMixin:
                 _tn_text = ((_tn_text + "\n" + _enf_text) if _tn_text else _enf_text)
             if _tn_text:
                 orch_content = orch_content + _tn_text
+        # ★ 2026-11-20：流式推送**之前**先折叠中间产物，否则用户先看到两个版本的
+        #   SysML 代码，done 重渲染时才变成一个 —— 与"最终正文只给最终版本"的要求相反。
+        orch_content, _folded_artifacts = _collapse_intermediate_artifacts(orch_content)
         # 5) 汇总内容流式推送
         #    P0-3（2026-09-17）：原 `range(0, len, 24)` 无节流切片 → 几十毫秒内把整段灌给前端，
         #    前端表现为「突然一大段」。改用 iter_stream_chunks 按 45 字符/秒 的类人节奏产出。
@@ -4102,6 +4252,10 @@ class StreamMixin:
         _views_sid = _spans.open("views", "SysML 视图", parent=_run_sid) if _spans else 0
         _pre_sysml_len = len(orch_content)
         orch_content = self._ensure_sysml_blocks(orch_content, done_items)
+        # ★ 2026-11-20：`_ensure_sysml_blocks` 可能再补一块代码 ⇒ 再折一次（幂等：
+        #   已折叠的围栏不再存在，只有新补的会被处理），并把原文并入过程区。
+        orch_content, _folded_more = _collapse_intermediate_artifacts(orch_content)
+        _folded_artifacts = list(_folded_artifacts or []) + list(_folded_more or [])
         # 6.1) P0-3：补回的内容是「事后拼接」的，必须增量补吐，否则前端只看到摘要，
         #      SysML 代码块要等 done 重渲染才出现（体验上等于「又突然冒出一大段」）。
         if len(orch_content) > _pre_sysml_len:
@@ -4152,7 +4306,7 @@ class StreamMixin:
             _gate_gaps
         except NameError:
             _gate_gaps = []
-        card_data = json.dumps({
+        card_obj = {
             "intent": intent, "agent": agent_def.name, "hil_level": hil_level,
             "kb_tags": kb_tags, "skill_hits": self._last_skill_hits, "slots": slots,
             "orchestrated": True, "degraded": degraded,
@@ -4200,8 +4354,22 @@ class StreamMixin:
             "exec": {"reasoning": f"自动编排：{len(orch_tasks)} 个子任务由多 Agent 协作执行",
                      "agent": agent_def.name, "tools": [],
                      "flow_kind": "orchestrated",
-                     "subtasks": subtasks},   # P0-2：子任务轨迹持久化（历史消息还原）
-        }, ensure_ascii=False)
+                     "subtasks": subtasks,   # P0-2：子任务轨迹持久化（历史消息还原）
+                     # ★ 2026-11-20：被折叠的中间版本/包树/确认单**一字不丢**放过程区，
+                     # 正文只留最终 SysML；用户要的"过程性展示"由此实现。
+                     "process_artifacts": _folded_artifacts},
+        }
+        # ★ 2026-11-20：统计随消息落库（刷新后仍在），不再只在 SSE done 里闪一下。
+        #   `run_tokens` 是真库 llm 计费口径；墙钟用本方法入口的 t0；工具调用数取
+        #   编排实时事件流里累计的条数（此前 card.exec.tools 硬写 [] ⇒ 界面显示 0）。
+        _usage = {"tokens": int(run_tokens or 0),
+                  "elapsed_ms": int((_t.time() - t0) * 1000),
+                  "tool_calls": int(sum(_orch_tool_counts.values())),
+                  "probe_caps": _orch_probe_caps, "validation_stalls": _orch_val_stalls,
+                  "subtasks": "%d/%d" % (sum(1 for s in subtasks if s.get("status") == "done"),
+                                         len(subtasks))}
+        _attach_usage_summary(card_obj, orch_content, _usage)
+        card_data = json.dumps(card_obj, ensure_ascii=False)
         # P0-3：编排产出记忆沉淀（LLM 提炼 or 规则降级，每会话限 2 次）
         self._deposit_session_memory(user_input, orch_content, intent)
         # P0-5：技能使用反馈采集（流式编排路径）
@@ -4284,6 +4452,9 @@ class StreamMixin:
             "orch_run_id": int(run_id or 0),
             "content": orch_content, "report": None, "card": json.loads(card_data),
             "sysml_views": sysml_views, "llm": llm_info, "orchestrated": True,
+            # ★ 2026-11-20：done 也带同一份 usage（前端实时收口条与刷新后的
+            # card_data.summary 用同一个数，避免"跑的时候有、刷新就没"）。
+            "usage": _usage,
             "plan": orch_tasks, "degraded": degraded,
             "run_budget": {"used_tokens": run_tokens, "budget": run_token_budget,
                            "hit": budget_hit, "executed": executed_count, "max_tasks": _max_tasks},
@@ -4552,6 +4723,10 @@ class StreamMixin:
         编排子任务流不传（_tracer=None）⇒ 全部打点退化为 no-op。
         """
         attachments = attachments or []
+        # ★ 2026-11-20：本轮墙钟起点（统计随消息落库，刷新后仍可见）。
+        import time as _t_stats
+        _stats_t0 = _t_stats.time()
+        _tokens_used = 0   # done 事件在早退路径也要能取到（不能依赖 card 装配执行过）
         # ★★ 2026-10-30（P0 缺口②）：**单请求墙钟预算**。
         #   传 `deadline_ts`（绝对时间戳，`time.time()` 口径）而非"剩余秒数"：
         #   剩余秒数每过一层都要重算，任一层忘了减就放大预算；绝对时间戳幂等。
@@ -6237,8 +6412,16 @@ class StreamMixin:
                             # 2026-10-04：重复调用短路（同工具同参数已成功跑过 ⇒ 回喂既有结果）。
                             # ⚠️ 必须发生在 yield "run" **之前**：否则前端会先亮起一个节点，
                             #    然后既没有真实执行也没有 done 事件 ⇒ 节点永久停在"执行中"。
-                            _dup = _lg.probe_dup(tname, targs)
-                            if _dup:
+                            # ★ 2026-11-20：先看"同工具试探次数"上限（不同关键词也算），
+                            #   再看语义等价重复。真机 t4 的 17 次 query_projects 全部
+                            #   参数不同，旧守卫一次都没挡住，单独耗掉 4 分钟。
+                            _probe_n = _lg.probe_cap(tname)
+                            _dup = 0 if _probe_n else _lg.probe_dup(tname, targs)
+                            if _probe_n:
+                                _lg.probe_cap_hits += 1
+                                _dup_streak += 1
+                                result = _lg.probe_cap_payload(tname, _probe_n)
+                            elif _dup:
                                 _lg.dup_short_circuits += 1
                                 _dup_streak += 1      # ★ 2026-10-27：连续重复计数（见 round 末收敛闸）
                                 # ★ 2026-10-28：回喂体统一由 LoopGuard 生成
@@ -6288,6 +6471,12 @@ class StreamMixin:
                                                          or ("未检索到" in _r0)
                                                          or ("无新冲突" in _r0)):
                                     _lg.undo_dup_count(tname, targs)
+                            # ★ 2026-11-20：校验停滞闸 —— 相同错误签名连续 3 次即短路。
+                            #   真机 t3 连跑 8 次 validate，语义错恒 120 条（标准库未加载的
+                            #   假错），重试只烧时间不产生新信息。
+                            if _lg.validation_stalled(tname, result):
+                                _lg.validation_stalls += 1
+                                result = _lg.validation_stall_payload()
                             _t_ok = bool(result.get("ok"))
                             _r_full = str(result.get("result") or "")
                             # ★ 2026-10-27（真机 E2E 实测，conv 9698）：**记录已成功执行的写操作**。
@@ -7455,7 +7644,7 @@ class StreamMixin:
                             retrieval["source"] = "tool_retrieve"
                 except Exception:
                     pass  # 计数回填失败不影响正文落库（观测字段，非交付内容）
-                card_data = json.dumps({
+                card_obj = {
                     "intent": intent,
                     "agent": agent_def.name,
                     "hil_level": hil_level,
@@ -7514,7 +7703,23 @@ class StreamMixin:
                     "sysml_views": sysml_views,
                     "submitted_by": audit_user(user) if isinstance(user, dict) else "会话发起人",
                     **self._build_rich_card(intent, retrieval, branch, user_input, provider_id),
-                }, ensure_ascii=False)
+                }
+                # ★ 2026-11-20：usage + 速览随消息落库（此前只有手点「生成结论」才写，
+                # 用户看到的就是"统计不见了"）。tokens 取 llm 计费口径，tool_calls 取
+                # 本轮真实执行过的工具数（不再让 exec.tools 为空时显示 0）。
+                _tokens_used = 0
+                try:
+                    _tokens_used = int((llm_info.get("tokens") or {}).get("total")
+                                       or (llm_info.get("tokens") or {}).get("completion")
+                                       or 0)
+                except Exception:
+                    pass
+                _attach_usage_summary(card_obj, llm_content, {
+                    "tokens": _tokens_used,
+                    "elapsed_ms": int((_t_stats.time() - _stats_t0) * 1000),
+                    "tool_calls": len(exec_tools or []),
+                })
+                card_data = json.dumps(card_obj, ensure_ascii=False)
                 # ★ 2026-11-19：与 execute.py 同口径注入 attempt 留痕。
                 #   单次生成时 attach 原样返回（旧数据逐字节兼容）。
                 try:
@@ -7674,6 +7879,13 @@ class StreamMixin:
                 # ★ 2026-10-17（米爸「harness 持续工作」）：本轮请求内自主续跑次数
                 #   （0 = 一轮收口；>0 = 评估器放行了 N 次续跑，前端/排查可追溯）。
                 "auto_continues": _auto_continues,
+                # ★ 2026-11-20：与落库 card_data.usage 同源，前端收口条不再只靠
+                # run_budget 猜 token、也不再因为没有 elapsed_ms 而完全不显示耗时。
+                "usage": {
+                    "tokens": _tokens_used,
+                    "elapsed_ms": int((_t_stats.time() - _stats_t0) * 1000),
+                    "tool_calls": len(exec_tools or []),
+                },
             }}
         except asyncio.CancelledError:
             # ★★ 2026-10-29（用户反馈「无辜终止 + 重新打开只看到自己输入」，真库 conv 9755 实证）：
