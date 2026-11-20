@@ -1486,31 +1486,43 @@ async def chat_stream(conv_id: int, body: ChatIn, conn=Depends(db_session),
                         #   前端 commit_partial 的写入即时可见，消除跨连接竞态双写。
                         #   (实测 conv 999999938：前端「已停止生成」与服务端「连接已中断」同秒双写)
                         _recheck_skip = False
-                        try:
-                            _last2 = _wc.execute(
-                                "SELECT id, role, content FROM messages WHERE conversation_id=? "
-                                "ORDER BY id DESC LIMIT 1", (conv_id,)).fetchone()
-                            if _last2 and _last2["role"] == "assistant":
-                                _is_new = (_start_msg_id <= 0 or int(_last2["id"]) > _start_msg_id)
-                                _is_final = "以上为已生成内容" in ((_last2["content"] or ""))
-                                if _is_new and _is_final:
-                                    _recheck_skip = True
-                        except Exception:
-                            _recheck_skip = False  # 复查失败则维持原行为（宁可重复也不静默丢）
-                        # 根治层：唯一键 + INSERT OR IGNORE（DB 原子保证，跨连接也只落一条）
-                        _finalize_key = _finalize_key_for_turn(_wc, conv_id)
+                        _finalize_key = ""
                         _inserted = 0
-                        if not _recheck_skip:
-                            _cur = _wc.execute(
-                                "INSERT OR IGNORE INTO messages "
-                                "(conversation_id, role, content, msg_type, card_data, finalize_key) "
-                                "VALUES (?,?,?,?,?,?)",
-                                (conv_id, "assistant", _body, "text", _card, _finalize_key))
-                            _inserted = _cur.rowcount
-                            if _inserted:
-                                _wc.execute(
-                                    "UPDATE conversations SET updated_at=CURRENT_TIMESTAMP "
-                                    "WHERE id=?", (conv_id,))
+                        # ★★ 2026-11-20 修 NameError（断连兜底整段失效的真因）：
+                        #   `_wc` 在本作用域**从未定义** —— ebc7f13 从 43a3f0e 搬这段时，
+                        #   把 `with db_conn() as _wc:` 那两行丢了却沿用了变量名。后果是：
+                        #   ① 下面复查 `_wc.execute(...)` 抛 NameError，被 `except Exception`
+                        #      吞掉并把 `_recheck_skip` 置 False（看起来"复查没命中"，实则没跑）；
+                        #   ② 紧接着 `_finalize_key_for_turn(_wc, ...)` 再抛一次，落到外层
+                        #      `except` 只打一行"[route_persist_gone] 兜底固化失败：NameError"
+                        #      ⇒ **兜底固化一次都没执行**，断连那轮的内容只剩帧日志里有。
+                        #   实测：tmp/exp_disconnect2.py 中途 aclose ⇒ 该日志行稳定复现。
+                        #   "check 与 write 用同一连接"的意图要成立，这条连接必须真的持有。
+                        with db_conn() as _wc:
+                            try:
+                                _last2 = _wc.execute(
+                                    "SELECT id, role, content FROM messages WHERE conversation_id=? "
+                                    "ORDER BY id DESC LIMIT 1", (conv_id,)).fetchone()
+                                if _last2 and _last2["role"] == "assistant":
+                                    _is_new = (_start_msg_id <= 0 or int(_last2["id"]) > _start_msg_id)
+                                    _is_final = "以上为已生成内容" in ((_last2["content"] or ""))
+                                    if _is_new and _is_final:
+                                        _recheck_skip = True
+                            except Exception:
+                                _recheck_skip = False  # 复查失败则维持原行为（宁可重复也不静默丢）
+                            # 根治层：唯一键 + INSERT OR IGNORE（DB 原子保证，跨连接也只落一条）
+                            _finalize_key = _finalize_key_for_turn(_wc, conv_id)
+                            if not _recheck_skip:
+                                _cur = _wc.execute(
+                                    "INSERT OR IGNORE INTO messages "
+                                    "(conversation_id, role, content, msg_type, card_data, finalize_key) "
+                                    "VALUES (?,?,?,?,?,?)",
+                                    (conv_id, "assistant", _body, "text", _card, _finalize_key))
+                                _inserted = _cur.rowcount
+                                if _inserted:
+                                    _wc.execute(
+                                        "UPDATE conversations SET updated_at=CURRENT_TIMESTAMP "
+                                        "WHERE id=?", (conv_id,))
                         if not _inserted:
                             print("[route_persist_gone] conv=%s 未写入：唯一键冲突或二次复查跳过 key=%s"
                                   % (conv_id, _finalize_key), flush=True)

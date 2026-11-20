@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-# CI-OPTIONAL: [local] tier=local（见 tools/gates_manifest.json）：默认分支只用 tempfile 临时库，但 `--with-e2e` 分支要 sqlite3.backup 真库副本 + TestClient lifespan，同一脚本不可拆分 ⇒ 整体未接线。2026-11-20 本机实测 87 PASS/0 FAIL（含 --with-e2e）。改法须同步改清单 tier 并接线，不允许只删这行
+# CI-OPTIONAL: [local] tier=local（见 tools/gates_manifest.json）：默认分支只用 tempfile 临时库，但 `--with-e2e` 分支要 sqlite3.backup 真库副本 + TestClient lifespan，同一脚本不可拆分 ⇒ 整体未接线。2026-11-20 本机实测 93 PASS/0 FAIL（含 --with-e2e 与断连 E11~E16）。改法须同步改清单 tier 并接线，不允许只删这行
 """门禁：方案B P0/P1 —— 帧日志地基 + 断线重连回放（RUN_STREAM_STORE_V1）。
 
 跑法（必须用项目 venv）：
@@ -515,6 +515,89 @@ with TestClient(main.app) as client:
 '''
 
 
+# ── 断连中途：为什么不用 TestClient.stream + break ────────────────────────
+# 实测（2026-11-20）：`with client.stream(...) as r: for line in r.iter_lines(): break`
+# **不会断连** —— TestClient 会把响应体继续读完，服务端照常跑完整轮
+# （run=done / last_seq=113），于是"断连"用例会假绿。
+# 真实断连在 Starlette 侧等价于"关闭响应体迭代器"：这里直接取 `body_iterator`
+# 迭代 N 帧后 `aclose()`，它会以 GeneratorExit 贯穿生成器 ⇒ 走 `except GeneratorExit`
+# ⇒ `_client_gone=True` ⇒ 收口写 cancelled/client_gone。这条路可复现、不靠时序赌。
+E2E_DISC_CHILD = r'''
+import asyncio, json, os, sys, time
+sys.path.insert(0, os.environ["MBSE_RO"])
+
+def emit(**kw):
+    sys.stdout.write("E2EJSON " + json.dumps(kw, ensure_ascii=False) + "\n")
+    sys.stdout.flush()
+
+from database import db_conn, init_db
+from models.conversation import ChatIn
+import routers.conversations as C
+
+HEAD = "断连前已生成的这一句不能丢。"
+FULL = HEAD + "".join("垫%d" % i for i in range(1, 41))
+
+class _SlowPipe:
+    def execute_stream(self, *a, **kw):
+        def gen():
+            yield {"type": "stage", "name": "慢生成", "status": "run"}
+            for ch in FULL:
+                time.sleep(0.03)
+                yield {"type": "token", "delta": ch}
+            yield {"type": "done", "data": {"intent": "design", "route": "rule",
+                                            "content": FULL, "orch_run_id": 0}}
+        return gen()
+
+C.get_pipeline = lambda: _SlowPipe()
+init_db()
+
+async def run():
+    with db_conn() as conn:
+        conn.execute("INSERT INTO conversations (title, intent) VALUES ('断连E2E','design')")
+        conn.commit()
+        cid = conn.execute("SELECT MAX(id) FROM conversations").fetchone()[0]
+    n = 0
+    with db_conn() as conn:
+        resp = await C.chat_stream(cid, ChatIn(message="慢慢说"), conn=conn, user=None)
+        it = resp.body_iterator
+        async for _chunk in it:
+            n += 1
+            if n >= 8:
+                break
+        await it.aclose()
+    await asyncio.sleep(0.4)
+    with db_conn() as conn:
+        rs = conn.execute(
+            "SELECT run_id,status,cancel_reason,last_seq,frame_count,truncated "
+            "FROM run_sessions WHERE conversation_id=? ORDER BY run_id DESC LIMIT 1",
+            (cid,)).fetchone()
+        ms = conn.execute(
+            "SELECT id,role,run_id,last_seq,content FROM messages "
+            "WHERE conversation_id=? AND role='assistant' ORDER BY id DESC LIMIT 1",
+            (cid,)).fetchone()
+        rid = int((rs["run_id"] if rs else 0) or 0)
+        fr = [dict(x) for x in conn.execute(
+            "SELECT seq,event_type,payload FROM run_frames WHERE run_id=? ORDER BY seq",
+            (rid,)).fetchall()]
+    from services.run_frame_store import reconstruct_from_frames
+    rec = reconstruct_from_frames(fr) if fr else {"content": "", "last_seq": 0}
+    emit(cid=cid, n_read=n,
+         status=(rs["status"] if rs else ""), reason=(rs["cancel_reason"] if rs else ""),
+         last_seq=int((rs["last_seq"] if rs else 0) or 0),
+         frame_count=int((rs["frame_count"] if rs else 0) or 0),
+         msg_id=int((ms["id"] if ms else 0) or 0),
+         msg_run_id=int((ms["run_id"] if ms else 0) or 0),
+         msg_len=len((ms["content"] if ms else "") or ""),
+         has_tail=("以上为已生成内容" in ((ms["content"] if ms else "") or "")),
+         rec_content=rec.get("content") or "",
+         rec_len=len(rec.get("content") or ""),
+         full_len=len(FULL), head=HEAD,
+         full_prefix=(FULL.startswith(rec.get("content") or "") if rec.get("content") else False))
+
+asyncio.run(run())
+'''
+
+
 def sec_e2e():
     section("E 端到端：真路由 + 假 pipeline + 真库副本")
     prod = os.path.join(ROOT, "mbse.db")
@@ -574,6 +657,37 @@ def sec_e2e():
         else:
             check("E10 订阅端点返回可断言内容", False, recs)
         print("     （E2E 耗时 %.1fs）" % (time.time() - t0))
+
+        # ── E11~E16 断连中途：真 aclose，不是源码级断言 ────────────────────
+        # 这一组替代 W6 那种"看源码顺序"的间接守护：W6 只能证明 `_fr_close()`
+        # 写在早退之前，证明不了"断连时兜底固化真的落库"—— 后者曾因
+        # `_wc` 未定义（NameError 被外层 except 吞掉）整整一天没执行过。
+        t1 = time.time()
+        p2 = subprocess.run([sys.executable, "-X", "utf8", "-c", E2E_DISC_CHILD],
+                            cwd=ROOT, env=env, capture_output=True, text=True,
+                            encoding="utf-8", errors="replace", timeout=300)
+        out2 = p2.stdout or ""
+        recs2 = [json.loads(ln[len("E2EJSON "):]) for ln in out2.splitlines()
+                 if ln.startswith("E2EJSON ")]
+        check("E11 断连子进程正常退出并产出断言数据",
+              p2.returncode == 0 and bool(recs2),
+              (p2.returncode, (p2.stderr or out2)[-400:]))
+        if recs2:
+            d = recs2[-1]
+            check("E12 断连后 run 立即收口（不是 running）",
+                  d.get("status") == "cancelled", d.get("status"))
+            check("E13 断连原因码为 client_gone", d.get("reason") == "client_gone", d.get("reason"))
+            check("E14 断连前已生成的帧仍留在库里",
+                  int(d.get("last_seq") or 0) > 0 and int(d.get("frame_count") or 0) > 0,
+                  (d.get("last_seq"), d.get("frame_count")))
+            check("E15 断连兜底固化真的落库（缺 `with db_conn() as _wc` 即 NameError 静默失败）",
+                  int(d.get("msg_id") or 0) > 0 and int(d.get("msg_run_id") or 0) > 0
+                  and int(d.get("msg_len") or 0) > 0 and d.get("has_tail") is True, d)
+            check("E16 帧重建是断连前正文的前缀（可回放，且短于全文）",
+                  d.get("full_prefix") is True
+                  and 0 < int(d.get("rec_len") or 0) < int(d.get("full_len") or 0),
+                  {k: d.get(k) for k in ("rec_len", "full_len", "full_prefix", "rec_content")})
+        print("     （断连 E2E 耗时 %.1fs）" % (time.time() - t1))
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
 
