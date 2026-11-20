@@ -51,6 +51,18 @@ COALESCE_TYPES = ("token", "reasoning")
 # 前端首屏卡顿。1200 是"约一屏"的量级。
 COALESCE_MAX_CHARS = 1200
 
+# 单帧入库字节上限（容量治理，2026-11-20）。为什么需要：
+#   `max_frames` 只约束**条数**，而 `tool` / `stage` 帧的 payload 是工具返回的**原样**
+#   结构（`parse_frame` 只把"解析失败的原始串"截到 500 字，能解析的 JSON 一律全留）
+#   ⇒ 一次带大结果的建模轮可以把几十 KB×N 写进库，20 个 run 的保留窗口叠加后相当可观。
+#   帧日志是"重放副本"而非业务数据，超限帧改写为「标记 + 前 1/4 预览」即可：
+#   正文字（token/reasoning）本来就受 COALESCE_MAX_CHARS 约束，永远不会走到这里。
+FRAME_MAX_BYTES = 64 * 1024
+
+# 按天保留（0 = 只按"每会话 N 个"裁剪）。帧日志是排障副本，留 7 天足够定位问题，
+# 过期连同其帧一起删；真要回收磁盘再跑 `tools/prune_run_frames.py --vacuum`。
+KEEP_DAYS = 7
+
 
 # ── 1. 运行会话（控制台） ──────────────────────────────────────────────
 
@@ -89,19 +101,58 @@ def new_run(conn, conversation_id, meta=None, owner_pid=None):
     return rid
 
 
-def prune_runs(conn, conversation_id, keep=20):
-    """只保留该会话最近 `keep` 个 run（含其帧）。`running` 的永不删。"""
-    if int(keep or 0) <= 0:
-        return 0
+def reap_restarted_runs(conn, reason="process_restart"):
+    """启动时把上一次进程留下的 `running` 一次性收口，返回改动行数。
+
+    为什么可以一刀切：本工程是**单进程部署**（`core/runtime_state.py` 明写
+    `uvicorn.run(app, ...)` 无 `workers`）+ SQLite 单写者 —— 进程刚起来时，库里任何
+    `status='running'` 都必然属于**已经死掉的那个进程**，不存在"别人的活还在跑"。
+
+    为什么 `new_run()` 里的 stale_owner 清理不够：那条判据是
+    `status='running' AND owner_pid <> 本进程`，且只在**该会话再次发起新轮**时触发。
+    用户只是重开会话看看、不再提问时，那行会永远停在 running ⇒ `/recovery` 报"仍在运行"
+    ⇒ 前端显示运行中告警、`/subscribe` 白等满 `tail_max_s`（60s）。
+
+    ⚠️ 必须放在迁移之后调用（表不存在时返回 0，不抛）。
+    """
     try:
-        rows = conn.execute(
-            "SELECT run_id FROM run_sessions WHERE conversation_id=? AND status<>'running' "
-            "ORDER BY run_id DESC LIMIT -1 OFFSET ?",
-            (int(conversation_id or 0), int(keep))).fetchall()
-        ids = [int(r[0]) for r in rows]
+        cur = conn.execute(
+            "UPDATE run_sessions SET status='cancelled', cancel_reason=?, ended_at=? "
+            "WHERE status='running'", (reason, _now()))
+        conn.commit()
+        return int(cur.rowcount or 0)
+    except Exception:
+        return 0
+
+
+def prune_runs(conn, conversation_id, keep=20, keep_days=KEEP_DAYS):
+    """裁剪该会话的历史 run（连同其帧），返回删除条数。`running` 的永不删。
+
+    两条判据取**并集**：
+      · 条数：只保留最近 `keep` 个（`keep<=0` 关闭该判据）；
+      · 时间：删掉 `started_at` 早于 `keep_days` 天的（`keep_days<=0` 关闭）。
+
+    为什么还要按时间：条数判据只在**该会话再次开新轮**时触发，长期不用的会话会一直
+    留着它的 20 个 run；帧日志是排障副本而非业务数据，过期就该走。
+    """
+    cid = int(conversation_id or 0)
+    ids = set()
+    try:
+        if int(keep or 0) > 0:
+            rows = conn.execute(
+                "SELECT run_id FROM run_sessions WHERE conversation_id=? AND status<>'running' "
+                "ORDER BY run_id DESC LIMIT -1 OFFSET ?",
+                (cid, int(keep))).fetchall()
+            ids.update(int(r[0]) for r in rows)
+        if int(keep_days or 0) > 0:
+            old = conn.execute(
+                "SELECT run_id FROM run_sessions WHERE conversation_id=? AND status<>'running' "
+                "AND started_at IS NOT NULL AND started_at < datetime('now', ?)",
+                (cid, "-%d days" % int(keep_days))).fetchall()
+            ids.update(int(r[0]) for r in old)
         if not ids:
             return 0
-        for rid in ids:
+        for rid in sorted(ids):
             conn.execute("DELETE FROM run_frames WHERE run_id=?", (rid,))
             conn.execute("DELETE FROM run_sessions WHERE run_id=?", (rid,))
         conn.commit()
@@ -407,7 +458,8 @@ class FrameTee:
 
     def __init__(self, run_id, conversation_id=0, conn_factory=None, *,
                  enabled=True, max_frames=2000, flush_frames=40,
-                 flush_interval_s=0.4, coalesce=True, clock=None):
+                 flush_interval_s=0.4, coalesce=True, clock=None,
+                 frame_max_bytes=FRAME_MAX_BYTES):
         self.run_id = int(run_id or 0)
         self.conversation_id = int(conversation_id or 0)
         self.enabled = bool(enabled) and self.run_id > 0
@@ -415,6 +467,9 @@ class FrameTee:
         self.flush_frames = max(1, int(flush_frames or 40))
         self.flush_interval_s = max(0.0, float(flush_interval_s or 0.0))
         self.coalesce = bool(coalesce)
+        # 单帧字节上限（0 = 不限）。见 FRAME_MAX_BYTES 的说明。
+        self.frame_max_bytes = max(0, int(frame_max_bytes or 0))
+        self.oversize = 0         # 被改写成"标记+预览"的帧数（可观测）
         self._clock = clock or time.monotonic
         self._conn_factory = conn_factory
         self._seq = 0
@@ -487,6 +542,7 @@ class FrameTee:
             et, payload = parse_frame(raw)
             if not et or not isinstance(payload, dict):
                 return 0        # 注释帧 / 心跳 / 不可解析帧：无可重放内容
+            payload = self._shrink_frame(et, payload)
             if self._truncated or self._cap_hit():
                 self._truncated = True
                 self.dropped += 1
@@ -533,6 +589,29 @@ class FrameTee:
             # 观测失败不得影响用户拿结果；同时也别让它每帧都抛一次
             self._dead = True
             return 0
+
+    # -- 容量治理 --
+    def _shrink_frame(self, et, payload):
+        """单帧超过 `frame_max_bytes` 时改写成「标记 + 预览」，返回可直接落库的 payload。
+
+        为什么只截 payload 不丢帧：`seq` 是游标真源，丢帧会在库里留洞（前端游标跳号
+        本身没问题，但"这一帧完全不存在"会让它跟 `truncated` 语义混淆）。保留一帧
+        标记 + 前 1/4 预览，既守住字节上限，又能在排障时看出"这里本来有个大载荷"。
+        超限帧不允许影响生成：任何异常都退回原 payload。
+        """
+        cap = self.frame_max_bytes
+        if not cap:
+            return payload
+        try:
+            blob = _dumps(payload)
+            n = len(blob.encode("utf-8"))
+            if n <= cap:
+                return payload
+            self.oversize += 1
+            return {"_oversize": True, "bytes": n, "event_type": et,
+                    "preview": blob[: max(64, cap // 4)]}
+        except Exception:
+            return payload
 
     def _maybe_flush(self):
         if self._pending and self._pending["chars"] >= COALESCE_MAX_CHARS:

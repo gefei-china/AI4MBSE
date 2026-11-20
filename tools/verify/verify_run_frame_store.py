@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-# CI-OPTIONAL: [local] tier=local（见 tools/gates_manifest.json）：默认分支只用 tempfile 临时库，但 `--with-e2e` 分支要 sqlite3.backup 真库副本 + TestClient lifespan，同一脚本不可拆分 ⇒ 整体未接线。2026-11-20 本机实测 93 PASS/0 FAIL（含 --with-e2e 与断连 E11~E16）。改法须同步改清单 tier 并接线，不允许只删这行
+# CI-OPTIONAL: [local] tier=local（见 tools/gates_manifest.json）：默认分支只用 tempfile 临时库，但 `--with-e2e` 分支要 sqlite3.backup 真库副本 + TestClient lifespan，同一脚本不可拆分 ⇒ 整体未接线。2026-11-20 本机实测 98 PASS/0 FAIL（含 --with-e2e 与断连 E11~E16）。改法须同步改清单 tier 并接线，不允许只删这行
 """门禁：方案B P0/P1 —— 帧日志地基 + 断线重连回放（RUN_STREAM_STORE_V1）。
 
 跑法（必须用项目 venv）：
@@ -149,6 +149,32 @@ def sec_runs():
         finish_run(conn, r5, "weird_status", "x")
         check("R5 非终态字符串被归一为 done（不写入未知状态）",
               get_run(conn, r5)["status"] == "done", get_run(conn, r5)["status"])
+
+        # R6 启动清理：单进程部署下，启动瞬间库里的 running 一律是死进程留下的
+        from services.run_frame_store import reap_restarted_runs, prune_runs
+        r6 = new_run(conn, 15, {}, owner_pid=1001)          # 故意不 finish，模拟残留
+        r6b = new_run(conn, 16, {}, owner_pid=1001)
+        finish_run(conn, r6b, "done", "ok")
+        n6 = reap_restarted_runs(conn)
+        check("R6 启动清理把残留 running 标 cancelled/process_restart，且不动 done",
+              n6 >= 1 and get_run(conn, r6)["status"] == "cancelled"
+              and get_run(conn, r6)["cancel_reason"] == "process_restart"
+              and get_run(conn, r6b)["status"] == "done",
+              (n6, get_run(conn, r6)["status"], get_run(conn, r6b)["status"]))
+
+        # R7 按天保留：条数判据只在"该会话再开新轮"时触发，长期不用的会话要靠时间判据
+        r7 = new_run(conn, 17, {}, owner_pid=1001)
+        finish_run(conn, r7, "done", "ok")
+        conn.execute("UPDATE run_sessions SET started_at=datetime('now','-30 days') "
+                     "WHERE run_id=?", (r7,))
+        conn.execute("INSERT INTO run_frames (run_id,seq,event_type,payload) VALUES (?,?,?,?)",
+                     (r7, 1, "token", '{"delta":"旧"}'))
+        conn.commit()
+        n7 = prune_runs(conn, 17, keep=0, keep_days=7)
+        left7 = conn.execute("SELECT COUNT(*) FROM run_sessions WHERE run_id=?", (r7,)).fetchone()[0]
+        left7f = conn.execute("SELECT COUNT(*) FROM run_frames WHERE run_id=?", (r7,)).fetchone()[0]
+        check("R7 超过保留天数的 run 连同其帧一起删（keep_days=7）",
+              n7 == 1 and left7 == 0 and left7f == 0, (n7, left7, left7f))
     finally:
         conn.close()
         try:
@@ -241,6 +267,28 @@ def sec_tee():
         finish_run(conn, rid, "error", "again", mid)
         m2 = conn.execute("SELECT run_id FROM messages WHERE id=?", (mid,)).fetchone()
         check("F18 不覆盖已被别的 run 关联的消息", int(m2["run_id"]) == rid, m2["run_id"])
+
+        # 单帧字节上限（容量治理）：tool 帧载荷是工具返回原样，条数上限管不住体积。
+        # ⚠️ 必须放在对齐断言之后：本段会重置 last_seq，放前面会让对齐断言读到别的值
+        #    （第一版就这么写，F17 报 {'run_id': 1, 'last_seq': 2} —— 是夹具顺序问题，不是实现问题）。
+        conn.execute("DELETE FROM run_frames WHERE run_id=?", (rid,))
+        conn.execute("UPDATE run_sessions SET last_seq=0, frame_count=0, truncated=0 WHERE run_id=?", (rid,))
+        conn.commit()
+        tee3 = FrameTee(rid, 21, conn_factory=lambda: _F(), flush_frames=1,
+                        flush_interval_s=0.0, max_frames=50, frame_max_bytes=2048)
+        s_big = tee3.feed(_frame("tool", {"type": "tool", "name": "big", "result": "x" * 20000}))
+        s_small = tee3.feed(_frame("token", {"type": "token", "delta": "短正文"}))
+        tee3.close()
+        big_row = conn.execute("SELECT payload FROM run_frames WHERE run_id=? AND seq=?",
+                               (rid, s_big)).fetchone()[0]
+        small_row = conn.execute("SELECT payload FROM run_frames WHERE run_id=? AND seq=?",
+                                 (rid, s_small)).fetchone()[0]
+        check("F20 超字节上限的帧被改写为标记+预览（帧号不丢，库不被撑大）",
+              tee3.oversize == 1 and len(big_row.encode("utf-8")) <= 2048 + 256
+              and "_oversize" in big_row, (tee3.oversize, len(big_row)))
+        check("F21 正文字（token）不受字节上限影响", "短正文" in small_row and s_small > 0)
+        check("F22 被裁剪的帧不进正文重建（不会把预览串当正文吐给用户）",
+              "xxxx" not in reconstruct_from_frames(read_frames(conn, rid, 0, 100))["content"])
     finally:
         conn.close()
         try:
