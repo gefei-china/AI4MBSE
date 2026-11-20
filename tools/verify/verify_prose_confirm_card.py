@@ -69,7 +69,9 @@ def main():
     print("\n=== M 变异自证：探测恒 None，P1 必须翻红 ===")
     fp = os.path.join(ROOT, "agent/pipeline_parts/stream.py")
     orig = open(fp, "rb").read()
-    mutated = orig.decode("utf-8").replace(
+    # ★ 2026-11-20：锚点必须**换行无关**（本机 autocrlf=true ⇒ CRLF，CI 是 LF）。
+    #   归一成 LF 再匹配；还原用 `orig` 原始字节，行尾逐字节不变。
+    mutated = orig.decode("utf-8").replace("\r\n", "\n").replace(
         "    s = str(text or \"\")\n    if has_card or not s.strip():",
         "    s = str(text or \"\")\n    if True:").encode("utf-8")
     if mutated == orig:

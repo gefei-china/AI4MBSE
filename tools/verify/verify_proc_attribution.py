@@ -134,7 +134,11 @@ console.log(JSON.stringify({
     print("\n=== M 变异自证：把 _ctx_skill 打回 None，S1 必须翻红 ===")
     fp = os.path.join(ROOT, "agent/pipeline_parts/stream.py")
     orig = open(fp, "rb").read()
-    mutated = orig.decode("utf-8").replace(
+    # ★ 2026-11-20：锚点必须**换行无关**。本机 `core.autocrlf=true` ⇒ checkout 后工作区是
+    #   CRLF，而 Linux CI 是 LF；带 `\n` 的多行锚点在两种环境下命中情况不同
+    #   ⇒ 门禁会"本机绿、CI 红"（合并到 master 后实测踩到：M0 直接报"锚点未命中"）。
+    #   做法：归一成 LF 再匹配，还原时用 `orig` 原始字节（逐字节复位，不改行尾）。
+    mutated = orig.decode("utf-8").replace("\r\n", "\n").replace(
         '                    if _wl_skill:\n                        _ctx_skill = _ctx_skill_guide',
         '                    if False:\n                        _ctx_skill = _ctx_skill_guide').encode("utf-8")
     if mutated == orig:
