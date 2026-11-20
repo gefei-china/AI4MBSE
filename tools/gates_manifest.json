@@ -16,6 +16,12 @@
  },
  "gates": [
   {
+   "script": "e2e_platform_scope_no_drift.py",
+   "tier": "local",
+   "timeout": 900,
+   "reason": "2026-11-20 新增：真实 LLM 验收「只读建模请求不得越界查平台坐标/写入」（修前 28 次平台工具调用 1208s → 修后 0 次 477s）。需运行中 8000 服务 + 真库 + LLM，约 8 分钟"
+  },
+  {
    "script": "e2e_skill_clarify_ab.py",
    "tier": "local",
    "timeout": 600,
