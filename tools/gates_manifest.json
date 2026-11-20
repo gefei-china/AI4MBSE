@@ -16,6 +16,12 @@
  },
  "gates": [
   {
+   "script": "e2e_skill_clarify_ab.py",
+   "tier": "local",
+   "timeout": 600,
+   "reason": "2026-11-20 新增：A/B 真实 LLM 会话评测「视图生成内容澄清」在含糊输入下的效果（J1命中/J2版式锚点/J3澄清优先/J4因果）。需运行中 8000 服务 + 真库 + LLM，CI 无此运行时"
+  },
+  {
    "script": "audit_dup_defs.py",
    "tier": "pr",
    "timeout": 120
@@ -2139,6 +2145,12 @@
    "tier": "local",
    "timeout": 240,
    "reason": "真跑 7 个技能包脚本（含智源 MCP 手册 lookup，71 工具）。依赖 static/skill_packages 实体文件 + 真库 skills 行"
+  },
+  {
+   "script": "verify_skill_state_actions.py",
+   "tier": "local",
+   "timeout": 120,
+   "reason": "2026-11-20 新增：技能状态与操作项闭环（草稿≠已停用、归属落真实用户、consumable 单一判据、前端动作不跨主键空间）。R 组需真库副本 sqlite3.backup，M 组变异需写源码，干净克隆无 mbse.db ⇒ local"
   },
   {
    "script": "verify_skill_tool_names.py",

@@ -645,16 +645,41 @@ function capEdit(pid) {
   for (let i = 0; i < all.length; i++) {
     if (_capPid(all[i]) === pid) { x = all[i]; break; }
   }
+  const _route = { skills: 'editSkill', agents: 'editAgent', tools: 'showToolForm',
+                   mcp_servers: 'editMCP', prompts: 'editPrompt' };
+  // ★ 2026-11-20：当前视图没加载该条目时（例如从「Skills 列表」卡进来的），
+  //   现取插件详情再路由。旧实现在这种情况下 rt 为空 ⇒ 掉到「插件清单 JSON 表单」，
+  //   用户点"编辑技能"却要填 manifest —— 同一动作两种表单，属状态-动作不闭环。
+  if (!x) {
+    api('/api/plugins/' + encodeURIComponent(pid)).then(function (d) {
+      const rt = (d && d.manifest && d.manifest.runtime) || {};
+      const route = _route[rt.legacy_table];
+      const lid = parseInt(rt.legacy_id, 10);
+      if (route && typeof window[route] === 'function' && lid > 0) window[route](lid);
+      else openUnifiedPluginForm(pid);
+    }).catch(function () { openUnifiedPluginForm(pid); });
+    return;
+  }
   // 映射键：manifest.runtime.legacy_table / legacy_id（迁移与同步桥共用的同一把钥匙）
   const rt = (x && x.manifest && x.manifest.runtime) || {};
-  const route = { skills: 'editSkill', agents: 'editAgent', tools: 'showToolForm',
-                  mcp_servers: 'editMCP', prompts: 'editPrompt' }[rt.legacy_table];
+  const route = _route[rt.legacy_table];
   const lid = parseInt(rt.legacy_id, 10);
   if (route && typeof window[route] === 'function' && lid > 0) {
     window[route](lid);
     return;
   }
   openUnifiedPluginForm(pid);
+}
+
+/* 发布态文案（唯一来源）。
+ * ★ 2026-11-20：必须与「个人安装态」措辞区分开。旧实现两处都用「已启用/已停用」，
+ *   于是同一条草稿卡片上出现「已停用（发布态）… 已启用（个人态）」两个相反的词，
+ *   用户无法判断到底能不能用。分开写之后，再加一个 consumable 综合结论。
+ */
+function _capStatusText(x) {
+  const m = { draft: '草稿（未发布）', rejected: '已驳回', submitted: '待审核',
+              published: '已发布', disabled: '已停用（不可消费）', removed: '已删除' };
+  return m[x.status] || x.status_label || x.status || '';
 }
 
 /* 紧凑能力卡片（对齐 WorkBuddy：图标 + 名称 + 动作 + 2 行描述 + 底部元信息） */
@@ -696,7 +721,16 @@ function capCard(x, tab, page) {
   if (x.can_cancel_share) {
     actions += `<button class="btn sm ghost" title="撤回后仅自己可见，能力照常可用" onclick="capCancelShare('${esc(pid)}','${page}')">↩ 撤回申请</button>`;
   }
-  actions += `<button class="btn sm ghost" onclick="capSetInstalled('${esc(pid)}',${enabled ? 'false' : 'true'},'${page}')">${enabled ? '停用' : '启用'}</button>`;
+  // ★ 2026-11-20 修状态-动作闭环：个人启停**只在「已发布」时才有意义**。
+  //   旧实现无条件渲染 `${enabled ? '停用' : '启用'}`：
+  //   草稿态/被下架态（status≠published）的条目根本不可消费，却挂一个「停用」按钮 ——
+  //   用户点下去什么也不会变（它本来就不可用），而真正需要的"发布"入口又按权限藏着。
+  //   实测样本：新建技能 status=disabled、installed_enabled=True ⇒
+  //   卡片写「已停用」+ 按钮写「停用」+ 没有任何「启用/发布」入口（用户本轮投诉）。
+  const published = (x.status === 'published');
+  if (published) {
+    actions += `<button class="btn sm ghost" title="只影响你自己：停用后你不再消费它，他人不受影响" onclick="capSetInstalled('${esc(pid)}',${enabled ? 'false' : 'true'},'${page}')">${enabled ? '停用' : '启用'}</button>`;
+  }
   // 2026-09-17：从市场安装的副本直接给卸载入口（内置除外——后端拒绝卸载内置，引导用停用）；
   // 卸载后插件市场对应条目的「安装」入口自动恢复，可随时重装。
   // 2026-09-29（动作语义二轮定稿）：来源决定按钮 —— 市场安装的（非自己创建）→ 卸载；
@@ -754,10 +788,11 @@ function capCard(x, tab, page) {
     <div class="capmeta">
       <span>${isBuiltin ? '内置' : (isMine ? '我创建' : '他人共享')}</span>
       <span>v${esc(x.current_version || '—')}</span>
-      <span class="${x.status === 'disabled' ? 'warn' : ''}">${x._from_server ? 'MCP 服务' : esc(x.status_label || x.status || '')}</span>
+      <span class="${x.status === 'disabled' ? 'warn' : ''}" title="发布态：决定「能否被 AI 消费」">${x._from_server ? 'MCP 服务' : esc(_capStatusText(x))}</span>
       ${!isBuiltin ? `<span title="可见范围 —— 与「能否被 AI 消费」无关">${pubShare ? '已上架市场' : (pendingShare ? '申请上架中' : '仅自己')}</span>` : ''}
       ${belong}
-      ${installed ? `<span class="capbadge ${enabled ? 'on' : 'off'}" title="个人启用状态 —— 仅影响你自己，不影响他人">${enabled ? '已启用' : '已停用'}</span>` : ''}
+      ${installed ? `<span class="capbadge ${enabled ? 'on' : 'off'}" title="个人安装态 —— 仅影响你自己，不影响他人；与上面的发布态是两个维度">${enabled ? '个人已启用' : '个人已停用'}</span>` : ''}
+      <span class="capbadge ${x.consumable ? 'on' : 'off'}" title="综合判定 = 已发布 且 个人已启用 且 已安装；这是 AI 会不会真的用它的唯一判据">${x.consumable ? 'AI 可用' : 'AI 不可用'}</span>
     </div>
     <div class="capacts">${actions}</div>
   </div>`;

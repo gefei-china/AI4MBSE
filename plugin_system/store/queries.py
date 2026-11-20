@@ -148,6 +148,14 @@ def plugin_dto(row, user=None):
     _cnt = (user or {}).get("_install_counts") if isinstance(user, dict) else None
     if _cnt is not None:
         d["install_count"] = int(_cnt.get(d["plugin_id"], 0))
+    # ★ 2026-11-20：**单一**「能否被 AI 消费」判据，供前端与学生产出的口径对齐。
+    #   背景（用户实测）：卡片元信息里同时出现「已停用」（发布态 status=disabled）
+    #   与「已启用」（个人安装态 enabled=True），操作区却只有「停用」按钮 ——
+    #   两个维度并列却没有一个"到底能不能用"的结论，用户只能猜。
+    #   运行时的真实口径是两个条件的**合取**（见 legacy_sync.is_available 与
+    #   pipeline._global_skill_pool 的 WHERE），这里就按同一口径给一个布尔值。
+    d["consumable"] = bool(d["installed"] and d.get("status") == "published"
+                           and d.get("enabled") is not False)
     return d
 
 

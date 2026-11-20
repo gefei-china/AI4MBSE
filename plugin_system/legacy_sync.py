@@ -183,6 +183,53 @@ def is_available(table, row):
     return True
 
 
+def derive_status(table, row):
+    """旧表行 → plugins.status。**「未发布」绝不能被折叠成「已停用」**。
+
+    ★ 2026-11-20 修（用户实测："新建的技能显示已停用、没有启用入口、却有停用按钮"）：
+      旧实现是 `"published" if available else "disabled"` —— 把**未发布（draft）**与
+      **发布后被停用（disabled）**压成同一个值。两者对用户是完全不同的下一步：
+        · draft    → 下一步是「发布」（作者自己就能做，免审核）
+        · disabled → 下一步是「恢复」（管理员/作者按 scope 决定，且它曾经是发布的）
+      压平之后能力中心只能显示"已停用"，而 KPI 上的动作按钮取的是**安装启用态**
+      （installed_enabled=True）⇒ 用户看到"已停用 + 停用按钮"、找不到任何"启用/发布"，
+      陷入死胡同。状态与可执行动作必须**同源派生**，这是本次的判据。
+    """
+    if is_available(table, row):
+        return "published"
+    _st = str(row.get("status") or "").strip().lower()
+    # 草稿族：旧表里可能是 draft / draft_revision（AI 沉淀的修订草稿）
+    if _st in ("draft", "draft_revision"):
+        return "draft"
+    if _st == "rejected":
+        return "rejected"
+    return "disabled"
+
+
+def _resolve_author(conn, row):
+    """旧表 `owner`（用户名或显示名）→ (author_id, author_name)。
+
+    ★ 2026-11-20：此前新建能力一律 `author_id=0`，导致 `plugin_dto.is_mine` 对**创建者本人**
+      也恒为 False ⇒ can_edit / can_delete / can_publish_self 全灭，卡片上只剩「卸载」，
+      用户看到的是"我自己建的东西，我什么都不能改"。归属必须落到真实用户。
+      解析不到（历史数据 owner 为空 / 用户已删）时保持 0/「本地创建」，不编造归属。
+    """
+    who = str(row.get("owner") or "").strip()
+    if not who:
+        return 0, AUTHOR_NAME
+    try:
+        r = conn.execute(
+            "SELECT id, COALESCE(NULLIF(display_name,''), username) AS nm FROM users "
+            "WHERE username=? OR display_name=? LIMIT 1", (who, who)).fetchone()
+    except Exception:
+        return 0, AUTHOR_NAME
+    if not r:
+        return 0, AUTHOR_NAME
+    # 用下标而非列名：调用方 conn 的 row_factory 可能是 sqlite3.Row 也可能是 tuple，
+    # 下标两种都成立（列名访问在 tuple 上会抛异常，被外层 except 吞掉 ⇒ 归属又丢了）。
+    return int(r[0]), str(r[1] or who)
+
+
 def find_plugin_by_legacy(conn, table, row_id):
     """按 runtime.legacy_table / legacy_id 反查 plugins.plugin_id。"""
     cur = conn.execute("SELECT plugin_id, manifest_json FROM plugins WHERE status!='removed'")
@@ -265,7 +312,7 @@ def sync_from_legacy(conn, table, row_id):
     d = dict(row)
 
     available = is_available(table, d)
-    status = "published" if available else "disabled"
+    status = derive_status(table, d)      # 不用 available 二元折叠，见 derive_status 注释
     scope = "public" if str(d.get("scope") or "").lower() == "public" else "personal"
     desc = _desc(kind, d)
     cat = _category(kind, d)
@@ -291,6 +338,16 @@ def sync_from_legacy(conn, table, row_id):
             "manifest_json=?, updated_at=? WHERE plugin_id=?",
             (desc, cat, status, scope, mf["version"],
              json.dumps(mf, ensure_ascii=False), _now(), pid))
+        # ★ 2026-11-20：历史行 author_id=0（本地创建时未记归属）→ 现在能解析到 owner 就回填。
+        #   只回填 0/空，**不覆盖已有归属**（可能是管理员代建、或已转移）。
+        try:
+            _aid, _anm = _resolve_author(conn, d)
+            if _aid > 0:
+                conn.execute(
+                    "UPDATE plugins SET author_id=?, author_name=? WHERE plugin_id=? "
+                    "AND (author_id IS NULL OR author_id=0)", (_aid, _anm, pid))
+        except Exception:
+            pass
         return True, "已更新 %s" % pid
 
     # 新建：构造合法 manifest 并入库
@@ -310,13 +367,14 @@ def sync_from_legacy(conn, table, row_id):
     except Exception as e:
         return False, "校验异常: %s" % e
 
+    _aid, _anm = _resolve_author(conn, d)
     conn.execute(
         """INSERT INTO plugins (plugin_id, name, namespace, type, scope, status, current_version,
            manifest_json, author_id, author_name, icon, category, description)
            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
         (normalized["id"], normalized["name"], "personal", normalized["type"], scope, status,
          normalized["version"], json.dumps(normalized, ensure_ascii=False),
-         0, AUTHOR_NAME, normalized.get("icon", ""), cat, desc))
+         _aid, _anm, normalized.get("icon", ""), cat, desc))
     conn.execute(
         "INSERT INTO plugin_versions (plugin_id, version, manifest_json, status) VALUES (?,?,?,?)",
         (normalized["id"], normalized["version"],

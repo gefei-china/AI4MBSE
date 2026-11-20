@@ -107,7 +107,11 @@ function editSkill(id) {
     if(en) en.checked = skillPrevEnabled === 1;
   });
 }
-function openSkillForm() {
+function openSkillForm(id) {
+  // ★ 2026-11-20：支持带 id 打开编辑。此前签名无参 ⇒ 草稿箱的「✏️ 查看」
+  //   调 openSkillForm(123) 时参数被静默丢弃，弹出一张**空白新建表单** ——
+  //   用户以为在查看/编辑草稿，实际在新建；保存后凭空多出一条同名技能。
+  if (id) { editSkill(Number(id)); return; }
   skillEditId = null;
   skillPrevEnabled = 1;
   showModal('skill');
