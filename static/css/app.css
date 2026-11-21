@@ -306,7 +306,15 @@ body.preview-dragging *{cursor:col-resize !important;}
 .msg .who{width:30px;height:30px;border-radius:50%;flex:none;display:flex;align-items:center;justify-content:center;font-size:13.5px;font-weight:600;}
 .msg.u .who{background:var(--blue);color:#fff;}
 .msg.ai .who{background:var(--blue-l);color:var(--blue-d);border:1px solid var(--blue-bd);}
-.msg .body{background:#fff;border:1px solid var(--line);border-radius:10px;padding:12px 14px;font-size:14.5px;white-space:pre-wrap;min-width:0;max-width:100%;overflow-wrap:break-word;word-break:break-word;}
+/* ★ 2026-11-20（米爸报「想复制一段却从头到尾全选中」）：
+   `white-space:pre-wrap` 原先挂在整个 .body 上（本意是给"用户消息原样换行"），
+   但 AI 消息是 markdown 逐行块级渲染（每行一个 <p class="md-p">/<h*>/<li>），
+   换行已由块级结构表达，**不需要 pre-wrap**；
+   而 pre-wrap 会让浏览器把 .body 整体当成"一个预格式化段落"⇒ 三击/拖选时
+   选区扩到整条消息（= 用户看到的"全选"）。
+   现在：AI 正文 normal，用户消息单独保留 pre-wrap（见 .msg.u .body）。
+   附带收益：结构化卡片不再继承 pre-wrap 产生空行，无需逐个 white-space:normal 兜底。 */
+.msg .body{background:#fff;border:1px solid var(--line);border-radius:10px;padding:12px 14px;font-size:14.5px;white-space:normal;min-width:0;max-width:100%;overflow-wrap:break-word;word-break:break-word;}
 /* 归一确认卡宿主：继承 .body 的 pre-wrap 会把模板串换行渲染成空白带（表头上下空白），恢复 normal */
 .msg .body .nr-inline{white-space:normal;}
 /* ── 2026-09-17 归一确认（人在回路）全屏查看 / 恢复 ─────────────────────────────
@@ -528,7 +536,8 @@ body.nr-full-lock{overflow:hidden;}
 /* P0-1 编排 DAG 容器（收起时隐藏，展开重建） */
 .dag-viz{width:100%;}
 .msg.u{align-self:flex-end;flex-direction:row-reverse;}
-.msg.u .body{background:var(--blue-l);border-color:var(--blue-bd);}
+/* 用户消息保持原样换行（这是 pre-wrap 的原始用途）；AI 正文已在 .msg .body 改回 normal */
+.msg.u .body{background:var(--blue-l);border-color:var(--blue-bd);white-space:pre-wrap;}
 /* ── 用户输入折叠（2026-10-28 用户反馈：输入内容多导致页面拉得很长）─────────────
    只作用于**用户输入**（.msg.u），不影响 AI 输出正文 —— 后者不允许收起是既有明确要求。
    收起时按行数限高（8 行 × 1.6 行高 ≈ 12.8em），底部渐隐提示"还有内容"。 */

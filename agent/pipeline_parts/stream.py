@@ -6113,6 +6113,8 @@ class StreamMixin:
             #   用于"重复调用收敛闸"，见 round 末尾 `_dup_streak >= 2` 处注释。
             #   初值必须在**外层循环之外**：跨轮累计才有意义（每轮归零就永远打不到 2）。
             _dup_streak = 0
+            # ★ 2026-11-20：本轮是否命中"校验停滞"（用于收敛闸强指令改口径）。
+            _validate_stalled = False
             # P0-2：多轮 ReAct——探测→执行工具→观察回填→再探测，直到无 tool_calls 或达上限（防死循环）
             # ★ 2026-10-09：3 → 6 且可配置，**与 execute.py 同源同值**。
             #   实测依据见 execute.py 同位置注释：3 轮预算在
@@ -6157,7 +6159,13 @@ class StreamMixin:
             # 为什么必须同源：这两段是同一套 ReAct 语义的两种实现，此前只有编排路径
             # 有 token 预算，重复检测与工具超时两边都没有 ⇒ 补一边就会留下新的不对称。
             from agent.loop_guard import (LoopGuard as _LoopGuard,
-                                          is_correctable_failure as _is_correctable_failure)
+                                          is_correctable_failure as _is_correctable_failure,
+                                          # ★ 2026-11-21：**必须**以模块级函数导入。
+                                          #   `is_validation_block_result` 是模块级纯函数、不是
+                                          #   LoopGuard 的实例方法；写成 `_lg.is_validation_block_result(...)`
+                                          #   会抛 AttributeError 掀翻整轮（与 execute.py 847 行
+                                          #   记录的 `_guard.is_correctable_failure` 事故同型）。
+                                          is_validation_block_result as _is_validation_block)
             # P0-①/P0-②（2026-10-07）协议护栏：并行 tool_calls 配对 + 截断参数拒绝。
             # 与 execute.py **同源**（同一模块）—— 两条路径是同一套 ReAct 语义的两种实现，
             # 协议层缺陷漏一条路径就是线上 HTTP 400（同 loop_guard 立规时的判断）。
@@ -6537,9 +6545,27 @@ class StreamMixin:
                             elif _dup:
                                 _lg.dup_short_circuits += 1
                                 _dup_streak += 1      # ★ 2026-10-27：连续重复计数（见 round 末收敛闸）
-                                # ★ 2026-10-28：回喂体统一由 LoopGuard 生成
-                                #   （含"这是重放、不要据此判不存在"的说明；与 execute.py 同源）
-                                result = _lg.replay_payload(tname, targs, _dup)
+                                # ★ 2026-11-20（米爸报"会话因校验工具短路卡死"）：
+                                #   校验停滞闸（6587 行 validation_stalled）位于**真执行**分支之后，
+                                #   而完全同参数的重复校验会先在这里被 dedup 短路 ⇒ 永远走不到
+                                #   停滞检测 ⇒ 回喂的仍是"判据 block / 40 错"原文，模型既修不动
+                                #   （autofix 无确定性修复）又跳不出 ⇒ 死循环、会话永不完成。
+                                #   修法：短路**当下**先登记 signature 并检测停滞；命中则回喂
+                                #   validation_stall_payload（明确"换动作/如实标注未验证"），
+                                #   不再把 block 错误原文当"可继续修"的结果回喂。
+                                _dup_prev = _lg.last_result_for(tname, targs)
+                                _stalled_now = (
+                                    _is_validation_block(tname, _dup_prev)      # 模块级纯函数
+                                    and _lg.validation_stalled(tname, {"result": _dup_prev})  # 实例方法（有状态）
+                                )
+                                if _stalled_now:
+                                    _lg.validation_stalls += 1
+                                    _validate_stalled = True   # 收敛闸据此改强指令（不再叫它重跑校验）
+                                    result = _lg.validation_stall_payload()
+                                else:
+                                    # ★ 2026-10-28：回喂体统一由 LoopGuard 生成
+                                    #   （含"这是重放、不要据此判不存在"的说明；与 execute.py 同源）
+                                    result = _lg.replay_payload(tname, targs, _dup)
                             else:
                                 _dup_streak = 0       # ★ 真执行 ⇒ 有新进展，连续计数归零
                                 result = _lg.call(self._exec_tool_call, tname, targs)
@@ -6955,6 +6981,20 @@ class StreamMixin:
                                 #   **强行切换执行模式**（禁止再查、立即做剩余关键动作），
                                 #   只有连续两次强指令仍不动才收敛终止。
                                 _dup_redirect = getattr(self, "_dup_redirect_n", 0)
+                                # ★ 2026-11-20（会话因校验短路永不完成）：校验已停滞时
+                                #   绝不能再注入"立即 sysml_v2_validate 清零硬错"——那正是
+                                #   把模型推回同一个死循环。改为直接收敛：如实标注未验证项收尾。
+                                if _validate_stalled:
+                                    _d_delta = (
+                                        f"（{agent_def.name}）校验工具已停滞（相同错误反复出现，"
+                                        f"根因不在本次代码）⇒ 本轮收敛，基于已有结论作答。")
+                                    exec_notices.append(({"kind": "progress", "text": _d_delta}))
+                                    yield {"type": "progress", "delta": _d_delta,
+                                           "kind": "progress", "round": _rnd + 1, "phase": "plan"}
+                                    yield {"type": "stage", "name": "校验停滞收敛",
+                                           "status": "done",
+                                           "detail": "相同校验错误反复出现：停止重跑，如实标注未验证项"}
+                                    break   # 退出 ReAct，交下方兜底流式生成（基于已有信息）
                                 if _dup_redirect < 2:
                                     self._dup_redirect_n = _dup_redirect + 1
                                     _dup_streak = 0        # 归零：给它机会按新指令推进

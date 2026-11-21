@@ -690,7 +690,10 @@ class ExecuteMixin:
             # 2026-10-04：接入统一护栏（与编排路径同源，见 agent/loop_guard.py）。
             # 原先这条路径只有轮次上限/token 上限/重复检测/工具超时，
             # 而编排路径有前三者 —— 同一套 ReAct 语义的两处实现护栏不对称。
-            from agent.loop_guard import LoopGuard, is_correctable_failure
+            from agent.loop_guard import (LoopGuard, is_correctable_failure,
+                                          # ★ 2026-11-21：模块级纯函数，**不能**当实例方法调
+                                          #   （同 847 行 `_guard.is_correctable_failure` 事故）。
+                                          is_validation_block_result as _is_validation_block)
             # P0-①/P0-②（2026-10-07）协议护栏，与 stream.py **同源**。
             from agent import loop_protocol as _lproto
             _guard = LoopGuard(
@@ -804,13 +807,24 @@ class ExecuteMixin:
                         _dup = _guard.probe_dup(tname, targs)
                         if _dup:
                             _guard.dup_short_circuits += 1
-                            # ★ 2026-10-28：回喂体统一由 LoopGuard 生成（与 stream.py 同源）
+                            # ★ 2026-11-21（与 stream.py 同源，两条 ReAct 路径必须同步）：
+                            #   校验停滞闸原先只装在"真执行"之后，而完全同参数的重复校验
+                            #   在执行前就被这里短路 ⇒ 停滞检测永远看不到 ⇒ 回喂的仍是
+                            #   "判据 block / 硬错 N 条"原文，模型反复修不动、死循环、会话
+                            #   永不完成。故短路**当下**先判 block + 停滞，命中则改回喂
+                            #   validation_stall_payload（明确"不要重跑、如实标注未验证"）。
+                            _dup_prev = _guard.last_result_for(tname, targs)
+                            if (_is_validation_block(tname, _dup_prev)
+                                    and _guard.validation_stalled(tname, {"result": _dup_prev})):
+                                _guard.validation_stalls += 1
+                                _pay = _guard.validation_stall_payload()
+                            else:
+                                # ★ 2026-10-28：回喂体统一由 LoopGuard 生成（与 stream.py 同源）
+                                _pay = _guard.replay_payload(tname, targs, _dup)
                             tool_results.append({
                                 "tool_call_id": tc.get("id", ""),
                                 "role": "tool", "name": tname,
-                                "content": json.dumps(
-                                    _guard.replay_payload(tname, targs, _dup),
-                                    ensure_ascii=False)})
+                                "content": json.dumps(_pay, ensure_ascii=False)})
                             continue
                         result = _guard.call(self._exec_tool_call, tname, targs)
                         # ★ harness 持续工作：计入全程工具史（完成度评估器的输入）

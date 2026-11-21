@@ -38,7 +38,7 @@ __all__ = ["DEFAULT_TOKEN_BUDGET", "DEFAULT_TOOL_TIMEOUT_S",
            "DEDUP_IGNORE_KEYS",
            "budget_exhausted", "dedup_hit", "call_tool_guarded", "LoopGuard",
            "tokens_of", "tokens_total_of", "charged_tokens", "CACHE_HIT_WEIGHT",
-           "is_correctable_failure"]
+           "is_correctable_failure", "is_validation_block_result"]
 
 # ── 默认阈值（与编排侧口径对齐，取"能挡住失控、又不误伤正常"）──
 # token：编排侧 _ORCH_TOKEN_BUDGET=200000 是**整个 run**（6 个任务）；
@@ -112,6 +112,21 @@ def call_key(name: str, args) -> str:
 def strict_call_key(name: str, args) -> str:
     """**严格键**（含分页参数）。用于"我到底调了几次不同参数"这类统计与排障。"""
     return "%s|%s" % (name or "", normalize_args(args))
+
+
+def is_validation_block_result(name: str, result) -> bool:
+    """纯函数：这次结果是否为 `sysml_v2_validate` 的"硬错阻断"回执。
+
+    供**重复调用短路分支**判定是否要改回喂"校验停滞"说明（2026-11-20）。
+    短路发生在执行前，validation_stalled 的执行后检测永远看不到它 ⇒
+    必须在这里独立判一次"上次结果是 block"，否则同一 block 错误会被无限回喂。
+    """
+    if str(name or "") != "sysml_v2_validate":
+        return False
+    txt = str(result if isinstance(result, str) else
+              (result or {}).get("result") or "")
+    return ("判据：block" in txt or "判据:block" in txt
+            or "存在硬错" in txt)
 
 
 def budget_exhausted(tokens_used: int, budget: int | None) -> bool:
