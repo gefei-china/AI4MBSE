@@ -272,17 +272,61 @@ def _conversation_project_id(conn, conversation_id) -> str:
 
 
 # ── 会话产物归档（AI 生成内容 → artifacts 表 + 报告自动写 reports 表）──
+_FENCE_OPEN = re.compile(r"^\s*```([\w+-]+)\s*$")   # 带语言标签的开围栏
+_FENCE_BARE = re.compile(r"^\s*```\s*$")            # 裸 ```（闭合/无标签开块）
+_FENCE_ANY = re.compile(r"^\s*```")                 # 任意围栏形态（含带尾巴的闭合）
+
+
 def _extract_code_blocks(content: str, limit: int = 5) -> list:
-    """从 markdown 文本提取 ``` 围栏代码块，返回 [{lang, code}]（最多 limit 条）。"""
+    r"""从 markdown 文本提取 ``` 围栏代码块，返回 [{lang, code}]（最多 limit 条）。
+
+    ★ 2026-11-21（真库 conv 999999977 msg 7205 实证）：原实现用非贪婪正则
+      ```([\w+-]*) + (.*?) + ``` 顺序配对 —— 模型写了**未闭合的 ```json**
+      后又开 ```sysml 时，```sysml 被当成 json 的**闭合围栏**消费掉
+      ⇒ 后面**整段真正的 SysML 代码**被错配成 text/错位 lang
+      ⇒ 被 `lang ∈ (sysml,kerml,…)` 过滤丢弃 ⇒ 版本/产物全部丢失
+      （该轮 3 段代码 5 个 package，归档 0 条）。
+      修法：行级状态机 —— **带语言标签的 ```lang 一律视为"开新块"**：
+      模型写 ```sysml 的意图只可能是开代码块，绝不可能是闭合上一个块；
+      若当前块未闭合，先在那里截断闭合它。裸 ``` 才是闭合。
+      附带抢救：**末尾未闭合的块也收**（模型漏写最后一个闭合围栏时，
+      代码本身是有效产出，不能因为少一行 ``` 就整段丢掉）。
+    """
     blocks = []
-    for m in re.finditer(r"```([\w+-]*)\n(.*?)```", content or "", re.S):
-        lang = m.group(1).strip() or "text"
-        code = m.group(2).strip()
-        if code and len(code) >= 20:  # 过滤过短片段
-            blocks.append({"lang": lang, "code": code})
-        if len(blocks) >= limit:
-            break
-    return blocks
+    cur_lang, cur_lines = None, []
+
+    def _flush(cur_lang, cur_lines):
+        code = "\n".join(cur_lines).strip()
+        if code and len(code) >= 20:  # 过滤过短片段（与旧判据一致）
+            blocks.append({"lang": cur_lang, "code": code})
+
+    for raw in (content or "").splitlines():
+        if cur_lang is None:
+            m = _FENCE_OPEN.match(raw)
+            if m:
+                cur_lang, cur_lines = m.group(1), []
+            elif _FENCE_BARE.match(raw):
+                cur_lang, cur_lines = "text", []   # 裸开块（旧正则 lang=''→text 的兼容）
+            continue
+        # ── 块内 ──
+        m = _FENCE_OPEN.match(raw)
+        if m:
+            # 带标签围栏 = 开新块 ⇒ 先截断闭合当前块（漏闭合抢救）
+            _flush(cur_lang, cur_lines)
+            cur_lang, cur_lines = m.group(1), []
+            if len(blocks) >= limit:
+                return blocks[:limit]
+            continue
+        if _FENCE_ANY.match(raw):
+            _flush(cur_lang, cur_lines)            # 裸/带尾巴 ``` = 闭合
+            cur_lang, cur_lines = None, []
+            if len(blocks) >= limit:
+                break
+            continue
+        cur_lines.append(raw)
+    if cur_lang is not None:                        # 末尾未闭合块：同样抢救
+        _flush(cur_lang, cur_lines)
+    return blocks[:limit]
 
 
 def _archive_impact_analysis(conn, conversation_id: int, message_id: int,

@@ -4688,6 +4688,20 @@ class StreamMixin:
                           conv_id=conversation_id, reason=reason, chars=len(text))
                 except Exception:
                     pass
+                # ★ 2026-11-21（conv 999999977 msg 7203 实证）：**停止/断连固化的代码必须一并归档**。
+                #   用户已完整看到的 SysML 代码若只进 messages、不进 artifacts/sysml_versions
+                #   ⇒ 产物入口/版本链里没有这轮产出（实测该轮 14k 字用例视图代码，
+                #   产物 0 条），下一轮"基于上一版修订"也没有基线可用。
+                #   与澄清路径"澄清会 return 走不到 _archive_artifacts"（见 _clarify_finish_events）
+                #   同族：**凡是正文落库的路径都必须归档**。
+                #   ⚠️ 单独 try 包住：归档失败绝不能连累消息固化回滚（消息保住 > 产物齐全），
+                #      且失败必须留痕（flush）。
+                try:
+                    _archive_artifacts(conn, conversation_id, _cur.lastrowid,
+                                       _card_json, text, "chat")
+                except Exception as _ar_err:      # noqa: BLE001
+                    print(f"[_persist_partial_stream] 固化消息归档失败（消息已保住）：%r"
+                          % (_ar_err,), flush=True)
                 conn.execute("UPDATE conversations SET updated_at=CURRENT_TIMESTAMP WHERE id=?",
                              (conversation_id,))
         except Exception as _persist_err:

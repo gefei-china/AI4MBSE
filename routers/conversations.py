@@ -1903,6 +1903,17 @@ def commit_partial_message(conv_id: int, body: dict = None, conn=Depends(db_sess
         if _cur.rowcount:
             mid = int(_cur.lastrowid)
             conn.execute("UPDATE conversations SET updated_at=CURRENT_TIMESTAMP WHERE id=?", (conv_id,))
+            # ★ 2026-11-21（conv 999999977 msg 7203 实证）：**前端停止固化的代码必须一并归档**。
+            #   用户点「停止」时已完整生成的 SysML 代码此前只进 messages ⇒ 产物入口/
+            #   版本链里没有这轮产出（实测 14k 字用例视图代码、产物 0 条）。
+            #   与服务端兜底 `_persist_partial_stream` 同口径（两条固化路径都要归档）。
+            #   ⚠️ 单独 try 包住：归档失败不连累消息固化，失败必须留痕。
+            try:
+                from agent.utils import _archive_artifacts as _archive
+                _archive(conn, conv_id, mid, "{}", content + suffix, "chat",
+                         created_by=audit_user(user))
+            except Exception as _ar_err:
+                print(f"[commit_partial] 固化消息归档失败（消息已保住）：{_ar_err!r}")
         else:
             # 唯一键冲突：本轮已由服务端兜底固化 ⇒ 返回那条 id，前端据此重渲染
             _exist = conn.execute(
