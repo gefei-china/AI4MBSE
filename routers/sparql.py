@@ -28,6 +28,21 @@ def dependency(user=Depends(require_permission("kb_ontology", "view"))):
     return dependency_status()
 
 
+@router.get("/freshness")
+def freshness(conn=Depends(db_session),
+              user=Depends(require_permission("kb_ontology", "view"))):
+    """P0-0 第八批：Fuseki 是 SQLite 的派生镜像 —— 查询前先能看见它是否陈旧。
+
+    四态：fresh / stale / unknown / skipped。stale 时才应调用 POST /sync；
+    unknown（回读异常）不要盲目重灌 —— 没验成不等于验出旧了。
+    """
+    from core.fuseki_freshness import check_freshness
+    from core.config import get as _cfg_get
+    out = check_freshness(conn)
+    out["autosync_enabled"] = bool(_cfg_get("graph_db", "fuseki_autosync"))
+    return out
+
+
 @router.post("/sync")
 def sync(req: SyncRequest, conn=Depends(db_session),
          user=Depends(require_permission("kb_ontology", "edit"))):

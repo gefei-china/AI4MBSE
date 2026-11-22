@@ -150,9 +150,15 @@ def _sparql_endpoint() -> str:
     return _fuseki_rt.resolve_endpoint()
 
 
-def _run_sparql_cq(query: str, expected: str) -> dict:
-    """执行一条 SPARQL CQ。Fuseki 不可达 ⇒ skip（**降级不是通过**）。"""
-    item = {"row_count": 0, "status": "skip", "message": ""}
+def _run_sparql_cq(query: str, expected: str, freshness: dict | None = None) -> dict:
+    """执行一条 SPARQL CQ。Fuseki 不可达 ⇒ skip（**降级不是通过**）。
+
+    P0-0 第八批：结果附 `freshness` 状态。真机实测过"镜像只剩 40% 数据而 CQ 仍 pass"
+    （非空判据掩盖大范围投影缺失）⇒ 评审方必须能看见这条结论是在新鲜还是陈旧镜像上得出。
+    **不改 status 判定**：陈旧是独立维度，历史调用方零回归；严格档（stale⇒skip）未启用。
+    """
+    item = {"row_count": 0, "status": "skip", "message": "",
+            "freshness": (freshness or {}).get("status", "unknown")}
     try:
         from services.sparql_sync import FusekiClient
         ep = _sparql_endpoint()
@@ -230,6 +236,21 @@ def run_cqs(conn, source: str = "", record: bool = True, qid: int | None = None)
         rows = conn.execute("SELECT * FROM ontology_questions WHERE id=?", (qid,)).fetchall()
     else:
         rows = conn.execute("SELECT * FROM ontology_questions WHERE enabled=1 ORDER BY id").fetchall()
+    # P0-0 第八批：一次 run 只判一次镜像新鲜度（不是每条 CQ 都重建 TTL）。
+    # 端点不通时直接标 unknown，不去打 N 次会超时的查询。
+    sp_fresh = None
+    if any((r["kind"] or "sql").strip() == "sparql" for r in rows):
+        try:
+            # ping() 要的是 **base URL**（内部拼 /$/ping）；误传完整端点会得到
+            # /mbse/$/ping ⇒ 404 ⇒ 恒 unknown（真机 2026-11-22 抓到）。
+            _base, _ds = _fuseki_rt.endpoint_parts(_fuseki_rt.resolve_endpoint())
+            if _fuseki_rt.ping(_base):
+                from core.fuseki_freshness import check_freshness
+                sp_fresh = check_freshness(conn)
+            else:
+                sp_fresh = {"status": "unknown", "reason": "Fuseki 不可达"}
+        except Exception:
+            sp_fresh = {"status": "unknown", "reason": "新鲜度判据异常"}
     out = []
     for r in rows:
         item = {"id": r["id"], "question": r["question"], "expected": r["expected"],
@@ -261,7 +282,7 @@ def run_cqs(conn, source: str = "", record: bool = True, qid: int | None = None)
             if not ok:
                 item["message"] = f"SPARQL 未通过只读校验：{err}"
             else:
-                item.update(_run_sparql_cq(r["query"], r["expected"]))
+                item.update(_run_sparql_cq(r["query"], r["expected"], freshness=sp_fresh))
         else:
             item["message"] = f"未知 kind: {kind}"
         out.append(item)
@@ -287,4 +308,6 @@ def summarize(results: list[dict]) -> dict:
     return {"total": len(results),
             "failed": sum(1 for x in results if x["status"] == "fail"),
             "skipped": sum(1 for x in results if x["status"] == "skip"),
+            # P0-0 第八批：镜像陈旧是独立维度，不并入 failed/skipped（零回归）
+            "stale": sum(1 for x in results if x.get("freshness") == "stale"),
             "results": results}

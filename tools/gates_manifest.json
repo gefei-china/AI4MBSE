@@ -2890,6 +2890,12 @@
    "tier": "pr",
    "timeout": 120,
    "reason": "2026-11-22 P0-0 第六批次：批量写入回读核验。rollback_merge 原只返回 restored_* 计数、不回读，恢复漏行时路由照常回 200。守 S1 restore 精确匹配 verified / S2 缺实体 / S3 多关系 failed / S4 merge 子集（目标多既有行仍 verified）/ S5 缺实体 failed / S6 回读异常 unknown（不是 failed）/ S7 failed 改判 ok=False+applied / S8 unknown 标 retry_safe=False 且原 key 保留 / S9 真跑 BranchRepo.rollback_merge / S10 两处接线静态锁。M1 抹四态 / M2 抹 failed 改判 / M3 抹 indeterminate 三组真跑变异必须判红。临时库隔离，零生产库写入、零 LLM、零网络。"
+  },
+  {
+   "script": "verify_fuseki_freshness.py",
+   "tier": "pr",
+   "timeout": 120,
+   "reason": "2026-11-22 P0-0 第八批次：Fuseki 派生镜像新鲜度（SQLite 写入不会自动投影，SPARQL CQ 只查非空，镜像落后仍 pass）。守 F1 齐全 fresh / F2 三元组不足 stale / F3 数量够但抽样缺失 stale / F4 回读异常 unknown（禁止自动重灌）/ F5 期望值按 RDF 集合去重（真机教训：按行数 1262 会把实际 506 的 fresh 误判成 stale）/ F6 main 仅 stale 才重灌、unknown 不动 / F7 freshness 端点 + CQ 元数据 / F8 配置四处登记 / F9 CQ 结果带 freshness。M1 抹陈旧判据 / M2 抹异常归态 / M3 期望值不去重 / M4 unknown 也重灌四组变异必须判红。临时库 + 注入客户端，零生产库写入、零 LLM、零网络。"
   }
  ]
 }

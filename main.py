@@ -85,6 +85,32 @@ async def lifespan(app: FastAPI):
     except Exception as _e_fs:
         print("[startup] ⚠️ Fuseki 自拉起异常（主服务继续）：%s: %s"
               % (type(_e_fs).__name__, str(_e_fs)[:160]), flush=True)
+    # ★ 2026-11-22（P0-0 第八批）：Fuseki 派生镜像**启动自动对齐**。
+    #   真机实测 SQLite 应投影 1262 三元组、Fuseki 只有 506，而 CQ 仍 pass
+    #   （非空判据掩盖大范围投影缺失）⇒ 拉起不等于数据新鲜。
+    #   `graph_db.fuseki_autosync` 默认 False，零副作用；打开后：
+    #     stale  ⇒ 重灌（with_time，与 /api/sparql/sync 同口径）；
+    #     unknown⇒ **不重灌**（没验成先别动，盲目 CLEAR DEFAULT 更危险）；
+    #     fresh  ⇒ 不动；异常只告警，不阻断主服务。
+    try:
+        from core.config import get as _cfg_get
+        if _cfg_get("graph_db", "fuseki_autosync"):
+            from database import get_db as _get_db
+            from core.fuseki_freshness import check_freshness as _check_fresh
+            _fr = _check_fresh(_get_db())
+            print("[startup] Fuseki 投影新鲜度：%s（SQLite 应投影 %s / Fuseki %s）"
+                  % (_fr.get("status"), _fr.get("expected_base"), _fr.get("actual")),
+                  flush=True)
+            # ⚠️ 只对 stale 动手：unknown 是"没验成"，不是"验出旧了"。
+            if _fr.get("status") == "stale":
+                from services.temporal_sparql import sync_to_fuseki_with_time as _resync
+                _sr = _resync(_get_db())
+                print("[startup] Fuseki 自动重灌：%s %s"
+                      % ("成功" if _sr.get("ok") else "失败",
+                         str(_sr.get("error") or _sr.get("triples", ""))[:160]), flush=True)
+    except Exception as _e_fs_sync:
+        print("[startup] ⚠️ Fuseki 自动对齐异常（主服务继续）：%s: %s"
+              % (type(_e_fs_sync).__name__, str(_e_fs_sync)[:160]), flush=True)
     # ★★ 2026-11-18：**强杀恢复** —— 把上次进程异常终止时留下的流式检查点固化成消息。
     #   必须紧跟 init_db()（表刚建好），且在所有后台守护线程启动之前。
     #   正常收口的流已在 finally 里删除检查点 ⇒ 这里扫到的只可能是强杀残留。
