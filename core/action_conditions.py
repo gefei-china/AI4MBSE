@@ -220,3 +220,60 @@ def rule_catalog() -> list:
     return [{"kind": k, "direction": v["direction"],
              "required": list(v["required"]), "desc": v["desc"]}
             for k, v in RULES.items()]
+
+
+# ══════════════════════════════════════════════════════════════════════
+# 执行侧合流（2026-11-22 第五批次）
+# ══════════════════════════════════════════════════════════════════════
+# 一个工具可被多个对象类型绑定，每条绑定各有 pre/post 规则。执行侧必须把
+# 多条判定合流成一个状态，口径在本文件定义（单一真源），不散落到 tools.py。
+
+#: 严重度：failed（证实为假）> unknown（无法证实）> verified（证实为真）> skipped（无约束）
+SEVERITY = {"failed": 3, "unknown": 2, "verified": 1, "skipped": 0}
+
+
+def combine(results: list[dict]) -> dict | None:
+    """多条规则判定合流为单一状态；空列表返回 None（= 没有约束）。
+
+    为什么是最差态而不是"任一通过"：绑定语义是**全部约束都须成立**，
+    只要有一条证实为假就应拒绝/告警；"任一通过"会把失败条件稀释掉，
+    与 pre/post 条件的本意相反。
+    """
+    items = [r for r in (results or []) if isinstance(r, dict)]
+    if not items:
+        return None
+    worst = max(items, key=lambda r: SEVERITY.get(r.get("status"), 2))
+    status = worst.get("status") if worst.get("status") in SEVERITY else "unknown"
+    return {
+        "status": status,
+        "ok": status in ("verified", "skipped"),
+        "kind": worst.get("kind", ""),
+        "why": worst.get("why", ""),
+        "count": len(items),
+        "details": [{"status": r.get("status"), "kind": r.get("kind", ""),
+                     "why": r.get("why", "")} for r in items],
+    }
+
+
+def needed_keys(results_or_rules) -> set[str]:
+    """从 post 规则里收集 snapshot 必须提供的参数名（供回读快照按 key 构造）。
+
+    evaluate() 的 snapshot key 语义是**参数名**（如 `id`），不是 id 值；
+    回读时若不按这些 key 填，规则会恒返回 unknown —— 这正是"配了却没生效"的
+    静默形态，所以由规则表自己声明需要哪些 key，避免执行侧另写一份猜测。
+    """
+    out = set()
+    for item in (results_or_rules or []):
+        if isinstance(item, dict):
+            raw = item.get("rule") or item
+            rule, _ = _as_rule(raw)
+            if not rule:
+                continue
+            kind = str(rule.get("kind") or "")
+            spec = RULES.get(kind)
+            if not spec:
+                continue
+            for k in ("arg", "source", "target"):
+                if k in rule:
+                    out.add(str(rule[k]))
+    return out

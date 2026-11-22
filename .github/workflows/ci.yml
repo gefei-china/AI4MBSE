@@ -164,6 +164,11 @@ jobs:
         if: ${{ !cancelled() }}
         run: python tools/verify/verify_tool_inject_by_type.py
 
+      # 2026-11-22 P0-1 第五批次：pre/post 条件在唯一出口真消费（临时库真回读）
+      - name: Guard 绑定条件执行消费（P0-1 第五批，临时库）
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_action_conditions_exec.py
+
       # 2026-11-22 P1-2：Fuseki 持久 + 随主服务自拉起。纯注入判据，零外部依赖。
       - name: Guard Fuseki 持久与自拉起（P1-2，零外部依赖）
         if: ${{ !cancelled() }}

@@ -1778,6 +1778,24 @@ class ToolMixin:
                         "result": "权限校验异常，内建工具已按最小权限拒绝：%s" % str(_bp_e)[:120],
                         "gate": "bypass_tool_perm"}
 
+        # ── P0-1（2026-11-22 第五批次）绑定 pre 条件：先于任何副作用 ──────
+        #   为什么挂在统一出口：绑定按工具名生效，两条 ReAct 路径同源；
+        #   为什么在幂等闸之前：pre 拒绝的执行不应占用幂等键（那是"已执行"的语义）。
+        #   failed ⇒ 拒绝；unknown ⇒ 放行但告警（观测故障 fail-open，见模块头）。
+        _pre_verdict = None
+        if not getattr(self, "_tool_action_pre_disabled", False):
+            try:
+                from core import action_binding_runtime as _abr
+                _pre = _abr.check_pre(name, arguments)
+                _pre_verdict = _pre
+                if _pre and _pre.get("status") == "failed":
+                    return {"ok": False, "gate": "action_pre_condition",
+                            "action_pre": _pre,
+                            "result": "⛔ 已拒绝执行：对象类型绑定的前置条件未满足 —— %s"
+                                      % str(_pre.get("why"))[:300]}
+            except Exception:
+                pass                       # 观测层故障绝不放宽也绝不阻断（此处放行）
+
         # ── 幂等闸（P0-1）────────────────────────────────────────────────
         _idem_ctx = None
         try:
@@ -1800,6 +1818,27 @@ class ToolMixin:
             res = _replay          # 已执行过 ⇒ 直接重放结果（不再产生副作用）
         else:
             res = self._exec_tool_call_impl(name, arguments)
+            # ── P0-1 绑定 post 条件：必须在幂等记账**之前** ──────────────
+            #   若先记账再判失败，重放会绕过核验直接报成功（与 A5"只记成功"同型）。
+            if (isinstance(res, dict) and res.get("ok") is True
+                    and not getattr(self, "_tool_action_post_disabled", False)):
+                try:
+                    from core import action_binding_runtime as _abr
+                    _post = _abr.check_post(name, arguments, res)
+                    if _post:
+                        res["action_post"] = _post
+                        if _post.get("status") == "failed":
+                            res["ok"] = False
+                            res["gate"] = "action_post_condition"
+                            _base = res.get("result")
+                            if isinstance(_base, str):
+                                res["result"] = _base + (
+                                    "\n\n⛔ 后置条件未满足：写入已发生，勿盲目重试 —— %s"
+                                    % str(_post.get("why"))[:300])
+                        elif _post.get("status") == "unknown":
+                            res["retry_safe"] = False  # 无法证实 ⇒ 别重试（同 P0-3 四态）
+                except Exception:
+                    pass                               # 观测层故障 fail-open
             if _idem_ctx and isinstance(res, dict) and res.get("ok") is True:
                 # ⚠️ 只记**成功**的执行：被闸拦下/失败的结果不是"已产生副作用"
                 try:
@@ -1808,6 +1847,10 @@ class ToolMixin:
                                  _idem_ctx["args_hash"], _idem_ctx["ordinal"], res)
                 except Exception:
                     pass
+        # pre 判 unknown ⇒ 已放行，但必须让模型/用户看得见"未能证实"（同 P0-3 四态纪律）
+        if (_pre_verdict and _pre_verdict.get("status") == "unknown"
+                and isinstance(res, dict) and "action_pre" not in res):
+            res["action_pre"] = _pre_verdict
         try:
             from agent import tool_result_notes as _notes
             return _notes.annotate(name, arguments, res)

@@ -2878,6 +2878,12 @@
    "tier": "pr",
    "timeout": 120,
    "reason": "2026-11-22 P0-1 G2：注入回归锚 + 类型过滤判据。上游目前无 scope_types 生产方，故默认关闭是硬约束——G2-1 scope_types=None 注入集合必须与 --save-baseline 在改 _build_tools_def 之前拍下的快照逐项相等 / G2-4 开关关闭时即使传值仍等于基线 / G2-2 传值时 write/destructive 注入集⊆绑定集且 read 数不变（只卡写不卡读）/ G2-3 剔除留痕 / M1 清空绑定⇒write 清空（证明过滤非空转）/ M2 关开关⇒回基线。固定夹具 9 工具覆盖 read/write/destructive，语义阈值锁死走全量分支，MBSE_DB_PATH 临时库隔离，零 LLM 零网络。"
+  },
+  {
+   "script": "verify_action_conditions_exec.py",
+   "tier": "pr",
+   "timeout": 120,
+   "reason": "2026-11-22 P0-1 第五批次：pre/post 条件在 _exec_tool_call 唯一出口真消费 + 四态对齐。守 S1 无绑定回执零回归 / S2 pre failed 拒绝且执行体零调用 / S3 pre unknown 放行但留痕可见 / S4 post verified / S5 post failed 把成功回执改判失败且提示勿重试 / S6 post unknown 放行但 retry_safe=False / S7 post 必须在幂等记账之前（否则重放绕过核验）/ S8 四态口径单一真源。M1 抹 pre / M2 抹 post / M3 抹回读快照三组真跑变异必须判红。临时库真写实体再真回读，零生产库写入、零 LLM、零网络。"
   }
  ]
 }
