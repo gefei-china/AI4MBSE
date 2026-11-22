@@ -52,37 +52,49 @@ SRC = open(GD, encoding="utf-8").read()
 # ══════════════════════════════════════════════════════════════════
 print("\n[A] 默认端点必须与本仓注册的数据集名一致")
 # ══════════════════════════════════════════════════════════════════
-# A1 源码取证：默认端点不得是 /ds
-#   ★ 判据不能是裸 `"…/ds" not in SRC` —— 注释里**正需要**出现 `/ds`
-#   （"原默认是 …/ds，那才是错的"）⇒ 裸串判据必然误报。
-#   正确口径：检查 **`or "…/ds"` 这个兜底表达式**是否还在（注释里写的是
-#   「原默认值是」，不会出现 `or "…/ds"` 这种代码形态）。
+# 2026-11-22 收敛：端点真值搬到 core.fuseki_runtime，graph_db / CQ / 启动脚本
+# 都读它。判据不能再靠「graph_db.py 源码里有没有那个字面量」——那会逼着
+# 大家继续在四处抄同一个字符串。改为**运行期取值 + 变异自证**。
+import graph_db  # noqa: E402
+from core import fuseki_runtime as _fr  # noqa: E402
+
+if os.path.join(_ROOT, "tools", "verify") not in sys.path:
+    sys.path.insert(0, os.path.join(_ROOT, "tools", "verify"))
+import fuseki_start as _fs  # noqa: E402
+
+# A1 源码取证：不得再出现 `or "…/ds"` 兜底（注释提及不算）
 _bad_default = 'or "http://localhost:3030/ds"'
 check("A1 代码中不再有 `or \"…/ds\"` 这个兜底默认值（注释提及不算）",
       _bad_default not in SRC,
       "仍存在兜底默认值" if _bad_default in SRC else "")
-check("A2 默认端点为 .../mbse",
-      '"http://localhost:3030/mbse"' in SRC or "http://localhost:3030/mbse" in SRC)
 
-# A3 与 fuseki_start.py 注册的数据集名交叉核对（**唯一真源**，不是抄字符串）
-_fs = os.path.join(_ROOT, "tools", "verify", "fuseki_start.py")
-_fs_src = open(_fs, encoding="utf-8").read()
-_check_ds = []
-for n in ast.walk(ast.parse(_fs_src)):
-    if isinstance(n, ast.Assign):
-        for t in n.targets:
-            if isinstance(t, ast.Name) and t.id == "DS" and isinstance(n.value, ast.Constant):
-                _check_ds.append(n.value.value)
-check("A3 fuseki_start.py 里能解析出注册的数据集名 DS", bool(_check_ds), str(_check_ds))
-if _check_ds:
-    _ds = _check_ds[0]
-    check("A4 默认端点末段 == fuseki 注册的数据集名（%s）" % _ds,
-          SRC.count("http://localhost:3030/%s" % _ds) >= 1)
+_w = graph_db.get_writer(True, "fuseki", "", False, "")
+check("A2 get_writer 空 endpoint 回落 == fuseki_runtime 单一真源",
+      getattr(_w, "endpoint", "") == _fr.DEFAULT_ENDPOINT,
+      "实得 %r / 真源 %r" % (getattr(_w, "endpoint", ""), _fr.DEFAULT_ENDPOINT))
+check("A2b 单一真源数据集为 mbse（非历史错误值 ds）",
+      _fr.DEFAULT_DATASET == "mbse" and _fr.DEFAULT_ENDPOINT.endswith("/mbse"),
+      _fr.DEFAULT_ENDPOINT)
 
-# A5 变异自证：若把默认端点改回 /ds，A1~A2 判据必须能抓住
-_mut_src = SRC.replace("http://localhost:3030/mbse", "http://localhost:3030/ds")
-check("A5 变异自证：把默认端点改回 /ds 会被 A1/A2 判红",
-      ("http://localhost:3030/ds" in _mut_src) and ("http://localhost:3030/mbse" not in _mut_src))
+# A3/A4 启动脚本与运行时真源交叉核对（不是抄字符串）
+_ds = getattr(_fs, "DS", None)
+check("A3 fuseki_start.DS 与单一真源一致（%r）" % _ds,
+      _ds == _fr.DEFAULT_DATASET, "启动脚本=%r 真源=%r" % (_ds, _fr.DEFAULT_DATASET))
+check("A4 默认端点末段 == 注册数据集名",
+      _fr.DEFAULT_ENDPOINT.rsplit("/", 1)[-1] == _ds,
+      _fr.DEFAULT_ENDPOINT)
+
+# A5 变异自证：把真源改成 /ds，get_writer 兜底必须跟着变 ⇒ 判据有区分力。
+#    只改模块属性值（调用时读取），不落盘，finally 复原。
+_orig_ep = _fr.DEFAULT_ENDPOINT
+try:
+    _fr.DEFAULT_ENDPOINT = "http://127.0.0.1:3030/ds"
+    _mut_ep = getattr(graph_db.get_writer(True, "fuseki", "", False, ""), "endpoint", "")
+finally:
+    _fr.DEFAULT_ENDPOINT = _orig_ep
+check("A5 变异自证：真源改回 /ds ⇒ A2 判红",
+      _mut_ep == "http://127.0.0.1:3030/ds" and _mut_ep != _orig_ep,
+      "变异后回落=%r" % _mut_ep)
 
 # ══════════════════════════════════════════════════════════════════
 print("\n[B] 端点配置错（404/405/501）可诊断，且不误入服务不可用熔断")
@@ -156,10 +168,10 @@ def _port_open(host, port, t=0.6):
         s.close()
 
 
-if _check_ds and _port_open("127.0.0.1", 3030):
+if _ds and _port_open("127.0.0.1", 3030):
     # get_writer 签名：endpoint 是第 5 个位置参数（前面是 enabled/backend/store_path/use_memory）
     _good = graph_db.get_writer(True, "fuseki", "", False,
-                                "http://127.0.0.1:3030/%s" % _check_ds[0])
+                                "http://127.0.0.1:3030/%s" % _ds)
     _r = _good.query_sparql("SELECT ?s ?p ?o WHERE { ?s ?p ?o } LIMIT 1")
     check("B8 真实 Fuseki 在跑时，真实数据集端点可查通（未抛异常）",
           True, "查询返回 %d 行（0 行=图谱为空，不算失败）" % len(_r))

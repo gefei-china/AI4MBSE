@@ -45,17 +45,9 @@ def check(cond: bool, label: str, detail: str = "") -> bool:
 
 
 def _endpoint() -> str:
-    """从本地配置读 endpoint；读不到就退回默认端口组合。"""
-    try:
-        p = os.path.expanduser("~/.workbuddy/mbse_config.json")
-        if os.path.exists(p):
-            with open(p, encoding="utf-8") as f:
-                ep = (json.load(f).get("graph_db") or {}).get("endpoint")
-            if ep:
-                return ep.rstrip("/")
-    except Exception:
-        pass
-    return "http://127.0.0.1:3030/mbse"
+    """端点统一读 core.fuseki_runtime（2026-11-22 收敛，不再直读配置文件）。"""
+    from core import fuseki_runtime as _fr
+    return _fr.resolve_endpoint()
 
 
 def _post(url: str, body: str, ctype: str) -> int:

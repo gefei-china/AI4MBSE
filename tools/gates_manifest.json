@@ -2719,6 +2719,48 @@
    "reason": "B3 harness 默认安全侧门禁（2026-11-18）：H1 干净部署（屏蔽 override）默认 harness_mode=enforce（agent 组进 DEFAULT_CONFIG——此前 schema default 不并入运行时配置，干净部署整组 MISSING）；H2 manual 验收措辞诚实化（待人工核验，不再视为已确认）且全部返回块带 deferred；H3/H4 强制放行告知与无进展检测在位；M1/M2 变异自证。零 DB/零 LLM、10/10，故进 pr 层。"
   },
   {
+   "script": "verify_single_write_entry.py",
+   "tier": "pr",
+   "timeout": 60,
+   "reason": "P0-0 写入口唯一性门禁（2026-11-21）：同一件事「写一个实体」原有 20 个 HTTP 端点各写一遍，POST /entities 只查类型不校验属性（与图谱入口两把尺子），执行后核验无处可挂。本门禁断言 G1 统一入口五件事齐备 / G2 已迁移端点无重复实现 / G3 真的接线 write_entity / G4 待迁移端点 ≤17 只降不升 / G5 核验三态（一致✓篡改✗无行✗，防恒 True 假核验）+ M1/M2 变异自证。零 DB（内存库）、零 LLM。"
+  },
+  {
+   "script": "verify_semver_semantics.py",
+   "tier": "pr",
+   "timeout": 60,
+   "reason": "A4 版本语义门禁（2026-11-21）：本体变更分级原有四份实现、查的键各不相同，domain_classes 从未被任何一份读到 ⇒ 实测 7 类破坏性变更 6 类被判「兼容」（下游实例静默变违规）。本门禁断言 C1 规则表 13 判例全对 / C2 约束键全登记（真库优先，CI 无真库时读 baselines/ontology_constraint_keys.json）/ C3 publish 与 release 两条路径都走单一实现 / C4 三个兼容包装均委托 / C5 OWL 导出带 versionIRI+priorVersion+兼容或不兼容声明 + M1/M2 变异自证。零 DB（内存库兜底）、零 LLM。"
+  },
+  {
+   "script": "verify_eval_trust_verdict.py",
+   "tier": "local",
+   "timeout": 60,
+   "reason": "2026-11-21 补登记（元门禁 G5a/G5b 一直在报「未分类」的存量欠账，非本轮改动引入）。脚本自带声明「CI-OPTIONAL」，故按 local 登记而不擅改其 CI 地位。实测零依赖、1.4s、21/21 全绿，后续可晋 pr。"
+  },
+  {
+   "script": "verify_validation_stall_shortcircuit.py",
+   "tier": "local",
+   "timeout": 60,
+   "reason": "2026-11-21 补登记（同上，存量未分类欠账）。脚本自带声明「CI-OPTIONAL」，按 local 登记。实测零依赖、1.8s、21/21 全绿，后续可晋 pr。"
+  },
+  {
+   "script": "verify_code_fence_and_partial_archive.py",
+   "tier": "local",
+   "timeout": 120,
+   "reason": "2026-11-21 补登记（同上，存量未分类欠账；出自并行会话，未声明 CI 口径）。实测 17/17 全绿、8.9s、自建临时 sqlite 不开 mbse.db ⇒ 具备晋 pr 条件，但晋 pr 需同时改 ci.yml（G6a），留给该脚本作者决定。"
+  },
+  {
+   "script": "verify_cq_sparql.py",
+   "tier": "pr",
+   "timeout": 60,
+   "reason": "P1-2 CQ SPARQL 档门禁（2026-11-21）：CQ 新增 kind='sparql' 走 Fuseki。挡四个真机抓出来的坏点：S1 白名单拦 SPARQL Update 写动词（含 LOAD/CLEAR/MOVE 这类不叫 update 但会改图的）；**S2 Fuseki 不可达必须 skip 不是 pass**（降级伪装通过 = 图库断了报成图查询通过）；S3 PREFIX/BASE 前导必须放行（首版漏了它，带 PREFIX 的合法 CQ 全被拒）；S4 通过项 detail 为空串；S5 sparql 分支不得回落 SQLite（回落会把口径变化藏起来）。含 M1/M2 变异自证（M2 真注入回落代码证明 S5 不是恒绿）。零外部依赖（Fuseki 不可达的用例反而是它的判据）。"
+  },
+  {
+   "script": "verify_ontology_write_e2e.py",
+   "tier": "local",
+   "timeout": 180,
+   "reason": "P0-0+A4 端到端（2026-11-21）：真发 HTTP 请求走「端点→统一写入口→仓储→回读核验」全链，含 E2b 判别性证据（绕过入口直写仓储能过 ⇒ 证明 E2 的 400 来自新增校验）。用 MBSE_DB_PATH 指向临时空库并在 import core.config 之前设置（脚本内含硬断言，绝不碰生产 mbse.db）。实测 9/9 全绿、3.8s、零 LLM 零外部网络。为何暂不进 pr：需导入全量 app，干净环境首次导入行为未实测，晋 pr 前应先跑一次 CI（G8/G6a 配套）。"
+  },
+  {
    "script": "verify_b2_file_hil.py",
    "tier": "local",
    "timeout": 300,
@@ -2795,6 +2837,24 @@
    "tier": "local",
    "timeout": 120,
    "reason": "2026-11-20 补登记：历史漏入清单，当前按 local 手工跑；是否晋 pr 需先确认无外部依赖并同步 ci.yml（G6a）"
+  },
+  {
+   "script": "verify_write_surface.py",
+   "tier": "pr",
+   "timeout": 60,
+   "reason": "2026-11-21 P0-0 收口纠偏：G4『待迁移 13 端点』只统计 3 个文件，而生产代码对 entities/relations 的直接 SQL 写实测 79 处 / 14 文件 / 31 函数（其中 78 处在 G4 统计面外）。本门禁把全部写入点按函数登记成显式台账：W1 新增裸写必须登记（防统计面外静默增长）/ W2 台账无过期键 / W3 推断并入必须走统一入口推断通道且端点侧裸写为 0 / W4 并列输出 G4 统计面与真实写入面（信息项）。AST 扫字符串字面量，剔除注释与 docstring 假阳性。含 M1/M2/M3 变异自证，零 DB 零 LLM 零网络。"
+  },
+  {
+   "script": "verify_inferred_write.py",
+   "tier": "pr",
+   "timeout": 120,
+   "reason": "2026-11-21 P0-0 推断通道真跑：_merge_cohort_items 原直接 INSERT entities/relations，不写 entity_versions、不留痕、无 post_check。第四轮改走 write_inferred_entity/edge。W3 只证明接线，本门禁真跑证明：I1 宽松档不被本体拒绝且类型告警可见 / I2 post_check 通过且补上首版本 / I3 严格档同类型必须被拒（判别性证据）/ I4 关系写入核验 / I5 留痕存在 + M1 变异。MBSE_DB_PATH 临时库隔离，绝不碰生产库，零 LLM 零网络。"
+  },
+  {
+   "script": "verify_fuseki_autostart.py",
+   "tier": "pr",
+   "timeout": 60,
+   "reason": "2026-11-22 P1-2 收尾：Fuseki 持久 + 随主服务自拉起。此前端点/数据集名/TDB2 目录/启动参数散在四处，且必须人工启动；--mem 重启即空。本门禁守：F1 持久档 --update+绝对 --loc 且无 --mem（漏 --update 时只读、/update 恒 405）/ F2 路径正斜杠 / F3 已活着幂等不重复拉起（ds.name 前导斜杠归一）/ F4 开关关时零动作 / F5 端口被别人占不抢占 / F6 模拟真拉起用持久参数 / F7 配置 DEFAULT+SCHEMA+ENV+BOOL 四处登记 / F8 lifespan 早段接线且异常不阻断 / F9 CQ 与 writer 共用单一真源 / F10 预建 --loc 目录（Fuseki 6.2 缺目录直接退出，真机踩过）。含 M1~M5 变异自证，零 DB 零 LLM 零网络零真 JVM。"
   }
  ]
 }

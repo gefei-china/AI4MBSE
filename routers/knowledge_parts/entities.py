@@ -39,25 +39,14 @@ def _temporal_list_entities(conn, status, branch, search, project_id,
 
 
 def _entity_type_check(conn, etype: str):
-    """KB API 直写路径的本体类型门禁（2026-09-14）。
+    """KB API 直写路径的本体类型门禁（**兼容包装**，实现见 `core.graph_write_gate`）。
 
-    图谱页入口（POST /api/knowledge/graph/nodes）本就有 GraphStore.validate_node 校验，
-    但 POST/PUT /api/knowledge/entities 直写入口此前不校验 entity_type——任意字符串
-    都能落库上图（ENT-TEST 测试残留「载荷」即经此路径进图）。本函数与图谱入口同一把尺子：
-    类型必须在本体声明（含子类/抽象类型口径，与 validate_node 第一分支一致）。
-    返回 None=通过；str=错误文案。空类型放行（历史行为，仅拦「写了但未声明」）。
+    ⚠️ 2026-11-21 P0-0 起本函数只是门面：类型门禁的唯一实现在
+    `core.graph_write_gate.check_entity_type`，与属性校验、写入、留痕、执行后核验同处一模块。
+    端点**不应**再直接调它 —— 请走 `write_entity(...)`，否则又多出一条"只查类型不校验属性"的路径。
     """
-    etype = (etype or "").strip()
-    if not etype:
-        return None
-    from ontology_semantics import GraphStore
-    v = GraphStore(conn).validator
-    if etype not in v._load_types():
-        known = v.entity_types()
-        if known:
-            return f"实体类型 '{etype}' 不在本体中（可用: {', '.join(known[:8])}）——请先在本体模型声明该类型"
-        return "本体未配置实体类型，请先在本体模型声明"
-    return None
+    from core.graph_write_gate import check_entity_type
+    return check_entity_type(conn, etype)
 
 
 @router.get("/api/knowledge/entities/{eid}/history")
@@ -210,20 +199,25 @@ def create_entity(ent: EntityIn, conn=Depends(db_session),
     g = _release_guard(conn, ent.branch or "dev")
     if g:
         return JSONResponse({"error": g}, 400)
-    # 本体类型门禁（2026-09-14）：未声明类型禁止直写入库
-    terr = _entity_type_check(conn, ent.entity_type)
-    if terr:
-        return JSONResponse({"error": terr}, 400)
     # P0-1 消歧提示（不阻断）：创建前查询同名/相似实体，随响应返回 dup_warning 供前端确认
     warns = _entity_dup_warning(conn, ent.name)
-    KnowledgeRepo(conn).create_entity(
-        ent.id, ent.name, ent.entity_type,
-        json.dumps(ent.properties, ensure_ascii=False), ent.branch,
-        knowledge_category=ent.knowledge_category or "", created_by=_actor(user))
-    audit(_actor(user), "entity_create", f"创建实体: {ent.name}", conn=conn, branch=ent.branch or "dev")
+    # ★ 2026-11-21 P0-0：统一写入口 —— 门禁 → 属性校验 → 写入 → 留痕 → **执行后核验**。
+    #   改前本端点只查「类型是否存在」、**不校验属性**，与图谱入口（validate_node）
+    #   是两把尺子；且写入后没有回读核验，接口 200 但库里不是那个样子时无人知晓。
+    from core.graph_write_gate import write_entity
+    res = write_entity(conn, op="create", entity_id=ent.id, name=ent.name,
+                       entity_type=ent.entity_type, properties=ent.properties,
+                       branch=ent.branch or "dev", actor=_actor(user),
+                       knowledge_category=ent.knowledge_category or "")
+    if not res.get("ok"):
+        # applied=True ⇒ 写入已提交但效果未证实 ⇒ 500（不能报 400 让人以为"没写进去"）
+        return JSONResponse({"error": res.get("error"), "stage": res.get("stage"),
+                             "post": res.get("post")},
+                            500 if res.get("applied") else 400)
+    out = {"ok": True, "post": res.get("post")}
     if warns:
-        return {"ok": True, "dup_warning": warns}
-    return {"ok": True}
+        out["dup_warning"] = warns
+    return out
 
 
 @router.put("/api/knowledge/entities/{entity_id}")
@@ -233,10 +227,6 @@ def update_entity(entity_id: str, ent: EntityIn, conn=Depends(db_session),
     g = _release_guard(conn, b)
     if g:
         return JSONResponse({"error": g}, 400)
-    # 本体类型门禁（2026-09-14）：改类到未声明类型禁止（与创建同口径）
-    terr = _entity_type_check(conn, ent.entity_type)
-    if terr:
-        return JSONResponse({"error": terr}, 400)
     # 属性变更审计（2026-09-14 历史页维度补全）：此前 PUT 更新完全无审计留痕，
     # 历史页看不到"改了哪些属性"。与 graph_node_update 同格式（字段: 旧→新），前端可解析 diff
     _old = KnowledgeRepo(conn).get_entity(entity_id, b) or {}
@@ -258,15 +248,20 @@ def update_entity(entity_id: str, ent: EntityIn, conn=Depends(db_session),
             _diffs.insert(0, f"类型: {_old.get('entity_type')}→{ent.entity_type}")
     except Exception:
         pass
-    KnowledgeRepo(conn).update_entity(
-        entity_id, ent.name, ent.entity_type,
-        json.dumps(ent.properties, ensure_ascii=False), b,
-        knowledge_category=ent.knowledge_category or "",
-        changed_by=_actor(user))   # P0-1：版本行记录操作人
-    audit(_actor(user), "entity_update",
-          f"更新实体: {ent.name} ({entity_id})" + ("；" + "；".join(_diffs[:20]) if _diffs else ""),
-          conn=conn, branch=b)
-    return {"ok": True}
+    # ★ 2026-11-21 P0-0：统一写入口（门禁→校验→写入→留痕→执行后核验）。
+    #   字段级 diff 仍在这里算（它是展示用的业务信息），但**写入与审计**交给统一入口，
+    #   避免"端点自己写一遍、Agent 工具链再写一遍"两条路径各自漏留痕。
+    from core.graph_write_gate import write_entity
+    res = write_entity(conn, op="update", entity_id=entity_id, name=ent.name,
+                       entity_type=ent.entity_type, properties=ent.properties,
+                       branch=b, actor=_actor(user),
+                       knowledge_category=ent.knowledge_category or "",
+                       extra_detail="；".join(_diffs[:20]))
+    if not res.get("ok"):
+        return JSONResponse({"error": res.get("error"), "stage": res.get("stage"),
+                             "post": res.get("post")},
+                            500 if res.get("applied") else 400)
+    return {"ok": True, "post": res.get("post")}
 
 
 @router.get("/api/knowledge/categories")

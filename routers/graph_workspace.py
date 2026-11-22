@@ -246,7 +246,8 @@ def reasoning_direct_merge(body: dict, conn=Depends(db_session), user=Depends(cu
     merged = {"entities": [], "relations": []}
     if cohort_id:
         res = reasoning_cohort_approve(cohort_id, {"branch": branch}, conn=conn, user=user)
-        merged = {"entities": res.get("entities") or [], "relations": res.get("relations") or []}
+        merged = {"entities": res.get("entities") or [], "relations": res.get("relations") or [],
+                  "failed": res.get("failed") or []}
     audit((user or {}).get("username", ""), "reasoning_direct_merge",
           f"items={len(items)} written={mat.get('written', 0)} skipped={mat.get('skipped', 0)} "
           f"cohort={cohort_id} branch={branch}", branch=branch)
@@ -451,7 +452,8 @@ def reasoning_cohort_item_approve(cohort_id: int, item_id: int, body: dict = Non
         raise HTTPException(409, "该条目已忽略，如需并入请先在批次中重新提交")
     branch = ((body or {}).get("branch") or "").strip() or _cohort_default_branch(conn)
     who = (user or {}).get("display_name") or (user or {}).get("username") or "system"
-    created_entities, created_relations, merged_ids = _merge_cohort_items(conn, branch, who, [it])
+    created_entities, created_relations, merged_ids, failed = _merge_cohort_items(
+        conn, branch, who, [it])
     conn.execute("UPDATE reasoning_cohort_items SET status='approved' WHERE id=?", (item_id,))
     # 并入明细追加到批次 stat（批次后续 approve 时其余条目仍可批量并入）
     st = _parse_stat(cohort["stat"])
@@ -473,9 +475,10 @@ def reasoning_cohort_item_approve(cohort_id: int, item_id: int, body: dict = Non
     _sync_triples_status(conn, merged_ids, "merged")
     conn.commit()
     audit((user or {}).get("username", ""), "reasoning_cohort_item_approve",
-          f"cohort={cohort_id} item={item_id} entities={len(created_entities)} relations={len(created_relations)} branch={branch}", branch=branch)
+          f"cohort={cohort_id} item={item_id} entities={len(created_entities)} "
+          f"relations={len(created_relations)} failed={len(failed)} branch={branch}", branch=branch)
     return {"ok": True, "idempotent": False, "branch": branch,
-            "entities": created_entities, "relations": created_relations}
+            "entities": created_entities, "relations": created_relations, "failed": failed}
 
 
 @router.post("/api/knowledge/reasoning/cohorts/{cohort_id}/items/{item_id}/reject")
@@ -541,19 +544,26 @@ def _merge_cohort_items(conn, branch: str, who: str, items) -> tuple:
                          "target_id": o_id, "target_name": o_name})
         merged_ids.append(d["id"])
 
+    # ★ 2026-11-21 P0-0 第四轮：不再直接 INSERT，改走统一写入口的**推断通道**。
+    #   原实现绕过类型门禁/留痕/post_check，且**不写 entity_versions**（推理并入的实体
+    #   历史上没有版本行）。推断类型可能不在本体（兜底 '实体' 实测不在 54 类型里），
+    #   所以走 write_inferred_* 的「告警不阻断 + 留痕 + 回读核验」档，而不是严格档。
+    from core.graph_write_gate import write_inferred_edge, write_inferred_entity
+
     # 2) 幂等补实体（仅当前分支缺失时插入，status='reviewed' → 并入图即显示）
-    created_entities = []
+    created_entities, failed = [], []
     for eid, meta in pending_ents.items():
         if conn.execute("SELECT 1 FROM entities WHERE id=? AND branch=?",
                         (eid, branch)).fetchone():
             continue
         etype = (meta["etype"] or "") or _existing_ent_type(conn, eid) or "实体"
         name = (meta["name"] or "") or eid
-        conn.execute(
-            "INSERT INTO entities (id, name, entity_type, properties, status, branch, source_type, "
-            "created_by, reviewed_by, reviewed_at, project_id) "
-            "VALUES (?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP,?)",
-            (eid, name, etype, "{}", "reviewed", branch, "reasoning", who, who, _pid))
+        res = write_inferred_entity(conn, entity_id=eid, name=name, entity_type=etype,
+                                    branch=branch, actor=who, project_id=_pid)
+        if not res.get("ok"):
+            # 失败必须可见 —— 不能让「批次 approved」掩盖并入失败。
+            failed.append({"kind": "entity", "id": eid, "error": res.get("error")})
+            continue
         created_entities.append({"id": eid, "name": name, "entity_type": etype})
 
     # 3) 幂等写关系
@@ -563,14 +573,17 @@ def _merge_cohort_items(conn, branch: str, who: str, items) -> tuple:
                 "SELECT 1 FROM relations WHERE source_id=? AND target_id=? AND relation_type=? AND branch=?",
                 (r["source_id"], r["target_id"], r["p"], branch)).fetchone():
             continue
-        conn.execute(
-            "INSERT INTO relations (source_id, target_id, relation_type, status, branch, created_by, project_id) "
-            "VALUES (?,?,?,?,?,?,?)",
-            (r["source_id"], r["target_id"], r["p"], "reviewed", branch, who, _pid))
+        res = write_inferred_edge(conn, source_id=r["source_id"], target_id=r["target_id"],
+                                  relation_type=r["p"], branch=branch, actor=who,
+                                  project_id=_pid)
+        if not res.get("ok"):
+            failed.append({"kind": "relation", "id": f"{r['source_id']}--{r['p']}--{r['target_id']}",
+                           "error": res.get("error")})
+            continue
         created_relations.append({"source_id": r["source_id"], "source": r["source_name"],
                                   "name": r["p"], "predicate": r["p"],
                                   "target_id": r["target_id"], "target": r["target_name"]})
-    return created_entities, created_relations, merged_ids
+    return created_entities, created_relations, merged_ids, failed
 
 
 def _sync_triples_status(conn, item_ids: list, status: str) -> None:
@@ -624,10 +637,12 @@ def reasoning_cohort_approve(cohort_id: int, body: dict = None,
         "SELECT * FROM reasoning_cohort_items WHERE cohort_id=? "
         "AND (status IS NULL OR status!='rejected') ORDER BY id", (cohort_id,)).fetchall()
 
-    created_entities, created_relations, merged_ids = _merge_cohort_items(conn, branch, who, items)
+    created_entities, created_relations, merged_ids, failed = _merge_cohort_items(
+        conn, branch, who, items)
 
     stat = {"entity_count": len(created_entities), "relation_count": len(created_relations),
-            "entities": created_entities, "relations": created_relations}
+            "entities": created_entities, "relations": created_relations,
+            "failed": failed}
     conn.execute(
         "UPDATE reasoning_cohorts SET status='approved', stat=?, decided_by=?, decided_at=CURRENT_TIMESTAMP "
         "WHERE id=?",
@@ -639,10 +654,12 @@ def reasoning_cohort_approve(cohort_id: int, body: dict = None,
     _sync_triples_status(conn, merged_ids, "merged")
     conn.commit()
     audit((user or {}).get("username", ""), "reasoning_cohort_approve",
-          f"cohort={cohort_id} entities={len(created_entities)} relations={len(created_relations)} branch={branch}", branch=branch)
+          f"cohort={cohort_id} entities={len(created_entities)} "
+          f"relations={len(created_relations)} failed={len(failed)} branch={branch}", branch=branch)
     return {"ok": True, "idempotent": False, "branch": branch,
             "entities": created_entities, "relations": created_relations,
-            "entity_count": len(created_entities), "relation_count": len(created_relations)}
+            "entity_count": len(created_entities), "relation_count": len(created_relations),
+            "failed": failed}
 
 
 @router.post("/api/knowledge/reasoning/cohorts/{cohort_id}/reject")

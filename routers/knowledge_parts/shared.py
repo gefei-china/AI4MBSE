@@ -856,134 +856,56 @@ def _snapshot_diff(conn, version_id: int) -> dict:
     added = sorted({n for n, k in cur - prev})
     removed = sorted({n for n, k in prev - cur})
     dom_changed = 0
+    level = "none"
     if prev_v:
-        # 域值域变更：对比同名同类型行的 allowed_values（复用 release 判定逻辑的宽松版）
+        # 2026-11-21 A4：此前这里第三份内联 `_dr` 只比 allowed_values（同 `_count_dom_range_changed`
+        # 的盲区），版本历史页展示的「域值域变更」与 publish 判定的版本号可能互相矛盾。
+        # 现统一委托 core.ontology_semver，页面看到的计数与判版本号的依据同源。
         prev_rows = conn.execute(
             "SELECT name, type_kind, constraints FROM ontology_version_snapshots WHERE version_id=?",
             (prev_v["id"],)).fetchall()
         cur_rows = conn.execute(
             "SELECT name, type_kind, constraints FROM ontology_version_snapshots WHERE version_id=?",
             (version_id,)).fetchall()
-        prev_map = {(r["name"], r["type_kind"]): r["constraints"] for r in prev_rows}
-        cur_map = {(r["name"], r["type_kind"]): r["constraints"] for r in cur_rows}
-
-        def _dr(c):
-            try:
-                c = json.loads(c or "{}")
-            except Exception:
-                c = {}
-            av = c.get("allowed_values") or {}
-            out = []
-            for side in ("src", "tgt"):
-                v = av.get(side)
-                out.append(sorted({str(x).strip() for x in (v if isinstance(v, list) else ([v] if v else []))
-                                   if str(x).strip() and str(x) != "?"}))
-            return out
-        for key in (set(prev_map) & set(cur_map)):
-            if _dr(prev_map[key]) != _dr(cur_map[key]):
-                dom_changed += 1
-    return {"added": added, "removed": removed, "dom_changed": dom_changed}
+        from core.ontology_semver import classify_snapshot_change
+        _sem = classify_snapshot_change(prev_rows, cur_rows)
+        dom_changed = _sem["dom_range_types"]
+        level = _sem["level"]
+    return {"added": added, "removed": removed, "dom_changed": dom_changed, "level": level}
 
 
 def _count_dom_range_changed(prev_rows, cur_rows) -> int:
-    """对比上一快照行与当前类型的定义域/值域，返回发生变更的类型数。"""
-    def _norm(c):
-        try:
-            c = json.loads(c or "{}")
-        except Exception:
-            c = {}
-        av = c.get("allowed_values") or {}
-        out = []
-        for side in ("src", "tgt"):
-            v = av.get(side)
-            out.append(sorted({str(x).strip() for x in (v if isinstance(v, list) else ([v] if v else []))
-                               if str(x).strip() and str(x) != "?"}))
-        return out
-    cur_map = {(r["name"], r["type_kind"]): r["constraints"] for r in cur_rows}
-    n = 0
-    for p in prev_rows:
-        key = (p["name"], p["type_kind"])
-        if key in cur_map and _norm(p["constraints"]) != _norm(cur_map[key]):
-            n += 1
-    return n
+    """定义域/值域发生变更的类型数（**兼容包装**，实现见 `core.ontology_semver`）。
+
+    ⚠️ 2026-11-21 起本函数只是门面。改前它自称「定义域/值域」，实际只比对
+    `allowed_values`，**从不看 `domain_classes` / `xsd_type`** —— 而这两个才是
+    定义域与类型语义的真身。实测「收窄 domain_classes」「decimal→string」都被判 0 变更。
+    保留函数名是为了不破坏既有调用方；新代码请直接用 `classify_snapshot_change`。
+    """
+    from core.ontology_semver import classify_snapshot_change
+    return classify_snapshot_change(prev_rows, cur_rows)["dom_range_types"]
 
 
 def _count_constraints_changed(prev_rows, cur_rows) -> int:
-    """P1-5 配套（2026-10-15）：对比上一快照与当前类型的**完整约束**（定义域/值域之外的
-    特性 characteristics / 反向 inverse_of / 基数 / xsd / 白名单等），返回变更类型数。
+    """定义域/值域之外的约束变更类型数（**兼容包装**，实现见 `core.ontology_semver`）。
 
-    为什么单独一个函数：`_count_dom_range_changed` 只看 dom/range（判 major 破坏性），
-    而特性/基数类变更**无法借此发布**——实测 R2 摘除 ALLOCATED_TO/TRACE 的 symmetric 后
-    publish 报「无差异」。约束变更是语义修正（多为收紧/纠错），不破坏消费方查询形状
-    → 判 minor（compatible=1），与 dom/range（改了端点形状，判 major）分开算。
+    ⚠️ 2026-11-21 起本函数只是门面。改前它的判定口径是「dom/range 未变 + 全约束有变
+    ⇒ 算约束变更」，并统一结论为 minor（兼容）—— 于是「摘 symmetric」「新增 required」
+    「新增 unique」「改 unit」全部被判为兼容，下游实例静默变违规。
+    现在收紧/放宽的判定交给规则表（见 `core/ontology_semver.RULE_TABLE`）。
     """
-    def _norm(c):
-        try:
-            c = json.loads(c or "{}")
-        except Exception:
-            c = {}
-        av = c.get("allowed_values") or {}
-        out = []
-        for side in ("src", "tgt"):
-            v = av.get(side)
-            out.append(sorted({str(x).strip() for x in (v if isinstance(v, list) else ([v] if v else []))
-                               if str(x).strip() and str(x) != "?"}))
-        return out
-
-    def _full(c):
-        """全约束规范化（dom/range 之外全部纳入；排序保证等价 JSON 同判）。"""
-        try:
-            c = json.loads(c or "{}")
-        except Exception:
-            return {}
-        if not isinstance(c, dict):
-            return {}
-
-        def _deep(x):
-            if isinstance(x, dict):
-                return {k: _deep(x[k]) for k in sorted(x)}
-            if isinstance(x, list):
-                return sorted((_deep(i) for i in x), key=lambda v: json.dumps(v, ensure_ascii=False, sort_keys=True))
-            return x
-        return _deep(c)
-
-    cur_map = {(r["name"], r["type_kind"]): r["constraints"] for r in cur_rows}
-    n = 0
-    for p in prev_rows:
-        key = (p["name"], p["type_kind"])
-        if key not in cur_map:
-            continue
-        # 只在 dom/range 未变时数约束变更（dom/range 变更已由破坏性口径单独计）
-        if _norm(p["constraints"]) == _norm(cur_map[key]) and \
-                _full(p["constraints"]) != _full(cur_map[key]):
-            n += 1
-    return n
+    from core.ontology_semver import classify_snapshot_change
+    return classify_snapshot_change(prev_rows, cur_rows)["other_types"]
 
 
 def _snapshot_dom_range_diff(conn, prev_rows, cur_rows) -> bool:
-    """对比上一已发布快照与当前类型的定义域/值域：有变化 → 破坏性（major）。"""
-    def _key(name, kind):
-        for r in cur_rows:
-            if r["name"] == name and r["type_kind"] == kind:
-                return r
-        return None
-    for p in prev_rows:
-        r = _key(p["name"], p["type_kind"])
-        if r is None:
-            continue
-        def _dr(row, side):
-            try:
-                c = json.loads(row["constraints"] or "{}")
-            except Exception:
-                c = {}
-            av = c.get("allowed_values") or {}
-            v = c.get("domain") if c.get("domain") is not None and side == "src" else (c.get("range") if side == "tgt" else av.get(side))
-            if v is None and side in ("src", "tgt"):
-                v = av.get(side)
-            return sorted({str(x).strip() for x in (v if isinstance(v, list) else ([v] if v else [])) if str(x).strip() and str(x) != "?"})
-        if _dr(p, "src") != _dr(r, "src") or _dr(p, "tgt") != _dr(r, "tgt"):
-            return True
-    return False
+    """是否存在破坏性变更（**兼容包装**，实现见 `core.ontology_semver`）。
+
+    ⚠️ 2026-11-21 起本函数只是门面。改前它查 `domain` / `range` 两个键，而本系统
+    实际存储在 `domain_classes` —— **那个键从没被读到过**，所以它对定义域变更恒返回 False。
+    """
+    from core.ontology_semver import classify_snapshot_change
+    return classify_snapshot_change(prev_rows, cur_rows)["level"] == "major"
 
 
 def _active_ont_rows(conn):

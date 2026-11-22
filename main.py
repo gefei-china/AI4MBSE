@@ -67,6 +67,24 @@ from routers import (
 async def lifespan(app: FastAPI):
     """应用生命周期（替代已弃用的 @app.on_event("startup")，语义等价）。"""
     init_db()
+    # ★ 2026-11-22（P1-2 收尾）：Fuseki（SPARQL CQ 档）随主服务受管自拉起。
+    #   `graph_db.fuseki_autostart` 默认 False ⇒ 这里瞬时返回 disabled，零副作用。
+    #   打开后：幂等（已有实例只核对数据集）、持久（--update --loc）、
+    #   失败只告警——绝不让 1GB JVM 的启动问题拖垮主服务；
+    #   图库不可用时 CQ sparql 档按既有纪律 skip（skip ≠ pass），不会伪装成功。
+    try:
+        from core import fuseki_runtime as _fuseki_rt
+        _fst = _fuseki_rt.ensure_running()
+        if _fst.get("status") in ("started", "already_running"):
+            print("[startup] Fuseki %s: %s（持久=%s）"
+                  % (_fst["status"], _fst.get("endpoint"), _fst.get("persistent", "已有实例")),
+                  flush=True)
+        elif _fst.get("status") != "disabled":
+            print("[startup] ⚠️ Fuseki 自拉起未生效：%s %s —— CQ sparql 档将 skip（不是通过）"
+                  % (_fst.get("status"), str(_fst.get("error") or "")[:160]), flush=True)
+    except Exception as _e_fs:
+        print("[startup] ⚠️ Fuseki 自拉起异常（主服务继续）：%s: %s"
+              % (type(_e_fs).__name__, str(_e_fs)[:160]), flush=True)
     # ★★ 2026-11-18：**强杀恢复** —— 把上次进程异常终止时留下的流式检查点固化成消息。
     #   必须紧跟 init_db()（表刚建好），且在所有后台守护线程启动之前。
     #   正常收口的流已在 finally 里删除检查点 ⇒ 这里扫到的只可能是强杀残留。

@@ -1,0 +1,25 @@
+{
+  "tag": "ontology_golden",
+  "ts": "2026-11-21 11:51:45",
+  "source": "snapshot",
+  "ontology_version_id": 175,
+  "rule_version": "2026-10-15.4",
+  "rule_count": 20,
+  "total": 54,
+  "severity": {
+    "info": 29
+  },
+  "codes": {
+    "normalized_alias_relation": 2,
+    "multi_domain_range": 20,
+    "missing_inverse": 7
+  },
+  "degraded": [],
+  "counts": {
+    "ontology_types": 54,
+    "entities": 184,
+    "relations": 249,
+    "tools": 122,
+    "ontology_versions": 75
+  }
+}

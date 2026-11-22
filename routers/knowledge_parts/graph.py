@@ -123,24 +123,32 @@ def graph_add_node(body: GraphNodeIn, conn=Depends(db_session),
     g = _release_guard(conn, body.branch or "dev")
     if g:
         return JSONResponse({"error": g}, 400)
-    # KB-P4：本体语义层——节点实例化先过本体校验（类型/必填/唯一/取值白名单）
-    from ontology_semantics import GraphStore
-    ok, res = GraphStore(conn).create_node(
-        nid, body.name, body.entity_type, body.properties, body.branch, body.x, body.y,
-        knowledge_category=body.knowledge_category or "")
-    if not ok:
-        return JSONResponse({"error": "; ".join(res)}, 400)
-    _log_graph_edit(conn, "node_add", nid, {"name": body.name, "type": body.entity_type}, _actor(user))
     # 审计带属性摘要（2026-09-14 历史页维度补全：新增节点时一并记录带了哪些属性）
     _props_txt = ""
     try:
         _pv = [(k, str(v)) for k, v in (body.properties or {}).items() if str(v).strip()][:6]
         if _pv:
-            _props_txt = "；属性: " + "、".join(f"{k}={v}" for k, v in _pv)
+            _props_txt = "属性: " + "、".join(f"{k}={v}" for k, v in _pv)
     except Exception:
         pass
-    audit(_actor(user), "graph_node_add", f"图谱新增节点: {body.name} ({nid}){_props_txt}", conn=conn, branch=body.branch or "dev")
-    return {"ok": True, "id": nid}
+    # ★ 2026-11-21 P0-0：统一写入口（门禁→校验→写入→留痕→执行后核验）。
+    #   ⚠️ status="reviewed" 必须显式传：图库内手动创建 = 工程师显式确认行为，
+    #   与 API 直写（`POST /entities` 默认 candidate 进审核队列）语义不同，
+    #   原实现由 `GraphStore.create_node` 内部写死，迁移时不能丢。
+    from core.graph_write_gate import write_entity
+    res = write_entity(conn, op="create", entity_id=nid, name=body.name,
+                       entity_type=body.entity_type, properties=body.properties,
+                       branch=body.branch or "dev", actor=_actor(user),
+                       knowledge_category=body.knowledge_category or "",
+                       x=body.x, y=body.y, status="reviewed",
+                       log_op="node_add", audit_event="graph_node_add",
+                       extra_detail=_props_txt)
+    if not res.get("ok"):
+        return JSONResponse({"error": res.get("error"), "stage": res.get("stage"),
+                             "post": res.get("post")},
+                            404 if res.get("stage") == "not_found"
+                            else (500 if res.get("applied") else 400))
+    return {"ok": True, "id": nid, "post": res.get("post")}
 
 
 @router.put("/api/knowledge/graph/nodes/{nid}")
@@ -167,22 +175,10 @@ def graph_update_node(nid: str, body: GraphNodeIn, conn=Depends(db_session),
             return JSONResponse({"error": f"改类仅允许迁移到祖先或同父类型族：{old_type} →（可迁移: {', '.join(sorted(mig))}）"}, 400)
         # P1-6（2026-09-07）：编辑保存同样新建一样过本体校验——此前 PUT 绕过
     # validate_node，可把受控属性改成白名单外的值/删必填/写非法键（约束漏洞）。
-    from ontology_semantics import GraphStore
-    # 2026-11-15：**必须传 branch 与 exclude_id** —— 唯一性只在分支内判定，且要比对时排除
-    # 自身（否则编辑已有实例时它自己就在库里，每次保存都被判"违反唯一约束"，实例改不动）。
-    errs = GraphStore(conn).validator.validate_node(
-        body.entity_type, body.properties, branch, exclude_id=nid)
-    if errs:
-        return JSONResponse({"error": "; ".join(errs)}, 400)
-    res = repo.update_entity(nid, body.name, body.entity_type,
-                             json.dumps(body.properties, ensure_ascii=False), branch,
-                             changed_by=_actor(user))   # P0-1：版本行记录操作人
-    if not res.get("ok"):
-        return JSONResponse({"error": res["error"]}, 404)
-    conn.execute("UPDATE entities SET graph_x=?, graph_y=? WHERE id=? AND branch=?",
-                 (body.x, body.y, nid, branch))
-    _log_graph_edit(conn, "node_update", nid, {"name": body.name, "x": body.x, "y": body.y}, _actor(user))
-    # 字段级变更审计（谁·何时·改了哪个字段：旧→新），随业务同事务写入 audit_logs
+    # ★ 2026-11-21 P0-0：校验与写入交给**统一写入口**（本体校验 + 属性校验 + 写入
+    #   + 留痕 + 执行后核验同处一处）。这里只保留**本端点特有的业务规则**（改类迁移约束）。
+    #   改前此处自己调 validate_node + repo.update_entity + _log_graph_edit + audit 四件事，
+    #   与 /entities 两条路径各自维护，必然漂移（实测：/entities 只查类型不校验属性）。
     _s = lambda v: ('∅' if v is None else str(v))
     _gchg = []
     try:
@@ -201,8 +197,20 @@ def graph_update_node(nid: str, body: GraphNodeIn, conn=Depends(db_session),
             _gchg.insert(0, "类型:" + _s(old_type) + "→" + _s(body.entity_type))
     except Exception:
         _gchg = []
-    _gdiff = ("；" + "；".join(_gchg[:20])) if _gchg else ""
-    audit(_actor(user), "graph_node_update", f"图谱更新节点: {body.name} ({nid})@{branch}{_gdiff}", conn=conn, branch=branch)
+    _gdiff = "；".join(_gchg[:20])
+    from core.graph_write_gate import write_entity
+    res = write_entity(conn, op="update", entity_id=nid, name=body.name,
+                       entity_type=body.entity_type, properties=body.properties,
+                       branch=branch, actor=_actor(user), x=body.x, y=body.y,
+                       log_op="node_update", audit_event="graph_node_update",
+                       extra_detail=_gdiff)
+    if not res.get("ok"):
+        return JSONResponse({"error": res.get("error"), "stage": res.get("stage"),
+                             "post": res.get("post")},
+                            404 if res.get("stage") == "not_found"
+                            else (500 if res.get("applied") else 400))
+    conn.execute("UPDATE entities SET graph_x=?, graph_y=? WHERE id=? AND branch=?",
+                 (body.x, body.y, nid, branch))
     # 分支版本管理：图谱节点手动保存提交打点（kind=manual，失败仅打印不阻断）
     try:
         CommitRepo(conn).create_commit(
@@ -210,25 +218,29 @@ def graph_update_node(nid: str, body: GraphNodeIn, conn=Depends(db_session),
             {"entities": [nid]}, {"id": nid, "name": body.name})
     except Exception as e:
         print(f"[commit_repo] manual 提交打点失败（不阻断业务）: {e}")
-    return {"ok": True, "forked": res.get("forked", False)}
+    return {"ok": True, "forked": res.get("forked", False), "post": res.get("post")}
 
 
 @router.delete("/api/knowledge/graph/nodes/{nid}")
 def graph_delete_node(nid: str, branch: Optional[str] = "dev", conn=Depends(db_session),
                       user=Depends(require_any_permission(WRITE_PERMS))):
     """删除节点（版本化）：仅删除指定分支版本行 + 同分支关联边；其他分支版本保留。"""
-    repo = KnowledgeRepo(conn)
     b = branch or "dev"
     g = _release_guard(conn, b)
     if g:
         return JSONResponse({"error": g}, 400)
-    conn.execute("DELETE FROM relations WHERE branch=? AND (source_id=? OR target_id=?)", (b, nid, nid))
-    cur = conn.execute("DELETE FROM entities WHERE id=? AND branch=?", (nid, b))
-    if cur.rowcount == 0:
-        return JSONResponse({"error": f"节点不存在: {nid}（分支 {b}）"}, 404)
-    _log_graph_edit(conn, "node_delete", nid, {}, _actor(user))
-    audit(_actor(user), "graph_node_delete", f"图谱删除节点: {nid}（{b}）", conn=conn, branch=b)
-    return {"ok": True}
+    # ★ 2026-11-21 P0-0：统一写入口。删除的**执行后核验是反向断言**（行必须消失），
+    #   不能复用"回读到且一致"的语义 —— 否则删除失败也会报成功。
+    from core.graph_write_gate import write_entity
+    res = write_entity(conn, op="delete", entity_id=nid, branch=b,
+                       actor=_actor(user), log_op="node_delete",
+                       audit_event="graph_node_delete")
+    if not res.get("ok"):
+        return JSONResponse({"error": res.get("error"), "stage": res.get("stage"),
+                             "post": res.get("post")},
+                            404 if res.get("stage") == "not_found"
+                            else (500 if res.get("applied") else 400))
+    return {"ok": True, "post": res.get("post")}
 
 
 @router.post("/api/knowledge/graph/edges")
@@ -237,16 +249,17 @@ def graph_add_edge(body: GraphEdgeIn, conn=Depends(db_session),
     g = _release_guard(conn, body.branch or "dev")
     if g:
         return JSONResponse({"error": g}, 400)
-    # KB-P4：本体语义层——边实例化先过本体校验（关系类型合法 + 源/目标类型约束）
-    from ontology_semantics import GraphStore
-    ok, res = GraphStore(conn).create_edge(
-        body.source_id, body.target_id, body.relation_type, body.props, body.branch)
-    if not ok:
-        return JSONResponse({"error": "; ".join(res)}, 400)
-    _log_graph_edit(conn, "edge_add", f"{body.source_id}--{body.relation_type}--{body.target_id}",
-                    dict(body.props), _actor(user))
-    audit(_actor(user), "graph_edge_add", f"图谱新增边: {body.source_id}--{body.relation_type}--{body.target_id}", conn=conn, branch=body.branch or "dev")
-    return {"ok": True, "id": res}
+    # ★ 2026-11-21 P0-0：统一写入口（关系类型门禁与实体同一把尺子 + 执行后核验）。
+    from core.graph_write_gate import write_edge
+    res = write_edge(conn, op="edge_create", source_id=body.source_id,
+                     target_id=body.target_id, relation_type=body.relation_type,
+                     props=body.props, branch=body.branch or "dev", actor=_actor(user))
+    if not res.get("ok"):
+        return JSONResponse({"error": res.get("error"), "stage": res.get("stage"),
+                             "post": res.get("post")},
+                            404 if res.get("stage") == "not_found"
+                            else (500 if res.get("applied") else 400))
+    return {"ok": True, "id": res.get("id"), "post": res.get("post")}
 
 
 @router.delete("/api/knowledge/graph/edges/{eid}")
@@ -259,9 +272,16 @@ def graph_delete_edge(eid: int, conn=Depends(db_session),
     g = _release_guard(conn, row["branch"] or "dev")
     if g:
         return JSONResponse({"error": g}, 400)
-    conn.execute("DELETE FROM relations WHERE id=?", (eid,))
-    _log_graph_edit(conn, "edge_delete", str(eid), {}, _actor(user))
-    return {"ok": True}
+    # ★ 2026-11-21 P0-0：统一写入口（删除的核验是反向断言：行必须消失）。
+    from core.graph_write_gate import write_edge
+    res = write_edge(conn, op="edge_delete", edge_id=eid,
+                     branch=row["branch"] or "dev", actor=_actor(user))
+    if not res.get("ok"):
+        return JSONResponse({"error": res.get("error"), "stage": res.get("stage"),
+                             "post": res.get("post")},
+                            404 if res.get("stage") == "not_found"
+                            else (500 if res.get("applied") else 400))
+    return {"ok": True, "post": res.get("post")}
 
 
 @router.get("/api/knowledge/graph/edges/review")

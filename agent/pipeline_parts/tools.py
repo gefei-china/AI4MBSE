@@ -611,10 +611,9 @@ class ToolMixin:
                     "WHERE a.name=? AND at.tool_type='tool' AND at.enabled=1 AND t.status='active' "
                     "AND t.source!='builtin'", (intent,)).fetchall():
                     desc = row["description"] or f"自定义工具 {row['name']}"
-                    if row["side_effect"] == "write":
-                        desc += "（写操作，需人工确认）"
-                    elif row["side_effect"] == "destructive":
-                        desc += "（高风险操作，必须人工确认）"
+                    # 2026-11-21 P1-8：副作用/风险/审批档位统一由最终组装处的 `_rule_brief`
+                    # 追加（读同一份 tools 表 + 同一份 HIL 策略）。此处不再各写一句
+                    # 「（写操作，需人工确认）」—— 两处各写一份文案，必然与策略调整不同步。
                     # ★★ 2026-10-28（conv 9736~9740 实证）：**配置未就绪的工具不注入**。
                     #   真机：`zhiyuan_sysmlv2_gen/check/import` 的 url 是
                     #   `{cfg:zhiyuan.base_url}/...`，而运行配置里 base_url 与 token
@@ -1161,13 +1160,82 @@ class ToolMixin:
                         _hint_suffix_by_name[_n] = _s
             except Exception:
                 _hint_suffix_by_name = {}
+        # ══ P1-8（2026-11-21）：把「调用前该知道的规则」写进工具描述 ══
+        # 改前：规则只在**服务端**校验 —— 模型按 description 猜着调，被拒后才知道；
+        #   更糟的是「权限不足」与「前置条件不满足」被拒后模型可能换个工具绕
+        #   （本系统 122 个工具，绕路空间很大），每次试错都是一轮 token。
+        # 标杆做法（Ontologiq MCP）：工具描述里直接写明前置条件/允许角色/审批要求，
+        #   让 agent **调用前即知规则**，而不是靠被拒来学习。
+        # 口径纪律：这里**不新写判定**，副作用的分类复用 `hil_service.classify_action`，
+        #   档位复用 `services.hil_policy.evaluate` —— 与执行侧同一份实现，避免"描述说 auto、
+        #   执行时 confirm"这种两处结论相反的经典错位。
+        _rule_rows, _hil_pols = {}, []
+        try:
+            from database import get_db as _gdb_r
+            _c_r = _gdb_r()
+            try:
+                for _r in _c_r.execute(
+                        "SELECT name, COALESCE(side_effect,'') AS se, "
+                        "       COALESCE(side_effect_source,'auto') AS src, "
+                        "       COALESCE(mcp_server_id,0) AS mid, "
+                        "       COALESCE(risk_level,'') AS rl, "
+                        "       COALESCE(allowed_roles,'[]') AS roles FROM tools").fetchall():
+                    _rule_rows[_r["name"]] = {"se": _r["se"], "src": _r["src"],
+                                              "mid": _r["mid"], "rl": _r["rl"],
+                                              "roles": _r["roles"]}
+            finally:
+                _c_r.close()
+            from services.hil_policy import load_policies as _lp8, evaluate as _ev8
+            _c_h = _gdb_r()
+            try:
+                _hil_pols = _lp8(_c_h)
+            finally:
+                _c_h.close()
+        except Exception:
+            _rule_rows, _hil_pols = {}, []
+
+        _HIL_TXT = {"confirm": "调用前需人工确认", "approve": "需审批角色放行",
+                    "notify": "执行后留痕（不拦截）", "deny": "禁止调用"}
+
+        def _rule_brief(name: str) -> str:
+            """工具规则摘要（只列**非默认**项，避免 66 个只读工具全被噪声污染）。"""
+            info = _rule_rows.get(name) or {}
+            bits = []
+            se = info.get("se") or ""
+            if se == "destructive":
+                bits.append("不可逆操作")
+            elif se == "write":
+                bits.append("写操作")
+            if (info.get("rl") or "") == "high":
+                bits.append("风险=高")
+            # HIL 档位：策略不可读 ⇒ 整段跳过（不猜、不编造「需确认」）
+            if _hil_pols and se:
+                try:
+                    _lvl = _ev8(_hil_pols, decision_point="tool_write",
+                                match_key=se or "read",
+                                context={"side_effect": se, "tool": name,
+                                         "tool_family": se or "", "tool_type": ""}
+                                ).get("level") or ""
+                    if _lvl in _HIL_TXT:
+                        bits.append(_HIL_TXT[_lvl])
+                except Exception:
+                    pass
+            try:
+                _roles = json.loads(info.get("roles") or "[]")
+            except Exception:
+                _roles = []
+            if _roles:
+                bits.append("限角色：" + "/".join(str(x) for x in _roles[:3]))
+            return ("【规则：" + "；".join(bits) + "】") if bits else ""
+
         for name, desc, ctype, server in candidates:
             _params = _schema_by_name.get(name) or _LOOSE
             tools.append({
                 "type": "function",
                 "function": {
                     "name": name,
-                    "description": (desc or "") + _hint_suffix_by_name.get(name, ""),
+                    "description": (desc or "") + _hint_suffix_by_name.get(name, "")
+                                   + _rule_brief(name),
                     "parameters": _params,
                 },
             })

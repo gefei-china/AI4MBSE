@@ -62,6 +62,7 @@ import time
 from urllib.parse import quote as _quote, unquote as _unquote
 
 from core import ns as _ns
+from core import fuseki_runtime as _fr   # 端点单一真源（2026-11-22）
 
 BASE = _ns.BASE
 NS_ONTOLOGY = _ns.NS_ONTOLOGY
@@ -860,7 +861,10 @@ def get_writer(enabled: bool = True, backend: str = "pyoxigraph",
             #   ⇒ 不熔断 ⇒ **每一轮对话的每一次 SPARQL 都白等满 timeout**，
             #   症状= 图谱检索恒空 + 首 token 延迟被拖到几十秒（实测 45~61s）。
             #   这才是"graph_db.fuseki.query_sparql 失败: HTTP 405"的真实成因。
-            return FusekiWriter(endpoint=endpoint or "http://localhost:3030/mbse",
+            # ★ 2026-11-22：兜底端点改读 core.fuseki_runtime 单一真源。
+            #   此前本处写死 "http://localhost:3030/mbse"，与 CQ 档/启动脚本各一份。
+            #   用 `_fr.DEFAULT_ENDPOINT`（模块属性而非 from-import）便于门禁变异自证。
+            return FusekiWriter(endpoint=endpoint or _fr.resolve_endpoint(),
                                 username=username, password=password)
         except Exception as e:
             logger.warning("graph_db.get_writer 降级 Mock（fuseki）: %s", e)

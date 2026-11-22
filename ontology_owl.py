@@ -203,6 +203,48 @@ def _parent_name(conn, r, rows=None) -> str:
     return row["name"] if row else ""
 
 
+def _version_declarations(conn, base: str, ontology_name: str) -> dict:
+    """按 OWL 2 版本管理惯例生成版本声明（2026-11-21 A4 配套）。
+
+    改前导出物里**只有 `owl:deprecated`**，没有版本链 —— 客户拿 Turtle 进 Protégé
+    无法回答「这一版和上一版是什么关系」。OWL 2 的标准做法是三个谓词：
+
+    - `owl:priorVersion`          —— 指向前一版本（无条件）
+    - `owl:backwardCompatibleWith`—— 本版与前一版向后兼容（本版 `compatible=1`）
+    - `owl:incompatibleWith`      —— 本版与前一版不兼容（本版 `compatible=0`）
+
+    ⚠️ 注意方向：这三个谓词描述的是**声明者（本版）对目标版本**的关系，
+    所以用**当前版本**的 `compatible` 决定用哪个谓词，而不是前一版本的。
+
+    返回 {} 表示无已发布版本 —— 此时不硬造版本 IRI（避免导出假声明）。
+    """
+    try:
+        cur = conn.execute(
+            "SELECT id, version_label, compatible FROM ontology_versions "
+            "WHERE status='released' ORDER BY id DESC LIMIT 1").fetchone()
+    except Exception:
+        return {}
+    if not cur or not cur["version_label"]:
+        return {}
+    # 版本 IRI 用**文档式**（ontology IRI 常常以 `#` 结尾，直接拼会得到
+    # `...#XingWangDomain/v25.5.0` 这种 fragment 里带斜杠的怪 URI）。
+    # 惯例：`<ontology-doc-IRI>/<version-label>`。
+    _doc = f"{base.rstrip('#/')}/{ontology_name}"
+    ont_iri = _doc
+    out = {"version_iri": f"{ont_iri}/{cur['version_label']}", "label": cur["version_label"]}
+    prev = conn.execute(
+        "SELECT version_label FROM ontology_versions "
+        "WHERE status='released' AND id<? ORDER BY id DESC LIMIT 1", (cur["id"],)).fetchone()
+    if prev and prev["version_label"]:
+        prior = f"{ont_iri}/{prev['version_label']}"
+        out["prior_version"] = prior
+        if cur["compatible"]:
+            out["backward_compatible_with"] = prior
+        else:
+            out["incompatible_with"] = prior
+    return out
+
+
 def to_owl(conn, ontology_name: str = "XingWangDomain", rows=None):
     """ontology_types → OWL/RDF-XML 字符串。方案 A3：返回 (xml, warnings)。
 
@@ -215,6 +257,19 @@ def to_owl(conn, ontology_name: str = "XingWangDomain", rows=None):
     root = ET.Element(f"{{{RDF}}}RDF")
     ont = ET.SubElement(root, f"{{{OWL}}}Ontology")
     ET.SubElement(ont, f"{{{OWL}}}imports", **{f"{{{RDF}}}resource": f"{BASE}{ontology_name}"})
+    # 2026-11-21 A4：版本链（versionIRI + priorVersion + 兼容/不兼容声明）
+    _vd = _version_declarations(conn, BASE, ontology_name)
+    if _vd:
+        ET.SubElement(ont, f"{{{OWL}}}versionIRI", **{f"{{{RDF}}}resource": _vd["version_iri"]})
+        ET.SubElement(ont, f"{{{OWL}}}versionInfo").text = _vd["label"]
+        if _vd.get("prior_version"):
+            ET.SubElement(ont, f"{{{OWL}}}priorVersion", **{f"{{{RDF}}}resource": _vd["prior_version"]})
+        if _vd.get("backward_compatible_with"):
+            ET.SubElement(ont, f"{{{OWL}}}backwardCompatibleWith",
+                          **{f"{{{RDF}}}resource": _vd["backward_compatible_with"]})
+        if _vd.get("incompatible_with"):
+            ET.SubElement(ont, f"{{{OWL}}}incompatibleWith",
+                          **{f"{{{RDF}}}resource": _vd["incompatible_with"]})
 
     # P0-1：实体 IRI 主轴——主体/引用 URI 均优先用 iri 列，回退 name 派生
     name2iri = _build_name2iri(rows, base=BASE)
@@ -483,7 +538,21 @@ def to_turtle(conn, ontology_name: str = "XingWangDomain", rows=None):
         _ns = BASE
     L.append(f"@prefix : <{_ns}> .")
     L.append("")
-    L.append(f":{ontology_name} a owl:Ontology .")
+    # 2026-11-21 A4：版本链（与 to_owl 同一份实现，避免两种语法各写一套）
+    _vd = _version_declarations(conn, _ns, ontology_name)
+    if _vd:
+        _hdr = [f":{ontology_name} a owl:Ontology",
+                f'    owl:versionIRI <{_vd["version_iri"]}>',
+                f'    owl:versionInfo "{_vd["label"]}"']
+        if _vd.get("prior_version"):
+            _hdr.append(f'    owl:priorVersion <{_vd["prior_version"]}>')
+        if _vd.get("backward_compatible_with"):
+            _hdr.append(f'    owl:backwardCompatibleWith <{_vd["backward_compatible_with"]}>')
+        if _vd.get("incompatible_with"):
+            _hdr.append(f'    owl:incompatibleWith <{_vd["incompatible_with"]}>')
+        L.append(" ;\n".join(_hdr) + " .")
+    else:
+        L.append(f":{ontology_name} a owl:Ontology .")
     L.append("")
 
     _name2iri = _build_name2iri(rows, base=_ns)

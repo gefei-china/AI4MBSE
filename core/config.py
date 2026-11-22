@@ -1399,6 +1399,16 @@ DEFAULT_CONFIG = {
         "neo4j_uri": "",             # Neo4j Bolt URI（如 bolt://localhost:7687）
         "neo4j_user": "",            # Neo4j 用户名
         "neo4j_password": "",        # Neo4j 密码（secret）
+        # ── P1-2（2026-11-22）：Fuseki 随主服务受管自拉起 ──
+        # 默认 False：不改既有部署行为（不会凭空多起一个 1GB 的 JVM）。
+        # 打开后由 core.fuseki_runtime.ensure_running() 幂等拉起：
+        #   已活着 ⇒ 只核对数据集；端口被别人占 ⇒ 只告警不抢占；
+        #   启动失败 ⇒ 主服务照常起，CQ sparql 档按既有纪律 skip（≠ pass）。
+        # 可用环境变量 MBSE_FUSEKI_AUTOSTART=1 覆盖（部署级，不写配置文件）。
+        "fuseki_autostart": False,
+        # 拉起时使用 TDB2 持久化（--update --loc=<abs>）。
+        # 设 False 回落 --mem（只用于临时验证；重启即空，不要在生产用）。
+        "fuseki_persistent": True,
     },
     # ── P0-2（2026-10-03 整改）：编排运行的 liveness 与孤儿回收 ──
     # 对标 LangGraph checkpointer / Temporal timeout：**长时间无任何推进的运行必须有明确结局**。
@@ -1859,11 +1869,14 @@ ENV_MAP = {
     "MBSE_EMBED_BIGRAM_DIM": ("embedding", "bigram_dim"),
     "MBSE_INTENT_CACHE_ENABLED": ("intent", "cache_enabled"),  # P1-31：默认 False（实测收益≈0）
     "MBSE_REQUEST_INVARIANT_MODE": ("request_invariant", "mode"),  # 部署级三态覆盖
+    "MBSE_FUSEKI_AUTOSTART": ("graph_db", "fuseki_autostart"),
 }
 
 # 布尔型配置项（ENV 值为 "1"/"true"/"yes" 视为 True）
 _BOOL_KEYS = {
     ("llm", "force_mock"),
+    ("graph_db", "fuseki_autostart"),   # P1-2：部署级开关，环境变量 "1" ⇒ True
+    ("graph_db", "fuseki_persistent"),
 }
 
 
@@ -2520,6 +2533,8 @@ CONFIG_SCHEMA = {
         "neo4j_uri":         {"type": "str",   "desc": "Neo4j Bolt URI（如 bolt://localhost:7687）"},
         "neo4j_user":        {"type": "str",   "desc": "Neo4j 用户名"},
         "neo4j_password":    {"type": "secret","desc": "Neo4j 密码"},
+        "fuseki_autostart":  {"type": "bool",  "desc": "Fuseki 随主服务自拉起（默认关；开后幂等、持久、失败只告警不阻断启动）"},
+        "fuseki_persistent": {"type": "bool",  "desc": "Fuseki 用 TDB2 持久化（--update --loc；关掉则 --mem 重启即空，仅验证用）"},
     },
     # P0-1（2026-10-18）：资产长尾治理阈值（core/lifecycle.py 消费；前端契约登记处）
     "lifecycle": {

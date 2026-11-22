@@ -205,11 +205,17 @@ def ontology_cq_add(body: dict = None, conn=Depends(db_session),
     expected = str(b.get("expected") or "empty").strip()
     if not question:
         return JSONResponse({"error": "question 不能为空"}, 400)
-    if kind != "sql":
-        return JSONResponse({"error": f"暂仅支持 kind=sql（当前: {kind}）"}, 400)
+    if kind not in ("sql", "sparql"):
+        return JSONResponse({"error": f"kind 必须是 sql | sparql（当前: {kind}）"}, 400)
     if expected not in ("empty", "nonempty"):
         return JSONResponse({"error": "expected 必须是 empty|nonempty"}, 400)
-    ok, err = _ocq.validate_query(query)
+    # 2026-11-21 P1-2：两种档位各用各的白名单（sql 拒 PRAGMA/ATTACH；sparql 拒
+    # SPARQL Update 写动词）。**不能都用 validate_query** —— 那会把 sparql 当 sql 校验，
+    # 反过来也一样。
+    if kind == "sparql":
+        ok, err = _ocq.validate_sparql(query)
+    else:
+        ok, err = _ocq.validate_query(query)
     if not ok:
         return JSONResponse({"error": err}, 400)
     cur = conn.execute(
@@ -236,9 +242,19 @@ def ontology_cq_update(qid: int, body: dict = None, conn=Depends(db_session),
     enabled = 1 if b.get("enabled") is None else (1 if b.get("enabled") else 0)
     if expected not in ("empty", "nonempty"):
         return JSONResponse({"error": "expected 必须是 empty|nonempty"}, 400)
-    ok, err = _ocq.validate_query(query)
+    # ★ 2026-11-21 P1-2：**必须按该行自己的 kind 选白名单**。
+    #   改前这里无条件 `validate_query`（SQL 白名单）：
+    #     ① sparql 档 CQ 一改就被 SQL 白名单拒（PREFIX 开头不匹配 ^select|^with）⇒ 改不动；
+    #     ② 更危险的方向被**同时**堵住了：SQL 白名单不认识 SPARQL 的 LOAD/CLEAR/MOVE，
+    #        若有人把 sql 行改成 sparql 语义，校验面与实际执行面对不上。
+    #   ⇒ 用行的 kind 决定用哪把尺子，与 run_cqs 的分派保持同一口径。
+    _k = (row["kind"] or "sql").strip()
+    if _k == "sparql":
+        ok, err = _ocq.validate_sparql(query)
+    else:
+        ok, err = _ocq.validate_query(query)
     if not ok:
-        return JSONResponse({"error": err}, 400)
+        return JSONResponse({"error": f"[{_k} 档] {err}"}, 400)
     conn.execute(
         "UPDATE ontology_questions SET question=?, query=?, expected=?, enabled=?, "
         "updated_at=CURRENT_TIMESTAMP WHERE id=?", (question, query, expected, enabled, qid))
@@ -427,6 +443,7 @@ def ontology_version_publish(body: dict = None, conn=Depends(db_session),
     constr_changed = 0   # P1-5 配套缺口修复（2026-10-15）：此前 diff 只认增删/dom-range，
     #                     特性（characteristics）/反向（inverse_of）/基数等约束变更无法发布 ——
     #                     R2 摘 symmetric 后发布被「无差异」拒绝，实测暴露。算 minor（兼容）。
+    _sem = None          # 2026-11-21 A4：变更分级结果（单一真源 core.ontology_semver）
     # 2026-09-02 发布说明：body.summary（用户填写，将展示在版本历史/changelog）；未填时自动按 diff 汇总
     body = body or {}
     user_note = str(body.get("summary") or "").strip()
@@ -439,15 +456,20 @@ def ontology_version_publish(body: dict = None, conn=Depends(db_session),
         prev_rows = conn.execute(
             "SELECT name, type_kind, constraints FROM ontology_version_snapshots WHERE version_id=?",
             (prev_v["id"],)).fetchall()
-        prev_names = {(r["name"], r["type_kind"]) for r in prev_rows}
-        removed = sorted({n for n, k in prev_names - cur_names})
-        added = sorted({n for n, k in cur_names - prev_names})
-        dom_changed = _count_dom_range_changed(prev_rows, cur)
-        constr_changed = _count_constraints_changed(prev_rows, cur)
-        if not removed and not added and not dom_changed and not constr_changed:
+        # ★ 2026-11-21 A4 修复：版本分级收敛到**单一真源** core/ontology_semver。
+        #   改前此处并列调用 `_count_dom_range_changed` + `_count_constraints_changed`，
+        #   两者查的键各不相同，且都不看 `domain_classes` / `xsd_type`（那才是定义域与类型语义），
+        #   实测 7 类破坏性变更里 6 类被判「兼容」（收窄 domain_classes、改 xsd_type、
+        #   摘 symmetric、新增 required/unique、改 unit）。后果：下游实例静默变违规。
+        from core.ontology_semver import classify_snapshot_change
+        _sem = classify_snapshot_change(prev_rows, cur)
+        removed, added = _sem["removed"], _sem["added"]
+        dom_changed = _sem["dom_range_types"]        # 前端「域值域变更」用它，口径已含 domain_classes
+        constr_changed = _sem["other_types"]         # 其它约束（特性/反向/基数/语义类型/标注）
+        if _sem["level"] == "none":
             return JSONResponse({"error": f"当前数据与已发布版本 {prev_v['version_label']} 无差异，"
                                           f"无变更可发布（先编辑本体再发布）"}, 400)
-        if removed or dom_changed:
+        if _sem["level"] == "major":
             major, minor, patch = prev_v["major"] + 1, 0, 0
             compatible = 0
         else:
@@ -475,6 +497,14 @@ def ontology_version_publish(body: dict = None, conn=Depends(db_session),
         auto_parts.append(f"{dom_changed} 个类型定义域/值域变更")
     if constr_changed:
         auto_parts.append(f"{constr_changed} 个类型约束变更（特性/反向/基数）")
+    # 2026-11-21 A4：破坏性变更必须**写明凭什么判破坏性** —— 只给计数，评审方无法复核。
+    if _sem and _sem["level"] == "major":
+        _why = [f"{x['type']}.{x['field']}={x['kind']}" for x in _sem["reasons"][:3]]
+        if _sem["removed"]:
+            _why.insert(0, f"删除类型 {len(_sem['removed'])} 个")
+        if _sem["unknown_fields"]:
+            _why.append(f"未登记约束键 {','.join(_sem['unknown_fields'])}")
+        auto_parts.append("破坏性判定依据：" + "；".join(_why))
     summary = user_note or ("；".join(auto_parts) if auto_parts else f"发布当前数据（{len(cur)} 类型）")
     if user_note:
         summary = f"{user_note}（变更：{'；'.join(auto_parts) if auto_parts else '首次发布'}）"
@@ -520,9 +550,13 @@ def ontology_version_publish(body: dict = None, conn=Depends(db_session),
                 migration_plan = {"ops": len(_plan["ops"]), "affected": _plan["affected_total"]}
     except Exception as _e:  # 计划生成失败不阻断发布（迁移可后续手动补建）
         migration_plan = {"ops": 0, "affected": 0, "error": str(_e)}
+    _major_basis = ""
+    if _sem and _sem["level"] == "major":
+        _major_basis = "；破坏性依据：" + "、".join(
+            f"{x['type']}.{x['field']}({x['kind']})" for x in _sem["reasons"][:5])
     audit(actor, "ontology_version_publish",
           f"发布当前数据 → {label}（快照 {len(cur)} 类型，"
-          f"{'兼容·自动跟随' if compatible else '⚠️ 破坏性需迁移确认'}）"
+          f"{'兼容·自动跟随' if compatible else '⚠️ 破坏性需迁移确认'}{_major_basis}）"
           + (f"；迁移计划 #{migration_plan_id}（{migration_plan.get('ops', 0)} op）" if migration_plan_id else "")
           + (f"；⚠️ CQ fail {chk['cq']['failed']}/total {chk['cq']['total']}（不拦截，已留痕可追责）"
              if chk and isinstance(chk.get("cq"), dict) and chk["cq"].get("failed") else ""),
@@ -533,7 +567,12 @@ def ontology_version_publish(body: dict = None, conn=Depends(db_session),
                          "check": _check_brief(chk) if chk else {}},
             "diff": {"added": added if prev_v else list(cur_names), "removed": removed if prev_v else [],
                      "dom_changed": dom_changed if prev_v else 0,
-                     "constr_changed": constr_changed if prev_v else 0},
+                     "constr_changed": constr_changed if prev_v else 0,
+                     # 2026-11-21 A4：把「为什么是这个版本号」一并返回，前端可直接展示依据
+                     "level": (_sem or {}).get("level", "none"),
+                     "major_types": (_sem or {}).get("major_types", 0),
+                     "reasons": (_sem or {}).get("reasons", [])[:20],
+                     "unknown_fields": (_sem or {}).get("unknown_fields", [])},
             "migration_plan_id": migration_plan_id, "migration_plan": migration_plan}
 
 
@@ -625,19 +664,24 @@ def ontology_version_release(body: dict = None, conn=Depends(db_session),
             (row["id"], r["id"], r["name"], r["type_kind"], r["parent_id"],
              r["properties"] or "{}", r["constraints"] or "{}",
              r["description"] or "", r["icon"] or "", r["color"] or "#185FA5"))
-    # ③ 兼容性判定：对比上一已发布快照
-    prev = conn.execute(
-        "SELECT version_id, name, type_kind FROM ontology_version_snapshots "
-        "WHERE version_id IN (SELECT id FROM ontology_versions WHERE status='released')").fetchall()
+    # ③ 兼容性判定：对比**最新已发布快照**，口径与 publish 完全一致。
+    #    ★ 2026-11-21 A4 修复（两处）：
+    #    ① 改前这里 `SELECT ... WHERE version_id IN (所有 released)` 取的是**全部**已发布快照，
+    #       同名类型会跨版本重复出现，diff 结果取决于查询返回顺序 —— 与 publish 那套「只比最新」
+    #       是两种口径，同一语义两套算法必然错位；
+    #    ② 改前调 `_snapshot_dom_range_diff`，它查 `domain`/`range` 键，而实际数据存的是
+    #       `domain_classes`，**那个键从没被任何一份实现读到**。现统一走 core.ontology_semver。
     compatible = 1
-    if prev:
-        prev_names = {(p["name"], p["type_kind"]) for p in prev}
-        cur_names = {(r["name"], r["type_kind"]) for r in src}
-        removed = prev_names - cur_names                       # 删除 = 破坏性
-        renamed = cur_names & prev_names                       # 重名且 type_kind 相同视为同名（改名=旧名消失+新名出现，已含在 removed/added）
-        # 改名检测：新增名 且 删除名 数量对不上 → 保守判不兼容（删除已覆盖）；域值域变更单独判
-        dom_changed = _snapshot_dom_range_diff(conn, prev, src)
-        if removed or dom_changed:
+    _prev_v = conn.execute(
+        "SELECT version_id FROM ontology_version_snapshots WHERE version_id IN "
+        "(SELECT id FROM ontology_versions WHERE status='released' AND id<>?) "
+        "ORDER BY version_id DESC LIMIT 1", (row["id"],)).fetchone()
+    if _prev_v:
+        _prev_rows = conn.execute(
+            "SELECT name, type_kind, constraints FROM ontology_version_snapshots WHERE version_id=?",
+            (_prev_v["version_id"],)).fetchall()
+        from core.ontology_semver import classify_snapshot_change
+        if classify_snapshot_change(_prev_rows, src)["level"] == "major":
             compatible = 0
     conn.execute(
         "UPDATE ontology_versions SET status='released', released_at=?, released_by=?, "

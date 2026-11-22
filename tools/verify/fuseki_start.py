@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""启动 Fuseki（Windows / Git Bash 可靠版，2026-10-10）。
+"""启动 Fuseki（Windows / Git Bash 可靠版，2026-10-10；2026-11-22 收敛到运行时单一真源）。
 
 ## 为什么不用 bash 直接跑（★ 踩了4 次坑）
 `/mbse` 这个**数据集名在 Git Bash 里会被 MSYS2 转成 Windows 路径**：
@@ -15,8 +15,13 @@ Fuseki 6.2.0 的 `--base=DIR` 是**静态内容目录**（放 UI 文件），
   而数据目录回落到`run/`。
 ⇒ 持久化要用 `--loc=DIR`（TDB2 库）或 `--tdb2`；本脚本默认 `--mem`（免持久化，验证够用）。
 
+## 2026-11-22 起
+端点 / 数据集名 / TDB2 目录 / 启动参数全部由 `core.fuseki_runtime` 单一真源提供；
+本脚本只保留 CLI 分发（前台 / 脱离常驻 / 停止）。
+主服务 lifespan 也调用同一个 `ensure_running()`，两边不会再各写一份参数。
+
 ## 用法
-    ./.venv/Scripts/python.exe -X utf8 tools/verify/fuseki_start.py            # 前台阻塞
+    ./.venv/Scripts/python.exe -X utf8 tools/verify/fuseki_start.py            # 前台阻塞（--mem）
     ./.venv/Scripts/python.exe -X utf8 tools/verify/fuseki_start.py --daemon   # 后台常驻
     ./.venv/Scripts/python.exe -X utf8 tools/verify/fuseki_start.py --persistent# TDB2 持久化
     ./.venv/Scripts/python.exe -X utf8 tools/verify/fuseki_start.py --stop     # 停
@@ -24,53 +29,42 @@ Fuseki 6.2.0 的 `--base=DIR` 是**静态内容目录**（放 UI 文件），
 from __future__ import annotations
 
 import os
-import subprocess
 import sys
 import time
-import urllib.request
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _ROOT = os.path.dirname(os.path.dirname(_HERE))
+if _ROOT not in sys.path:
+    sys.path.insert(0, _ROOT)
 
-JAVA = os.path.join(_ROOT, "java-runtime", "bin", "java.exe")
-JAR = os.path.join("fuseki", "jena-fuseki-server.jar")
-PORT = "3030"
-DS = "mbse"                      # ★ 纯 ASCII，无斜杠 ⇒ 不会被任何 shell 转换
-LOC = os.path.join(_ROOT, "tmp", "fuseki_tdb2")
-_OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+from core import fuseki_runtime as fr  # noqa: E402
+
+# 兼容旧引用（门禁/脚本按这些名字取常量）；真值只在 fr 里。
+JAVA = fr.JAVA
+JAR = fr.JAR
+PORT = str(fr.DEFAULT_PORT)
+DS = fr.DEFAULT_DATASET
+LOC = fr.TDB2_DIR
+
+
+def _base() -> str:
+    # ⚠️ ping/datasets 要的是**服务根** `http://host:port`，不是含数据集名的端点。
+    #    曾直接把 resolve_endpoint() 传进去 ⇒ 打 /mbse/$/ping 恒失败，
+    #    表现为"明明活着却以为没起"（2026-11-22 抓到）。
+    return fr.endpoint_parts(fr.resolve_endpoint())[0]
 
 
 def _ping(timeout=3) -> str | None:
-    try:
-        with _OPENER.open(f"http://127.0.0.1:{PORT}/$/ping", timeout=timeout) as r:
-            return r.read().decode("utf-8", "replace").strip()
-    except Exception:
-        return None
+    return "OK" if fr.ping(_base(), timeout=timeout) else None
 
 
 def _datasets() -> list[str]:
-    try:
-        with _OPENER.open(f"http://127.0.0.1:{PORT}/$/datasets", timeout=6) as r:
-            import json
-            return [d.get("ds.name") for d in json.loads(r.read().decode()).get("datasets", [])]
-    except Exception:
-        return []
+    return fr.datasets(_base())
 
 
 def stop() -> int:
-    #只杀本 jar 的进程（按命令行匹配，避免误杀别的 java）
-    killed = 0
-    try:
-        out = subprocess.run(
-            ["powershell", "-NoProfile", "-Command",
-             "Get-CimInstance Win32_Process -Filter \"Name='java.exe'\" | "
-             "Where-Object { $_.CommandLine -like '*jena-fuseki-server.jar*' } | "
-             "ForEach-Object { Stop-Process -Id $_.ProcessId -Force; $_.ProcessId }"],
-            capture_output=True, text=True, timeout=30)
-        killed = len([x for x in (out.stdout or "").split() if x.strip()])
-    except Exception as e:
-        print(f"停止失败：{type(e).__name__} {e}")
-    print(f"已停止 {killed} 个 Fuseki 进程")
+    killed = fr.stop().get("stopped") or []
+    print(f"已停止 {len(killed)} 个 Fuseki 进程：{killed}")
     return 0
 
 
@@ -78,21 +72,11 @@ def main() -> int:
     if "--stop" in sys.argv:
         return stop()
 
-    args = [JAVA, "-Xmx1g", "-jar", JAR]
-    if "--persistent" in sys.argv:
-        os.makedirs(LOC, exist_ok=True)
-        # ★--loc 必须是**绝对路径且用正斜杠**；用 os.path 转换避免 MSYS 介入
-        # ★★ --update 不可省（2026-10-12 实测）：Fuseki 的 `--loc` 默认**只读**，
-        #    缺 --update 时 `POST /mbse/update` 直接 **HTTP 405**（Method Not Allowed），
-        #    表现为「图库能查、但服务侧 graph_db.write_triples 永远写不进去」。
-        #    官方口径："To allow update on the database, add --update. Updates are persisted."
-        #    即 `--update --loc=<dir>` = **可写 + 持久化** 二者兼得，不是二选一。
-        #    （历史注释曾写"实测 --loc(TDB2) 是只读的"，那是**漏加 --update** 的观察，
-        #      不是 TDB2 的限制；TDB2 本身支持事务写入。）
-        args += ["--update", "--loc=" + LOC.replace("\\", "/")]
-    else:
-        args += ["--mem"]
-    args += ["--port", PORT, "/" + DS]      # ★关键：/mbse 传给 java，不经 shell
+    persistent = "--persistent" in sys.argv
+    if persistent:
+        fr.ensure_persistent_dir()   # Fuseki 6.2 不会自建 --loc 目录
+    ep = fr.resolve_endpoint()
+    args = fr.build_command(ep, persistent=persistent)
 
     if _ping():
         print(f"⚠️ 端口 {PORT} 已有服务在跑；先--stop 再启动")
@@ -101,16 +85,8 @@ def main() -> int:
 
     print("启动命令：", " ".join(args))
     if "--daemon" in sys.argv:
-        log = open(os.path.join(_ROOT, "logs", "fuseki.log"), "ab")
-        # ★★ DETACHED_PROCESS（Windows 0x00000008）：让 java **脱离本进程**存活。
-        #   踩过的坑：不加这个 flag 时，子进程会在**启动它的 shell 退出时被一起回收**
-        #   （`nohup` 在 Git Bash 下无效；`Start-Process` 被安全策略拦）——
-        #   现象是"日志显示 Start Fuseki成功、ping 也通，几秒后连不上"。
-        flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) | \
-            getattr(subprocess, "DETACHED_PROCESS", 0x00000008)
-        proc = subprocess.Popen(args, cwd=_ROOT, stdout=log, stderr=subprocess.STDOUT,
-                                creationflags=flags, close_fds=True)
-        print(f"PID={proc.pid}（已脱离本进程）")
+        pid = fr._spawn(args)
+        print(f"PID={pid}（已脱离本进程）")
         for _ in range(24):          # 最多等 48s
             time.sleep(2)
             if _ping():
@@ -120,6 +96,7 @@ def main() -> int:
         return 0 if _ping() else 1
 
     # 前台阻塞
+    import subprocess
     p = subprocess.Popen(args, cwd=_ROOT)
     try:
         p.wait()

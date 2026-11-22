@@ -110,6 +110,42 @@ jobs:
         if: ${{ !cancelled() }}
         run: python tools/verify/verify_harness_default_safe.py
 
+      # 2026-11-21 P0-0：写入口唯一性。20 个写端点各写一遍的老形态必须在门禁下收敛：
+      # 已迁移端点不得再出现 validate_node / repo.*_entity / _log_graph_edit（G2），
+      # 且执行后核验必须是"会失败的核验"而不是恒 True（G5）。
+      - name: Guard 写入口唯一性 + 执行后核验（P0-0，零 DB）
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_single_write_entry.py
+
+      # 2026-11-21 A4：版本语义。四份实现各查不同的键、domain_classes 无人读 ⇒
+      # 7 类破坏性变更 6 类被判"兼容"。门禁锁死规则表与两条判定路径的单一真源。
+      - name: Guard 本体变更 SemVer 语义（A4，零 DB）
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_semver_semantics.py
+
+      # 2026-11-21 P1-2：CQ SPARQL 档。最关键一条是 S2 —— Fuseki 不可达必须 skip
+      # 而不是 pass（降级伪装通过 = 图库断了报成图查询通过）。本门禁用"不可达的端口"
+      # 当判据，因此不需要 CI 里真的起 Fuseki。
+      - name: Guard CQ SPARQL 档（P1-2，零外部依赖）
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_cq_sparql.py
+
+      # 2026-11-21 P0-0 收口纠偏：G4 只数 3 个文件的端点，真实裸写 80 处 / 15 文件。
+      # 本门禁把统计面外的写入点也纳入显式台账，新增裸写必须先登记，防「数字好看但假」。
+      - name: Guard 全仓写入面台账（P0-0，零外部依赖）
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_write_surface.py
+
+      # 静态 W3 只能证明「接线了」，证明不了「写对了」—— 真跑推断通道并验首版本/留痕。
+      - name: Guard 推断并入通道真跑（P0-0，临时库）
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_inferred_write.py
+
+      # 2026-11-22 P1-2：Fuseki 持久 + 随主服务自拉起。纯注入判据，零外部依赖。
+      - name: Guard Fuseki 持久与自拉起（P1-2，零外部依赖）
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_fuseki_autostart.py
+
       - name: Guard S4 调用契约（采样参数优先级，48 项）
         if: ${{ !cancelled() }}
         run: python tools/verify/verify_s4_calls.py

@@ -1,0 +1,18 @@
+{
+  "tag": "ontology_constraint_keys",
+  "ts": "2026-11-21 12:12:57",
+  "why": "约束键清单（mbse.db 不入库，CI 无真库时本文件是键覆盖门禁的唯一依据）",
+  "keys": {
+    "allowed_values": 12,
+    "alt_labels": 4,
+    "card_src": 1,
+    "characteristics": 6,
+    "domain_classes": 13,
+    "lang": 4,
+    "quantity_kind": 11,
+    "required": 1,
+    "unique": 1,
+    "unit": 10,
+    "xsd_type": 13
+  }
+}

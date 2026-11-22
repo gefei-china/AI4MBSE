@@ -83,6 +83,14 @@ EXT_DEP_EXEMPT = {
         "同上：t_live() opt-in 段，默认不执行",
     "verify_alert_evaluator.py":
         "反面测试：故意指向 http://127.0.0.1:1/nope，验证不可达时返回 False 而非抛异常",
+    "verify_cq_sparql.py":
+        "反面测试：S2 故意把端点指向 http://127.0.0.1:39999/mbse（无服务），"
+        "验证「Fuseki 不可达 ⇒ skip 而不是 pass」。它**不需要** Fuseki 在线，"
+        "恰恰需要一个不可达的地址才能测降级语义；其余用例全用内存库/纯函数。",
+    "verify_fuseki_autostart.py":
+        "F9 只把 http://127.0.0.1:3030/alt 当作**配置返回值**注入 config.get，"
+        "验证 CQ/writer/启动脚本是否同源；F3~F6 的 ping/datasets/_spawn/_port_open "
+        "全部 monkeypatch，门禁真跑不连网、不起 JVM、不碰生产库。",
 }
 
 
