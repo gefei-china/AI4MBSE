@@ -1,0 +1,20 @@
+{
+  "names": [
+    "ask_user",
+    "capability_query",
+    "code_exec",
+    "delete_model_elements",
+    "doc_parse",
+    "entity_create",
+    "entity_delete",
+    "file_write",
+    "graph_retrieve",
+    "impact_analyze",
+    "memory_fetch",
+    "query_projects",
+    "requirement_itemize",
+    "todo_write",
+    "validate"
+  ],
+  "scope_types": null
+}

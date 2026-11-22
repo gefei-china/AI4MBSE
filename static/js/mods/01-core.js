@@ -370,6 +370,17 @@ const MODAL_FORMS = {
         <div class="form-row" id="ot-profile-row"><label>来源 / 引用 <span class="info-tip" title="profile 来源与引用，如 SysML V2 元类 / ISO 15288 条款 / GB-T 标准">ⓘ</span></label>
           <div style="display:flex;gap:6px;"><input id="ot-profile-src" placeholder="来源，如 SysML V2" style="flex:1;"><input id="ot-profile-ref" placeholder="引用，如 Part::PartDefinition" style="flex:1;"></div></div>
       </div>
+      <!-- P0-1（2026-11-22）对象类型可用动作绑定：独立分区，独立保存，不进 saveOntType 主流程 -->
+      <div class="form-section" id="ot-actions-section">
+        <div class="form-section-head"><span class="fs-icon">⚡</span><span class="fs-title">可用动作 <span class="fs-hint">（Action · 独立保存）</span></span></div>
+        <div class="form-row"><label>已绑工具 <span class="info-tip" title="绑定到本对象类型的工具（Action）。运行时注入默认关闭：配置先就位，待数据就绪后由管理员开启 ontology.type_action_inject">ⓘ</span></label>
+          <div id="ot-actions-list" style="display:flex;flex-wrap:wrap;gap:6px;min-height:24px;"><span style="color:var(--mut);font-size:12.5px;">加载中…</span></div></div>
+        <div class="form-row"><label>添加绑定</label>
+          <div style="display:flex;gap:6px;align-items:center;">
+            <select id="ot-action-tool" style="flex:1;min-width:120px;"><option value="">选择工具…</option></select>
+            <button class="btn ghost" onclick=" ontologyActionBind()" title="添加绑定（pre/post 条件留空=无约束）">绑定</button></div></div>
+          <div id="ot-actions-note" style="font-size:12px;color:var(--mut);"></div>
+      </div>
       <!-- 2026-09-14 本体编辑影响预览（保存前由 saveOntType 调 impact-preview 填充） -->
       <div id="ot-impact-box" style="display:none;"></div>
       <div class="form-actions"><button class="btn ghost" onclick="closeOntSlide()">取消</button><button class="btn" onclick="saveOntType()">保存</button></div>`,

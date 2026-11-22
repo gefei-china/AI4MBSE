@@ -1199,7 +1199,8 @@ function renderOntSideDetail(){
     h+=row('域（FROM）',esc(av.src||'—'))+row('范围（TO）',esc(av.tgt||'—'))+row('基数', (cons.card_src||cons.card_tgt) ? ('源 '+(cons.card_src?(cons.card_src.min??0)+'..'+(cons.card_src.max??'∞'):'—')+' / 目标 '+(cons.card_tgt?(cons.card_tgt.min??0)+'..'+(cons.card_tgt.max??'∞'):'—')) : esc(cons.cardinality||'—'))+row('特征',esc((cons.characteristics||[]).join(' / ')||'—'));
   } else {
     const bindN=((ontData.binding||[]).find(b=>b.entity_type===t.name)||{}).total||0;
-    h+=row('子类',parent?esc(parent.name):'owl:Thing')+row('实例数',bindN)+row('必填 / 唯一',(cons.required||[]).length+' / '+(cons.unique||[]).length)+row('属性表',propsN+' 项');
+    h+=row('子类',parent?esc(parent.name):'owl:Thing')+row('实例数',bindN)+row('必填 / 唯一',(cons.required||[]).length+' / '+(cons.unique||[]).length)+row('属性表',propsN+' 项')
+      +`<div id="ont-side-actions" style="display:flex;justify-content:space-between;border-bottom:1px dashed var(--line);padding:4px 0;font-size:12.5px;"><span style="color:var(--mut);">可用动作</span><span style="font-weight:500;">加载中…</span></div>`;
   }
   if(t.description) h+=`<div style="font-size:12.5px;color:var(--mut);margin-top:8px;line-height:1.7;">${esc(t.description)}</div>`;
   h+=`<div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap;">
@@ -1209,6 +1210,15 @@ function renderOntSideDetail(){
     <button class="btn sm ghost" onclick="ontGotoEdit('${ontJs(t.name)}')" title="切换到编辑模式查看完整定义（中栏字段表单）">📝 编辑模式 →</button>
   </div>`;
   box.innerHTML=h;
+  // P0-1（2026-11-22）：实体类型详情只读展示「支持 N 个动作」（异步，失败不破详情）
+  if(t.type_kind==='entity'){
+    api('/api/knowledge/ontology/types/'+t.id+'/actions').then(r=>{
+      const el=document.getElementById('ont-side-actions'); if(!el) return;
+      const n=((r&&r.actions)||[]).length;
+      el.innerHTML='<span style="color:var(--mut);">可用动作</span><span style="font-weight:500;">支持 '+n+' 个'
+        +(n?' · <a href="javascript:;" onclick="ontGotoEdit(\''+ontJs(t.name)+'\')" style="color:var(--blue-d);">查看</a>':'')+'</span>';
+    }).catch(()=>{ const el=document.getElementById('ont-side-actions'); if(el) el.lastElementChild.textContent='—'; });
+  }
   // 2026-09-02 三轮调整：图谱态右栏追加当前对象变更历史（对应 WebProtégé 详情面板 Changes 区）
   const cl=document.createElement('div');
   cl.id='ont-side-cl';

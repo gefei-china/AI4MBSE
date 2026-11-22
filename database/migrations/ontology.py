@@ -588,3 +588,35 @@ def _migrate_ontology_questions(conn):
     c.execute("CREATE INDEX IF NOT EXISTS idx_ocq_ts ON ontology_cq_logs(ts)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_ocq_qid ON ontology_cq_logs(question_id)")
     conn.commit()
+
+
+# ══════════════════════════════════════════════════════════════════════
+# P0-1（2026-11-22）对象类型 ↔ Action 绑定表。
+#
+# DDL 真源：schema.py 建表段（新库）；本函数用同一份 DDL 幂等补老库。
+# 为什么两处：本工程 init_db 对"新库走 schema 建表、老库走 migration 补表"
+# 两条路都支持，抄写漂移的教训见 ENTITY_VERSIONS_DDL（本文件顶部）。
+# ══════════════════════════════════════════════════════════════════════
+TYPE_ACTIONS_DDL = """
+    CREATE TABLE IF NOT EXISTS ontology_type_actions (
+        type_id        INTEGER NOT NULL,
+        tool_name      TEXT    NOT NULL,
+        pre_condition  TEXT,
+        post_condition TEXT,
+        enabled        INTEGER NOT NULL DEFAULT 1,
+        note           TEXT,
+        rule_version   TEXT,
+        created_at     TEXT DEFAULT (datetime('now','localtime')),
+        PRIMARY KEY (type_id, tool_name)
+    )
+"""
+
+
+def _migrate_type_actions(conn):
+    """幂等补 ontology_type_actions 表（老库升级路径；新库由 schema.py 建）。"""
+    before = {r[0] for r in conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table'")}
+    if "ontology_type_actions" not in before:
+        conn.execute(TYPE_ACTIONS_DDL)
+        conn.commit()
+        print("[init_db] 迁移: ontology_type_actions 已建立（P0-1 对象类型↔Action 绑定）")

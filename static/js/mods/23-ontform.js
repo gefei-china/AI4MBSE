@@ -225,6 +225,8 @@ function ontologyEditType(id, name, kind, consStr) {
   // 方案A（2026-09-07）：实体=只读引用视图；必填/唯一/白名单改由属性行内联回填，
   // 旧「约束规则」section 已隐藏，不再需要 ot-req/ot-uniq/ot-allowed-rows 回填。
   if(kind === 'entity'){ renderOntEntProps(); document.querySelectorAll('#ot-props-rows .er-allowed').forEach(el=>initEnumChips(el)); }   // 2026-09-13 枚举 chips
+  // P0-1（2026-11-22）：加载本类型已绑 Action（独立配置，不进 saveOntType 主流程）
+  if(kind === 'entity' && typeof ontologyActionsLoad === 'function') ontologyActionsLoad(id);
 }
 function toggleOntKindFields(kind) {
   // P1-10（2026-09-07）表单重构：按 kind 切分整 section——简化原逐 row 切换为 section 切换
@@ -238,6 +240,8 @@ function toggleOntKindFields(kind) {
   show('ot-cons-section', false);   // 方案A：必填/唯一/白名单已内联到属性行，独立「约束规则」不再展示
   show('ot-relation-section', isRel);
   show('ot-attr-section', isAttr);
+  // P0-1（2026-11-22）可用动作仅实体类型有；relation/attribute 隐藏
+  show('ot-actions-section', isEnt);
   // 类型特征章节内的"实体/属性"专属行
   show('ot-abstract-row', isEnt, 'block');
   show('ot-disjoint-row', isEnt, 'block');
@@ -704,6 +708,69 @@ async function oiDoImport(){
     loadOntology();
   }catch(e){ toast('导入失败：'+e.message); }
 }
+/* ══ P0-1（2026-11-22）对象类型可用动作（独立配置，不进 saveOntType 主流程）══
+   设计：这是配置面。运行时注入默认关闭（ontology.type_action_inject=false），
+   前端只负责配置绑定与展示，绝不声称"配了就立即生效"。
+   加载时机：ontologyEditType 里对 entity 类型调用 ontologyActionsLoad(id)。 */
+async function ontologyActionsLoad(tid){
+  const box = document.getElementById('ot-actions-list');
+  const sel = document.getElementById('ot-action-tool');
+  const note = document.getElementById('ot-actions-note');
+  const sec = document.getElementById('ot-actions-section');
+  if(!box || !tid){ if(sec) sec.style.display='none'; return; }
+  if(sec) sec.style.display='';
+  try{
+    const [r, tools] = await Promise.all([
+      api('/api/knowledge/ontology/types/'+tid+'/actions'),
+      api('/api/studio/tools').catch(()=>({tools:[]}))
+    ]);
+    const acts = (r && r.actions) || [];
+    window._p01Bound = new Set(acts.map(a=>a.tool_name));
+    box.innerHTML = acts.length
+      ? acts.map(a=>{
+          const p = a.pre_condition ? ' pre' : '', q = a.post_condition ? ' post' : '';
+          const badge = (p||q) ? ' <span style="color:var(--mut);font-size:11px;">['+(p.trim()+q.trim())+']</span>' : '';
+          return '<span class="chip" style="display:inline-flex;align-items:center;gap:4px;padding:3px 8px;border:1px solid var(--line);border-radius:12px;font-size:12.5px;">'
+            + esc(a.tool_name) + badge
+            + '<a href="javascript:;" onclick="ontologyActionUnbind(\''+esc(a.tool_name)+'\')" title="解绑" style="color:var(--mut);">×</a></span>';
+        }).join('')
+      : '<span style="color:var(--mut);font-size:12.5px;">未绑定任何动作（写类工具默认不受类型约束）</span>';
+    if(sel){
+      const all = (tools && (tools.tools||tools)) || [];
+      const arr = Array.isArray(all) ? all : [];
+      sel.innerHTML = '<option value="">选择工具…</option>' + arr
+        .filter(t=>t && t.name && !window._p01Bound.has(t.name))
+        .map(t=>'<option value="'+esc(t.name)+'">'+esc(t.name)+(t.side_effect==='write'?'（写）':t.side_effect==='destructive'?'（不可逆）':'')+'</option>')
+        .join('');
+    }
+    if(note) note.textContent = '规则版本 '+(r.rule_version||'-')+' · 运行时注入默认关闭（配置先就位）';
+  }catch(e){
+    box.innerHTML = '<span style="color:var(--mut);font-size:12.5px;">加载失败：'+esc(e.message||'')+'</span>';
+  }
+}
+async function ontologyActionBind(){
+  const tid = window._ontTypeEditId;
+  const sel = document.getElementById('ot-action-tool');
+  const tn = sel && sel.value;
+  if(!tid || !tn){ toast('请先选择工具'); return; }
+  try{
+    const r = await api('/api/knowledge/ontology/types/'+tid+'/actions/'+encodeURIComponent(tn),
+      {method:'PUT', body:JSON.stringify({enabled:1, note:''})});
+    if(r && r.error){ toast('绑定失败：'+r.error); return; }
+    toast('已绑定 '+tn+'（运行时注入仍默认关闭）');
+    ontologyActionsLoad(tid);
+  }catch(e){ toast('绑定失败：'+(e.message||'')); }
+}
+async function ontologyActionUnbind(tn){
+  const tid = window._ontTypeEditId;
+  if(!tid) return;
+  try{
+    const r = await api('/api/knowledge/ontology/types/'+tid+'/actions/'+encodeURIComponent(tn), {method:'DELETE'});
+    if(r && r.error){ toast('解绑失败：'+r.error); return; }
+    toast('已解绑 '+tn); ontologyActionsLoad(tid);
+  }catch(e){ toast('解绑失败：'+(e.message||'')); }
+}
+
 /* KB-P2: 力导向图可视化（零依赖 SVG 实现，拖拽/缩放/平移 + 审核工作流） */
 let graphState = {nodes:[], edges:[], sel:null, svgW:880, svgH:460,
   vp:{scale:1, panX:0, panY:0},

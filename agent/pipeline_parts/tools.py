@@ -326,13 +326,20 @@ def builtin_has_executor(name: str) -> bool:
 class ToolMixin:
     """工具定义、执行、重试策略与调用留痕。"""
 
-    def _build_tools_def(self, intent: str, user_input: str = "", user=None) -> list:
+    def _build_tools_def(self, intent: str, user_input: str = "", user=None,
+                         scope_types=None) -> list:
         """缺口B + TR-P3：从 Agent 绑定构建 OpenAI-compatible 工具定义（function calling）。
 
         - 内置工具 → 宽松 schema（name/description）；MCP 工具 → 宽松参数 schema
         - TR-P3b 角色过滤：DB 工具 allowed_roles 非空且当前用户角色不匹配 → 不注入
         - TR-P3a JIT 工具选择：候选 >8 时按 user_input 语义预筛 top 6（复用 VectorEngine 双条件防误筛），
           保底保留读类核心工具（graph_retrieve/validate/impact_analyze）；小规模全量注入（简单可靠）
+        - ★ P0-1（2026-11-22）对象类型维度：`scope_types`（对象类型名列表）非空且开关
+          `ontology.type_action_inject=true` 时，**只约束写类工具**（write/destructive）
+          —— 只有被本轮 scope 类型绑定的工具才注入；read 工具恒不受约束。
+          ⚠️ `scope_types=None`（默认）⇒ 本维度**完全不参与**，逐字节回到改动前行为。
+          这是硬约束（G2 回归锚），因为上游目前无 scope_types 生产方，默认开启会让
+          写类工具集体消失，表现为"能力不存在"（本仓同型事故）。
         """
         # 角色过滤辅助：DB 中该工具的允许角色
         def _roles_of(name: str) -> list:
@@ -1133,6 +1140,63 @@ class ToolMixin:
                     pass
         except Exception:
             pass
+        # ══ P0-1（2026-11-22）对象类型 ↔ Action 注入过滤 ══
+        # 只约束写类工具，read 恒注入。两道前置闸任一不开 ⇒ 完全跳过本段（零回归）。
+        #   · 开关 `ontology.type_action_inject`（默认 False）
+        #   · 本轮 scope_types 非空（上游目前无人传 ⇒ 恒跳过，这是"默认关闭"的落点）
+        # 判据单一真源：side_effect 读 tools 表（与写意图闸 _se_map 同源口径）。
+        # 失败语义沿用本仓纪律：查询异常 ⇒ 不过滤（宁可多给工具，也不因观测故障砍能力）；
+        # 剔除留痕 ⇒ 不静默丢弃。
+        _scope_on = False
+        try:
+            from core.config import get as _cfg_p01
+            _scope_on = bool(_cfg_p01("ontology", "type_action_inject", False))
+        except Exception:
+            _scope_on = False
+        _scope_names = [str(x) for x in (scope_types or []) if str(x or "").strip()]
+        if _scope_on and _scope_names:
+            try:
+                from database import get_db as _p01db
+                _p01c = _p01db()
+                try:
+                    _ph = ",".join("?" * len(_scope_names))
+                    _rows = _p01c.execute(
+                        "SELECT a.tool_name FROM ontology_type_actions a "
+                        "JOIN ontology_types t ON a.type_id=t.id "
+                        "WHERE t.name IN (%s) AND a.enabled=1" % _ph,
+                        tuple(_scope_names)).fetchall()
+                    _bound_names = {r[0] for r in _rows}
+                    _se_rows = _p01c.execute(
+                        "SELECT name, COALESCE(side_effect,'read') AS se FROM tools").fetchall()
+                    _p01_se = {r["name"]: r["se"] for r in _se_rows}
+                finally:
+                    _p01c.close()
+                _kept_c, _dropped_c = [], []
+                for _c in candidates:
+                    _se = _p01_se.get(_c[0], "read")
+                    # 只有 write/destructive 受类型约束；read（含未知默认 read）恒注入
+                    if _se in ("write", "destructive") and _c[0] not in _bound_names:
+                        _dropped_c.append(_c[0])
+                    else:
+                        _kept_c.append(_c)
+                if _dropped_c:
+                    candidates = _kept_c
+                    self._dropped_by_type = list(_dropped_c)
+                    try:
+                        logger.info("[tool_gate] P0-1 对象类型 %s 未绑定的写类工具不注入: %s",
+                                    _scope_names, ", ".join(sorted(_dropped_c)[:8]))
+                    except Exception:
+                        pass
+                else:
+                    self._dropped_by_type = []
+            except Exception as _p01ex:
+                # 观测/查询故障 ⇒ 不过滤（保留全部候选），只告警。
+                self._dropped_by_type = []
+                try:
+                    logger.warning("[tool_gate] P0-1 类型绑定查询失败，跳过类型过滤（不砍工具）: %s",
+                                   str(_p01ex)[:120])
+                except Exception:
+                    pass
         # ★ 2026-10-13：按工具名注入真实参数契约（此前**两个分支都硬编码 properties:{}**，
         #   等于把 DB 里 39/41 条已存在的 input_schema 全部丢弃 ⇒ 模型以为"任意参数"）。
         #   _LOOSE 是回落形态，与改动前**逐字节一致**，保证关开关/无 schema 时行为不变。

@@ -154,6 +154,16 @@ jobs:
         if: ${{ !cancelled() }}
         run: python tools/verify/verify_post_condition_status.py
 
+      # 2026-11-22 P0-1 G1/G2：对象类型↔Action 绑定。上游无 scope_types 生产方，
+      # 故"默认关闭 + 回归锚"是硬约束——注入集合不因新增维度悄悄变化。
+      - name: Guard 类型绑定表一致性（P0-1 G1，只读）
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_type_actions_binding.py
+
+      - name: Guard 类型注入回归锚（P0-1 G2，临时库）
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_tool_inject_by_type.py
+
       # 2026-11-22 P1-2：Fuseki 持久 + 随主服务自拉起。纯注入判据，零外部依赖。
       - name: Guard Fuseki 持久与自拉起（P1-2，零外部依赖）
         if: ${{ !cancelled() }}

@@ -2866,6 +2866,18 @@
    "tier": "pr",
    "timeout": 60,
    "reason": "2026-11-22 P0-2a 实施前取证固化：方案要求按 project/branch/dept/owner 过滤列表与检索，但 ① agent/rag.py 有米爸拍板的冻结决策——project_id/branch 是视图标签非安全边界，rag.tenant_isolation 锁死 off，开启会滤掉统一底座的公共资产；② 实测 entities.created_by 184 行全为占位串（系统补齐 174 / 历史遗留 10），按 user id/username 关联均为 0，实体表无 department 列 ⇒ owner/dept 无路径。照做只会得到空转权限门。本门禁守：R1 就绪度快照字段齐全 / R2 开关两处登记 / R3 默认 False / R4 未就绪时禁止开启（含本机覆盖）/ R5 blockers 非空防手改快照 / R6 tenant 冻结交叉断言 / R7 scope 白名单不得含已证伪维度。含 M1~M3 变异自证，零 DB 零 LLM 零网络。"
+  },
+  {
+   "script": "verify_type_actions_binding.py",
+   "tier": "pr",
+   "timeout": 60,
+   "reason": "2026-11-22 P0-1 G1：对象类型↔Action 绑定表结构与数据一致性。守 [1] 8 列 + 复合主键 (type_id,tool_name) / [2][3] 软引用全命中 ontology_types.id 与 tools.name（软外键不可靠，靠门禁守）/ [4] 无重复主键 / [5] pre/post_condition 全部过 core.action_conditions 规则表（非法 kind / 方向错配即红）/ [6] rule_version 与单一真源对齐 / [7] enabled 只有 0/1 / M8 变异证明坏引用与非法规则能被判红。生产库只读，零写零 LLM 零网络。"
+  },
+  {
+   "script": "verify_tool_inject_by_type.py",
+   "tier": "pr",
+   "timeout": 120,
+   "reason": "2026-11-22 P0-1 G2：注入回归锚 + 类型过滤判据。上游目前无 scope_types 生产方，故默认关闭是硬约束——G2-1 scope_types=None 注入集合必须与 --save-baseline 在改 _build_tools_def 之前拍下的快照逐项相等 / G2-4 开关关闭时即使传值仍等于基线 / G2-2 传值时 write/destructive 注入集⊆绑定集且 read 数不变（只卡写不卡读）/ G2-3 剔除留痕 / M1 清空绑定⇒write 清空（证明过滤非空转）/ M2 关开关⇒回基线。固定夹具 9 工具覆盖 read/write/destructive，语义阈值锁死走全量分支，MBSE_DB_PATH 临时库隔离，零 LLM 零网络。"
   }
  ]
 }

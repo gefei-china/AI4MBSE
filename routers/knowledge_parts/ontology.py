@@ -610,3 +610,123 @@ def ontology_delete_type(tid: int, force: bool = False, conn=Depends(db_session)
     # 2026-09-08 版本语义收敛：删除属编辑态，只留变更记录；破坏性升级在发布时由 diff 判定（removed→major）
     audit(_actor(user), "ontology_delete", f"本体删除类型#{tid}: {row['name']}", conn=conn)
     return {"ok": True, "affected_instances": affected}
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# P0-1（2026-11-22）对象类型 ↔ Action（工具）绑定 CRUD
+# ══════════════════════════════════════════════════════════════════════════
+# 说明：这是**配置面**（管理绑定），不是运行时注入面。运行时注入默认关闭
+# （`ontology.type_action_inject=false` 且上游无 scope_types），本 CRUD 只负责
+# 让管理员能预先配置绑定，待数据就绪后再开开关。规则合法性由
+# core.action_conditions 的纯函数表守（含 rule_version 口径）。
+
+def _p01_parse_prepost(raw):
+    """把前端传来的 pre/post 条件归一为 JSON 文本；非法直接抛 ValueError。"""
+    if raw is None or raw == "":
+        return None
+    obj = raw if isinstance(raw, dict) else None
+    if obj is None and isinstance(raw, str):
+        try:
+            obj = json.loads(raw)
+        except Exception as ex:
+            raise ValueError("条件 JSON 解析失败: %s" % str(ex)[:80])
+    if obj is None or not isinstance(obj, dict):
+        raise ValueError("条件必须是 JSON 对象")
+    from core.action_conditions import validate as _val
+    bad = _val(obj)
+    if bad:
+        raise ValueError("; ".join(bad))
+    return json.dumps(obj, ensure_ascii=False)
+
+
+@router.get("/api/knowledge/ontology/types/{tid}/actions")
+def ontology_type_actions_list(tid: int, conn=Depends(db_session)):
+    """列出某对象类型已绑定的 Action（工具）。"""
+    if not conn.execute("SELECT 1 FROM ontology_types WHERE id=?", (tid,)).fetchone():
+        return JSONResponse({"error": "类型不存在"}, 404)
+    rows = conn.execute(
+        "SELECT a.tool_name, a.pre_condition, a.post_condition, a.enabled, a.note, "
+        "       a.rule_version, a.created_at, COALESCE(t.side_effect,'read') AS side_effect "
+        "FROM ontology_type_actions a LEFT JOIN tools t ON a.tool_name=t.name "
+        "WHERE a.type_id=? ORDER BY a.tool_name", (tid,)).fetchall()
+    out = []
+    for r in rows:
+        d = dict(r)
+        for k in ("pre_condition", "post_condition"):
+            try:
+                d[k] = json.loads(d[k]) if d[k] else None
+            except Exception:
+                d[k] = None
+        out.append(d)
+    from core.action_conditions import RULE_VERSION as _rv
+    return {"type_id": tid, "actions": out, "rule_version": _rv,
+            "inject_enabled": False}  # 前端提示：运行时注入默认关闭
+
+
+@router.put("/api/knowledge/ontology/types/{tid}/actions/{tool_name}")
+def ontology_type_actions_upsert(tid: int, tool_name: str, body: dict = None,
+                                 conn=Depends(db_session),
+                                 user=Depends(require_any_permission(WRITE_PERMS))):
+    """新增/更新一条绑定。tool_name 必须是已注册工具；pre/post 规则须合法。"""
+    body = body or {}
+    tool_name = str(tool_name or "").strip()
+    if not tool_name:
+        return JSONResponse({"error": "tool_name 不能为空"}, 400)
+    if not conn.execute("SELECT 1 FROM ontology_types WHERE id=?", (tid,)).fetchone():
+        return JSONResponse({"error": "类型不存在"}, 404)
+    if not conn.execute("SELECT 1 FROM tools WHERE name=?", (tool_name,)).fetchone():
+        return JSONResponse({"error": "工具未注册: %s" % tool_name}, 404)
+    from core.action_conditions import RULE_VERSION as _rv, validate as _val
+    direction = {"pre_condition": "pre", "post_condition": "post"}
+    try:
+        pre = _p01_parse_prepost(body.get("pre_condition"))
+        post = _p01_parse_prepost(body.get("post_condition"))
+    except ValueError as ex:
+        return JSONResponse({"error": str(ex)}, 400)
+    # 方向校验：把 post 规则写进 pre_condition 即拒绝（单一真源 action_conditions）
+    for key, raw in (("pre_condition", pre), ("post_condition", post)):
+        if raw and _val(json.loads(raw), direction[key]):
+            return JSONResponse(
+                {"error": "%s 规则非法: %s" % (key, "; ".join(_val(json.loads(raw), direction[key])))},
+                400)
+    enabled = 1 if body.get("enabled", 1) else 0
+    note = str(body.get("note") or "")[:500]
+    conn.execute(
+        "INSERT INTO ontology_type_actions (type_id, tool_name, pre_condition, post_condition, "
+        "enabled, note, rule_version, created_at) VALUES (?,?,?,?,?,?,?,datetime('now','localtime')) "
+        "ON CONFLICT(type_id, tool_name) DO UPDATE SET pre_condition=excluded.pre_condition, "
+        "post_condition=excluded.post_condition, enabled=excluded.enabled, note=excluded.note, "
+        "rule_version=excluded.rule_version",
+        (tid, tool_name, pre, post, enabled, note, _rv))
+    conn.commit()
+    audit(_actor(user), "ontology_action_bind",
+          "绑定类型#%s 的 Action: %s（enabled=%d, rule_version=%s）" % (tid, tool_name, enabled, _rv),
+          conn=conn)
+    return {"ok": True, "type_id": tid, "tool_name": tool_name, "rule_version": _rv}
+
+
+@router.delete("/api/knowledge/ontology/types/{tid}/actions/{tool_name}")
+def ontology_type_actions_delete(tid: int, tool_name: str, conn=Depends(db_session),
+                                 user=Depends(require_any_permission(WRITE_PERMS))):
+    """解绑一条 Action。"""
+    n = conn.execute("DELETE FROM ontology_type_actions WHERE type_id=? AND tool_name=?",
+                     (tid, tool_name)).rowcount
+    conn.commit()
+    if n:
+        audit(_actor(user), "ontology_action_unbind",
+              "解绑类型#%s 的 Action: %s" % (tid, tool_name), conn=conn)
+    return {"ok": True, "deleted": bool(n)}
+
+
+@router.get("/api/knowledge/ontology/actions/by-tool")
+def ontology_actions_by_tool(conn=Depends(db_session)):
+    """工具 → 适用类型反查（能力中心「适用类型」列消费）。一次查询，避免 N+1。"""
+    rows = conn.execute(
+        "SELECT a.tool_name, t.name AS type_name, t.id AS type_id "
+        "FROM ontology_type_actions a JOIN ontology_types t ON a.type_id=t.id "
+        "WHERE a.enabled=1 ORDER BY a.tool_name, t.name").fetchall()
+    by_tool = {}
+    for r in rows:
+        by_tool.setdefault(r["tool_name"], []).append(
+            {"id": r["type_id"], "name": r["type_name"]})
+    return {"by_tool": by_tool}

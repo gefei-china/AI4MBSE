@@ -59,6 +59,7 @@ from .migrations import (
     _migrate_ontology_instance_migrations,  # 2026-09-14 本体变更→实例迁移计划表
     _migrate_ontology_health_logs,         # 2026-10-15 P0-2 本体体检历史表（趋势线数据源）
     _migrate_ontology_questions,           # 2026-10-15 P1-4 CQ（能力问题）两表
+    _migrate_type_actions,                 # 2026-11-22 P0-1 对象类型↔Action 绑定表
     _migrate_artifact_ingest,  # 2026-09-15 AI 产物收编资料库（origin 溯源/块级过滤/时效取代）
     _seed_departments,
     _seed_knowledge_categories,
@@ -488,6 +489,22 @@ def init_db():
         parent_id INTEGER,
         properties TEXT DEFAULT '{}',
         created_at TEXT DEFAULT CURRENT_TIMESTAMP
+    )""")
+
+    # ── P0-1（2026-11-22）对象类型 ↔ Action（工具）绑定 ──
+    # 软外键（type_id→ontology_types.id / tool_name→tools.name）：版本回滚/改名不炸，
+    # 一致性由 verify_type_actions_binding 门禁守（本工程既有做法，见 knowledge_commits）。
+    # pre/post_condition 是 JSON，规则表见 core/action_conditions.py（纯函数，零运行时 AI）。
+    c.execute("""CREATE TABLE IF NOT EXISTS ontology_type_actions (
+        type_id        INTEGER NOT NULL,
+        tool_name      TEXT    NOT NULL,
+        pre_condition  TEXT,
+        post_condition TEXT,
+        enabled        INTEGER NOT NULL DEFAULT 1,
+        note           TEXT,
+        rule_version   TEXT,
+        created_at     TEXT DEFAULT (datetime('now','localtime')),
+        PRIMARY KEY (type_id, tool_name)
     )""")
 
     # ── 分支管理 ──
@@ -1988,6 +2005,8 @@ def init_db():
     # ── P1-4（2026-10-15）CQ（能力问题）机制两表：问题登记 + 执行历史 ──
     _migrate_ontology_questions(conn)
     # ── 2026-09-15 AI 产物收编资料库（origin 溯源 / 块级过滤 / superseded 时效链）──
+    # ── P0-1（2026-11-22）对象类型↔Action 绑定表 ──
+    _migrate_type_actions(conn)
     _migrate_artifact_ingest(conn)
     # ── P0 Staging 写前融合改造：v2g_candidates 三义拆分 + Mention/Canonical 双层模型 ──
     _migrate_staging_tables(conn)

@@ -38,6 +38,7 @@ from .ontology import (
     _migrate_ontology_instance_migrations,
     _migrate_ontology_health_logs,
     _migrate_ontology_questions,
+    _migrate_type_actions,          # 2026-11-22 P0-1 对象类型↔Action 绑定表
 )
 from .graph import (
     _backfill_pipeline_detail,

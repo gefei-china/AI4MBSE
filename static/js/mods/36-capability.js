@@ -252,7 +252,19 @@ function capJumpManage() {
 
 /* 加载数据：个人可用 = 我创建的 + 我安装的（/api/plugins/mine 一次拉取；2026-09-17 定稿，
  * 消费区不再展示全市场目录 —— 市场目录与治理统一在「插件市场」页） */
+// P0-1（2026-11-22）：工具 → 适用对象类型反查缓存（能力中心「适用类型」列）。
+// 一次加载、全局复用，避免每行一次 API（N+1）。取不到就空字典，显示「通用」不破表。
+let _capTypeActions = {};
+async function capLoadTypeActions(){
+  try{
+    const r = await api('/api/knowledge/ontology/actions/by-tool');
+    _capTypeActions = (r && r.by_tool) || {};
+  }catch(e){ _capTypeActions = {}; }
+}
+
 async function capLoad(page) {
+  // 列表视图需要「适用类型」列，预取一次（与插件列表并行，不阻塞）
+  capLoadTypeActions();
   const s = _capS(page);
   // 2026-09-30：工具页顺带预热 _toolsCache —— 工具卡片的「编辑」经 capEdit(pid) 路由到
   //   showToolForm(legacy_id)，而该函数靠 _toolsCache 取上下文。此前全站没有任何「进页面」
@@ -342,6 +354,16 @@ function capTableRow(x, page) {
   }
   acts += capMoreBtn(x, page);
   const badge = (on, txt, tip) => `<span class="capbadge ${on ? 'on' : 'off'}" title="${tip}">${txt}</span>`;
+  // P0-1：适用对象类型列（多类型 +N 折叠；空显示通用）。仅 tool 类型有意义。
+  let scopeTypesCell = '—';
+  if(t === 'tool'){
+    const _ts = _capTypeActions[x.name] || [];
+    scopeTypesCell = _ts.length
+      ? '<span title="'+esc(_ts.map(function(z){return z.name;}).join('、'))+'">'
+        + esc(_ts[0].name) + (_ts.length>1 ? ' <span style="color:var(--mut);">+'+(_ts.length-1)+'</span>' : '')
+        + '</span>'
+      : '<span style="color:var(--mut);">通用</span>';
+  }
   return '<tr>'
     + `<td class="ct-name"><span style="color:${m.color};font-weight:600;">${m.abbr}</span> ${esc(label)}</td>`
     + `<td>${esc(m.label)}</td>`
@@ -351,16 +373,17 @@ function capTableRow(x, page) {
     + `<td>${installed ? badge(enabled, enabled ? '个人已启用' : '个人已停用', '个人安装态，仅影响你自己') : '—'}</td>`
     + `<td>${badge(!!x.consumable, x.consumable ? 'AI 可用' : 'AI 不可用', '综合判定：已发布 且 个人已启用 且 已安装')}</td>`
     + `<td>v${esc(x.current_version || '—')}</td>`
+    + `<td>${scopeTypesCell}</td>`
     + `<td class="ct-acts">${acts}</td>`
     + '</tr>';
 }
 function capTableHtml(list, page, groups) {
   const head = '<thead><tr><th>名称</th><th>类型</th><th>描述</th><th>来源</th><th>发布态</th>'
-    + '<th>个人态</th><th>AI 判定</th><th>版本</th><th style="text-align:right;">操作</th></tr></thead>';
+    + '<th>个人态</th><th>AI 判定</th><th>版本</th><th>适用类型</th><th style="text-align:right;">操作</th></tr></thead>';
   let body = '';
   if (groups && groups.length) {
     groups.forEach(function (g) {
-      body += `<tr class="ct-group"><td colspan="9">${esc(g.title)} <span style="color:var(--mut);font-weight:400;">· ${g.list.length}</span></td></tr>`;
+      body += `<tr class="ct-group"><td colspan="10">${esc(g.title)} <span style="color:var(--mut);font-weight:400;">· ${g.list.length}</span></td></tr>`;
       body += g.list.map(function (x) { return capTableRow(x, page); }).join('');
     });
   } else {
