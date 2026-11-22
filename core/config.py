@@ -229,6 +229,13 @@ DEFAULT_CONFIG = {
         # ⚠️ 带 X-Session-Token 但令牌无效时**永远不回落** X-User-Id（与开关无关）——
         #    否则任意伪造令牌即可把自报通道重新打开（《架构评估》§4.1 D2）。
         "trust_user_id_header": True,
+        # ── P0-2a（2026-11-22）：对象级可见范围**能力预留**，默认必须 False ──
+        # 数据现状实测：entities.created_by 184 行全为「系统补齐」/「历史遗留（虚构人名）」
+        # 占位串，0 行可关联 users.id/username；实体表无 department 列；
+        # project_id/branch 已被米爸拍板为「视图标签、非安全边界」，且检索侧
+        # rag.tenant_isolation 冻结 off（有门禁锁死）。⇒ 现在开启只会滤掉全部数据。
+        # 由 tools/verify/verify_object_scope_readiness.py 守：数据未就绪时开启即判红。
+        "scope_enforcement": False,
     },
     "integration": {
         "timeout": 15,           # 通用 HTTP 工具默认调用超时（秒，工具 config 可覆盖）
@@ -2890,6 +2897,7 @@ _EXTRA_SCHEMA = {
         "session_ttl_hours":       {"type": "int",  "desc": "登录会话有效期（小时）"},
         "enforce_login":           {"type": "bool", "desc": "是否强制登录（关=匿名可访问，权限门对匿名一律放行）"},
         "trust_user_id_header":    {"type": "bool", "desc": "是否信任 X-User-Id 头（仅内网/联调应开启）"},
+        "scope_enforcement":       {"type": "bool", "desc": "对象级可见范围强制开关（默认关；created_by 为占位串、无 dept 路径时禁止开启，见 verify_object_scope_readiness）"},
     },
     "conv_summary": {
         "max_tokens":              {"type": "int",  "desc": "会话摘要输出上限（token）。P1-27 实测硬编码 300 时 266 次调用恒触顶、摘要功能基本失效"},

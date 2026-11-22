@@ -2855,6 +2855,12 @@
    "tier": "pr",
    "timeout": 60,
    "reason": "2026-11-22 P1-2 收尾：Fuseki 持久 + 随主服务自拉起。此前端点/数据集名/TDB2 目录/启动参数散在四处，且必须人工启动；--mem 重启即空。本门禁守：F1 持久档 --update+绝对 --loc 且无 --mem（漏 --update 时只读、/update 恒 405）/ F2 路径正斜杠 / F3 已活着幂等不重复拉起（ds.name 前导斜杠归一）/ F4 开关关时零动作 / F5 端口被别人占不抢占 / F6 模拟真拉起用持久参数 / F7 配置 DEFAULT+SCHEMA+ENV+BOOL 四处登记 / F8 lifespan 早段接线且异常不阻断 / F9 CQ 与 writer 共用单一真源 / F10 预建 --loc 目录（Fuseki 6.2 缺目录直接退出，真机踩过）。含 M1~M5 变异自证，零 DB 零 LLM 零网络零真 JVM。"
+  },
+  {
+   "script": "verify_object_scope_readiness.py",
+   "tier": "pr",
+   "timeout": 60,
+   "reason": "2026-11-22 P0-2a 实施前取证固化：方案要求按 project/branch/dept/owner 过滤列表与检索，但 ① agent/rag.py 有米爸拍板的冻结决策——project_id/branch 是视图标签非安全边界，rag.tenant_isolation 锁死 off，开启会滤掉统一底座的公共资产；② 实测 entities.created_by 184 行全为占位串（系统补齐 174 / 历史遗留 10），按 user id/username 关联均为 0，实体表无 department 列 ⇒ owner/dept 无路径。照做只会得到空转权限门。本门禁守：R1 就绪度快照字段齐全 / R2 开关两处登记 / R3 默认 False / R4 未就绪时禁止开启（含本机覆盖）/ R5 blockers 非空防手改快照 / R6 tenant 冻结交叉断言 / R7 scope 白名单不得含已证伪维度。含 M1~M3 变异自证，零 DB 零 LLM 零网络。"
   }
  ]
 }

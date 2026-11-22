@@ -8,7 +8,14 @@ from routers.knowledge_parts.shared import *
 @router.put("/api/knowledge/graph/edges/{eid}")
 def graph_update_edge(eid: int, body: dict, conn=Depends(db_session),
                       user=Depends(require_any_permission(WRITE_PERMS))):
-    """修正关系：更新关系类型 / 属性（候选 → 修正留痕，重新进入审核流）。"""
+    """修正关系：更新关系类型 / 属性（候选 → 修正留痕，重新进入审核流）。
+
+    P0-0 第五轮（2026-11-22）：canonical 化、源/目标类型门禁、UPDATE、留痕、审计、
+    执行后核验**全部**收进 `core.graph_write_gate.write_edge(op='edge_update')`。
+    端点只保留分支守卫、入参形态检查与提交打点（打点是端点特有副作用，不属写口）。
+    """
+    from core.graph_write_gate import write_edge
+
     branch = body.get("branch") or "dev"
     g = _release_guard(conn, branch)
     if g:
@@ -16,29 +23,18 @@ def graph_update_edge(eid: int, body: dict, conn=Depends(db_session),
     rt = (body.get("relation_type") or "").strip()
     if not rt:
         return JSONResponse({"error": "relation_type required"}, 400)
-    # P1-6（2026-09-07）：修正关系同样过本体校验——①关系名 canonical 化（防废弃
-    # 中文名经修正路径回流，与 sysml_importer/create_relation 同口径）；②domain/range
-    # 类型约束（validate_edge）。修正后重新进入审核流（status='candidate'）。
-    from core.relmap import canonical
-    _c = canonical(rt)
-    if _c is None:
-        return JSONResponse({"error": f"关系类型已废弃且无 canonical 映射: {rt}"}, 400)
-    rt = _c
-    row = conn.execute(
-        "SELECT r.source_id, r.target_id, s.entity_type stype, t.entity_type ttype "
-        "FROM relations r LEFT JOIN entities s ON s.id=r.source_id AND s.branch=? "
-        "LEFT JOIN entities t ON t.id=r.target_id AND t.branch=? WHERE r.id=?",
-        (branch, branch, eid)).fetchone()
-    if not row:
-        return JSONResponse({"error": "edge not found"}, 404)
-    from ontology_semantics import GraphStore
-    errs = GraphStore(conn).validator.validate_edge(row["stype"], rt, row["ttype"])
-    if errs:
-        return JSONResponse({"error": "; ".join(errs)}, 400)
-    conn.execute("UPDATE relations SET relation_type=?, properties=?, status='candidate', reviewed_by='', reviewed_at='' WHERE id=?",
-                 (rt, json.dumps(body.get("properties") or {}, ensure_ascii=False), eid))
-    _log_graph_edit(conn, "edge_update", str(eid), {"relation_type": rt}, _actor(user))
-    audit(_actor(user), "relation_update", f"修正关系 #{eid}: {rt}", conn=conn)
+
+    res = write_edge(conn, op="edge_update", edge_id=eid, relation_type=rt,
+                     props=body.get("properties") or {}, branch=branch,
+                     actor=_actor(user), log_op="edge_update",
+                     audit_event="relation_update", extra_detail=f"#{eid}")
+    if not res.get("ok"):
+        stage = res.get("stage")
+        # applied=True ⇒ 已写入但效果未证实 ⇒ 500（不能报 400 让人以为没写进去）
+        return JSONResponse(
+            {"error": res.get("error"), "stage": stage, "post": res.get("post")},
+            404 if stage == "not_found" else (500 if res.get("applied") else 400))
+
     # 分支版本管理：图谱边手动保存提交打点（kind=manual，失败仅打印不阻断）
     try:
         row = conn.execute("SELECT source_id, target_id FROM relations WHERE id=?", (eid,)).fetchone()
@@ -50,7 +46,7 @@ def graph_update_edge(eid: int, body: dict, conn=Depends(db_session),
                  "relation_type": rt})
     except Exception as e:
         print(f"[commit_repo] manual 提交打点失败（不阻断业务）: {e}")
-    return {"ok": True}
+    return {"ok": True, "post": res.get("post")}
 
 
 @router.post("/api/knowledge/entities/{entity_id}/merge")

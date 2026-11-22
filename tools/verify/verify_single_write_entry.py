@@ -20,10 +20,10 @@ Palantir 的答案是反过来的：**默认只允许通过 Action 编辑**，�
       `repo.update_entity`、`_log_graph_edit`）—— 出现即说明又长出第二把尺子
   G3  已迁移端点必须**真的调用** `write_entity`（防"声明迁移、实际没接"）
   G4  待迁移端点数 ≤ 预算（**只降不升**；新增写端点必须先迁移或显式抬预算）
-      ⚠️ 口径边界：G4 只统计 WRITE_FILES 这 3 个文件的**端点**。全仓对
-      entities/relations 的直接 SQL 写实测 80 处 / 15 文件 / 32 函数，其中
-      77 处在 G4 统计面外 —— 由 `verify_write_surface.py` 登记。
-      **不要**把 G4 的「待迁移 13」当成写入口覆盖率。
+      ⚠️ 口径边界：G4 只统计 WRITE_FILES 这 4 个文件的**端点**（2026-11-22 由 3 扩到 4：
+      `graph_query.py` 原就在文件系统里、只是没被统计，扩面后待迁移同口径 +3）。全仓对
+      entities/relations 的直接 SQL 写由 `verify_write_surface.py` 全量登记。
+      **不要**把 G4 的「待迁移 12」当成写入口覆盖率。
   G5  `post_check` 的核验语义**非空且会失败** —— 用临时库跑两轮：
       数据一致 ⇒ verified=True；属性被篡改 ⇒ verified=False。
       这条是防"核验函数恒返回 True"这种假核验。
@@ -50,13 +50,20 @@ PARTS = os.path.join(ROOT, "routers", "knowledge_parts")
 WRITE_FILES = (
     "routers/knowledge_parts/entities.py",
     "routers/knowledge_parts/graph.py",
+    "routers/knowledge_parts/graph_query.py",   # 2026-11-22 扩面：PUT edges/{eid} 在此文件
     "routers/graph_workspace.py",
 )
 
 #: 待迁移端点预算（**只降不升**）。
 #: 2026-11-21 首批 20 个写端点 → 迁移 3 个 ⇒ 17
 #: 2026-11-21 第二批 → 再迁移 4 个（graph nodes create/delete、graph edges create/delete）⇒ 13
-BUDGET_PENDING = 13
+#: 2026-11-22 第五批 → 再迁移 1 个（PUT graph/edges/{eid}，走 write_edge op=edge_update）。
+#:   ⚠️ 该端点本就在 G4 统计面**外**（graph_query.py），所以 G4 分子不降——覆盖率进展由
+#:      `verify_write_surface.py` 的台账体现，不要误读为"迁移没生效"。
+#: 2026-11-22 同轮扩统计面 3→4 文件（纳入 graph_query.py）：4 个写端点中 1 个已迁移、
+#:   3 个原本就在但未统计 ⇒ 13+3=16。**是同口径还原，不是抬预算放宽**：
+#:   判断"只降不升"必须按同一文件集合比，否则扩面会造成假红、逼人误抬预算。
+BUDGET_PENDING = 16
 
 #: 已迁移端点必须出现的接线函数。
 #: ⚠️ 2026-11-21：第二批迁移了 4 个**边**端点，它们走 `write_edge`（关系生命周期），
@@ -174,7 +181,7 @@ def check_g4():
                 pending.append(f"{os.path.basename(rel)}:{meth} {path}")
     _add(len(pending) <= BUDGET_PENDING,
          f"G4 待迁移端点 ≤ 预算（{len(pending)}/{BUDGET_PENDING}；"
-         "仅 3 文件口径，全仓写入面见 verify_write_surface.py）",
+         "仅 %d 文件口径，全仓写入面见 verify_write_surface.py）" % len(WRITE_FILES),
          "超预算，新增写端点请先迁移或显式抬预算:\n      " + "\n      ".join(pending))
 
 

@@ -117,6 +117,13 @@ jobs:
         if: ${{ !cancelled() }}
         run: python tools/verify/verify_single_write_entry.py
 
+      # 2026-11-22 P0-2a：数据未就绪时禁止开启对象级可见范围。
+      # project/branch 已被拍板为视图标签非安全边界；created_by 全为占位串。
+      # 没有这道闸，照方案文本实现会得到"全 0 命中或全放行"的空转权限门。
+      - name: Guard 对象级权限数据就绪（P0-2a，零 DB）
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_object_scope_readiness.py
+
       # 2026-11-21 A4：版本语义。四份实现各查不同的键、domain_classes 无人读 ⇒
       # 7 类破坏性变更 6 类被判"兼容"。门禁锁死规则表与两条判定路径的单一真源。
       - name: Guard 本体变更 SemVer 语义（A4，零 DB）

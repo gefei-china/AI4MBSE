@@ -91,7 +91,6 @@ REGISTRY = {
     ("entity_resolver.py", "merge_entities"): "bulk",
     ("entity_resolver.py", "merge_relation"): "bulk",
     ("entity_resolver.py", "rollback_merge"): "bulk",
-    ("routers/knowledge_parts/graph_query.py", "graph_update_edge"): "bulk",
     ("routers/knowledge_parts/graph_query.py", "merge_entity"): "bulk",
     ("routers/knowledge_parts/ontology.py", "ontology_update_type"): "bulk",
     ("services/ontology_migration.py", "apply"): "bulk",

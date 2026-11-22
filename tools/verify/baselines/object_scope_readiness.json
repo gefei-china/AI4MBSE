@@ -1,0 +1,27 @@
+{
+  "captured_at": "2026-11-22",
+  "capture_sql": {
+    "dist": "SELECT created_by, COUNT(*) FROM entities GROUP BY created_by",
+    "link_by_id": "SELECT COUNT(*) FROM entities e JOIN users u ON CAST(e.created_by AS INTEGER)=u.id",
+    "link_by_username": "SELECT COUNT(*) FROM entities e JOIN users u ON e.created_by=u.username",
+    "dept_col": "PRAGMA table_info(entities)"
+  },
+  "entities_total": 184,
+  "created_by_dist": {
+    "历史遗留（虚构人名）": 10,
+    "系统补齐": 174
+  },
+  "linkable_by_user_id": 0,
+  "linkable_by_username": 0,
+  "entity_has_department_column": false,
+  "users_total": 18,
+  "users_department_nonempty": 2,
+  "ready": false,
+  "blockers": [
+    "created_by 全为占位串，无法关联任何用户（按 owner 过滤恒 0 命中）",
+    "entities 无 department 列，且 created_by 不可关联 ⇒ 按 dept 过滤无路径",
+    "project_id / branch 已被拍板为视图标签而非安全边界（agent/rag.py 顶部决策块），不可作为过滤维度",
+    "rag.tenant_isolation 冻结 off（verify_tenant_isolation.py 锁死），检索侧不得另开同语义开关"
+  ],
+  "refresh_rule": "数据灌入/字段回填后重跑 capture_sql 更新本文件；未更新前 readiness 判据按此快照执行"
+}

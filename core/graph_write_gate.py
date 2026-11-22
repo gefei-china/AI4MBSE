@@ -45,7 +45,7 @@ import json
 #: `delete`            —— 实体删除（**核验是反向断言：行必须消失**）
 #: `edge_create`       —— 关系写入（走 `relations`）
 #: `edge_delete`       —— 关系删除（同样反向断言）
-WRITE_OPS = ("create", "update", "delete", "edge_create", "edge_delete")
+WRITE_OPS = ("create", "update", "delete", "edge_create", "edge_update", "edge_delete")
 
 #: 已迁移到统一入口的写端点（门禁 G2/G3 据此断言；`tools/verify/verify_single_write_entry.py`）
 MIGRATED_ENDPOINTS = (
@@ -55,6 +55,7 @@ MIGRATED_ENDPOINTS = (
     "PUT /api/knowledge/graph/nodes/{nid}",
     "DELETE /api/knowledge/graph/nodes/{nid}",
     "POST /api/knowledge/graph/edges",
+    "PUT /api/knowledge/graph/edges/{eid}",
     "DELETE /api/knowledge/graph/edges/{eid}",
 )
 
@@ -349,7 +350,7 @@ def write_edge(conn, *, op: str, edge_id=None, source_id: str = "", target_id: s
     关系类型门禁与实体**同一把尺子**：源/目标类型 + 关系类型约束由
     `OntologyValidator.validate_edge` 判（唯一实现，端点不得另写）。
     """
-    if op not in ("edge_create", "edge_delete"):
+    if op not in ("edge_create", "edge_update", "edge_delete"):
         return {"ok": False, "stage": "type_gate", "error": f"不支持的边操作 {op!r}"}
     branch = branch or "dev"
     props = props or {}
@@ -369,6 +370,42 @@ def write_edge(conn, *, op: str, edge_id=None, source_id: str = "", target_id: s
             # 一律归 validate（语义 = 未通过校验，写入未发生）
             return {"ok": False, "stage": "validate", "error": "; ".join(res or [])[:400]}
         edge_id = res
+    elif op == "edge_update":
+        # P0-0 第五轮（2026-11-22）：前端图谱编辑器直调的 PUT edges/{eid} 原来自写
+        # UPDATE + 自己的 canonical/validate_edge，是 A1「前端直连绕过核验」的活样本。
+        # 这里把判定与写入收进统一入口：关系名归一、源/目标类型门禁、写入、留痕、
+        # 审计、post_check 与建边/删边同一套；端点只保留 release_guard 与 404/500 语义。
+        if edge_id is None:
+            return {"ok": False, "stage": "not_found", "error": "边更新缺少 edge_id"}
+        row = conn.execute(
+            "SELECT r.branch, r.source_id, r.target_id, "
+            "s.entity_type stype, t.entity_type ttype FROM relations r "
+            "LEFT JOIN entities s ON s.id=r.source_id AND s.branch=r.branch "
+            "LEFT JOIN entities t ON t.id=r.target_id AND t.branch=r.branch "
+            "WHERE r.id=?", (edge_id,)).fetchone()
+        if not row:
+            return {"ok": False, "stage": "not_found", "error": "edge not found"}
+        branch = row["branch"] or branch
+        source_id = row["source_id"] or source_id
+        target_id = row["target_id"] or target_id
+
+        from core.relmap import canonical as _rel_canon
+        _c = _rel_canon(relation_type)
+        if _c is None:
+            return {"ok": False, "stage": "type_gate",
+                    "error": f"关系类型已废弃且无 canonical 映射: {relation_type}"}
+        relation_type = _c
+
+        from ontology_semantics import GraphStore
+        errs = GraphStore(conn).validator.validate_edge(
+            row["stype"] or "", relation_type, row["ttype"] or "")
+        if errs:
+            return {"ok": False, "stage": "validate", "error": "; ".join(errs)[:400]}
+
+        conn.execute(
+            "UPDATE relations SET relation_type=?, properties=?, status='candidate', "
+            "reviewed_by='', reviewed_at='' WHERE id=?",
+            (relation_type, json.dumps(props or {}, ensure_ascii=False), edge_id))
     else:  # edge_delete
         if edge_id is None:
             return {"ok": False, "stage": "not_found", "error": "边删除缺少 edge_id"}
@@ -387,9 +424,15 @@ def write_edge(conn, *, op: str, edge_id=None, source_id: str = "", target_id: s
         pass
     try:
         from core.audit import audit as _audit
-        _audit(actor or "system", audit_event or ("graph_edge_add" if op == "edge_create" else "graph_edge_delete"),
-               (f"图谱新增边: {_node}" if op == "edge_create" else f"图谱删除边: {edge_id}") +
-               "［统一写入口］" + (("；" + extra_detail) if extra_detail else ""),
+        # ⚠️ 三态文案不能写成 create/其它 二元：2026-11-22 真机抓到 edge_update
+        # 被记成「图谱删除边: 442」（event_type 对、detail 错 ⇒ 审计回放会误导）。
+        _detail = ("图谱新增边: %s" % _node if op == "edge_create"
+                   else "图谱修正边: %s" % _node if op == "edge_update"
+                   else "图谱删除边: %s" % edge_id)
+        _audit(actor or "system", audit_event or ("graph_edge_add" if op == "edge_create"
+                                                  else "graph_edge_update" if op == "edge_update"
+                                                  else "graph_edge_delete"),
+               _detail + "［统一写入口］" + (("；" + extra_detail) if extra_detail else ""),
                conn=conn, branch=branch)
     except Exception:
         pass
