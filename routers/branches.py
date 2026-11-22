@@ -430,15 +430,18 @@ def rollback_merge(mr_id: int, conn=Depends(db_session), user=Depends(current_us
     result = BranchRepo(conn).rollback_merge(mr_id)
     if not result.get("ok"):
         return JSONResponse({"error": result["error"]}, 400)
+    # P0-0 第七批：repo 层回执的 post/retry_safe 必须端到端透传。
+    # 旧实现在这里手工重建白名单响应，unknown 被裁成纯成功（前端看不到"没验成"）。
+    _vs = (result.get("post") or {}).get("verify_status", "")
+    _suffix = f"（回读核验 {_vs}，需人工确认）" if _vs and _vs != "verified" else ""
     audit(_actor(user), "merge_rollback",
           f"回滚合并请求#{mr_id}: 还原 release {result.get('restored_entities', 0)} 实体 / "
-          f"{result.get('restored_relations', 0)} 关系", conn=conn)
+          f"{result.get('restored_relations', 0)} 关系{_suffix}", conn=conn)
     BranchRepo(conn).add_mr_comment(
         mr_id, author=_actor(user), action="rollback",
         comment=f"回滚发布：还原 {result.get('restored_entities', 0)} 实体 / "
-                f"{result.get('restored_relations', 0)} 关系")
-    return {"ok": True, "restored_entities": result["restored_entities"],
-            "restored_relations": result["restored_relations"]}
+                f"{result.get('restored_relations', 0)} 关系{_suffix}")
+    return {"ok": True, **result}
 
 
 @router.get("/api/branches/{name}/history")

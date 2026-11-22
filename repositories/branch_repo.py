@@ -1264,18 +1264,25 @@ class BranchRepo(BaseRepo):
             self.execute(
                 f"UPDATE sqlite_sequence SET seq=(SELECT COALESCE(MAX(id),0) FROM `{table}`) WHERE name=?",
                 (table,))
-        # ③ 发布日志撤销留痕：保留原发布日志，新增 rollback 记录（版本继续递增）
+        # ③ 发布日志撤销留痕：保留原发布日志，新增 rollback 记录（版本继续递增）。
+        # P0-0 第七批：按 mr 幂等——核验失败/未定时快照保留，调用方可能需要重试回滚，
+        # 重试不得重复写 rollback 日志（否则发布日志时间线出现同一回滚 N 份）。
         from datetime import datetime as _rdt
         _rnow = _rdt.now().strftime("%Y-%m-%d %H:%M:%S")
-        for e in snapshot.get("entities", []):
-            _pv = self.scalar(
-                "SELECT COUNT(*)+1 FROM knowledge_publish_logs WHERE entity_id=?", (e["id"],)) or 1
-            self.execute(
-                "INSERT INTO knowledge_publish_logs (entity_id, name, branch, published_at, version, merged_from, action) "
-                "VALUES (?,?,?,?,?,?,?)",
-                (e["id"], e.get("name", ""), tgt, _rnow, _pv, f"回滚自合并请求#{mr_id}", "rollback"))
-        # 快照一次性消费：清空防止二次回滚
-        self.execute("UPDATE merge_requests SET prev_release_snapshot='{}' WHERE id=?", (mr_id,))
+        _rb_tag = f"回滚自合并请求#{mr_id}"
+        _already_logged = self.scalar(
+            "SELECT COUNT(*) FROM knowledge_publish_logs WHERE action='rollback' AND merged_from=?",
+            (_rb_tag,)) or 0
+        if not _already_logged:
+            for e in snapshot.get("entities", []):
+                if not isinstance(e, dict) or not e.get("id"):
+                    continue
+                _pv = self.scalar(
+                    "SELECT COUNT(*)+1 FROM knowledge_publish_logs WHERE entity_id=?", (e["id"],)) or 1
+                self.execute(
+                    "INSERT INTO knowledge_publish_logs (entity_id, name, branch, published_at, version, merged_from, action) "
+                    "VALUES (?,?,?,?,?,?,?)",
+                    (e["id"], e.get("name", ""), tgt, _rnow, _pv, _rb_tag, "rollback"))
         # ── P0-0（2026-11-22 第六批次）批量写回读核验（A9 四态单一真源）──
         # 原来只返回 restored_* 计数：恢复漏行时计数仍为正，路由照常记审计回 200。
         # 现在按快照精确集合回读；failed 改判失败，unknown 标 retry_safe=False。
@@ -1284,6 +1291,12 @@ class BranchRepo(BaseRepo):
             self.conn, tgt,
             [e.get("id") for e in snapshot.get("entities", []) if isinstance(e, dict)],
             snapshot.get("relations", []), mode="restore")
+        # P0-0 第七批：**快照消费移到核验之后**（只在 verified 时消费）。
+        # 旧顺序是先清空再核验 ⇒ failed/unknown 时快照已消费、无法二次回滚，
+        # 回执虽写 applied=True 却没有恢复路径，等于把"可恢复失败"做成"不可逆失败"。
+        # 保留快照后重试是安全的：rollback 本身就是"按同一快照整层重建"，幂等。
+        if post.get("verify_status") == "verified":
+            self.execute("UPDATE merge_requests SET prev_release_snapshot='{}' WHERE id=?", (mr_id,))
         return apply_to_result(
             {"ok": True, "restored_entities": restored_e,
              "restored_relations": restored_r}, post, "回滚")
