@@ -2884,6 +2884,12 @@
    "tier": "pr",
    "timeout": 120,
    "reason": "2026-11-22 P0-1 第五批次：pre/post 条件在 _exec_tool_call 唯一出口真消费 + 四态对齐。守 S1 无绑定回执零回归 / S2 pre failed 拒绝且执行体零调用 / S3 pre unknown 放行但留痕可见 / S4 post verified / S5 post failed 把成功回执改判失败且提示勿重试 / S6 post unknown 放行但 retry_safe=False / S7 post 必须在幂等记账之前（否则重放绕过核验）/ S8 四态口径单一真源。M1 抹 pre / M2 抹 post / M3 抹回读快照三组真跑变异必须判红。临时库真写实体再真回读，零生产库写入、零 LLM、零网络。"
+  },
+  {
+   "script": "verify_bulk_write_verify.py",
+   "tier": "pr",
+   "timeout": 120,
+   "reason": "2026-11-22 P0-0 第六批次：批量写入回读核验。rollback_merge 原只返回 restored_* 计数、不回读，恢复漏行时路由照常回 200。守 S1 restore 精确匹配 verified / S2 缺实体 / S3 多关系 failed / S4 merge 子集（目标多既有行仍 verified）/ S5 缺实体 failed / S6 回读异常 unknown（不是 failed）/ S7 failed 改判 ok=False+applied / S8 unknown 标 retry_safe=False 且原 key 保留 / S9 真跑 BranchRepo.rollback_merge / S10 两处接线静态锁。M1 抹四态 / M2 抹 failed 改判 / M3 抹 indeterminate 三组真跑变异必须判红。临时库隔离，零生产库写入、零 LLM、零网络。"
   }
  ]
 }

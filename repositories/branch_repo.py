@@ -1035,8 +1035,21 @@ class BranchRepo(BaseRepo):
         # 非 release（个人→dev 迁移）在此打点。失败仅打印、不阻断业务；跟随调用方请求事务统一提交
         if not is_release:
             self._merge_commit(src, tgt, False, merge_ent_ids, merge_rel_ids)
-        return {"ok": True, "action": MR_MERGED, "moved": moved,
-                "updated": updated, "doc_snapshot": snap}
+        result = {"ok": True, "action": MR_MERGED, "moved": moved,
+                  "updated": updated, "doc_snapshot": snap}
+        if is_release:
+            # ── P0-0 第六批次：release 发布层批量写回读核验 ──
+            # 期望集合与上面复制逻辑同口径：源分支全部实体 + 两端都在源集合内的关系。
+            # 非 release（个人→dev）迁移语义不同，暂不纳入本批，避免误判正常合并。
+            from core.bulk_write_verify import verify_branch_write, apply_to_result
+            _src_ids = set(src_ents.keys())
+            _exp_rels = [dict(r) for r in self.rows(
+                "SELECT source_id, target_id, relation_type FROM relations WHERE branch=?", (src,))
+                if r["source_id"] in _src_ids and r["target_id"] in _src_ids]
+            post = verify_branch_write(
+                self.conn, tgt, list(_src_ids), _exp_rels, mode="merge")
+            apply_to_result(result, post, "合并")
+        return result
 
     def open_merge_request(self, mr_id: int, actor: str = "未登录") -> dict:
         """P1-1：草稿转正式评审（draft → open）。守卫走 #18 状态机。"""
@@ -1263,4 +1276,14 @@ class BranchRepo(BaseRepo):
                 (e["id"], e.get("name", ""), tgt, _rnow, _pv, f"回滚自合并请求#{mr_id}", "rollback"))
         # 快照一次性消费：清空防止二次回滚
         self.execute("UPDATE merge_requests SET prev_release_snapshot='{}' WHERE id=?", (mr_id,))
-        return {"ok": True, "restored_entities": restored_e, "restored_relations": restored_r}
+        # ── P0-0（2026-11-22 第六批次）批量写回读核验（A9 四态单一真源）──
+        # 原来只返回 restored_* 计数：恢复漏行时计数仍为正，路由照常记审计回 200。
+        # 现在按快照精确集合回读；failed 改判失败，unknown 标 retry_safe=False。
+        from core.bulk_write_verify import verify_branch_write, apply_to_result
+        post = verify_branch_write(
+            self.conn, tgt,
+            [e.get("id") for e in snapshot.get("entities", []) if isinstance(e, dict)],
+            snapshot.get("relations", []), mode="restore")
+        return apply_to_result(
+            {"ok": True, "restored_entities": restored_e,
+             "restored_relations": restored_r}, post, "回滚")

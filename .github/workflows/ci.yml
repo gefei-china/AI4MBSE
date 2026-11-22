@@ -169,6 +169,11 @@ jobs:
         if: ${{ !cancelled() }}
         run: python tools/verify/verify_action_conditions_exec.py
 
+      # 2026-11-22 P0-0 第六批次：批量写回读核验（真跑 rollback_merge）
+      - name: Guard 批量写入回读核验（P0-0 第六批，临时库）
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_bulk_write_verify.py
+
       # 2026-11-22 P1-2：Fuseki 持久 + 随主服务自拉起。纯注入判据，零外部依赖。
       - name: Guard Fuseki 持久与自拉起（P1-2，零外部依赖）
         if: ${{ !cancelled() }}
