@@ -148,6 +148,12 @@ jobs:
         if: ${{ !cancelled() }}
         run: python tools/verify/verify_inferred_write.py
 
+      # 2026-11-22 A9：核验第 4 态 unknown。查询异常曾与断言不一致同判 failed，
+      # 调用方重试会造成重复写入；本门禁真跑四态 + 故障注入 + 3 组变异。
+      - name: Guard 执行后核验四态（A9，临时库）
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_post_condition_status.py
+
       # 2026-11-22 P1-2：Fuseki 持久 + 随主服务自拉起。纯注入判据，零外部依赖。
       - name: Guard Fuseki 持久与自拉起（P1-2，零外部依赖）
         if: ${{ !cancelled() }}

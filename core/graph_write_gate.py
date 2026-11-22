@@ -35,10 +35,32 @@
   - `stage="type_gate"` / `"validate"` / `"write"` / `"not_found"` —— **写入未发生**
   - `stage="post_condition"` 且 `applied=True` —— **写入已发生，但效果未能证实**。
     这是最需要暴露的一类：接口返回 200、库里却不是用户以为的样子。
+
+## A9（2026-11-22）：核验第 4 态 `unknown`
+
+改造前只有 `verified: bool`，查询异常（锁等待超时/连接断）与"回读到了但不一致"
+都落到 `verified=False`。调用方据此判断"失败并重试"，而**请求已发出时写没写成
+客户端根本无法区分** —— 重试会造成重复实体/重复关系。现在 `post` 增加
+`verify_status` 四态（`verified`/`failed`/`unknown`/`skipped`）：
+
+  · `verified` —— 回读成功且全部断言通过；
+  · `failed`   —— 回读成功但有断言不成立（**确定未达成**，可安全重做）；
+  · `unknown`  —— 查询异常/回读不到（**可能已生效**，`retry_safe=False`，先查询确认）；
+  · `skipped`  —— 本操作未配置后置条件（保留态，当前统一入口不使用）。
+
+`verified` 布尔**保留且语义不变**（仅 `verify_status=="verified"` 为真），
+所有既有调用方的 `if not post["verified"]` 与前端 `post` 透传零回归。
 """
 from __future__ import annotations
 
 import json
+
+#: 执行后核验的四态（A9）。`skipped` 为保留态：未配置后置条件时不可把"没验"
+#: 伪装成"验过"，但目前统一入口的每次写都带后置断言，故不产生该状态。
+VERIFY_STATUSES = ("verified", "failed", "unknown", "skipped")
+
+#: unknown 的对外硬提示：必须让模型/调用方看到"不要重试"，不能只靠布尔 False
+UNKNOWN_HINT = "效果无法判定（可能已写入），不要重试，先查询确认当前状态"
 
 #: 本入口支持的写操作
 #: `create` / `update` —— 实体写入（走 `entity_versions` + `entities`）
@@ -105,6 +127,32 @@ def _load_props(v) -> dict:
         return {}
 
 
+def _post_result(checks: list, op: str, *, indeterminate: bool = False) -> dict:
+    """把核验项归一成四态返回。
+
+    `indeterminate=True` 表示**回读本身不可信**（查询抛异常/回读不到行），
+    此时即便 checks 里有 `ok=False` 也不能判 failed —— 那是"没验成"，
+    不是"验出来不对"。这是 A9 的核心区分。
+    """
+    if indeterminate or not checks:
+        status = "unknown"
+    elif all(c["ok"] for c in checks):
+        status = "verified"
+    else:
+        status = "failed"
+    return {"verified": status == "verified", "verify_status": status,
+            "op": op, "checks": list(checks)}
+
+
+def _post_error(prefix: str, post: dict) -> str:
+    """按四态生成对外错误文案；unknown 必须显式写"不要重试"。"""
+    bad = "; ".join(f"{c['check']}={c['detail']}" for c in post.get("checks", [])
+                    if not c["ok"])[:300]
+    if post.get("verify_status") == "unknown":
+        return f"{prefix}；{UNKNOWN_HINT}" + (f"：{bad}" if bad else "")
+    return f"{prefix}：{bad}" if bad else prefix
+
+
 def post_check(conn, entity_id: str, branch: str, name: str, entity_type: str,
                properties: dict, op: str) -> dict:
     """执行后核验：回读并断言「写的东西真的落成了那样」。
@@ -117,6 +165,7 @@ def post_check(conn, entity_id: str, branch: str, name: str, entity_type: str,
                           不让仓储补写的派生字段造成假红）
     """
     checks = []
+    indeterminate = False  # A9：回读不可信 ⇒ unknown，不能当 failed 触发重试
 
     def _add(key, ok, detail=""):
         checks.append({"check": key, "ok": bool(ok), "detail": detail})
@@ -128,9 +177,14 @@ def post_check(conn, entity_id: str, branch: str, name: str, entity_type: str,
             "WHERE id=? AND branch=? ORDER BY version_no DESC LIMIT 1",
             (entity_id, branch or "dev")).fetchone()
     except Exception as e:
+        indeterminate = True
         _add("version_row", False, f"查询失败：{str(e)[:120]}")
 
-    if row is not None:
+    if row is None:
+        # 写入已提交却回读不到版本行：可能是仓储没落、也可能是读快照滞后。
+        # 客户端无法区分 ⇒ 归 unknown，提示先查询确认，禁止盲目重试。
+        indeterminate = True
+    else:
         _add("version_row", bool(row["is_current"]),
              "" if row["is_current"] else f"最新版本行 is_current={row['is_current']}")
         _add("name", (row["name"] or "") == (name or ""),
@@ -145,8 +199,7 @@ def post_check(conn, entity_id: str, branch: str, name: str, entity_type: str,
                 diffs.append(f"{k}: {v!r}→{stored.get(k)!r}")
         _add("props", not diffs, "; ".join(diffs[:6]))
 
-    return {"verified": all(c["ok"] for c in checks) and bool(checks),
-            "op": op, "checks": checks}
+    return _post_result(checks, op, indeterminate=indeterminate)
 
 
 def post_check_deleted(conn, entity_id: str, branch: str) -> dict:
@@ -158,6 +211,7 @@ def post_check_deleted(conn, entity_id: str, branch: str) -> dict:
     ⇒ **删除失败也报成功**。两个方向都是错的，所以单独写、单独测。
     """
     checks = []
+    indeterminate = False
 
     def _add(key, ok, detail=""):
         checks.append({"check": key, "ok": bool(ok), "detail": detail})
@@ -172,10 +226,10 @@ def post_check_deleted(conn, entity_id: str, branch: str) -> dict:
         _add("edges_gone", (r[0] if r else 0) == 0,
              "" if (r[0] if r else 0) == 0 else f"仍有 {r[0]} 条关联边挂在 {entity_id}@{b}")
     except Exception as ex:
+        indeterminate = True
         _add("query", False, f"查询失败：{str(ex)[:120]}")
 
-    return {"verified": all(c["ok"] for c in checks) and bool(checks),
-            "op": "delete", "checks": checks}
+    return _post_result(checks, "delete", indeterminate=indeterminate)
 
 
 def post_check_edge(conn, edge_id, branch: str, source_id: str = None,
@@ -186,6 +240,7 @@ def post_check_edge(conn, edge_id, branch: str, source_id: str = None,
     删除：行必须消失。
     """
     checks = []
+    indeterminate = False
 
     def _add(key, ok, detail=""):
         checks.append({"check": key, "ok": bool(ok), "detail": detail})
@@ -203,17 +258,19 @@ def post_check_edge(conn, edge_id, branch: str, source_id: str = None,
         except Exception:
             pass  # 映射模块不可用 ⇒ 保持原值，由比对给出失败，不把异常当通过
 
+    row = None  # 查询抛异常时也要有定义；A9 把异常归 unknown 而非早退
     try:
         row = conn.execute("SELECT source_id, target_id, relation_type, branch "
                            "FROM relations WHERE id=?", (edge_id,)).fetchone()
     except Exception as ex:
+        indeterminate = True
         _add("query", False, f"查询失败：{str(ex)[:120]}")
-        return {"verified": False, "op": op, "checks": checks}
 
     if op == "edge_delete":
         _add("edge_gone", row is None, "" if row is None else f"relations 仍存在 id={edge_id}")
     else:
         if row is None:
+            indeterminate = True  # 建/改后回读不到 ⇒ 无法判定，不能当确定失败
             _add("edge_row", False, f"relations 中查不到 id={edge_id}")
         else:
             _add("edge_row", True)
@@ -234,8 +291,7 @@ def post_check_edge(conn, edge_id, branch: str, source_id: str = None,
                 _ok = (row["branch"] or "dev") == (branch or "dev")
                 _add("branch", _ok, "" if _ok else f"{row['branch']!r} != {branch!r}")
 
-    return {"verified": all(c["ok"] for c in checks) and bool(checks),
-            "op": op, "checks": checks}
+    return _post_result(checks, op, indeterminate=indeterminate)
 
 
 def write_entity(conn, *, op: str, entity_type: str = "", name: str = "", properties: dict = None,
@@ -335,9 +391,8 @@ def write_entity(conn, *, op: str, entity_type: str = "", name: str = "", proper
     if not post["verified"]:
         return {"ok": False, "stage": "post_condition", "applied": True,
                 "id": entity_id, "post": post,
-                "error": "写入已提交，但效果核验未通过（接口不会再报成功）："
-                         + "; ".join(f"{c['check']}={c['detail']}" for c in post["checks"]
-                                     if not c["ok"])[:300]}
+                "verify_status": post["verify_status"], "retry_safe": False,
+                "error": _post_error("写入已提交，但效果核验未通过（接口不会再报成功）", post)}
     return {"ok": True, "id": entity_id, "forked": forked, "post": post}
 
 
@@ -442,9 +497,8 @@ def write_edge(conn, *, op: str, edge_id=None, source_id: str = "", target_id: s
     if not post["verified"]:
         return {"ok": False, "stage": "post_condition", "applied": True,
                 "id": edge_id, "post": post,
-                "error": "写入已提交，但效果核验未通过（接口不会再报成功）："
-                         + "; ".join(f"{c['check']}={c['detail']}" for c in post["checks"]
-                                     if not c["ok"])[:300]}
+                "verify_status": post["verify_status"], "retry_safe": False,
+                "error": _post_error("写入已提交，但效果核验未通过（接口不会再报成功）", post)}
     return {"ok": True, "id": edge_id, "post": post}
 
 
@@ -495,9 +549,8 @@ def write_inferred_entity(conn, *, entity_id: str, name: str, entity_type: str,
     if not post["verified"]:
         return {"ok": False, "stage": "post_condition", "applied": True,
                 "id": entity_id, "post": post, "warnings": warnings,
-                "error": "推断实体已写入但效果核验未通过: "
-                         + "; ".join(f"{c['check']}={c['detail']}" for c in post["checks"]
-                                     if not c["ok"])[:300]}
+                "verify_status": post["verify_status"], "retry_safe": False,
+                "error": _post_error("推断实体已写入但效果核验未通过", post)}
     return {"ok": True, "id": entity_id, "post": post, "warnings": warnings}
 
 
@@ -530,9 +583,8 @@ def write_inferred_edge(conn, *, source_id: str, target_id: str, relation_type: 
     if not post["verified"]:
         return {"ok": False, "stage": "post_condition", "applied": True,
                 "id": edge_id, "post": post, "warnings": warnings,
-                "error": "推断关系已写入但效果核验未通过: "
-                         + "; ".join(f"{c['check']}={c['detail']}" for c in post["checks"]
-                                     if not c["ok"])[:300]}
+                "verify_status": post["verify_status"], "retry_safe": False,
+                "error": _post_error("推断关系已写入但效果核验未通过", post)}
     return {"ok": True, "id": edge_id, "post": post, "warnings": warnings}
 
 

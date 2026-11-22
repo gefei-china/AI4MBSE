@@ -1810,6 +1810,11 @@
    "timeout": 120
   },
   {
+   "script": "verify_post_condition_status.py",
+   "tier": "pr",
+   "timeout": 120
+  },
+  {
    "script": "verify_probe_mark.py",
    "tier": "backlog",
    "timeout": 180,
