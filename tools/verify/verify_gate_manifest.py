@@ -91,6 +91,10 @@ EXT_DEP_EXEMPT = {
         "F9 只把 http://127.0.0.1:3030/alt 当作**配置返回值**注入 config.get，"
         "验证 CQ/writer/启动脚本是否同源；F3~F6 的 ping/datasets/_spawn/_port_open "
         "全部 monkeypatch，门禁真跑不连网、不起 JVM、不碰生产库。",
+    "verify_cq_ui_freshness.py":
+        "真机两项（L1/L2）在 `--live` 之后，默认不执行 —— 未加 --live 时打印 SKIP 并"
+        "明示「不计入通过」，CI 无服务不会红。默认路径只做：源码静态断言 + 真 node"
+        " 执行渲染 + 5 组内存变异；本机无 node 时同样 SKIP 明示。",
 }
 
 

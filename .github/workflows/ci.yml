@@ -209,6 +209,12 @@ jobs:
         if: ${{ !cancelled() }}
         run: python tools/verify/verify_fuseki_temporal_incremental.py
 
+      # 2026-11-23 P0-0 第十一批补：CQ 面板必须让用户看见"图库新不新鲜"，
+      # 否则严格档的 skip 会被误读成"模型有问题"。静态+渲染+变异，真机项 --live 才跑。
+      - name: Guard CQ 面板新鲜度可感知性（P0-0 第十一批补）
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_cq_ui_freshness.py
+
       # 2026-11-22 P1-2：Fuseki 持久 + 随主服务自拉起。纯注入判据，零外部依赖。
       - name: Guard Fuseki 持久与自拉起（P1-2，零外部依赖）
         if: ${{ !cancelled() }}

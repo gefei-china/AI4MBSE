@@ -2413,10 +2413,44 @@ let ogFitKey = '';   // 2026-09-07 筛选/聚焦视图切换检测：变更时�
 // 入口：本体页顶栏「❓ CQ」按钮。结果查看另见 🩺 一致性校验滑窗的 CQ 分区（09-impact.js）。
 // 机制：每条 CQ = 业务问题 + 只读 SQL + 期望（empty/nonempty）；发布门禁与 /validate 自动执行，
 // fail 不拦截发布（R1），落 ontology_cq_logs 可追责。此面板负责登记/修改/删除/手动执行/看历史。
+// P0-0 第十一批补：CQ 面板顶部「图库新鲜度」状态条。
+// 为什么必须有：严格档（cq_strict_freshness）在 stale/unknown 时会把 CQ 降级成 skip，
+// 但用户只看到一行 skip 与 message，分不清"这是图库的问题、不是模型的问题"。
+// 新鲜度单独请求：慢或失败都不能拖住 CQ 列表；取不到时明写"无法获取"，绝不伪装成 fresh。
+function _cqFreshBar(f){
+  const base = 'display:flex;align-items:center;gap:8px;font-size:12.5px;border-radius:6px;padding:7px 10px;margin-bottom:10px;line-height:1.5;';
+  if(!f){
+    return `<div style="${base}background:#f6f7f9;border:1px solid var(--line);color:var(--mut);">`
+      + `<span style="font-weight:700;flex:none;">图库新鲜度 ❔ 无法获取</span>`
+      + `<span style="flex:1;min-width:0;">不影响 CQ 执行，但结论可信度未知；严格档下 CQ 会 skip（降级不是通过）</span></div>`;
+  }
+  const st = f.status || 'unknown';
+  const tone = st==='fresh'
+    ? 'background:#f1f8f3;border:1px solid #bcdcc8;color:#2f7d4f;'
+    : st==='stale'
+      ? 'background:#fdf6ef;border:1px solid #ecd3b6;color:#a8571b;'
+      : 'background:#f6f7f9;border:1px solid var(--line);color:#6b7c8f;';
+  const label = st==='fresh' ? '✅ 新鲜' : st==='stale' ? '⚠️ 不新鲜' : '❔ 无法判定';
+  const tail = st==='fresh'
+    ? '镜像与库一致，CQ 结论可信'
+    : st==='stale'
+      ? '严格档会把 CQ 降级为 skip —— <b>skip 不是通过</b>，先修图库再判定模型'
+      : '拿不到图库状态；严格档下 CQ 会 skip（降级不是通过）';
+  const nums = (f.expected_base!=null)
+    ? `（base 应 ${f.expected_base} 条 / 实际 ${f.actual} 条${f.mode ? ' · '+esc(f.mode)+' 档' : ''}）` : '';
+  return `<div style="${base}${tone}" title="${esc(f.reason||'')}">`
+    + `<span style="font-weight:700;flex:none;">图库新鲜度 ${label}</span>`
+    + `<span style="flex:1;min-width:0;">${tail}${esc(nums)}</span></div>`;
+}
+
 async function openOntCQs(){
   openPanel('❓ 能力问题（CQ）管理', '<div class="loading">加载中…</div>');
   try{
-    const r = await api('/api/knowledge/ontology/cqs');
+    const [r, frRaw] = await Promise.all([
+      api('/api/knowledge/ontology/cqs'),
+      api('/api/sparql/freshness').catch(()=>null),
+    ]);
+    const fr = (frRaw && frRaw.status) ? frRaw : null;
     if(r.error){ openPanel('❓ 能力问题（CQ）管理', `<div style="color:var(--red);padding:12px;font-size:13.5px;">${esc(r.error)}</div>`); return; }
     const qs = r.questions || [];
     window.__ontCqs = qs;   // 供 ontCqEdit/ontCqDel 按 id 取行（避免 onclick 字符串传对象）
@@ -2440,6 +2474,7 @@ async function openOntCQs(){
         </div>
       </div>`; }).join('');
     openPanel('❓ 能力问题（CQ）管理', `
+      ${_cqFreshBar(fr)}
       <div style="font-size:12.5px;color:var(--mut);line-height:1.6;margin-bottom:10px;">
         CQ 回答「这个本体是否建对了域」的<b>业务问题</b>（validation 层），与「🩺 一致性检查」的机械体检（verification 层）互补。<br>
         发布门禁与体检会自动执行全部启用的 CQ；<b>fail 不阻断发布</b>，但随发布留痕、可追责。<br>
@@ -2460,7 +2495,10 @@ async function ontCqRunAll(){
     const r = await api('/api/knowledge/ontology/cqs/run', {method:'POST', body:JSON.stringify({})});
     if(r.error){ toast('执行失败：'+r.error); return; }
     const s = r.summary || {};
-    toast(`CQ 完成：pass ${s.total-(s.failed||0)-(s.skipped||0)} / fail ${s.failed||0} / skip ${s.skipped||0}`);
+    const staleN = s.stale || 0, skipN = s.skipped || 0;
+    // 降级必须说出来：stale 时 skip 不是"跑不过"，是"没法判"——两者对用户的处置完全不同
+    toast(`CQ 完成：pass ${s.total-(s.failed||0)-skipN} / fail ${s.failed||0} / skip ${skipN}`
+      + (staleN ? `　⚠️ ${staleN} 条因镜像不新鲜降级（skip 不是通过）` : ''));
     openOntCQs();
   }catch(e){ toast('执行失败：'+(e.message||e)); }
 }
