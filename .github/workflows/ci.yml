@@ -179,6 +179,11 @@ jobs:
         if: ${{ !cancelled() }}
         run: python tools/verify/verify_fuseki_freshness.py
 
+      # 2026-11-23 P0-0 第九批：写后增量投影（精确三元组差量，commit 后 flush）。
+      - name: Guard Fuseki 写后增量投影（P0-0 第九批，临时库）
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_fuseki_incremental_sync.py
+
       # 2026-11-22 P1-2：Fuseki 持久 + 随主服务自拉起。纯注入判据，零外部依赖。
       - name: Guard Fuseki 持久与自拉起（P1-2，零外部依赖）
         if: ${{ !cancelled() }}

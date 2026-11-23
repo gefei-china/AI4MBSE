@@ -22,8 +22,34 @@ def db_session():
         conn.commit()
     except Exception:
         conn.rollback()
+        # 回滚路径：写前快照绝不可投影（否则 Fuseki 留下幽灵三元组）
+        try:
+            from core.fuseki_projection import discard as _proj_discard
+            _proj_discard(conn)
+        except Exception:
+            pass
         raise
+    else:
+        # P0-0 第九批（2026-11-23）：**只在 commit 成功之后**投影 Fuseki。
+        # 写在写入口内部会推未提交数据 —— 请求后续 rollback 就留下幽灵三元组。
+        # 投影是派生视图维护，失败只告警，绝不把已成功的业务请求改成失败。
+        try:
+            from core.fuseki_projection import flush as _projection_flush
+            _p = _projection_flush(conn)
+            if _p.get("status") == "failed":
+                print("[fuseki-projection] ⚠️ 增量投影失败 %d/%d 对象（写入已提交）：%s"
+                      % (_p.get("failed", 0), _p.get("objects", 0),
+                         str(_p.get("results", []))[:300]), flush=True)
+        except Exception as _e:
+            print("[fuseki-projection] ⚠️ 增量投影异常（写入已提交）：%s: %s"
+                  % (type(_e).__name__, str(_e)[:200]), flush=True)
     finally:
+        # 兜底清理：任何未走 flush/discard 的路径都不留下连接引用
+        try:
+            from core.fuseki_projection import discard as _proj_discard
+            _proj_discard(conn)
+        except Exception:
+            pass
         conn.close()
 
 

@@ -1419,6 +1419,8 @@ DEFAULT_CONFIG = {
         #   unknown ⇒ **不重灌**（没验成先别动，避免盲目 CLEAR DEFAULT）；
         #   失败只告警，不阻断主服务（与 autostart 同纪律）。
         "fuseki_autosync": False,
+        # P0-0 第九批：写后增量投影。开后写入提交即差量更新 Fuseki；默认关，零副作用。
+        "fuseki_writesync": False,
         # 拉起时使用 TDB2 持久化（--update --loc=<abs>）。
         # 设 False 回落 --mem（只用于临时验证；重启即空，不要在生产用）。
         "fuseki_persistent": True,
@@ -1884,6 +1886,7 @@ ENV_MAP = {
     "MBSE_REQUEST_INVARIANT_MODE": ("request_invariant", "mode"),  # 部署级三态覆盖
     "MBSE_FUSEKI_AUTOSTART": ("graph_db", "fuseki_autostart"),
     "MBSE_FUSEKI_AUTOSYNC": ("graph_db", "fuseki_autosync"),
+    "MBSE_FUSEKI_WRITESYNC": ("graph_db", "fuseki_writesync"),
 }
 
 # 布尔型配置项（ENV 值为 "1"/"true"/"yes" 视为 True）
@@ -1891,6 +1894,7 @@ _BOOL_KEYS = {
     ("llm", "force_mock"),
     ("graph_db", "fuseki_autostart"),   # P1-2：部署级开关，环境变量 "1" ⇒ True
     ("graph_db", "fuseki_autosync"),    # P0-0 第八批：部署级开关，环境变量 "1" ⇒ True
+    ("graph_db", "fuseki_writesync"),   # P0-0 第九批：部署级开关，环境变量 "1" ⇒ True
     ("graph_db", "fuseki_persistent"),
 }
 
@@ -2550,6 +2554,7 @@ CONFIG_SCHEMA = {
         "neo4j_password":    {"type": "secret","desc": "Neo4j 密码"},
         "fuseki_autostart":  {"type": "bool",  "desc": "Fuseki 随主服务自拉起（默认关；开后幂等、持久、失败只告警不阻断启动）"},
         "fuseki_autosync":   {"type": "bool",  "desc": "启动时检测 Fuseki 投影新鲜度，stale 才自动重灌（unknown 不重灌；默认关）"},
+        "fuseki_writesync":  {"type": "bool",  "desc": "写入提交后按精确三元组差量增量投影到 Fuseki（失败只告警不阻断；默认关）"},
         "fuseki_persistent": {"type": "bool",  "desc": "Fuseki 用 TDB2 持久化（--update --loc；关掉则 --mem 重启即空，仅验证用）"},
     },
     # P0-1（2026-10-18）：资产长尾治理阈值（core/lifecycle.py 消费；前端契约登记处）

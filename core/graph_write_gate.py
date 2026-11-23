@@ -144,6 +144,28 @@ def _post_result(checks: list, op: str, *, indeterminate: bool = False) -> dict:
             "op": op, "checks": list(checks)}
 
 
+def _projection_capture(conn, kind: str, obj_id):
+    """P0-0 第九批：写入前抓 Fuseki 投影快照。
+
+    开关关闭 / 抓快照异常时返回空集合 —— 派生视图的问题绝不拖垮业务写入。
+    真正的投影在 `db_session.commit()` 之后由 `fuseki_projection.flush()` 完成。
+    """
+    try:
+        from core.fuseki_projection import enabled, capture_before
+        return capture_before(conn, kind, obj_id) if enabled() else set()
+    except Exception:
+        return set()
+
+
+def _projection_mark(conn, kind: str, obj_id, before) -> None:
+    """登记待投影对象；失败静默（写入已经成功，不能被投影拖成失败）。"""
+    try:
+        from core.fuseki_projection import mark
+        mark(conn, kind, obj_id, before)
+    except Exception:
+        pass
+
+
 def _post_error(prefix: str, post: dict) -> str:
     """按四态生成对外错误文案；unknown 必须显式写"不要重试"。"""
     bad = "; ".join(f"{c['check']}={c['detail']}" for c in post.get("checks", [])
@@ -316,6 +338,9 @@ def write_entity(conn, *, op: str, entity_type: str = "", name: str = "", proper
     if not entity_id:
         return {"ok": False, "stage": "not_found", "error": f"{op} 操作缺少实体 id"}
 
+    # 写后增量投影（第九批）：写前快照；提交后统一 flush
+    _proj_before = _projection_capture(conn, "entity", entity_id)
+
     # ① 本体类型门禁（删除不需要：类型已存在，删的时候再校验类型没意义）
     if op != "delete":
         terr = check_entity_type(conn, entity_type)
@@ -388,6 +413,8 @@ def write_entity(conn, *, op: str, entity_type: str = "", name: str = "", proper
     # ⑤ 执行后核验（P0-3 挂点）—— 删除走**反向断言**，语义完全不同
     post = (post_check_deleted(conn, entity_id, branch) if op == "delete"
             else post_check(conn, entity_id, branch, name, entity_type, properties, op))
+    # 写入已发生（即使后置核验失败）⇒ 两种返回路径都要登记投影
+    _projection_mark(conn, "entity", entity_id, _proj_before)
     if not post["verified"]:
         return {"ok": False, "stage": "post_condition", "applied": True,
                 "id": entity_id, "post": post,
@@ -409,6 +436,8 @@ def write_edge(conn, *, op: str, edge_id=None, source_id: str = "", target_id: s
         return {"ok": False, "stage": "type_gate", "error": f"不支持的边操作 {op!r}"}
     branch = branch or "dev"
     props = props or {}
+    # 写后增量投影（第九批）：create 时 edge_id 尚未生成 ⇒ 空快照
+    _proj_before = _projection_capture(conn, "edge", edge_id)
 
     from repositories.knowledge_repo import KnowledgeRepo
     if op == "edge_create":
@@ -494,6 +523,7 @@ def write_edge(conn, *, op: str, edge_id=None, source_id: str = "", target_id: s
 
     post = post_check_edge(conn, edge_id, branch, source_id or None, target_id or None,
                            relation_type or None, op=op)
+    _projection_mark(conn, "edge", edge_id, _proj_before)
     if not post["verified"]:
         return {"ok": False, "stage": "post_condition", "applied": True,
                 "id": edge_id, "post": post,
@@ -521,6 +551,7 @@ def write_inferred_entity(conn, *, entity_id: str, name: str, entity_type: str,
     """
     branch = branch or "dev"
     warnings = []
+    _proj_before = _projection_capture(conn, "entity", entity_id)
     try:
         terr = check_entity_type(conn, entity_type)
     except Exception as e:
@@ -546,6 +577,7 @@ def write_inferred_entity(conn, *, entity_id: str, name: str, entity_type: str,
                           {"name": name, "type": entity_type, "branch": branch},
                           warnings, branch)
     post = post_check(conn, entity_id, branch, name, entity_type or "实体", {}, "create")
+    _projection_mark(conn, "entity", entity_id, _proj_before)
     if not post["verified"]:
         return {"ok": False, "stage": "post_condition", "applied": True,
                 "id": entity_id, "post": post, "warnings": warnings,
@@ -580,6 +612,8 @@ def write_inferred_edge(conn, *, source_id: str, target_id: str, relation_type: 
                           warnings, branch)
     post = post_check_edge(conn, edge_id, branch, source_id, target_id,
                            relation_type, op="edge_create")
+    # 推断并入只会 create 新边 ⇒ 写前无旧三元组（不能在写后 capture，那是 after）
+    _projection_mark(conn, "edge", edge_id, set())
     if not post["verified"]:
         return {"ok": False, "stage": "post_condition", "applied": True,
                 "id": edge_id, "post": post, "warnings": warnings,

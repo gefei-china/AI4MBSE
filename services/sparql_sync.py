@@ -237,35 +237,77 @@ def _exec_dict(conn, sql, params=()):
     return out
 
 
+def ontology_type_lines(conn, d: dict) -> list:
+    """**单条**本体类型的 N-Triples 行。
+
+    P0-0 第九批（2026-11-23）：从 `build_ontology_ttl` 抽出，供全量/增量投影共用。
+    同一语义只允许一处实现 —— 增量若自己重写一份 IRI/转义规则，早晚漂移。
+    """
+    lines = []
+    iri = _ttl_iri(d.get("name", ""))
+    lines.append(f"{iri} {RDF_TYPE} {OWL_CLASS} .")
+    lines.append(f"{iri} {RDFS_LABEL} {_ttl_escape(d.get('name', ''))} .")
+    pid = d.get("parent_id")
+    if pid:
+        try:
+            parents = _exec_dict(conn, "SELECT name FROM ontology_types WHERE id=?", (pid,))
+            if parents:
+                lines.append(f"{iri} {RDFS_SUBCLASS} {_ttl_iri(parents[0]['name'])} .")
+        except Exception:
+            pass
+    try:
+        props = json.loads(d.get("properties") or "{}")
+    except Exception:
+        props = {}
+    if props:
+        lines.append(f"{iri} {RDFS_COMMENT} {_ttl_escape(json.dumps(props, ensure_ascii=False))} .")
+    return lines
+
+
+def entity_lines(d: dict) -> list:
+    """**单行** entities 记录的 N-Triples 行（与全量 builder 同一公式）。"""
+    MBSE_VF = "<" + ONTOLOGY_IRI_BASE + "validFrom>"
+    MBSE_VT = "<" + ONTOLOGY_IRI_BASE + "validTo>"
+    iri = _ttl_uri(d.get("id", ""))
+    type_iri = _ttl_iri(d["entity_type"]) if d.get("entity_type") else OWL_CLASS
+    lines = [
+        f"{iri} {RDF_TYPE} {type_iri} .",
+        f"{iri} {RDFS_LABEL} {_ttl_escape(d.get('name', ''))} .",
+    ]
+    if d.get("valid_from"):
+        lines.append(f"{iri} {MBSE_VF} {_ttl_date(d['valid_from'])} .")
+    if d.get("valid_to"):
+        lines.append(f"{iri} {MBSE_VT} {_ttl_date(d['valid_to'])} .")
+    try:
+        props = json.loads(d.get("properties") or "{}")
+    except Exception:
+        props = {}
+    for k, v in props.items():
+        prop_iri = _ttl_iri(k)
+        if isinstance(v, (int, float)):
+            lines.append(f"{iri} {prop_iri} {v} .")
+        else:
+            lines.append(f"{iri} {prop_iri} {_ttl_escape(v)} .")
+    return lines
+
+
+def relation_line(d: dict) -> str:
+    """**单条** relations 记录的 N-Triples 行。"""
+    return (f"{_ttl_uri(d.get('source_id',''))} {_ttl_iri(d.get('relation_type',''))} "
+            f"{_ttl_uri(d.get('target_id',''))} .")
+
+
 def build_ontology_ttl(conn) -> str:
     """ontology_types → 严格 N-Triples（每行完整三元组 + 全 IRI）。"""
     lines = []
     for d in _exec_dict(conn, "SELECT * FROM ontology_types"):
-        iri = _ttl_iri(d.get("name", ""))
-        lines.append(f"{iri} {RDF_TYPE} {OWL_CLASS} .")
-        lines.append(f"{iri} {RDFS_LABEL} {_ttl_escape(d.get('name', ''))} .")
-        pid = d.get("parent_id")
-        if pid:
-            try:
-                parents = _exec_dict(conn, "SELECT name FROM ontology_types WHERE id=?", (pid,))
-                if parents:
-                    lines.append(f"{iri} {RDFS_SUBCLASS} {_ttl_iri(parents[0]['name'])} .")
-            except Exception:
-                pass
-        try:
-            props = json.loads(d.get("properties") or "{}")
-        except Exception:
-            props = {}
-        if props:
-            lines.append(f"{iri} {RDFS_COMMENT} {_ttl_escape(json.dumps(props, ensure_ascii=False))} .")
+        lines.extend(ontology_type_lines(conn, d))
     return "\n".join(lines)
 
 
 def build_entities_ttl(conn, project_id=None) -> str:
     """entities + relations → 严格 N-Triples。"""
     lines = []
-    MBSE_VF = "<" + ONTOLOGY_IRI_BASE + "validFrom>"
-    MBSE_VT = "<" + ONTOLOGY_IRI_BASE + "validTo>"
     q = (
         "SELECT id, name, entity_type, properties, branch, "
         "valid_from, valid_to, is_current FROM entities "
@@ -276,29 +318,12 @@ def build_entities_ttl(conn, project_id=None) -> str:
         q += " AND project_id=?"
         params.append(project_id)
     for d in _exec_dict(conn, q, params):
-        iri = _ttl_uri(d.get("id", ""))
-        type_iri = _ttl_iri(d["entity_type"]) if d.get("entity_type") else OWL_CLASS
-        lines.append(f"{iri} {RDF_TYPE} {type_iri} .")
-        lines.append(f"{iri} {RDFS_LABEL} {_ttl_escape(d.get('name', ''))} .")
-        if d.get("valid_from"):
-            lines.append(f"{iri} {MBSE_VF} {_ttl_date(d['valid_from'])} .")
-        if d.get("valid_to"):
-            lines.append(f"{iri} {MBSE_VT} {_ttl_date(d['valid_to'])} .")
-        try:
-            props = json.loads(d.get("properties") or "{}")
-        except Exception:
-            props = {}
-        for k, v in props.items():
-            prop_iri = _ttl_iri(k)
-            if isinstance(v, (int, float)):
-                lines.append(f"{iri} {prop_iri} {v} .")
-            else:
-                lines.append(f"{iri} {prop_iri} {_ttl_escape(v)} .")
+        lines.extend(entity_lines(d))
     for d in _exec_dict(conn,
         "SELECT source_id, target_id, relation_type, properties FROM relations "
         "WHERE status<>'deprecated'"
     ):
-        lines.append(f"{_ttl_uri(d.get('source_id',''))} {_ttl_iri(d.get('relation_type',''))} {_ttl_uri(d.get('target_id',''))} .")
+        lines.append(relation_line(d))
     return "\n".join(lines)
 
 
