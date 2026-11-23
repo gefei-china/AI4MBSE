@@ -227,6 +227,11 @@ jobs:
         if: ${{ !cancelled() }}
         run: python tools/verify/verify_action_rules_array.py
 
+      # 2026-11-23：本体是单一事实源，不得残留测试标记（真实浏览器门禁曾写进去过）。
+      - name: Guard 本体数据洁净度（测试标记 / 类型闭合）
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_ontology_no_test_data.py
+
       # 2026-11-22 P1-2：Fuseki 持久 + 随主服务自拉起。纯注入判据，零外部依赖。
       - name: Guard Fuseki 持久与自拉起（P1-2，零外部依赖）
         if: ${{ !cancelled() }}

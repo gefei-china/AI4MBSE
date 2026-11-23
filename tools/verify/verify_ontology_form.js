@@ -258,6 +258,25 @@ function main() {
       if (restored && typeof restored === "object") { R = restored; }
       else { try { R = typeof restored === "string" ? JSON.parse(restored) : {}; } catch (_) {} }
       check("4c 门禁写过的锚点/别名已恢复原值（不污染真实本体）", !!R.ok, JSON.stringify(R));
+
+      // ⚠️ 4c 只看了 PUT 的 ok —— **PUT 成功 ≠ 库里真的干净**（本仓"命令成功≠操作生效"同型）。
+      //    2026-11-23 实测：生产库 ontology_types 里残留
+      //    `利益相关方.constraints.alt_labels = ["门禁别名甲","门禁别名乙"]`，
+      //    正是本门禁写进去的（恢复那一步没生效），而 4c 当时是绿的。
+      //    ⇒ 必须回读断言，不能只信响应码。
+      const chk = evalJs(`(async()=>{
+        try{
+          const rr=await fetch('/api/knowledge/ontology'); const dd=await rr.json();
+          const tt=dd.types||dd||[]; const ee=tt.find(t=>t.id===${E.id});
+          const s=ee?String(ee.constraints||''):'';
+          return JSON.stringify({found:!!ee, polluted:s.indexOf('门禁别名')>=0, cons:s.slice(0,140)});
+        }catch(e){ return JSON.stringify({found:false, polluted:true, err:String(e)}); }
+      })()`);
+      let N = {};
+      if (chk && typeof chk === "object") { N = chk; }
+      else { try { N = typeof chk === "string" ? JSON.parse(chk) : {}; } catch (_) {} }
+      check("4d 恢复后回读库：本体里不含测试标记（PUT ok ≠ 真干净）",
+        !!N.found && N.polluted === false, JSON.stringify(N));
     }
   }
 

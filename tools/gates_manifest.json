@@ -2950,6 +2950,12 @@
    "tier": "pr",
    "timeout": 60,
    "reason": "2026-11-23 P0-1 补：动作绑定条件支持数组（「必填且非空」必须两条规则）。守 R1 validate 数组逐条带下标 / R2 evaluate_rules 数组语义=全部成立（空串·缺键·None ⇒ failed，正常 ⇒ verified）/ R3 空数组与 None ⇒ skipped 不得当 verified / R4 路由归一化接受数组且元素非对象即报错 / R5 needed_keys 从数组收集 post 键 / R6 单条各自漏洞真实存在（证明两条必须一起配）。M1 evaluate_rules 只取第一条 / M2 路由改回只收 dict 两组变异必须判红。纯函数 + 进程内，零 DB 写、零网络。"
+  },
+  {
+   "script": "verify_ontology_no_test_data.py",
+   "tier": "pr",
+   "timeout": 90,
+   "reason": "2026-11-23 本体数据洁净度：真实浏览器门禁 verify_ontology_form.js 会真保存 alt_labels=「门禁别名甲/乙」，其恢复只信 PUT 的 ok、未回读 ⇒ 生产库 ontology_types(id=9041) 残留测试别名（当天该门禁是绿的）。守 T1 本体 constraints/properties/description 不含测试标记 / T2 实体与关系类型都能在本体里找到（单一事实源成立）/ T3 被检行数>0 防空转。M1 注入含标记类型必须判红、M1b 移除后恢复洁净。库为空（CI 常态）时 SKIP 明示不计入通过。"
   }
  ]
 }
