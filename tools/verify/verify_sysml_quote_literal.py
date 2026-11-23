@@ -127,6 +127,32 @@ def main() -> int:
             ck(len(ea) > 0, "M3 若夹具已是双引号，Q4b 必红（A 组非空转）",
                "semantic=%d" % len(ea))
 
+    # ── Q5 诊断提示（D2）：hint 必须指向**真修法**，不能只说「引用不成立」 ──
+    print("\n-- Q5 诊断提示 --")
+    try:
+        if str(REPO) not in sys.path:
+            sys.path.insert(0, str(REPO))
+        import sysml_v2_check as V5
+        # Q5a 纯函数：不含 `== '…'` 的源码行不得被误标
+        no_cmp = V5._quote_literal_hint("Couldn't resolve reference to Element ''甲''",
+                                        "            then '建立冷媒循环';")
+        ck(no_cmp == "", "Q5a 无 `== '…'` 的行不被误标为引号问题", no_cmp[:60])
+        # Q5b 纯函数：命中时必须给出双引号写法
+        hit = V5._quote_literal_hint("Couldn't resolve reference to Element ''允许''",
+                                     "            if '判定'.'结果' == '允许' then '做';")
+        ck("双引号" in hit and '== "允许"' in hit, "Q5b 命中时 hint 给出 `== \"允许\"` 写法", hit[:80])
+        # Q5c 真机：285 行夹具的 10 条语义错，全部 hint 含「单引号当字符串」
+        if avail and V5.available():
+            ra5 = V5.check_code(FIX.read_text(encoding="utf-8"), use_cache=False)
+            items = V5.diagnostics(ra5, max_items=40)
+            n_hint = sum(1 for d in items if "单引号当字符串" in (d.get("hint") or ""))
+            ck(len(items) >= 10 and n_hint == len(items),
+               "Q5c 10 条语义错的 hint 全部指向引号修法", "items=%d hint=%d" % (len(items), n_hint))
+        else:
+            skip("Q5c checker.jar 不可用，跳过")
+    except Exception as ex:
+        ck(False, "Q5 诊断提示判据执行成功", "%s: %s" % (type(ex).__name__, str(ex)[:100]))
+
     # ── 静态变异（不需要真机） ──
     print("\n-- 变异（必须判红） --")
     # M1 把卡片里的正例（== "允许"）改掉 ⇒ Q1 的正反例判据必须失效

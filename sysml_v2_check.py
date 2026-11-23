@@ -455,6 +455,37 @@ _HINTS = {
     "syntax": "语法：该处结构写法不被接受（对照 L0 卡的关键字与写法表）",
     "semantic": "语义：引用/类型族不成立（名字是否已声明、usage 与 def 是否用反）",
 }
+
+
+#: 单引号当字符串比较值的模式：`== '允许'`（行内、非双引号）
+_SQ_CMP = re.compile(r"==\s*'([^'\n]{1,40})'")
+
+
+def _quote_literal_hint(msg: str, source: str) -> str:
+    """当「引用不成立」其实是**单引号当字符串**时，给一条**指向真修法**的提示。
+
+    2026-11-23 实测（conv 1000000000，活动视图 285 行）：
+      生成端写 `if '判定'.'结果' == '允许' then …`，checker 报
+      `Couldn't resolve reference to Element ''允许''`（注意双层引号 = 它把"允许"当**名字**）。
+      通用 hint「引用/类型族不成立」会把人引向"改端口/改上下文"，而真修法是**换引号**
+      —— 那一轮因此连改两次都没收敛，最后被判停滞。
+
+    KerML 词法：单引号 = 转义标识符，双引号 = 字符串字面量。**同一行**出现 `== 'X'`
+    且诊断里引用的正是 X ⇒ 判定为引号问题（只改提示，不改计数与判据）。
+    """
+    if not msg or not source:
+        return ""
+    if "Couldn't resolve reference" not in msg and "Cannot resolve" not in msg:
+        return ""
+    m = _SQ_CMP.search(source)
+    if not m:
+        return ""
+    tok = m.group(1).strip()
+    if not tok or tok not in msg:
+        return ""
+    return ('语义：**单引号当字符串** —— `== \'%s\'` 应写成 `== "%s"`'
+            '（单引号是标识符，解析器会当元素引用去找；字符串必须双引号）' % (tok, tok))
+
 # 归一化消息：把引号内的具体 token 抹掉，用于「同一行同一类错」的二次合并
 _QUOTED = re.compile(r"'[^']*'")
 
@@ -561,7 +592,9 @@ def diagnostics(result, *, max_items=40, max_msg=3, collapse_lines=True):
             "path": path, "file": f, "line": ln, "col": col, "cols": [col],
             "source": d.get("source") or "",
             "messages": [msg],
-            "hint": _HINTS.get(path, ""),
+            # 行级特异提示优先于按路别的通用提示（只影响 hint 文案，不改计数与判据）
+            "hint": (_quote_literal_hint(msg, d.get("source") or "")
+                     or _HINTS.get(path, "")),
         }
         by_pos[key] = node
         by_line[lkey] = node
