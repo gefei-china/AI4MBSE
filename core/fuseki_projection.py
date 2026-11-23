@@ -52,14 +52,17 @@ flush / 服务启动时按「尝试次数少优先、id 小优先」重放，成
 回放变成 `delta(before, 当前 after)`，t2 已成功时是纯 no-op，天然幂等且
 与重放顺序无关。
 
-## 边界
+## 第十一批：时态三元组也进差量
 
-只投影 base 三元组；W3C Time 时态三元组（含 bnode）仍需全量同步或既有
-时态链路维护。
+快照含 8 条 W3C Time 行（与 `build_valid_intervals_ttl` 同一纯函数）。
+Fuseki 会重命名 bnode label，故删除不能按原 label 精确匹配；改为按**命名
+区间 IRI**模式删除整个区间 + 一跳邻居，再把 after 中该实体的时态块整块重插。
+只插变化的那一行会留下没有 `<inv> hasBeginning` 指向的孤儿 bnode。
 """
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 
 #: ⚠️ sqlite3.Connection 既不能 setattr（无 __dict__）也不能 weakref（实测），
@@ -78,6 +81,7 @@ def projection_snapshot(conn, kind: str, obj_id) -> set:
     from services.sparql_sync import (
         _exec_dict, entity_lines, relation_line, ontology_type_lines,
     )
+    from services.temporal_sparql import entity_interval_lines
     if not obj_id:
         return set()
     if kind == "entity":
@@ -90,6 +94,9 @@ def projection_snapshot(conn, kind: str, obj_id) -> set:
         lines = []
         for d in rows:
             lines.extend(entity_lines(d))
+            # 第十一批：时态三元组进快照，写后差量一并维护（不再等全量重灌）。
+            if d.get("valid_from") or d.get("valid_to"):
+                lines.extend(entity_interval_lines(d))
     elif kind == "edge":
         rows = _exec_dict(
             conn,
@@ -146,26 +153,117 @@ def _update_statement(op: str, lines: list) -> str:
     return SPARQL_PREFIXES + " %s DATA { %s }" % (op, "\n".join(lines))
 
 
+_INTERVAL_RE = re.compile(r"<http://mbse/ontology/[^>\s]+/interval>")
+
+
+def _split_temporal_deletes(to_del: list, to_ins: list, before=None, after=None) -> tuple:
+    """时态三元组按**整块**换，不做逐行差量。
+
+    Fuseki 会重命名 bnode label ⇒ `DELETE DATA { _:safe_x_ba ... }` 匹配不到。
+    更关键的是：只插变化的那一行会产生**孤儿 bnode**（没有 `<inv> hasBeginning`
+    指向它，下次再删就找不到）。因此任一有效期字段变化 ⇒
+      · 按命名区间 IRI 模式删除整个区间 + 一跳邻居；
+      · 把 after 中该实体的**全部**时态行重新插入。
+    返回 (精确删除行, 插入行, 模式删除语句)。
+    """
+    from urllib.parse import unquote
+    from services.sparql_sync import SPARQL_PREFIXES
+    from services.temporal_sparql import HAS_VALID, bnode_labels
+
+    def _eid_of(ln):
+        ent = ln.split(" ", 1)[0]
+        if not ent.startswith("<http://mbse/ontology/"):
+            return ""
+        return unquote(ent[len("<http://mbse/ontology/"):-1])
+
+    def _inv_of(eid):
+        return "<http://mbse/ontology/" + eid + "/interval>"
+
+    label2inv = {}
+    for ln in (before or set()):
+        if HAS_VALID in ln:
+            eid = _eid_of(ln)
+            ba, bb = bnode_labels(eid)
+            label2inv[ba] = label2inv[bb] = _inv_of(eid)
+
+    def _affected(ln):
+        if HAS_VALID in ln:
+            m = _INTERVAL_RE.search(ln)
+            return m.group(0) if m else None
+        if "time#" in ln:
+            m = _INTERVAL_RE.search(ln)
+            if m:
+                return m.group(0)
+            return next((v for k, v in label2inv.items() if k in ln), None)
+        if "ontology/validFrom>" in ln or "ontology/validTo>" in ln:
+            eid = _eid_of(ln)
+            return _inv_of(eid) if eid else None
+        return None
+
+    changed = set(to_del) | set(to_ins)
+    invs = {v for ln in changed if (v := _affected(ln))}
+    if not invs:
+        return list(to_del), list(to_ins), []
+    affected_eids = {_eid_of(ln) for ln in changed
+                     if "ontology/validFrom>" in ln or "ontology/validTo>" in ln
+                     or HAS_VALID in ln}
+    affected_eids |= {e for e in {_eid_of(ln) for ln in (before or set()) if HAS_VALID in ln}
+                      if _inv_of(e) in invs}
+    full_temporal = {ln for ln in (after or set()) if "time#" in ln or HAS_VALID in ln}
+    # bnode label 是 id 的清洗形式（中文→下划线），不能只用原始 eid 做包含匹配，
+    # 否则「整块重插」会漏掉 4 条 bnode 主语行 ⇒ 留下孤儿 bnode / 旧日期。
+    anchors = set()
+    for e in affected_eids:
+        if not e:
+            continue
+        anchors.add(e)
+        ba, bb = bnode_labels(e)
+        anchors.add(ba)
+        anchors.add(bb)
+    add_ins = {ln for ln in full_temporal if any(a in ln for a in anchors)}
+    # 链接行主语/宾语都是命名 IRI，必须精确删（模式删除按 inv 主语，碰不到它）
+    exact_del = [ln for ln in to_del if "time#" not in ln]
+    inserts = {ln for ln in to_ins if "time#" not in ln and HAS_VALID not in ln} | add_ins
+    # ⚠️ DELETE 模板里必须用**已绑定的变量**：写 `DELETE { ?s ?p ?o }` 而 WHERE 只绑定
+    # 了 ?p/?o 时 ?s 未绑定，Fuseki 静默跳过整条删除（实测 204 但三元组不动）。
+    patterns = [
+        SPARQL_PREFIXES + " DELETE { %s ?p ?o . %s ?p1 ?s . ?s ?p2 ?o2 } "
+        "WHERE { { %s ?p ?o } UNION { %s ?p1 ?s . ?s ?p2 ?o2 } }"
+        % (inv, inv, inv, inv)
+        for inv in sorted(invs)
+    ]
+    return exact_del, sorted(inserts), patterns
+
+
 def apply_delta(cli, before: set, after: set, timeout: float = 30.0) -> dict:
     """把差量推到 Fuseki。差集为空则零网络调用（幂等）。"""
     to_del, to_ins = delta(before, after)
     if not to_del and not to_ins:
-        return {"ok": True, "deleted": 0, "inserted": 0, "calls": 0}
+        return {"ok": True, "deleted": 0, "inserted": 0, "calls": 0, "patterns": 0}
     from services.sparql_sync import FusekiUnavailable, _chunk_lines
+    exact_del, to_ins, patterns = _split_temporal_deletes(to_del, to_ins, before, after)
     calls = 0
     try:
-        for op, lines in (("DELETE", to_del), ("INSERT", to_ins)):
+        # 模式删除必须先跑：它要靠 <inv> 的一跳邻居定位 bnode，
+        # 若先精确删掉 <inv> 自身，邻居就找不到了。
+        for q in patterns:
+            cli.update(q, timeout=timeout)
+            calls += 1
+        for op, lines in (("DELETE", exact_del), ("INSERT", to_ins)):
             for chunk in _chunk_lines("\n".join(lines)):
                 if chunk.strip():
                     cli.update(_update_statement(op, chunk.splitlines()), timeout=timeout)
                     calls += 1
     except FusekiUnavailable as ex:
         return {"ok": False, "error": "Fuseki 不可达: %s" % str(ex)[:200],
-                "deleted": len(to_del), "inserted": len(to_ins), "calls": calls}
+                "deleted": len(to_del), "inserted": len(to_ins), "calls": calls,
+                "patterns": len(patterns)}
     except Exception as ex:
         return {"ok": False, "error": "%s: %s" % (type(ex).__name__, str(ex)[:200]),
-                "deleted": len(to_del), "inserted": len(to_ins), "calls": calls}
-    return {"ok": True, "deleted": len(to_del), "inserted": len(to_ins), "calls": calls}
+                "deleted": len(to_del), "inserted": len(to_ins), "calls": calls,
+                "patterns": len(patterns)}
+    return {"ok": True, "deleted": len(to_del), "inserted": len(to_ins), "calls": calls,
+            "patterns": len(patterns)}
 
 
 # ══════════════════════════════════════════════════════════════════════════

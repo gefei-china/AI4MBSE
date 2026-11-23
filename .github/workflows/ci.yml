@@ -204,6 +204,11 @@ jobs:
         if: ${{ !cancelled() }}
         run: python tools/verify/verify_fuseki_replay_queue.py
 
+      # 2026-11-23 P0-0 第十一批：时态三元组进写后差量（按命名区间模式删 bnode）。
+      - name: Guard Fuseki 时态增量投影（P0-0 第十一批，临时库）
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_fuseki_temporal_incremental.py
+
       # 2026-11-22 P1-2：Fuseki 持久 + 随主服务自拉起。纯注入判据，零外部依赖。
       - name: Guard Fuseki 持久与自拉起（P1-2，零外部依赖）
         if: ${{ !cancelled() }}
