@@ -215,6 +215,12 @@ jobs:
         if: ${{ !cancelled() }}
         run: python tools/verify/verify_cq_ui_freshness.py
 
+      # 2026-11-23：生成端「单引号 ≠ 字符串」+ 校验停滞不得误归因为环境。
+      # 真机 A/B 需要 checker.jar/java-runtime（CI 不入库），缺失时脚本 SKIP 并明示。
+      - name: Guard SysML v2 单引号/字符串规则与停滞归因（P0-0 第十一批补②）
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_sysml_quote_literal.py
+
       # 2026-11-22 P1-2：Fuseki 持久 + 随主服务自拉起。纯注入判据，零外部依赖。
       - name: Guard Fuseki 持久与自拉起（P1-2，零外部依赖）
         if: ${{ !cancelled() }}

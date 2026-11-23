@@ -31,6 +31,7 @@
 | `B13`/`B14`/`G01`/`G03` | `render` 只能引用 usage，不能引用 `rendering def` |
 | `U01`–`U07`/`X01`–`X03` | `subject`/`actor`/`stakeholder` 顺序硬规则 |
 | **`S01`** | **`subject = x` 与 `satisfy r by …` 对同一需求二选一**（2026-09-19 真机实测新增） |
+| **`S02`** | **单引号是标识符、双引号才是字符串**：`== '允许'` ❌ / `== "允许"` ✅（2026-11-23 checker.jar 受控 A/B：10 错 → 0 错 pass） |
 | `J03`/`J04` | `allocate r to <usage>;` |
 | §3.2 / §3.3 | 类型族匹配；"引用类"语法只能引用 usage |
 
@@ -55,6 +56,10 @@ L0_CARD = """
 · UTF-8 禁止 BOM；裸名只能 A-Z a-z _ 开头，后续只 A-Z a-z 0-9 _
 · 含中文/空格/连字符的名字必须单引号包裹：part def '电池包'; ✅ ｜ part def 电池包; ❌
   （推荐英文标识符 + 中文 doc 注释）
+· ⚠️ 单引号是**标识符**、双引号才是**字符串** —— 比较值 / 默认值一律双引号：
+    if '判定'.'结果' == "允许" then …  ✅ ｜ if '判定'.'结果' == '允许' then …  ❌
+    （`'允许'` 被当成元素引用 ⇒ `Couldn't resolve reference to Element ''允许''`；
+      2026-11-23 checker.jar 实测 A/B：单引号 10 条语义错 / 改双引号 0 条、判据 pass）
 
 ■ 包与导入
 · 全文必须包在 package <Name> { … } 内；`...` 是非法记号，必须写真实体
@@ -77,6 +82,7 @@ connector c from a to b;         → connect a to b;
 satisfy SomeRequirementDef by p; → 先 requirement r : Def; 再 satisfy r by p;
 doc "文本"                        → doc /* 文本 */
 a && b   /   a || b              → a & b   /   a or b
+x == '允许'                      → x == "允许";          // 单引号是标识符，字符串必须双引号
 first A if C then B else D;      → if C { action X; } else { action Y; }
 render MyRendererDef;            → 先 rendering r : MyRendererDef; 再 render r;
 extend SubUC;                    → v2 没有 extend → include use case SubUC;

@@ -2938,6 +2938,12 @@
    "tier": "pr",
    "timeout": 120,
    "reason": "2026-11-23 P0-0 第十一批补：CQ 面板「图库新鲜度」可感知性。守 F0 三处源码抽取成功（抽不到即判红，不把空串当无违规）/ S1 面板真接线状态条 / S2 新鲜度与列表并行且失败降级 null（不拖住列表）/ S3 stale 明写「skip 不是通过」/ S4 unknown 有独立文案 / S5 取不到时明写「无法获取」且不伪装 fresh / S6 三态底色可分 / S7「执行全部」消费 summary.stale 并提示降级 / S8 用真 node 执行渲染验三态文案-颜色-数字-转义。M1 抹接线 / M2 去「skip 不是通过」/ M3 取不到伪装 fresh / M4 抹 stale 提示 / M5 stale 改绿底 五组真变异必须判红。--live 时追加 L1 新鲜度接口字段合法 / L2 CQ 列表零回归；CI 无服务/无 node 时 SKIP 并明示，不计入通过。"
+  },
+  {
+   "script": "verify_sysml_quote_literal.py",
+   "tier": "pr",
+   "timeout": 180,
+   "reason": "2026-11-23 P0-0 第十一批补②：SysML v2「单引号是标识符、双引号才是字符串」生成端规则 + 校验停滞归因。守 Q1 L0 卡含该规则正反例 / Q2 出处表登记 S02 / Q3 停滞回喂不再断言「根因在环境」且给出中性自查步骤 / Q4 真机 A/B（同一份 285 行活动视图：单引号 ⇒ ≥10 条 Couldn't resolve reference；改双引号 ⇒ 0 错 pass），A 组防夹具空转、B 组防「改法不生效」。M1 抹卡片正例 / M2 文案改回「根因在环境」/ M3 夹具预置双引号 三组变异必须判红。checker.jar 或 java-runtime 缺失（CI 常态）时 Q4 打印 SKIP 并明示不计入通过，Q1-Q3 与变异仍必须全绿。"
   }
  ]
 }
