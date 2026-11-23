@@ -357,11 +357,17 @@ def sync_to_fuseki(
     ttl = build_ontology_ttl(conn) + "\n" + build_entities_ttl(conn, project_id)
     # INSERT DATA {} 是 N-Triples 语法，不接受 @prefix 指令 → 剥离之（IRI 已全量展开）
     ntriples = _strip_turtle_prefixes(ttl)
+    # P0-0 第九批④：重灌前抢救手工三元组（默认关，零回归）
+    from services import fuseki_manual as _manual
+    preserved = (_manual.collect_manual(cli, ntriples, timeout=timeout)
+                 if _manual.preserve_enabled() else set())
     try:
         cli.update("CLEAR DEFAULT", timeout=timeout)
         for chunk in _chunk_lines(ntriples):
             if chunk.strip():
                 cli.update(_build_insert(chunk), timeout=timeout)
+        if preserved:
+            _manual.reinsert_manual(cli, preserved, timeout=timeout)
     except FusekiUnavailable as e:
         return {
             "ok": False,
@@ -376,6 +382,7 @@ def sync_to_fuseki(
         "duration_ms": int((time.time() - started) * 1000),
         "fuseki_url": base_url,
         "dataset": dataset,
+        "preserved_manual": len(preserved),
     }
 
 

@@ -2914,6 +2914,12 @@
    "tier": "pr",
    "timeout": 120,
    "reason": "2026-11-23 P0-0 第九批③：新鲜度从数量下界升级为 base 三元组集合精确包含。真机取证：506 条 base 与 Fuseki 逐条精确匹配（额外 1217 条是时态三元组）。守 F1 容忍额外三元组 / F2 等量不同内容（删一条补一条垃圾，数量不变）仍能抓 stale / F3 真缺 / F4 异常归 unknown / F5 期望值复用同步器 builder / F6 配置四处登记与 check_freshness 接线 / F7 四态字段兼容。M1 抹精确差 / M2 反向差集 / M3 异常归 stale 三组源码真变异必须判红。临时库 + 注入客户端，零生产库写、零 LLM、零网络。"
+  },
+  {
+   "script": "verify_fuseki_manual_preserve.py",
+   "tier": "pr",
+   "timeout": 120,
+   "reason": "2026-11-23 P0-0 第九批④：全量重灌保留手工三元组。守 F1 只识别非 base 非时态的手工行 / F2 按谓词排除时态行（Fuseki 重命名 bnode label，按文本做差会重插出双份时态图）/ F3 排除 base / F4 真跑 sync_to_fuseki_with_time 且 CLEAR 后重插 / F5 开关关闭零回归 / F6 配置四处登记 / F7 空集合零网络 / F8 两条重灌路径都接线。M1 抹时态识别 / M2 不减 base / M3 抹重插接线三组真变异必须判红。临时库 + 注入客户端，零生产库写、零 LLM、零网络。"
   }
  ]
 }

@@ -194,6 +194,11 @@ jobs:
         if: ${{ !cancelled() }}
         run: python tools/verify/verify_fuseki_exact_freshness.py
 
+      # 2026-11-23 P0-0 第九批④：全量重灌保留手工三元组。
+      - name: Guard Fuseki 手工三元组保留（P0-0 第九批④，临时库）
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_fuseki_manual_preserve.py
+
       # 2026-11-22 P1-2：Fuseki 持久 + 随主服务自拉起。纯注入判据，零外部依赖。
       - name: Guard Fuseki 持久与自拉起（P1-2，零外部依赖）
         if: ${{ !cancelled() }}

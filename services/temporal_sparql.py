@@ -102,11 +102,19 @@ def sync_to_fuseki_with_time(
         + "\n" + build_valid_intervals_ttl(conn)
     )
     ntriples = _strip_turtle_prefixes(ttl)
+    # P0-0 第九批④：base_ttl 不含时态三元组 —— 它们会由本次重灌重新生成，
+    # 若被当成"手工"重插，旧 bnode label 会造出第二套时态图。
+    from services import fuseki_manual as _manual
+    base_ttl = (build_ontology_ttl(conn) + "\n" + build_entities_ttl(conn, project_id))
+    preserved = (_manual.collect_manual(cli, base_ttl, timeout=timeout)
+                 if _manual.preserve_enabled() else set())
     try:
         cli.update("CLEAR DEFAULT", timeout=timeout)
         for chunk in _chunk_lines(ntriples):
             if chunk.strip():
                 cli.update(_build_insert(chunk), timeout=timeout)
+        if preserved:
+            _manual.reinsert_manual(cli, preserved, timeout=timeout)
     except FusekiUnavailable as e:
         return {"ok": False, "error": "写入失败: " + str(e),
                 "duration_ms": int((_time.time() - started) * 1000)}
@@ -117,4 +125,5 @@ def sync_to_fuseki_with_time(
         "fuseki_url": base_url,
         "dataset": dataset,
         "has_time_ontology": True,
+        "preserved_manual": len(preserved),
     }
