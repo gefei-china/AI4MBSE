@@ -2956,6 +2956,12 @@
    "tier": "pr",
    "timeout": 90,
    "reason": "2026-11-23 本体数据洁净度：真实浏览器门禁 verify_ontology_form.js 会真保存 alt_labels=「门禁别名甲/乙」，其恢复只信 PUT 的 ok、未回读 ⇒ 生产库 ontology_types(id=9041) 残留测试别名（当天该门禁是绿的）。守 T1 本体 constraints/properties/description 不含测试标记 / T2 实体与关系类型都能在本体里找到（单一事实源成立）/ T3 被检行数>0 防空转。M1 注入含标记类型必须判红、M1b 移除后恢复洁净。库为空（CI 常态）时 SKIP 明示不计入通过。"
+  },
+  {
+   "script": "verify_ontology_profile_mapping.py",
+   "tier": "pr",
+   "timeout": 120,
+   "reason": "2026-11-23 本体定位选项 A：标准映射（profile_source/profile_ref）覆盖与合法性。守 P1 entity/relation 全部有映射（新增类型漏填即红）/ P2 元类名必须在已知 SysML v2 词表内（防拼错：拼错比不填更糟，导出件看着有实际对不上）/ P3 ISO 15288 条款号在 §6.4.1–§6.4.14 内 / P4 真链路：to_turtle 的 rdfs:seeAlso 条数 ≥ 已映射类型数（防库里填了、导出不带）+ P4a 处理 to_turtle 返回元组。M1 清空一条 / M2 元类拼错 / M3 条款越界 三组内存变异必须判红，零写库。库为空（CI 常态）时 SKIP 明示。"
   }
  ]
 }

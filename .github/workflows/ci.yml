@@ -232,6 +232,11 @@ jobs:
         if: ${{ !cancelled() }}
         run: python tools/verify/verify_ontology_no_test_data.py
 
+      # 2026-11-23 定位选项 A：类型必须能对上外部标准（SysML v2 元类 / ISO 15288 条款）。
+      - name: Guard 本体标准映射（覆盖率 / 元类 / 条款 / 导出链路）
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_ontology_profile_mapping.py
+
       # 2026-11-22 P1-2：Fuseki 持久 + 随主服务自拉起。纯注入判据，零外部依赖。
       - name: Guard Fuseki 持久与自拉起（P1-2，零外部依赖）
         if: ${{ !cancelled() }}
