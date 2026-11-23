@@ -155,7 +155,7 @@ def _eval_rows(rows: list[dict], direction: str, args: dict | None = None,
         raw = b.get("%s_condition" % direction)
         if not raw:
             continue
-        out.append(_ac.evaluate(raw, args=args, snapshot=snapshot, direction=direction))
+        out.append(_ac.evaluate_rules(raw, args=args, snapshot=snapshot, direction=direction))
     return out
 
 

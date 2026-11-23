@@ -621,17 +621,27 @@ def ontology_delete_type(tid: int, force: bool = False, conn=Depends(db_session)
 # core.action_conditions 的纯函数表守（含 rule_version 口径）。
 
 def _p01_parse_prepost(raw):
-    """把前端传来的 pre/post 条件归一为 JSON 文本；非法直接抛 ValueError。"""
+    """把前端传来的 pre/post 条件归一为 JSON 文本；非法直接抛 ValueError。
+
+    2026-11-23：支持**规则数组**（单条 = 直接存对象；多条 = 存数组）。
+    背景：一条 (type_id, tool_name) 只能存一份条件，而「必填且非空」必须两条规则，
+    只收单对象等于让最常见的前置约束无法表达（`field_not_empty` 遇缺键是 unknown ⇒ 放行）。
+    """
     if raw is None or raw == "":
         return None
-    obj = raw if isinstance(raw, dict) else None
+    obj = raw if isinstance(raw, (dict, list)) else None
     if obj is None and isinstance(raw, str):
         try:
             obj = json.loads(raw)
         except Exception as ex:
             raise ValueError("条件 JSON 解析失败: %s" % str(ex)[:80])
-    if obj is None or not isinstance(obj, dict):
-        raise ValueError("条件必须是 JSON 对象")
+    if obj is None or not isinstance(obj, (dict, list)):
+        raise ValueError("条件必须是 JSON 对象或对象数组")
+    items = obj if isinstance(obj, list) else [obj]
+    if not items:
+        return None
+    if not all(isinstance(x, dict) for x in items):
+        raise ValueError("条件数组的每个元素都必须是 JSON 对象")
     from core.action_conditions import validate as _val
     bad = _val(obj)
     if bad:

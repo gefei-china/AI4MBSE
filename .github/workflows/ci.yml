@@ -221,6 +221,12 @@ jobs:
         if: ${{ !cancelled() }}
         run: python tools/verify/verify_sysml_quote_literal.py
 
+      # 2026-11-23：绑定条件支持数组 —— 「必填且非空」必须两条规则，
+      # 只支持单条会让最常见的前置约束静默失效（unknown ⇒ 放行）。
+      - name: Guard 动作绑定条件数组（P0-1 补）
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_action_rules_array.py
+
       # 2026-11-22 P1-2：Fuseki 持久 + 随主服务自拉起。纯注入判据，零外部依赖。
       - name: Guard Fuseki 持久与自拉起（P1-2，零外部依赖）
         if: ${{ !cancelled() }}

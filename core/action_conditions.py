@@ -88,7 +88,14 @@ def validate(raw: Any, direction: str | None = None) -> list[str]:
 
     :param direction: 'pre' / 'post' 时额外校验方向匹配（如把 entity_exists 写进
       pre_condition 即报 direction_mismatch）。None 时只校验结构。
+
+    2026-11-23：支持**规则数组**（数组内逐条校验，错误带下标）。
     """
+    if isinstance(raw, list):
+        errs = []
+        for i, x in enumerate(raw):
+            errs += ["[%d] %s" % (i, e) for e in validate(x, direction)]
+        return errs
     rule, err = _as_rule(raw)
     if err:
         return [err]
@@ -255,6 +262,39 @@ def combine(results: list[dict]) -> dict | None:
     }
 
 
+def _expand_rules(raw: Any) -> list:
+    """展开「单条规则」或「规则数组」为规则列表（数组可嵌套）。
+
+    为什么需要数组（2026-11-23）：绑定表一条 (type_id, tool_name) 只能存一份条件，
+    而「必填**且**非空」这类约束天然是两条规则 —— 单条 `required_args` 只拦"缺键"
+    （空串放行），单条 `field_not_empty` 只拦"空值"（缺键判 unknown ⇒ 放行）。
+    ⇒ 只支持单条就等于表达不了最常见的前置约束。
+    """
+    if isinstance(raw, list):
+        out = []
+        for x in raw:
+            out.extend(_expand_rules(x))
+        return out
+    if raw is None or raw == "":
+        return []
+    return [raw]
+
+
+def evaluate_rules(raw: Any, args: dict | None = None, snapshot: dict | None = None,
+                   direction: str | None = None) -> dict:
+    """对「单条规则」或「规则数组」做合流判定。
+
+    数组语义 = **全部须成立**（取最差态，见 `combine`）；空数组/None = 无约束 ⇒ `skipped`。
+    执行侧（`action_binding_runtime._eval_rows`）统一走这里，不再逐条散落。
+    """
+    items = _expand_rules(raw)
+    if not items:
+        return {"ok": True, "status": "skipped", "kind": "", "why": "无约束条件", "count": 0}
+    merged = combine([evaluate(x, args=args, snapshot=snapshot, direction=direction)
+                      for x in items])
+    return merged or {"ok": True, "status": "skipped", "kind": "", "why": "无约束条件", "count": 0}
+
+
 def needed_keys(results_or_rules) -> set[str]:
     """从 post 规则里收集 snapshot 必须提供的参数名（供回读快照按 key 构造）。
 
@@ -263,7 +303,7 @@ def needed_keys(results_or_rules) -> set[str]:
     静默形态，所以由规则表自己声明需要哪些 key，避免执行侧另写一份猜测。
     """
     out = set()
-    for item in (results_or_rules or []):
+    for item in _expand_rules(results_or_rules):
         if isinstance(item, dict):
             raw = item.get("rule") or item
             rule, _ = _as_rule(raw)
