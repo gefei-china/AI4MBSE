@@ -43,6 +43,22 @@ def freshness(conn=Depends(db_session),
     return out
 
 
+@router.get("/replay")
+def replay_queue(conn=Depends(db_session),
+                 user=Depends(require_permission("kb_ontology", "view"))):
+    """P0-0 第十批：写后投影失败队列可见性（降级必须可见，不能只打日志）。"""
+    from core.fuseki_projection import queue_status
+    return queue_status(conn)
+
+
+@router.post("/replay")
+def replay_now(conn=Depends(db_session),
+               user=Depends(require_permission("kb_ontology", "edit"))):
+    """手动重放队列；每项按当前 DB 重算 after，重复调用不产生副作用。"""
+    from core.fuseki_projection import replay
+    return replay(conn)
+
+
 @router.post("/sync")
 def sync(req: SyncRequest, conn=Depends(db_session),
          user=Depends(require_permission("kb_ontology", "edit"))):

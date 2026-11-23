@@ -199,6 +199,11 @@ jobs:
         if: ${{ !cancelled() }}
         run: python tools/verify/verify_fuseki_manual_preserve.py
 
+      # 2026-11-23 P0-0 第十批：写后投影失败重放队列（存 before 现场重算 after）。
+      - name: Guard Fuseki 写后投影重放队列（P0-0 第十批，临时库）
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_fuseki_replay_queue.py
+
       # 2026-11-22 P1-2：Fuseki 持久 + 随主服务自拉起。纯注入判据，零外部依赖。
       - name: Guard Fuseki 持久与自拉起（P1-2，零外部依赖）
         if: ${{ !cancelled() }}

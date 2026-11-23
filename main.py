@@ -115,6 +115,27 @@ async def lifespan(app: FastAPI):
     except Exception as _e_fs_sync:
         print("[startup] ⚠️ Fuseki 自动对齐异常（主服务继续）：%s: %s"
               % (type(_e_fs_sync).__name__, str(_e_fs_sync)[:160]), flush=True)
+    # ★ 2026-11-23（P0-0 第十批）：Fuseki 短暂不可达期间写后投影失败欠账重放。
+    #   与 autosync 是两条独立兜底：autosync 只在 stale 时全量重灌，unknown 不动；
+    #   重放只处理队列里明确登记过的对象，失败不阻断主服务、也不清队列。
+    #   `graph_db.fuseki_replay_queue` 默认 False ⇒ 这里瞬时返回 disabled。
+    try:
+        from core.config import get as _cfg_get
+        if _cfg_get("graph_db", "fuseki_replay_queue"):
+            from database import get_db as _get_db
+            from core.fuseki_projection import replay as _replay_proj
+            _conn_rp = _get_db()
+            try:
+                _rr = _replay_proj(_conn_rp)
+            finally:
+                _conn_rp.close()
+            if _rr.get("status") != "no_pending":
+                print("[startup] Fuseki 失败重放：%s（成功 %s / 仍失败 %s / 队列剩 %s）"
+                      % (_rr.get("status"), _rr.get("replayed", 0),
+                         _rr.get("failed", 0), _rr.get("pending", 0)), flush=True)
+    except Exception as _e_rp:
+        print("[startup] ⚠️ Fuseki 失败重放异常（主服务继续）：%s: %s"
+              % (type(_e_rp).__name__, str(_e_rp)[:160]), flush=True)
     # ★★ 2026-11-18：**强杀恢复** —— 把上次进程异常终止时留下的流式检查点固化成消息。
     #   必须紧跟 init_db()（表刚建好），且在所有后台守护线程启动之前。
     #   正常收口的流已在 finally 里删除检查点 ⇒ 这里扫到的只可能是强杀残留。

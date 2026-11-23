@@ -23,3 +23,4 @@
 {"query": "什么是设计与实施约束？", "relevant": [24666], "self": 24611, "section": "5.5 设计与实施约束", "doc": "Print_面向网络总体的AI赋能MBSE系统设计技术研究项目技术要求.pdf", "note": "相关集仅 1 条（算不出 recall 分母），需人工确认", "relevant_keys": ["848:37"]}
 {"query": "什么是大语言模型调用接口要求？", "relevant": [24667], "self": 24612, "section": "6.1 大语言模型调用接口要求", "doc": "Print_面向网络总体的AI赋能MBSE系统设计技术研究项目技术要求.pdf", "note": "相关集仅 1 条（算不出 recall 分母），需人工确认", "relevant_keys": ["848:38"]}
 {"query": "什么是文档与外部知识库接口要求？", "relevant": [24668], "self": 24613, "section": "6.2 文档与外部知识库接口要求", "doc": "Print_面向网络总体的AI赋能MBSE系统设计技术研究项目技术要求.pdf", "note": "相关集仅 1 条（算不出 recall 分母），需人工确认", "relevant_keys": ["848:39"]}
+{"query": "检索质量怎么看？", "relevant": [], "human_confirmed": true, "queue_id": 5, "query_src": "retrieval", "conversation_id": 202, "note": "生产回流人工确认；相关集待人工补（标注卡未指定 chunk）"}

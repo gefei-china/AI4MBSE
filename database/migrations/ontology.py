@@ -620,3 +620,32 @@ def _migrate_type_actions(conn):
         conn.execute(TYPE_ACTIONS_DDL)
         conn.commit()
         print("[init_db] 迁移: ontology_type_actions 已建立（P0-1 对象类型↔Action 绑定）")
+
+
+# ══════════════════════════════════════════════════════════════════════
+# P0-0 第十批（2026-11-23）写后投影失败重放队列。
+# DDL 真源：schema.py 建表段；此处同一份 DDL 幂等补老库（避免抄写漂移）。
+# ══════════════════════════════════════════════════════════════════════
+FUSEKI_REPLAY_DDL = """
+    CREATE TABLE IF NOT EXISTS fuseki_projection_replay (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        kind        TEXT NOT NULL,
+        obj_id      TEXT NOT NULL,
+        before_json TEXT NOT NULL,
+        attempts    INTEGER NOT NULL DEFAULT 0,
+        last_error  TEXT DEFAULT '',
+        created_at  TEXT DEFAULT (datetime('now','localtime')),
+        updated_at  TEXT DEFAULT (datetime('now','localtime')),
+        UNIQUE(kind, obj_id)
+    )
+"""
+
+
+def _migrate_fuseki_replay(conn):
+    """幂等补 fuseki_projection_replay 表（老库升级路径；新库由 schema.py 建）。"""
+    before = {r[0] for r in conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table'")}
+    if "fuseki_projection_replay" not in before:
+        conn.execute(FUSEKI_REPLAY_DDL)
+        conn.commit()
+        print("[init_db] 迁移: fuseki_projection_replay 已建立（P0-0 第十批 写后投影重放）")

@@ -60,6 +60,7 @@ from .migrations import (
     _migrate_ontology_health_logs,         # 2026-10-15 P0-2 本体体检历史表（趋势线数据源）
     _migrate_ontology_questions,           # 2026-10-15 P1-4 CQ（能力问题）两表
     _migrate_type_actions,                 # 2026-11-22 P0-1 对象类型↔Action 绑定表
+    _migrate_fuseki_replay,                # 2026-11-23 P0-0 第十批 写后投影失败重放队列
     _migrate_artifact_ingest,  # 2026-09-15 AI 产物收编资料库（origin 溯源/块级过滤/时效取代）
     _seed_departments,
     _seed_knowledge_categories,
@@ -505,6 +506,21 @@ def init_db():
         rule_version   TEXT,
         created_at     TEXT DEFAULT (datetime('now','localtime')),
         PRIMARY KEY (type_id, tool_name)
+    )""")
+
+    # ── P0-0 第十批（2026-11-23）写后投影失败重放队列 ──
+    # before_json 存"写前 base 三元组集合"，重放时按当前 DB 重算 after（幂等/顺序无关）。
+    # UNIQUE(kind,obj_id) 让同一对象的多次失败合并为最早 before 的并集。
+    c.execute("""CREATE TABLE IF NOT EXISTS fuseki_projection_replay (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        kind        TEXT NOT NULL,
+        obj_id      TEXT NOT NULL,
+        before_json TEXT NOT NULL,
+        attempts    INTEGER NOT NULL DEFAULT 0,
+        last_error  TEXT DEFAULT '',
+        created_at  TEXT DEFAULT (datetime('now','localtime')),
+        updated_at  TEXT DEFAULT (datetime('now','localtime')),
+        UNIQUE(kind, obj_id)
     )""")
 
     # ── 分支管理 ──
@@ -2007,6 +2023,8 @@ def init_db():
     # ── 2026-09-15 AI 产物收编资料库（origin 溯源 / 块级过滤 / superseded 时效链）──
     # ── P0-1（2026-11-22）对象类型↔Action 绑定表 ──
     _migrate_type_actions(conn)
+    # ── P0-0 第十批（2026-11-23）Fuseki 写后投影失败重放队列 ──
+    _migrate_fuseki_replay(conn)
     _migrate_artifact_ingest(conn)
     # ── P0 Staging 写前融合改造：v2g_candidates 三义拆分 + Mention/Canonical 双层模型 ──
     _migrate_staging_tables(conn)
