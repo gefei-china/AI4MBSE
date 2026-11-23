@@ -2902,6 +2902,12 @@
    "tier": "pr",
    "timeout": 120,
    "reason": "2026-11-23 P0-0 第九批次：写后增量投影，消除启动对齐之外的陈旧窗口。全量/增量共用同一 TTL 行生成器（F1），按精确三元组差量 DELETE/INSERT（F2/F2b），不按 subject 一把清以免误删同主体其它边（F3），同 id 跨分支删除不误删其它分支（F4），空差集零网络（F5），Fuseki 不可达只报失败不阻断写入（F6），开关默认关且四处登记（F7/F11），commit 之后才 flush、写入口只 mark（F10），连接引用清理（F13）。M1 抹差量 / M2 抹 DELETE / M3 开关失效 / M4 单分支快照四组真变异必须判红。临时库 + 注入客户端，零生产库写、零 LLM、零网络。"
+  },
+  {
+   "script": "verify_cq_strict_freshness.py",
+   "tier": "pr",
+   "timeout": 120,
+   "reason": "2026-11-23 P0-0 第九批②：SPARQL CQ 严格档。stale/unknown 时不再把结论当 pass（与 A9『没验成≠验过』同型）。守 F1 stale⇒skip / F2 unknown⇒skip / F3 不误伤 fresh / F4 开关关闭零回归 / F5『未传 freshness』旧调用不被误伤（关键哨兵）/ F6 配置四处登记且 run_cqs 只判一次新鲜度 / F7 summarize 双维度计数。M1 抹严格档 / M2 误伤 fresh / M3 抹哨兵三组源码真变异必须判红。临时库 + 注入客户端，零生产库写、零 LLM、零网络。"
   }
  ]
 }

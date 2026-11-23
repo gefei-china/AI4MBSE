@@ -150,15 +150,34 @@ def _sparql_endpoint() -> str:
     return _fuseki_rt.resolve_endpoint()
 
 
+def _strict_freshness() -> bool:
+    """CQ 严格档：镜像陈旧 / 新鲜度未验成时，不把 SPARQL CQ 结论当 pass。
+
+    与 A9 同型：**验的不是最新版本 / 根本没验成**，都不能当作通过。
+    """
+    try:
+        from core.config import get as _cfg_get
+        return bool(_cfg_get("graph_db", "cq_strict_freshness"))
+    except Exception:
+        return False  # 配置不可读 ⇒ 保守维持历史口径，不让配置故障改判业务结论
+
+
 def _run_sparql_cq(query: str, expected: str, freshness: dict | None = None) -> dict:
     """执行一条 SPARQL CQ。Fuseki 不可达 ⇒ skip（**降级不是通过**）。
 
     P0-0 第八批：结果附 `freshness` 状态。真机实测过"镜像只剩 40% 数据而 CQ 仍 pass"
     （非空判据掩盖大范围投影缺失）⇒ 评审方必须能看见这条结论是在新鲜还是陈旧镜像上得出。
-    **不改 status 判定**：陈旧是独立维度，历史调用方零回归；严格档（stale⇒skip）未启用。
+
+    P0-0 第九批②：严格档开启时，stale / unknown ⇒ skip。注意 **`freshness is None`
+    表示"未判新鲜度"**（旧调用方/门禁直接调用），此时严格档不介入 —— 否则会把
+    "没做这项检查"误当成"检查发现不新鲜"，历史判据全被改判。
     """
-    item = {"row_count": 0, "status": "skip", "message": "",
-            "freshness": (freshness or {}).get("status", "unknown")}
+    fs = (freshness or {}).get("status", "unknown")
+    item = {"row_count": 0, "status": "skip", "message": "", "freshness": fs}
+    if freshness is not None and _strict_freshness() and fs in ("stale", "unknown"):
+        item["message"] = (
+            "Fuseki 镜像%s —— 本条 CQ 的结论不可信，严格档降级 skip（降级不是通过）" % fs)
+        return item
     try:
         from services.sparql_sync import FusekiClient
         ep = _sparql_endpoint()
