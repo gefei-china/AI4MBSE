@@ -222,6 +222,11 @@ def check_s7():
             return True
 
         def query(self, sparql, timeout=20.0):
+            # 2026-11-23：严格档开启后 run_cqs 会先判新鲜度，COUNT 查询若也回
+            # `{boolean:True}` ⇒ 判据解析失败 ⇒ freshness=unknown ⇒ CQ 被 skip，
+            # 本门禁就从"测 ASK 前导"变成"测新鲜度"。夹具按查询形态分别应答。
+            if "COUNT(*)" in (sparql or ""):
+                return {"results": {"bindings": [{"n": {"value": "0"}}]}}
             return {"boolean": True}       # 只有 ASK 才有这个键
 
     c = sqlite3.connect(":memory:")
@@ -232,6 +237,15 @@ def check_s7():
     c.execute("""CREATE TABLE ontology_cq_logs (id INTEGER PRIMARY KEY AUTOINCREMENT,
         question_id INT, source TEXT, status TEXT, row_count INT, message TEXT,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)""")
+    # 严格档开启后 run_cqs 先判新鲜度，而新鲜度用同步器同一 builder 读这三张表；
+    # 缺表会让 expected 计算抛异常 ⇒ freshness=unknown ⇒ CQ skip ⇒ 本门禁测不到 ASK。
+    c.execute("""CREATE TABLE entities (id TEXT, name TEXT, entity_type TEXT,
+        properties TEXT, branch TEXT, status TEXT, is_current INT, valid_from TEXT,
+        valid_to TEXT, project_id TEXT)""")
+    c.execute("""CREATE TABLE relations (source_id TEXT, target_id TEXT,
+        relation_type TEXT, properties TEXT, status TEXT)""")
+    c.execute("""CREATE TABLE ontology_types (id INTEGER, name TEXT,
+        parent_id INTEGER, properties TEXT)""")
 
     import services.sparql_sync as ss
     orig_cls = ss.FusekiClient

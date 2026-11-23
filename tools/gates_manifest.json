@@ -2908,6 +2908,12 @@
    "tier": "pr",
    "timeout": 120,
    "reason": "2026-11-23 P0-0 第九批②：SPARQL CQ 严格档。stale/unknown 时不再把结论当 pass（与 A9『没验成≠验过』同型）。守 F1 stale⇒skip / F2 unknown⇒skip / F3 不误伤 fresh / F4 开关关闭零回归 / F5『未传 freshness』旧调用不被误伤（关键哨兵）/ F6 配置四处登记且 run_cqs 只判一次新鲜度 / F7 summarize 双维度计数。M1 抹严格档 / M2 误伤 fresh / M3 抹哨兵三组源码真变异必须判红。临时库 + 注入客户端，零生产库写、零 LLM、零网络。"
+  },
+  {
+   "script": "verify_fuseki_exact_freshness.py",
+   "tier": "pr",
+   "timeout": 120,
+   "reason": "2026-11-23 P0-0 第九批③：新鲜度从数量下界升级为 base 三元组集合精确包含。真机取证：506 条 base 与 Fuseki 逐条精确匹配（额外 1217 条是时态三元组）。守 F1 容忍额外三元组 / F2 等量不同内容（删一条补一条垃圾，数量不变）仍能抓 stale / F3 真缺 / F4 异常归 unknown / F5 期望值复用同步器 builder / F6 配置四处登记与 check_freshness 接线 / F7 四态字段兼容。M1 抹精确差 / M2 反向差集 / M3 异常归 stale 三组源码真变异必须判红。临时库 + 注入客户端，零生产库写、零 LLM、零网络。"
   }
  ]
 }

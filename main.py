@@ -98,9 +98,13 @@ async def lifespan(app: FastAPI):
             from database import get_db as _get_db
             from core.fuseki_freshness import check_freshness as _check_fresh
             _fr = _check_fresh(_get_db())
-            print("[startup] Fuseki 投影新鲜度：%s（SQLite 应投影 %s / Fuseki %s）"
-                  % (_fr.get("status"), _fr.get("expected_base"), _fr.get("actual")),
-                  flush=True)
+            # 精确档下 actual 可能因时态/手工三元组**大于** expected 却仍 stale
+            # （缺一条 base 同时多一条别的），只打印数量会把排障方向带偏。
+            _missing_n = len(_fr.get("missing") or [])
+            _detail = ("；缺 %d 条 base 三元组" % _missing_n) if _missing_n else ""
+            print("[startup] Fuseki 投影新鲜度：%s（SQLite 应投影 %s / Fuseki %s%s）"
+                  % (_fr.get("status"), _fr.get("expected_base"),
+                     _fr.get("actual"), _detail), flush=True)
             # ⚠️ 只对 stale 动手：unknown 是"没验成"，不是"验出旧了"。
             if _fr.get("status") == "stale":
                 from services.temporal_sparql import sync_to_fuseki_with_time as _resync

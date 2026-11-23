@@ -144,6 +144,12 @@ def _static_checks(add, main_src=None, sparql_src=None, cq_src=None, cfg_src=Non
 
 def main():
     caught1 = caught2 = caught3 = caught4 = False
+    # 本门禁守的是**数量下界 + 抽样**旧判据（F1~F5）；第九批③新增的精确集合档
+    # 由 verify_fuseki_exact_freshness.py 单独守。部署配置一旦打开精确档，
+    # 这里的假客户端就收不到它认识的两类查询 ⇒ 全变 unknown、门禁测不到自己要测的东西。
+    # 显式锁定旧路径，两个判据各测各的，不靠部署配置碰运气。
+    orig_exact = ff._exact_enabled
+    ff._exact_enabled = lambda: False
     try:
         c = get_db()
         data = []
@@ -223,6 +229,7 @@ def main():
         print("  [%s] M4 unknown 也重灌 ⇒ F6 判红" % ("PASS" if caught4 else "FAIL"))
         c.close()
     finally:
+        ff._exact_enabled = orig_exact
         shutil.rmtree(_TMP, ignore_errors=True)
 
     n_fail = sum(1 for x in _RESULTS if not x[0])

@@ -1423,6 +1423,8 @@ DEFAULT_CONFIG = {
         "fuseki_writesync": False,
         # P0-0 第九批②：CQ 严格档 —— 镜像 stale / 新鲜度 unknown 时不把结论当 pass。
         "cq_strict_freshness": False,
+        # P0-0 第九批③：新鲜度精确档 —— base 三元组逐条集合包含（替代数量下界）。
+        "fuseki_exact_freshness": False,
         # 拉起时使用 TDB2 持久化（--update --loc=<abs>）。
         # 设 False 回落 --mem（只用于临时验证；重启即空，不要在生产用）。
         "fuseki_persistent": True,
@@ -1890,6 +1892,7 @@ ENV_MAP = {
     "MBSE_FUSEKI_AUTOSYNC": ("graph_db", "fuseki_autosync"),
     "MBSE_FUSEKI_WRITESYNC": ("graph_db", "fuseki_writesync"),
     "MBSE_CQ_STRICT_FRESHNESS": ("graph_db", "cq_strict_freshness"),
+    "MBSE_FUSEKI_EXACT_FRESHNESS": ("graph_db", "fuseki_exact_freshness"),
 }
 
 # 布尔型配置项（ENV 值为 "1"/"true"/"yes" 视为 True）
@@ -1899,6 +1902,7 @@ _BOOL_KEYS = {
     ("graph_db", "fuseki_autosync"),    # P0-0 第八批：部署级开关，环境变量 "1" ⇒ True
     ("graph_db", "fuseki_writesync"),   # P0-0 第九批：部署级开关，环境变量 "1" ⇒ True
     ("graph_db", "cq_strict_freshness"), # P0-0 第九批②：部署级开关，环境变量 "1" ⇒ True
+    ("graph_db", "fuseki_exact_freshness"), # P0-0 第九批③：部署级开关，环境变量 "1" ⇒ True
     ("graph_db", "fuseki_persistent"),
 }
 
@@ -2560,6 +2564,7 @@ CONFIG_SCHEMA = {
         "fuseki_autosync":   {"type": "bool",  "desc": "启动时检测 Fuseki 投影新鲜度，stale 才自动重灌（unknown 不重灌；默认关）"},
         "fuseki_writesync":  {"type": "bool",  "desc": "写入提交后按精确三元组差量增量投影到 Fuseki（失败只告警不阻断；默认关）"},
         "cq_strict_freshness": {"type": "bool", "desc": "SPARQL CQ 严格档：镜像 stale 或新鲜度未验成 ⇒ skip（降级不是通过；默认关）"},
+        "fuseki_exact_freshness": {"type": "bool", "desc": "新鲜度精确档：base 三元组逐条集合包含，抓等量内容错位（替代数量下界；默认关）"},
         "fuseki_persistent": {"type": "bool",  "desc": "Fuseki 用 TDB2 持久化（--update --loc；关掉则 --mem 重启即空，仅验证用）"},
     },
     # P0-1（2026-10-18）：资产长尾治理阈值（core/lifecycle.py 消费；前端契约登记处）

@@ -80,6 +80,82 @@ def _default_client():
     return FusekiClient(base_url=base or ep, dataset=ds or "mbse")
 
 
+def _exact_enabled() -> bool:
+    """P0-0 第九批③：base 三元组集合精确包含档（默认关，旧口径零回归）。"""
+    try:
+        from core.config import get as _cfg_get
+        return bool(_cfg_get("graph_db", "fuseki_exact_freshness"))
+    except Exception:
+        return False
+
+
+def expected_base_triples(conn, project_id=None) -> set:
+    """应投影的 **base 三元组集合**（与同步器同一 builder，按集合去重）。"""
+    from services.sparql_sync import build_ontology_ttl, build_entities_ttl
+    ttl = build_ontology_ttl(conn) + "\n" + build_entities_ttl(conn, project_id)
+    return {ln.strip() for ln in ttl.splitlines() if ln.strip().endswith(" .")}
+
+
+def _binding_term(b: dict) -> str:
+    """SPARQL JSON  binding → N-Triples 词项（与 builder 输出同一文本口径）。"""
+    t = b.get("type")
+    v = b.get("value", "")
+    if t == "uri":
+        return "<" + v + ">"
+    if t == "bnode":
+        return "_:" + v
+    if t == "literal":
+        s = '"' + str(v).replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n") + '"'
+        dt = b.get("datatype")
+        lang = b.get("xml:lang") or b.get("lang")
+        if dt:
+            s += "^^<" + dt + ">"
+        elif lang:
+            s += "@" + lang
+        return s
+    return "<" + str(v) + ">"
+
+
+def actual_triples(cli, limit: int = 200000) -> set:
+    """一次查询取回 Fuseki 全部三元组，归一成 N-Triples 行集合。"""
+    res = cli.query("SELECT ?s ?p ?o WHERE { ?s ?p ?o } LIMIT %d" % limit)
+    rows = (res.get("results") or {}).get("bindings") or []
+    return {"%s %s %s ." % (_binding_term(r["s"]), _binding_term(r["p"]),
+                             _binding_term(r["o"])) for r in rows}
+
+
+def exact_missing(expected: set, actual: set) -> list:
+    """精确档判据：期望集合中任一三元组缺失即 stale。
+
+    只做**包含**而不是全等：额外三元组合法（W3C Time 时态投影、手工 SPARQL update），
+    但 base 一条都不能少。与"数量下界 + 抽样"相比，能抓到**等量不同内容**的错位。
+    """
+    return sorted(set(expected or set()) - set(actual or set()))
+
+
+def check_exact_freshness(conn, cli=None, project_id=None) -> dict:
+    """精确档四态：缺任何 base 三元组 ⇒ stale；回读异常 ⇒ unknown（不自动重灌）。"""
+    out = {"status": "unknown", "expected_base": 0, "actual": 0,
+           "sample_size": 0, "missing": [], "reason": "", "mode": "exact"}
+    try:
+        expected = expected_base_triples(conn, project_id)
+        client = cli or _default_client()
+        actual = actual_triples(client)
+        missing = exact_missing(expected, actual)
+    except Exception as ex:
+        out["reason"] = "精确新鲜度回读失败：%s: %s" % (type(ex).__name__, str(ex)[:160])
+        return out
+    out.update(expected_base=len(expected), actual=len(actual), missing=missing)
+    if missing:
+        out["status"] = "stale"
+        out["reason"] = ("base 三元组缺失 %d 条（精确集合比对）：%s"
+                         % (len(missing), ", ".join(missing[:3])))
+    else:
+        out["status"] = "fresh"
+        out["reason"] = "base %d 条三元组逐条命中（容忍额外时态/手工三元组）" % len(expected)
+    return out
+
+
 def is_stale(expected: int, actual: int, missing: list) -> bool:
     """陈旧判据（两条下界任一不满足）。单独成函数供门禁做真变异。"""
     return bool(actual < expected or missing)
@@ -91,7 +167,13 @@ def error_status(ex: Exception) -> str:
 
 
 def check_freshness(conn, cli=None, project_id=None, sample_limit: int = 8) -> dict:
-    """回读 Fuseki 并与 SQLite 投影比对。返回四态字典。"""
+    """回读 Fuseki 并与 SQLite 投影比对。返回四态字典。
+
+    精确档（`graph_db.fuseki_exact_freshness`）开启时改走 `check_exact_freshness`：
+    base 三元组**逐条集合包含**，能抓到"数量相同但内容错位"的陈旧形态。
+    """
+    if _exact_enabled():
+        return check_exact_freshness(conn, cli, project_id)
     out = {"status": "unknown", "expected_base": 0, "actual": 0,
            "sample_size": 0, "missing": [], "reason": ""}
     try:

@@ -189,6 +189,11 @@ jobs:
         if: ${{ !cancelled() }}
         run: python tools/verify/verify_cq_strict_freshness.py
 
+      # 2026-11-23 P0-0 第九批③：新鲜度精确档（base 三元组集合逐条包含）。
+      - name: Guard Fuseki 精确新鲜度（P0-0 第九批③，临时库）
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_fuseki_exact_freshness.py
+
       # 2026-11-22 P1-2：Fuseki 持久 + 随主服务自拉起。纯注入判据，零外部依赖。
       - name: Guard Fuseki 持久与自拉起（P1-2，零外部依赖）
         if: ${{ !cancelled() }}
