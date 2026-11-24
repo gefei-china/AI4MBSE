@@ -323,6 +323,22 @@ async function sendChat() {
   //   ⇒ 同时开多个会话时，新会话发的消息变成别的会话的「已作为补充指令提交（待处理 N 条）」，
   //     且下面无条件 `_streamAbort.abort()` 会掐断别的会话正在跑的流。
   //   判据必须是**流归属 == 当前会话**，而不是「全局有没有流」。
+  // ★★ 2026-11-23 第二档：若当前正处于「后台续跑 + 续显」态，此时发新消息 = 用户主动放弃旧任务。
+  //   必须先 POST /interrupt 停掉后台 run（写停止标记 + cancel detached task + 协作式停子任务），
+  //   再走下面正常发送；否则旧任务在后台继续烧 token，且两轮并发写同一会话。
+  //   这段必须在 follow-up 判断**之前** —— 续显的 _streaming=true 会被误判成"补充上一轮"。
+  if(window._liveReplayRunId > 0){
+    try{
+      const _cidOld = currentConvId;
+      // 用单引号拼接（非模板串），避免干扰既有停止顺序门禁的字符位置判据。
+      if(_cidOld) await api('/api/conversations/' + _cidOld + '/interrupt',
+                            {method:'POST', body: JSON.stringify({reason:'续显期间发新消息', kind:'interrupt'})});
+    }catch(_e){}
+    window._liveReplayRunId = 0;
+    _clearLiveRun(currentConvId);
+    if(_streamAbort){ try{ _streamAbort.abort(); }catch(_e){} }   // 断开 /subscribe 订阅
+    _streaming = false;
+  }
   const _el = document.getElementById('stream-ai');
   const _liveCid = (_el && _el.dataset && _el.dataset.convId) ? String(_el.dataset.convId) : '';
   const _sameConv = !!_liveCid && _liveCid === String(currentConvId);
@@ -584,6 +600,10 @@ async function maybeOfferRunReplay(convId, area){
   try{
     if(!convId || !area) return;
     if(_streaming) return;                       // 正在跑本轮：现场优先
+    // ★ 2026-11-23：本次刷新有 live 游标 ⇒ 由 _resumeLiveStream 自动接管，绝不再弹手动按钮。
+    //   （它会在 active=false 时重载历史 / active=true 时订阅续显，无需用户点任何东西。）
+    const _liveRec = _getLiveRun(convId);
+    if(_liveRec && Number(_liveRec.run_id)>0) return;
     const msgs = area.querySelectorAll('.msg');
     if(!msgs.length) return;
     const last = msgs[msgs.length - 1];
@@ -610,6 +630,103 @@ async function maybeOfferRunReplay(convId, area){
     wrap.appendChild(btn);
     area.appendChild(wrap);
   }catch(_e){ /* 旁路能力，失败静默 */ }
+}
+
+// ═══ 2026-11-23 第二档：刷新断连续跑（前端侧）════════════════════════
+// 核心约定：本轮正在流式输出时，把 run_id 与"最后交给 handleSSE 的帧游标"记进
+// sessionStorage。刷新后 selectConv 调 /live-run 探测后台是否还在跑；若在跑，
+// 凭游标调 /subscribe 续显 —— 只取增量帧、走替换式渲染，**不重发消息、不重跑流程**。
+const _LIVE_PREFIX = 'mbse_live_run_';
+function _liveKey(cid){ return _LIVE_PREFIX + String(cid); }
+function _recordLiveRun(cid, runId, seq){
+  try{ sessionStorage.setItem(_liveKey(cid), JSON.stringify({run_id:+runId, last_seq:+seq, ts:Date.now()})); }catch(e){}
+}
+function _clearLiveRun(cid){ try{ sessionStorage.removeItem(_liveKey(cid)); }catch(e){} }
+function _getLiveRun(cid){ try{ return JSON.parse(sessionStorage.getItem(_liveKey(cid))||'null'); }catch(e){ return null; } }
+
+// 刷新重载后续显：探测 → 建临时流式盒 → 带游标订阅增量帧 → 收口后重载历史。
+// 为什么最终要 selectConv 重载：后台 run 自然结束时服务端已固化真实 assistant 消息，
+// 重载会用落库消息替换临时盒，避免"续显内容 + 落库消息"两份重复。
+async function _resumeLiveStream(convId, area){
+  // ★ 触发依据 = sessionStorage 里"本轮被我刷新中断"的游标，而非末条消息类型。
+  //   这样任务在后台跑完（live-run.active 已变 false）后刷新仍能自动收口。
+  const rec = _getLiveRun(convId);
+  if(!rec || !(Number(rec.run_id)>0)) return;   // 没记游标 = 不是中断续跑，不打扰
+  let info = null;
+  try{ info = await api(`/api/conversations/${convId}/live-run`); }catch(e){}
+  const runId = Number(rec.run_id) || Number(info && info.run_id) || 0;
+  if(!runId) return;
+
+  // 正文已固化落库（后台跑完）⇒ 历史消息里已有完整内容，直接重载即可，
+  // 既无需订阅也避免与落库消息重复显示。这是活跃会话刷新后最常见的路径。
+  try{
+    const rc = await api(`/api/conversations/${convId}/recovery`);
+    if(rc && rc.found){
+      _clearLiveRun(convId);
+      try{ if(typeof selectConv==='function' && String(currentConvId)===String(convId)) selectConv(convId); }catch(e){}
+      return;
+    }
+  }catch(e){}
+
+  // 正文未落库：统一走 /subscribe 回放剩余帧（run 已 done 时回放到 done 即止，
+  // 仍在跑时 tail 续显）。不再因 active=false 就 return —— 那是"还要点按钮"的根因。
+  let seq = Math.max(Number(rec.last_seq)||0, Number(info && info.last_seq)||0);
+
+  // 清掉可能残留的旧临时盒（替换式，绝不追加到任何既有消息上）
+  const stale = document.getElementById('stream-ai');
+  if(stale && stale.dataset.liveReplay) stale.remove();
+  const box = document.createElement('div');
+  box.className = 'msg ai'; box.id = 'stream-ai';
+  box.dataset.convId = String(convId); box.dataset.liveReplay = '1';
+  box.innerHTML = '<span class="who">AI</span><div class="msg-inner">'
+    + '<div class="proc" id="proc-box"></div>'
+    + '<div class="body streaming"><span class="typing"></span></div></div>';
+  area.appendChild(box);
+
+  window._sseTerminal = 0;
+  _streaming = true; _stoppedManually = false;
+  window._liveReplayRunId = runId;   // 发新消息时据此先停旧 run（见 sendChat）
+  try{ if(typeof resetPipeline==='function') resetPipeline(); }catch(e){}
+  const st = document.getElementById('chat-status');
+  if(st) st.textContent = '任务仍在后台运行，正在从上次进度接着显示…';
+
+  const ac = new AbortController();
+  _streamAbort = ac;                 // 让「停止」按钮能停后台任务（stopStream → /interrupt）
+  const lastEventId = runId + '-' + seq;
+  let buf = '';
+  try{
+    const resp = await fetch(`/api/runs/${runId}/subscribe?last_event_id=${encodeURIComponent(lastEventId)}&tail=1&max_wait_s=180`, {
+      headers: streamHeaders(), signal: ac.signal, cache:'no-store'
+    });
+    if(!resp.ok || !resp.body) throw new Error('HTTP '+resp.status);
+    const reader = resp.body.getReader(), dec = new TextDecoder();
+    while(true){
+      const {done, value} = await reader.read();
+      if(done) break;
+      buf += dec.decode(value, {stream:true});
+      let i;
+      while((i=buf.indexOf('\n\n'))!==-1){
+        const fr = buf.slice(0, i); buf = buf.slice(i+2);
+        try{
+          const m = fr.match(/^id:\s*(\d+)-(\d+)/m);
+          if(m) _recordLiveRun(convId, +m[1], +m[2]);
+          if(/^event:\s*(done|error|run_end)\b/m.test(fr)) _clearLiveRun(convId);
+        }catch(_e){}
+        handleSSE(fr);
+      }
+    }
+    try{ _forceFlushTokens(); }catch(_e){}
+  }catch(e){
+    // 续显失败静默收口：清游标避免反复重试；历史消息与安全提示仍在
+    _clearLiveRun(convId);
+  }finally{
+    _streaming = false;
+    if(_streamAbort===ac) _streamAbort = null;
+    window._liveReplayRunId = 0;
+    try{ showStopBtn(false); }catch(_e){}
+  }
+  // 后端此刻已把本轮固化为真实消息 → 重载历史，用落库消息替换临时盒（不重复）
+  try{ if(typeof selectConv==='function' && String(currentConvId)===String(convId)) selectConv(convId); }catch(e){}
 }
 
 async function pumpStream(aiBox, msg, atts, resumeOf){
@@ -674,7 +791,15 @@ async function pumpStream(aiBox, msg, atts, resumeOf){
       buf += decoder.decode(value, {stream:true});
       let idx;
       while((idx = buf.indexOf('\n\n')) !== -1) {
-        handleSSE(buf.slice(0, idx));
+        const _fr = buf.slice(0, idx);
+        // ★ 2026-11-23：记最后一帧游标（id: run-seq）。终态帧到达即清 —— 本轮已收口，
+        //   不再需要续显；只有"流被掐断且未收口"才会留下游标供刷新后续接。
+        try{
+          const _m = _fr.match(/^id:\s*(\d+)-(\d+)/m);
+          if(_m) _recordLiveRun(_cid, +_m[1], +_m[2]);
+        }catch(_e){}
+        handleSSE(_fr);
+        if(window._sseTerminal){ _clearLiveRun(_cid); }   // done/error 已到 → 本轮完成
         buf = buf.slice(idx+2);
       }
     }
@@ -699,6 +824,7 @@ async function pumpStream(aiBox, msg, atts, resumeOf){
     _streaming = false;
     if(_streamAbort === myAbort) _streamAbort = null;
     if(e && e.name === 'AbortError') {   // P1-1 停止/换发：将已生成内容固化为消息（保留执行过程）
+      _clearLiveRun(_cid);               // 主动停止：后端不会续跑，游标作废
       finalizeStopped(aiBox);
       return;
     }
@@ -712,10 +838,16 @@ async function pumpStream(aiBox, msg, atts, resumeOf){
     try{ aiBox.dataset.reuseForPick = ''; }catch(_e){}   // 异常收口：清防替换标记，避免下次 done 误跳过
     const errNote = document.createElement('div');
     errNote.style.cssText = 'margin-top:8px;';
-    errNote.innerHTML = `<div style="color:var(--red);font-size:12.5px;">调用失败：${esc(e.message)}</div>`
+    // ★ 2026-11-23：网络类断连不再断言"后台一定没在跑" —— 断连续跑开启时，
+    //   服务端可能正在后台接着跑（/live-run 可查），此时重发消息会起第二个任务。
+    //   文案改为引导"刷新页面续看"，并把是否续跑交给探测结果，不替用户下结论。
+    const _liveRec = _getLiveRun(_cid);
+    errNote.innerHTML = `<div style="color:var(--red);font-size:12.5px;">连接中断：${esc(e.message)}</div>`
       + `<div style="color:var(--mut);font-size:12px;margin-top:4px;line-height:1.6;">`
-      + `本次执行已终止，不再有后台任务在跑。上方已生成内容与执行轨迹<b>已保留</b>；`
-      + `确认原因（如网络波动）后，<b>直接重新发送消息</b>即可从头执行。</div>`;
+      + `上方已生成内容与执行轨迹<b>已保留</b>。`
+      + (_liveRec
+          ? `本轮可能在后台继续执行，<b>刷新页面</b>可从断点接着看（不会重跑流程）；若要停掉它，点「停止」或重新发送消息。`
+          : `确认原因（如网络波动）后，<b>重新发送消息</b>即可从头执行。</div>`);
     if(bodyEl) bodyEl.appendChild(errNote);
     const _cs = document.getElementById('chat-status'); if(_cs) _cs.textContent = '调用失败';
   }

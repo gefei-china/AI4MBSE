@@ -67,7 +67,24 @@ function gkJumpFirst(){ if(__gkData.length) gkJump(0); }
 initNav();   // 2026-09-04 v3：折叠态恢复 + data-name 初始化 + hover tooltip / 更多卡片（此前漏调用导致折叠无名称提示）
 // 2026-09-04 v6：默认进入「AI 建模」页（HTML 上 pg-ai 已带 on），不调用 loadHome 以免拉无用的 dashboard。
 // go('ai') 内部 loadPage('ai') 已加载会话列表并渲染欢迎屏（无会话/未选会话时），此处不再重复调用 loadConversations。
-go('ai');
+// ★ 2026-11-23：刷新后原地恢复 —— 若 localStorage 记了上次路由，直接恢复它，不再无条件 go('ai')。
+//   这是页面启动的唯一入口，必须在这里决定首屏，否则后续恢复会被这里的 go('ai') 抢先覆盖。
+(function _bootRoute(){
+  let restored = false;
+  try{
+    const raw = localStorage.getItem('mbse_current_route');
+    if(raw){
+      const r = JSON.parse(raw);
+      const p = String(r.p||'');
+      // 只恢复非空、非 home 的合法路由；home 保持默认（历史行为）
+      if(p && p!=='home' && typeof go === 'function'){
+        go(p, String(r.tab||'') || undefined);
+        restored = true;
+      }
+    }
+  }catch(e){}
+  if(!restored) go('ai');
+})();
 // 会话列表描述性注释（旧逻辑已由上方全局加载取代）
 loadCurrentUser();
 loadCurrentProject();

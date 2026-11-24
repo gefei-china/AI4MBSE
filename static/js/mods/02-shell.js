@@ -324,6 +324,12 @@ function go(p, tabId) {
     rp = [p, ...rp.filter(x=>x!==p)].slice(0,5);
     localStorage.setItem('mbse_recent_pages', JSON.stringify(rp));
   }
+  // ★ 2026-11-23：记住当前路由（页面 + 子 Tab），供刷新后原地恢复。
+  //   含 home：用户在任意页面刷新都应留在那一页（含子 Tab），而不是回默认欢迎页。
+  //   go() 是唯一切页入口（导航点击 / tab() / 各业务跳转都走它），故此处是单一真源。
+  try{
+    localStorage.setItem('mbse_current_route', JSON.stringify({p: String(p||''), tab: String(tabId||''), ts: Date.now()}));
+  }catch(e){}
   let _navHit = false;
   document.querySelectorAll('#mainnav a').forEach(a=>{
     let on = a.dataset.page===p && (!a.dataset.tab || a.dataset.tab===tabId);
@@ -546,3 +552,5 @@ async function loadHome() {
   }catch(e){ const el = document.getElementById('recent-reports-home'); if(el) el.innerHTML = '<div style="font-size:12.5px;color:var(--mut);">加载失败</div>'; }
 }
 // 工作台最近对话：进入 AI 建模并选中该对话
+// ★ 2026-11-23：刷新后的首屏路由恢复统一在 33-search.js 的启动入口处理
+//   （那里才是页面初始化的唯一 go('ai') 调用点，恢复必须在那一步决定，否则会被它覆盖）。

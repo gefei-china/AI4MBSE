@@ -1104,6 +1104,12 @@ DEFAULT_CONFIG = {
         "tail_poll_s": 0.4,          # 订阅端等待新帧的轮询间隔（P2 换成推送总线后可置 0）
         "tail_max_s": 60,            # 订阅端最长 tail 时长（超时后结束本次订阅，客户端可再次续传）
     },
+    # 2026-11-23 第二档：刷新/切页造成的断连不再等于"用户不要了"。
+    # 无 /interrupt 停止标记的断连 → 后台继续生成 + 帧继续落库，重载后凭游标续显。
+    "session_resume": {
+        "enabled": True,             # 总开关（关 = 行为逐字节回到改动前：断连即停）
+        "detach_grace_s": 60,        # 断连后无人订阅认领的宽限期（秒）；到点后台收口，避免白烧 token
+    },
     "agent_assignment": {
         # ── 编排分派打分（2026-10-13，B1-7）────────────────────────────────
         # 定位：**择优与留痕，不是决策者**。planner LLM 已产出每个子任务的 agent，
@@ -2489,6 +2495,10 @@ CONFIG_SCHEMA = {
         "coalesce_tokens":  {"type": "bool",  "desc": "连续 token/reasoning 合帧（默认开）：关掉会让帧数按字增长"},
         "tail_poll_s":      {"type": "float", "desc": "订阅端等待新帧的轮询间隔（秒，默认 0.4）"},
         "tail_max_s":       {"type": "float", "desc": "订阅端单次最长 tail 时长（秒，默认 60）；超时结束订阅，客户端可凭游标再次续传"},
+    },
+    "session_resume": {
+        "enabled": {"type": "bool",  "desc": "刷新断连续跑总开关（关=断连即停，行为回到改动前）"},
+        "detach_grace_s": {"type": "float", "desc": "断连后无人订阅认领的宽限期（秒，默认 60）；到点后台收口"},
     },
     "kb_scope": {
         "docs_missing_fallback": {"type": "bool", "desc": "白名单文档不存在时剔除失效项；全失效则退化为不限文档"},

@@ -289,6 +289,16 @@ def interrupt_run(run_id: int, body: dict = None, conn=Depends(db_session),
     """
     _own_run(conn, run_id, user)
     require_permission("ai_chat", "generate")(user=user)
+    # ★ 2026-11-23 第二档：停止 = 最高优先级。若本 run 因刷新已转后台续跑，
+    #   必须当场取消它 —— 否则"先刷新、回来点停止"会让任务在后台继续烧 token。
+    from services.detached_stream import get_registry as _get_reg
+    _reg = _get_reg()
+    _d = _reg.get(run_id)
+    if _d is not None:
+        _d.reason = "user_stop"
+        _reg.mark_stopped(_d.conv_id)
+        if _d.task is not None:
+            _d.task.cancel()
     res = _do_interrupt(conn, run_id, body or {}, user)
     if not res.get("ok"):
         return JSONResponse({"error": res.get("error") or "中断失败", "run_id": run_id,
@@ -319,6 +329,15 @@ def interrupt_conversation(conv_id: int, body: dict = None, conn=Depends(db_sess
     if not conv_visible_to(row, user):
         raise HTTPException(status_code=404, detail="会话不存在")
     require_permission("ai_chat", "generate")(user=user)
+    # ★ 2026-11-23 第二档：会话级停止同样要（a）写停止标记（断连时据此不续跑），
+    #   （b）取消已转后台的 detached 任务（覆盖"先刷新后点停止"的竞态）。
+    from services.detached_stream import get_registry as _get_reg
+    _reg = _get_reg()
+    _reg.mark_stopped(conv_id)
+    for _d in _reg.find_by_conv(conv_id):
+        _d.reason = "user_stop"
+        if _d.task is not None:
+            _d.task.cancel()
     from agent.orch_interrupt import active_run as _active_run
     r = _active_run(conn, conv_id)
     if not r:

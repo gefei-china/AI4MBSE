@@ -243,12 +243,23 @@ def iter_with_heartbeat(iterator, interval_s: float = 15.0, comment: str = "ping
 # ① flows.py 的流式执行仍用同步版（它自己 sleep(1) 轮询，改动面更大、收益相同但风险更高）；
 # ② 同步版仍被 verify_sse_heartbeat 的既有断言覆盖，不因新增异步版而失去回归保护。
 async def iter_with_heartbeat_async(iterator, interval_s: float = 15.0, comment: str = "ping",
-                                    visible_ping: bool = False):
+                                    visible_ping: bool = False, detach_ctx=None):
     """把阻塞式同步事件源包装成 **async** 生成器（带心跳）。
 
     与 `iter_with_heartbeat` 的差别只有一处，但很关键：消费侧不占线程池线程。
     用法：端点写成 `async def` + `return StreamingResponse(agen(), media_type="text/event-stream")`。
     `visible_ping=True` 时空闲心跳为可见事件帧（带阶段+耗时，P1-33），默认注释帧不变。
+
+    ★ 2026-11-23 第二档（刷新不中断）`detach_ctx`：一个可变 dict，形如
+      ``{"detach": callable()->bool, "on_detach": callable(task)}``。
+
+      消费侧（SSE 客户端）断开、本生成器收到 GeneratorExit/CancelledError 时：
+        · 若 `detach_ctx["detach"]()` 返回 True（刷新/离开，非主动停止）⇒
+          **不 stop worker、不 close 事件源**，而是本生成器自己起一个后台 task
+          继续把队列 Drain 完（帧照常被上层消费落库），并通过 `on_detach(task)`
+          把该 task 交给 detached registry 管理 grace/认领。这样整轮生成、帧落库、
+          正文固化、run 终态全部照常走完，用户重载后按游标续显即可。
+        · 若未提供 detach_ctx 或其判定 False ⇒ 行为逐字节回到改动前（stop + close）。
     """
     import asyncio
     import threading as _th
@@ -260,6 +271,8 @@ async def iter_with_heartbeat_async(iterator, interval_s: float = 15.0, comment:
     _DONE = object()
     _t0 = time.monotonic()
     _last_stage = [None]        # list 包装：worker 线程写、主协程读，避免 nonlocal 跨线程歧义
+    _detach_task = None         # 脱离模式下的后台排空 task（由 finally 决定是否需要）
+    _detached = False           # 是否已转入后台排空（决定 finally 不 stop/不 close）
 
     def _worker():
         """跑在自建 daemon 线程里（不占 anyio 线程池）。"""
@@ -300,6 +313,7 @@ async def iter_with_heartbeat_async(iterator, interval_s: float = 15.0, comment:
                     close()
             except Exception:
                 pass
+            box["worker_done"] = True       # ★ 供 detach 判定：整轮是否已自然跑完
             try:
                 loop.call_soon_threadsafe(q.put_nowait, (True, _DONE))
             except RuntimeError:
@@ -330,8 +344,67 @@ async def iter_with_heartbeat_async(iterator, interval_s: float = 15.0, comment:
         if exc is not None and not isinstance(exc, GeneratorExit):
             raise exc
     finally:
+        # ★ 2026-11-23：脱离模式判定 —— 只有"刷新/离开且非停止"才转后台。
+        #   这里的 finally 在**两种**情形都会进：① 正常跑完 ② 消费侧 GeneratorExit/
+        #   CancelledError。只有后者且 detach_ctx 判定 True 才转后台。
+        _want_detach = False
+        if detach_ctx and isinstance(detach_ctx, dict):
+            try:
+                _want_detach = bool(detach_ctx.get("detach", lambda: False)())
+                # 事件源尚未产出终态（DONE）才算"还在跑"；已自然结束无需转后台
+                _want_detach = _want_detach and not box.get("worker_done", False)
+            except Exception:
+                _want_detach = False
+        if _want_detach:
+            # 不 stop worker、不 close iterator —— 让 LLM/工具继续跑完整轮，
+            # execute_stream 自身的收口（固化正文 + 闭 span）照常执行。
+            # 本生成器自己起 task 把队列 drain 掉，防止 queue 无消费而堆积；
+            # drain 到 DONE = 整轮结束，回调 on_done 让上层写 run 终态（done）。
+            async def _drain():
+                _natural = False
+                try:
+                    while True:
+                        try:
+                            done, frame = await asyncio.wait_for(q.get(), timeout=interval_s)
+                        except asyncio.TimeoutError:
+                            continue
+                        if done:
+                            _natural = True      # 只有收到 DONE 才算整轮自然结束
+                            break
+                        # ★ 帧落库下沉：断连后内层消费循环已退出，改由 drain 落库。
+                        #   同一帧要么走内层消费、要么走这里，二者互斥不会重复。
+                        if callable(detach_ctx.get("on_frame")):
+                            try:
+                                detach_ctx["on_frame"](frame)
+                            except Exception:
+                                pass
+                except (asyncio.CancelledError, Exception):
+                    pass
+                finally:
+                    stop.set()
+                    try:
+                        close = getattr(iterator, "close", None)
+                        if callable(close):
+                            close()
+                    except Exception:
+                        pass
+                    # ★ 只有自然结束才写 done；被 /interrupt 或 grace 取消时写 cancelled，
+                    #   绝不写 done（否则"已停止"的任务被记成成功完成）。
+                    _cb = detach_ctx.get("on_done" if _natural else "on_cancel")
+                    if callable(_cb):
+                        try:
+                            _cb()
+                        except Exception:
+                            pass
+            try:
+                _detach_task = asyncio.create_task(_drain())
+                if callable(detach_ctx.get("on_detach")):
+                    detach_ctx["on_detach"](_detach_task)
+                return          # ★ 关键：detach 时跳过下面的 stop/close
+            except Exception:
+                _want_detach = False   # 转后台失败 ⇒ 退回原止损路径
+        # ── 原路径（未启用 detach / 主动停止 / 转后台失败）─────────────
         stop.set()             # 先叫停 worker，再关事件源（顺序反了会漏帧）
-        # 客户端断开 → 外层关闭本生成器 → 连带把事件源关掉，避免 LLM 继续烧钱。
         # ⚠️ 2026-10-27：这里通常是**尽力而为**（worker 正在 `__next__` 里跑 LLM 时，
         #   本线程 close 会抛 `generator already executing`，被下面吞掉）。
         #   **真正生效的 close 在 `_worker` 的 finally 里**（同一线程、挂起态，必成）。

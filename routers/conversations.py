@@ -663,6 +663,50 @@ def _collect_frames(conn, run_id, after_seq=0, limit=4000):
 #      它是"替换"而不是"追加"，见 12-chatsend.js 的 `_renderRunReplay`）；
 #   ② 带游标 = 只取"我还没看过的部分"（SSE `id:` 行/`X-Last-Event-ID` 头，
 #      为 P2 的"断线后台继续、重连接着冒字"预留；P1 阶段生成仍随连接停止）。
+@router.get("/api/conversations/{conv_id}/live-run")
+def conversation_live_run(conv_id: int, conn=Depends(db_session), user=Depends(current_user)):
+    """刷新重载后探测：本会话是否有**正在后台续跑**的生成轮（第二档断连续跑）。
+
+    返回 ``{active, run_id, last_seq, status}``：
+      * active=True  ⇒ 前端应带游标调 ``/api/runs/{run_id}/subscribe`` 续显；
+        这条 run 因刷新转了后台，LLM/工具还在跑、帧还在落库，**绝不能重发消息重跑流程**。
+      * active=False ⇒ 没有后台续跑（本轮已自然结束 / 主动停止 / 未开启），
+        前端按正常历史消息渲染即可。
+
+    判据（缺一不可）：
+      ① 帧日志开关开启；② 该会话最新 run 的 status='running'（未收口）；
+      ③ owner_pid 是**本进程**（跨进程残留由启动 reap 已清，这里再挡一层）；
+      ④ 该 run 确实登记在 detached registry（内存）—— 排除"别处还在正常流式"的误判。
+    """
+    from core.config import get as _cfg_get
+    from services.run_frame_store import latest_run as _latest
+    from services.detached_stream import get_registry as _get_reg
+    out = {"active": False, "run_id": 0, "last_seq": 0, "status": ""}
+    try:
+        _own_conv(conn, int(conv_id), user)
+        if not _cfg_get("session_resume", "enabled", True):
+            return out
+        if not _cfg_get("run_stream", "enabled", True):
+            return out
+        run = _latest(conn, int(conv_id)) or {}
+        rid = int(run.get("run_id") or 0)
+        if not rid:
+            return out
+        reg = _get_reg()
+        # 该 run 必须在内存 registry 里（本进程断连转后台的那一条）
+        d = reg.get(rid)
+        if d is None or int(d.conv_id) != int(conv_id):
+            return out
+        if str(run.get("status") or "") != "running":
+            return out
+        out = {"active": True, "run_id": rid,
+               "last_seq": int(run.get("last_seq") or 0),
+               "status": "running"}
+    except Exception:
+        pass
+    return out
+
+
 @router.get("/api/runs/{run_id}/frames")
 def get_run_frames(run_id: int, last_event_id: str = Query(""),
                    limit: int = Query(4000, ge=1, le=20000),
@@ -712,6 +756,11 @@ async def subscribe_run(run_id: int, request: Request,
     _poll = float(_cfg_get("run_stream", "tail_poll_s", 0.4) or 0.4)
     _maxw = float(max_wait_s or 0) or float(_cfg_get("run_stream", "tail_max_s", 60) or 60)
 
+    # ★ 2026-11-23：订阅即"认领" —— 续 activity 时钟，阻止 detach grace 到期收口。
+    #   放在循环内（每次 poll 都 touch）：页面开着就一直续，页面关了连接断开自然停。
+    from services.detached_stream import get_registry as _get_reg
+    _reg = _get_reg()
+
     async def _gen():
         yield "retry: 3000\n\n"
         _cur = _cursor
@@ -719,6 +768,7 @@ async def subscribe_run(run_id: int, request: Request,
         _ping_at = _t0
         _meta = {}
         while True:
+            _reg.touch(run_id)          # 有人在看 ⇒ 后台续跑继续，不要 60s 收口
             try:
                 with db_conn() as _c:
                     _run = _get(_c, run_id) or {}
@@ -874,7 +924,94 @@ async def chat_stream(conv_id: int, body: ChatIn, conn=Depends(db_session),
     _tracer.begin_conversation()
     _conv_meta = {}   # done 帧里回填 intent/route（闭 span 时写入 meta）
 
-    async def _event_stream_inner(deadline_ts=0.0):
+    # ── 2026-11-23 第二档：断连续跑的进程级状态（提到 chat_stream 层级，
+    #    让内层 _frames 构造与外层 event_stream 都能闭包访问）─────────────
+    from services.detached_stream import get_registry as _get_reg, should_detach as _should_detach
+    from core.config import get as _det_cfg
+    _reg = _get_reg()
+    _det_enabled = bool(_det_cfg("session_resume", "enabled", True))
+    _det_grace = float(_det_cfg("session_resume", "detach_grace_s", 60) or 60)
+    _reg.clear_stopped(conv_id)   # 新一轮：作废旧停止标记
+    # ★ core/sse 的 detach 判定结果回传标记：内层 aclose(_frames) 时 core/sse 的
+    #   finally 会判定 detach 并回调这里置 True；内层 finally 据此跳过断连收口
+    #   （run 终态交给后台 on_done 写 done），避免 run 被误标 cancelled。
+    _detach_claimed = [False]
+    # ★ run_id 用 cell 在内层 _fr_open 建 run 后回写 —— chat_stream 层级看不到
+    #   内层局部变量 _fr_run_id（曾在 _detach_decide 里直接引用它 ⇒ NameError ⇒
+    #   判定被 core/sse 的 except 吞掉 ⇒ 刷新仍走 client_gone，实测两次踩此坑）。
+    _det_run_id = [0]
+
+    def _detach_decide():
+        """core/sse 断连时调用：判定是否续跑，成立则回传标记供内层收口避让。"""
+        _ok = _should_detach(_reg.consume_stopped(conv_id), _det_enabled, _det_run_id[0])
+        if _ok:
+            _detach_claimed[0] = True
+        return _ok
+
+    def _detach_mark_done(rid, cid):
+        """后台排空到 DONE（整轮生成自然结束）→ 写 run 终态 done 并注销 registry。"""
+        try:
+            from services.run_frame_store import finish_run as _fr_fin
+            with db_conn() as _dc:
+                _fr_fin(_dc, int(rid), "done", "detached_natural")
+        except Exception as _e:
+            print("[detach] conv=%s run=%s 写终态失败：%r" % (cid, rid, _e), flush=True)
+        try:
+            _cur = _reg.get(int(rid))
+            if _cur:
+                _cur.reason = "natural"
+            _reg.unregister(int(rid))
+        except Exception:
+            pass
+        print("[detach] conv=%s run=%s 后台整轮完成，run=done" % (cid, rid), flush=True)
+
+    def _detach_mark_cancelled(rid, cid):
+        """后台排空被 /interrupt 或 grace 取消 → 写 run=cancelled，绝不写 done。"""
+        try:
+            _cur = _reg.get(int(rid))
+            _reason = (_cur.reason if _cur and _cur.reason else "detached_cancelled")
+            from services.run_frame_store import finish_run as _fr_fin
+            with db_conn() as _dc:
+                _fr_fin(_dc, int(rid), "cancelled", _reason)
+        except Exception as _e:
+            print("[detach] conv=%s run=%s 写 cancelled 终态失败：%r" % (cid, rid, _e), flush=True)
+        try:
+            _reg.unregister(int(rid))
+        except Exception:
+            pass
+        print("[detach] conv=%s run=%s 后台被取消，run=cancelled（reason=%s）"
+              % (cid, rid, locals().get("_reason", "?")), flush=True)
+
+    def _on_detach(task, rid, cid):
+        """SSE 包装器转入后台排空时回调：登记 task + 启动 grace watcher。"""
+        _reg.register(int(rid), int(cid), task, None)
+        d = _reg.get(int(rid))
+        if d is not None:
+            d.watcher = _detach_start_watcher(rid, cid, _det_grace)
+        print("[detach] conv=%s run=%s 转后台续跑 grace=%.0fs"
+              % (cid, rid, _det_grace), flush=True)
+
+    def _detach_start_watcher(rid, cid, grace_s):
+        """每条脱离 run 起一个 watcher：grace 内无订阅认领则 cancel 排空 task。"""
+        async def _watch():
+            try:
+                while True:
+                    await asyncio.sleep(min(5.0, max(1.0, grace_s / 12.0)))
+                    cur = _reg.get(int(rid))
+                    if cur is None:
+                        return                      # 已自然完成 / 已被停止
+                    if _reg.expired_ids(grace_s):
+                        if cur.task is not None:
+                            cur.reason = "grace_expired"
+                            print("[detach] conv=%s run=%s grace=%.0fs 到期，收口"
+                                  % (cid, rid, grace_s), flush=True)
+                            cur.task.cancel()
+                        return
+            except asyncio.CancelledError:
+                pass
+        return asyncio.create_task(_watch())
+
+    async def _event_stream_inner(deadline_ts=0.0, run_id_cell=None):
         # P1-2：首帧声明重连间隔（SSE 协议字段），并立刻产一帧心跳，
         # 让 nginx/网关在本轮第一个 LLM 请求发出前就看到"连接活跃"。
         yield "retry: 3000\n\n"
@@ -906,6 +1043,14 @@ async def chat_stream(conv_id: int, body: ChatIn, conn=Depends(db_session),
                 from services.run_frame_store import new_run as _fr_new, FrameTee as _FrTee
                 with db_conn() as _frc:
                     _fr_run_id = _fr_new(_frc, conv_id, {"branch": work_branch})
+                # ★ 2026-11-23：回写 run_id 到 cell，供 chat_stream 层级的 detach 判定读取
+                _det_run_id[0] = int(_fr_run_id)
+                if run_id_cell is not None:
+                    try:
+                        run_id_cell[0] = int(_fr_run_id)
+                    except Exception:
+                        pass
+                print("[run_stream] conv=%s run=%s 帧日志已开" % (conv_id, _fr_run_id), flush=True)
                 _fr_tee = _FrTee(
                     _fr_run_id, conv_id, conn_factory=db_conn,
                     max_frames=int(_fr_cfg("run_stream", "max_frames", 2000) or 2000),
@@ -922,6 +1067,14 @@ async def chat_stream(conv_id: int, body: ChatIn, conn=Depends(db_session),
             断连正是最需要帧日志的场景，早退后再收口等于白记。
             """
             if _fr_closed[0]:
+                return
+            # ★ 2026-11-23：detach 成功时 run 终态与 tee 收口交给后台 on_done，
+            #   这里必须完全跳过 —— 否则内层断连收口会把 run 误标 cancelled/client_gone，
+            #   与后台继续跑、稍后写 done 冲突（用户实测：刷新后任务被终止的假象）。
+            if _detach_claimed[0]:
+                print("[detach] conv=%s run=%s 内层收口让位给后台（detach 已认领）"
+                      % (conv_id, _fr_run_id), flush=True)
+                _fr_closed[0] = True
                 return
             _fr_closed[0] = True
             if not _fr_run_id:
@@ -1196,6 +1349,19 @@ async def chat_stream(conv_id: int, body: ChatIn, conn=Depends(db_session),
                 # 实测背景：LLM 网关/embedding 故障时单步重试链达数分钟，注释帧 `: ping`
                 # 前端无法展示 ⇒ 用户只看到无限转圈，以为系统死了。
                 visible_ping=True,
+                # ★ 2026-11-23 第二档：把断连续跑判定下沉到 SSE 包装器自身。
+                #   断点：内层 finally 的 `if _client_gone: return` 会把断连异常吞成
+                #   StopAsyncIteration，放在外层的断连钩子永远收不到 ⇒ 判定必须在这里
+                #   （消费者退出、本生成器 finally 执行处），它是唯一稳定可见的点。
+                detach_ctx={
+                    "detach": lambda: _detach_decide(),
+                    "on_detach": lambda task: _on_detach(task, _fr_run_id, conv_id),
+                    "on_frame": lambda raw: _fr_tee.feed(raw) if _fr_tee else 0,
+                    "on_done": lambda: (
+                        (_fr_tee.close() if _fr_tee else None),
+                        _detach_mark_done(_fr_run_id, conv_id)),
+                    "on_cancel": lambda: _detach_mark_cancelled(_fr_run_id, conv_id),
+                } if (_det_enabled and _fr_run_id) else None,
             )
             async for raw in _frames:
                 # P1-32（2026-10-10）：终态哨兵 —— 记录是否发过 done/error。
@@ -1414,7 +1580,9 @@ async def chat_stream(conv_id: int, body: ChatIn, conn=Depends(db_session),
             #     · 有攒到正文 → 落库 + 「已中断」说明后缀（内容一字不丢）；
             #     · 一个字都没有 → 落一条**如实说明**（不留"发了消息但没有任何回应"的空档）。
             #   幂等：库里最后一条已是 assistant ⇒ 跳过（正常 done 已落过 / agent 侧已固化）。
-            if not _terminal:
+            # ★ 2026-11-23：detach 已认领 ⇒ 后台会跑完整轮并由 execute_stream 正常固化正文，
+            #   内层这里绝不写「已中止」兜底消息（否则刷新后用户看到中止提示，正是本次 bug）。
+            if not _terminal and not _detach_claimed[0]:
                 # ★ 2026-11-19 问题2：原因分类前移，供有正文/无正文两支共用；
                 #   旧实现只在无正文分支分类，有正文时写死「连接已中断」，
                 #   误导为网络/输出上限（实测 conv 999999938 finish_reason 无 length）。
@@ -1638,21 +1806,22 @@ async def chat_stream(conv_id: int, body: ChatIn, conn=Depends(db_session),
         # ★ 2026-11-19：持有内层生成器引用，CancelledError 时主动 aclose ——
         #   取消若落在外层 `yield _f`（SSE 写出点），内层只会被 GC 延迟收尾，
         #   其 `_client_gone` 来不及置位 ⇒ span 误记 no_terminal_frame。
+        #
+        # ★ 2026-11-23 第二档：断连判定已下沉到 core/sse.iter_with_heartbeat_async 的
+        #   detach_ctx（内层 finally 的 `if _client_gone: return` 会把异常吞成
+        #   StopAsyncIteration，外层这里拿不到可靠的断连信号）。转后台、保活 worker、
+        #   排空、grace 收口全部由那一层完成。这里恢复原语义，不重复处置。
         _inner = _event_stream_inner(deadline_ts=_deadline)
         try:
             async for _f in _inner:
                 yield _f
         except asyncio.CancelledError:
-            # 同 GeneratorExit：让内层走自己的断连收口（固化正文 + 清 follow-up + 闭 span），
-            # 然后把取消继续向上抛，不能吞。
             try:
                 await _inner.aclose()
             except (asyncio.CancelledError, Exception):
                 pass
             raise
         finally:
-            # 必须放 finally：客户端断开时 `async for` 会被 GeneratorExit 打断，
-            # 不放这里就会出现"名额永久泄漏 ⇒ 几次之后所有人 429"。
             await _gate.__aexit__(None, None, None)
 
     return StreamingResponse(

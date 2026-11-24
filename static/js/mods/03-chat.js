@@ -409,6 +409,8 @@ async function newTask(projectId, projectName) {
   window._pendingProjectId = projectId ? String(projectId) : '';
   currentConvId = null;
   _isDraft = true;
+  // ★ 2026-11-23：新建任务=草稿态，清掉"最后会话"记录，避免刷新又跳回旧会话
+  try{ localStorage.removeItem('mbse_last_conv_id'); }catch(e){}
   // 2026-09-04 v4：中栏展示 WorkBuddy 风格初始欢迎屏（主智能选项 + 快速模块）
   renderChatWelcome({draft:true});
   const input = document.getElementById('chat-input');
@@ -449,6 +451,8 @@ async function deleteConv(id) {
     await api(`/api/conversations/${id}`, {method:'DELETE'});
     if(currentConvId === id) {
       currentConvId = null;
+      // ★ 2026-11-23：删掉的会话不再作为刷新恢复目标
+      try{ localStorage.removeItem('mbse_last_conv_id'); }catch(e){}
       document.getElementById('chat-area').innerHTML = '<div class="loading">选择或新建对话开始建模…</div>';
       // 2026-09-29：「未选择」与「已加载」同性质（零信息量常驻），不再写入状态栏
     }
@@ -837,6 +841,9 @@ async function selectConv(id) {
     _convTabs[currentConvId] = { tabs: _previewTabs.slice(), activeKey: _previewActiveKey };
   }
   currentConvId = id;
+  // ★ 2026-11-23：记住最后打开的会话，供刷新后原地恢复（不回欢迎页）。
+  //   写在这里而非加载成功后：即便消息加载失败，下次刷新仍回到同一会话让用户重试。
+  try{ localStorage.setItem('mbse_last_conv_id', String(id)); }catch(e){}
   // ★ 2026-11-06：切换会话必须清掉上一个会话残留的运行态文案（「仍在执行：t1…」）。
   //   `#chat-status` 是全局元素，旧会话的流/心跳写进去后不会自动消失 ⇒
   //   新会话明明没在跑，却一直显示别的会话的执行状态。
@@ -877,6 +884,8 @@ async function selectConv(id) {
     area.innerHTML = '<div style="text-align:center;color:var(--mut);padding:40px;">开始输入以启动 AI 建模…</div>';
     // 活跃流保护③兜底：流式现场属于本会话却拿到空消息（后端入口落库失效时）→ 现场挂回，别显示空态
     _reattachLiveStream(area, id);
+    // ★ 2026-11-23：空会话也可能是"刷新前刚发消息、后台还在跑"⇒ 同样探测续显
+    try{ if(typeof _resumeLiveStream === 'function') _resumeLiveStream(id, area); }catch(_e){}
   }
   else {
     area.innerHTML = msgs.length < _convMsgTotal
@@ -898,6 +907,10 @@ async function selectConv(id) {
       //   给一个「回放上一轮输出」的入口（不自动回放）。必须放在全部消息渲染完之后，
       //   否则 `area.querySelectorAll('.msg')` 拿不到末条，判据会静默失效。
       try{ if(typeof maybeOfferRunReplay === 'function') maybeOfferRunReplay(id, area); }catch(_e){}
+      // ★ 2026-11-23 第二档：探测本会话是否有刷新前转入后台的生成轮。
+      //   有 ⇒ 带游标订阅续显（不重跑流程）；无 ⇒ 什么都不做。必须放在渲染 done 里，
+      //   保证续显的临时盒追加在所有历史消息之后、不会被后续分片覆盖。
+      try{ if(typeof _resumeLiveStream === 'function') _resumeLiveStream(id, area); }catch(_e){}
     });
   }
   // 2026-09-29（用户反馈）：状态栏不再写「已加载」——零信息量却让蓝色状态条常驻不消失
@@ -924,6 +937,36 @@ async function selectConv(id) {
   }
   loadArtifacts(id);   // 会话产物分栏：按当前会话加载
 }
+
+// ★ 2026-11-23：刷新后原地恢复最后打开的会话（不再回欢迎页/新会话页）。
+//   为什么要主动恢复：页面启动默认进 home，loadConversations() 见到 currentConvId=null
+//   就渲染欢迎屏（见本文件 :89）。这里在页面就绪后读取 selectConv 写入的 last id，
+//   用 goToConversation 切回 AI 页并加载该会话 —— 用户感知就是"刷新只刷内容，位置不变"。
+//   guard：只在没有 currentConvId、且不在草稿态时恢复；一次性，避免与用户手动操作打架。
+(function _restoreLastConvOnReload(){
+  let _done = false;
+  function _try(){
+    if(_done) return;
+    try{
+      if(currentConvId || _isDraft){ _done = true; return; }   // 用户已选会话/正在新建 ⇒ 不干预
+      // ★ 2026-11-23：只有"刷新后要回的就是 AI 页"才恢复会话。
+      //   若路由恢复已把页面切到 kb/studio/reports 等，绝不能再 goToConversation（它会 go('ai')
+      //   覆盖路由）—— 那正是"其他页刷新却回新建会话页"的根因。
+      let _routeP = 'ai';   // 无记录时按默认 AI 页处理（保持旧行为）
+      try{
+        const _raw = localStorage.getItem('mbse_current_route');
+        if(_raw){ _routeP = String((JSON.parse(_raw)||{}).p || 'ai'); }
+      }catch(e){}
+      if(_routeP && _routeP !== 'ai'){ _done = true; return; }  // 目标不是 AI 页 ⇒ 会话恢复让位
+      const last = localStorage.getItem('mbse_last_conv_id');
+      if(!last || !/^\d+$/.test(last)){ _done = true; return; }
+      _done = true;
+      if(typeof goToConversation === 'function') goToConversation(Number(last));
+    }catch(e){ _done = true; }
+  }
+  if(document.readyState === 'loading') document.addEventListener('DOMContentLoaded', ()=>setTimeout(_try, 300));
+  else setTimeout(_try, 300);
+})();
 
 // ── V3 可折叠四栏：会话列表收起展开（图标由 CSS transform 控制方向）──
 function convToggle(){
