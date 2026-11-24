@@ -95,7 +95,10 @@ assert i_flow > 0, "编排主路径定位失败"
 _i_next = stream.find("\n    def ", i_flow + 10)
 flow_body = stream[i_flow:_i_next if _i_next > 0 else len(stream)]
 
-chk("A1 真实执行路径的 exec 带 subtasks", '"subtasks": subtasks}' in flow_body)
+# ★ 2026-11-24：原字面判据 '"subtasks": subtasks}' 已过时 —— 2026-11-20 P1-3 给 exec
+#   追加了 process_artifacts 键排在 subtasks 之后（com 历史遗留），字面匹配随之断裂，
+#   而字段本身一直存在。判据放宽为"exec 字典里带 subtasks 键"（意图不变：轨迹持久化不丢）。
+chk("A1 真实执行路径的 exec 带 subtasks", '"subtasks": subtasks' in flow_body)
 chk("A2 画布复用路径 `_stream_orchestrated` 已移除（不得回潮）",
     "def _stream_orchestrated(" not in stream,
     "仍存在定义 ⇒ 画布流程复用可能被加回来了")

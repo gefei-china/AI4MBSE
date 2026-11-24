@@ -569,6 +569,15 @@ function renderMessage(m) {
       const altHtml = (typeof altCardFromTools === 'function') ? altCardFromTools(cd) : null;
       if(altHtml) html += `<div class="rc">${altHtml}</div>`;
   }
+  // ABORT_CONTINUE_V1（2026-11-24）：abort 固化消息（card_data.exec.abort_reason，
+  // "本轮未产出正文，已中止…"）是一条**死胡同消息** —— 用户刷新回来只能看到它，
+  // 正文永远不会有进展。补一键继续：取本轮提问重发（显式点击 = 用户同意，
+  // 不违反"不自动重生成烧 token"原则）。共享内核见 12-chatsend.js _continueReask。
+  if(m.role==='assistant' && cd && cd.exec && cd.exec.abort_reason && m.id){
+    html += `<div class="abort-continue" data-mid="${m.id}" style="margin-top:8px;">`
+          + `<button class="btn btn-sm btn-outline-primary" onclick="abortContinueReask(this)">继续执行本轮提问</button>`
+          + `</div>`;
+  }
   // P0-3 会话产物（规范06 产物即界面）：产物卡片网格（图标+标题+类型+操作），≥3 横滑
   if(m.role==='assistant' && cd) {
     html += artGridHtml(m, cd);

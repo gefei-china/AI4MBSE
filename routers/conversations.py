@@ -782,6 +782,15 @@ async def subscribe_run(run_id: int, request: Request,
                 continue
             _plan = prepare_frame_replay(_cur, _run.get("status"), _run.get("last_seq"),
                                          tail=bool(tail))
+            # ★ 2026-11-24：决策了就必须执行 —— prepare_frame_replay 对「游标超尾」
+            #   （客户端 seq > 服务端 max_seq，典型：进程重启后帧未落全 / 脏游标）的
+            #   处置是 resume_from_seq=0 从头回放，但本循环此前只读了 plan["tail"]，
+            #   从未应用 resume_from_seq ⇒ _cur 保持超前值，一行帧都读不到，
+            #   直接 run_end —— 用户视角就是"点了恢复，什么都没续上"。
+            #   真实案例 run 65：游标 65-28 > last_seq 24，24 帧回放全部漏掉。
+            if _plan.get("replay") and int(_plan.get("resume_from_seq") or 0) < _cur:
+                _cur = max(0, int(_plan["resume_from_seq"]))
+                continue    # 回到循环头按新游标重读帧（_cur 递增，不会死循环）
             if not _meta:
                 _meta = {"run_id": int(run_id), "status": _run.get("status") or "",
                          "last_seq": int(_run.get("last_seq") or 0),

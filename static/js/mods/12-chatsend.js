@@ -530,6 +530,60 @@ async function _recoverTurnContent(aiBox){
   if(_cs) _cs.textContent = '已恢复本轮内容';
 }
 
+// CONTINUE_LAST_TURN_V1（2026-11-24）：run 已死（取消/失败/服务重启）且无正文落库时，
+// 回放只是静态副本，本轮永远不会有进展 —— 唯一出路是重新执行本轮提问。
+// 与其让用户手动复制问题再粘贴重发，不如给一键继续：取该会话最后一条用户消息
+// 塞回输入框走 sendChat 正常链路。**显式点击 = 用户同意**，不违反
+// "不自动重生成、避免断线误触烧 token"的原则。
+// ★ _continueReask 是共享内核：回放注释（_renderRunReplay）、续显收口注释
+//   （_resumeLiveStream）、abort 固化消息历史渲染（05-markdown.js abortContinueReask）
+//   三处入口都落到这里。beforeMid>0 时取该消息**之前**最近的用户提问
+//   （abort 固化消息紧跟在本轮提问之后，用 id < mid 的最后一条 user 最稳）。
+async function _continueReask(convId, beforeMid, btn){
+  beforeMid = Number(beforeMid || 0);
+  try{
+    if(btn){ btn.disabled = true; btn.textContent = '重新发送中…'; }
+    const mr = await api('/api/conversations/' + encodeURIComponent(convId) + '/messages?limit=50');
+    const items = Array.isArray(mr) ? mr : ((mr && Array.isArray(mr.messages)) ? mr.messages : []);
+    let q = '';
+    for(let i = items.length - 1; i >= 0; i--){
+      const it = items[i] || {};
+      if(beforeMid > 0 && Number(it.id || 0) >= beforeMid) continue;
+      if(String(it.role || '') === 'user'){ q = String(it.content || '').trim(); break; }
+    }
+    const input = document.getElementById('chat-input');
+    if(!q || !input || typeof sendChat !== 'function'){
+      if(btn){ btn.disabled = false; btn.textContent = '无法自动重发，请手动发送'; }
+      return;
+    }
+    input.value = q;
+    sendChat();
+    if(btn) btn.textContent = '已重新发送';
+  }catch(_e){
+    if(btn){ btn.disabled = false; btn.textContent = '重试'; }
+  }
+}
+
+function _appendContinueBtn(convId, container, opts){
+  opts = opts || {};
+  if(!container) return;
+  const btn = document.createElement('button');
+  btn.textContent = '继续执行本轮提问';
+  btn.className = 'btn btn-sm btn-outline-primary';
+  btn.style.cssText = 'margin-left:8px;';
+  btn.onclick = () => { _continueReask(convId, opts.beforeMid || 0, btn); };
+  container.appendChild(btn);
+}
+
+// abort 固化消息（card_data.exec.abort_reason）历史渲染的入口：renderMessage 只能拼
+// HTML 字符串，按钮用 onclick 挂到这个全局函数上（历史渲染必然在当前会话视图内，
+// currentConvId 即会话；mid 定位它前面那轮提问）。
+async function abortContinueReask(el){
+  const wrap = el.closest('.abort-continue');
+  const mid = wrap ? Number(wrap.dataset.mid || 0) : 0;
+  await _continueReask(currentConvId, mid, el);
+}
+
 // RUN_FRAME_REPLAY_V1（2026-11-19，方案B P1）：**按帧日志重建本轮输出**。
 //
 // 为什么需要它：`/recovery` 只能给"已固化落库"的正文，而固化是节流/收口行为 ——
@@ -567,10 +621,22 @@ async function _renderRunReplay(convId, runId, aiBox, opts){
     + 'background:rgba(28,126,214,.10);color:#1864ab;font-size:12.5px;line-height:1.6;';
   let html = '以下内容来自<b>本轮帧日志回放</b>（服务端逐帧记录，与当时屏幕上的输出一致）。';
   if(r.status === 'running') html += '<br>该轮在服务端仍标记为运行中（本轮可能未正常收口）。';
+  if(String(r.status||'') === 'cancelled') html += '<br>该轮已被<b>中断</b>（手动停止 / 刷新断连 / 服务重启），上方是中断前已完成的部分。';
+  if(String(r.status||'') === 'failed') html += '<br>该轮执行<b>失败</b>，上方是失败前已完成的部分。';
   if(Number(r.truncated || 0) === 1) html += '<br>⚠ 帧日志已达上限被截断，末尾部分可能缺失。';
   if(opts.reason === 'no_finalized_message') html += '<br>本轮正文未落库（进程中断/未收口），这是唯一的完整副本。';
-  html += '<br>需要继续请直接重发这条消息。';
+  const _rstatus = String(r.status||'');
+  if(_rstatus === 'cancelled' || _rstatus === 'failed'){
+    html += '<br>要拿到完整回答，需要重新执行本轮提问：';
+  }else{
+    html += '<br>需要继续请直接重发这条消息。';
+  }
   note.innerHTML = html;
+  // ★ 2026-11-24：run 已死（取消/失败）⇒ 回放后永远不会再有新内容（无进展），
+  //   给一键继续，而不是让用户手动复制问题重发。
+  if((_rstatus === 'cancelled' || _rstatus === 'failed') && convId){
+    _appendContinueBtn(convId, note, {});
+  }
 
   const bodyEl = (aiBox && aiBox.querySelector) ? aiBox.querySelector('.body') : null;
   if(bodyEl){
@@ -694,6 +760,7 @@ async function _resumeLiveStream(convId, area){
   _streamAbort = ac;                 // 让「停止」按钮能停后台任务（stopStream → /interrupt）
   const lastEventId = runId + '-' + seq;
   let buf = '';
+  let _endStatus = '';    // run_end 事件里的 run 终态（done/cancelled/failed/running=超时）
   try{
     const resp = await fetch(`/api/runs/${runId}/subscribe?last_event_id=${encodeURIComponent(lastEventId)}&tail=1&max_wait_s=180`, {
       headers: streamHeaders(), signal: ac.signal, cache:'no-store'
@@ -710,7 +777,18 @@ async function _resumeLiveStream(convId, area){
         try{
           const m = fr.match(/^id:\s*(\d+)-(\d+)/m);
           if(m) _recordLiveRun(convId, +m[1], +m[2]);
-          if(/^event:\s*(done|error|run_end)\b/m.test(fr)) _clearLiveRun(convId);
+          const _evm = fr.match(/^event:\s*(done|error|run_end)\b/m);
+          if(_evm){
+            if(_evm[1] !== 'run_end'){ _clearLiveRun(convId); }
+            else{
+              // run_end.data.status 才是 run 的真实终态：
+              //   · done/cancelled/failed ⇒ 清游标（本轮已了结）；
+              //   · running（tail 超时）⇒ **保留游标**，下次刷新还能凭它续显。
+              const _dm = fr.match(/^data:\s*(\{[\s\S]*?\})\s*$/m);
+              try{ _endStatus = String((JSON.parse(_dm[1])||{}).status||''); }catch(_e){}
+              if(_endStatus === 'done' || _endStatus === 'cancelled' || _endStatus === 'failed') _clearLiveRun(convId);
+            }
+          }
         }catch(_e){}
         handleSSE(fr);
       }
@@ -725,8 +803,30 @@ async function _resumeLiveStream(convId, area){
     window._liveReplayRunId = 0;
     try{ showStopBtn(false); }catch(_e){}
   }
-  // 后端此刻已把本轮固化为真实消息 → 重载历史，用落库消息替换临时盒（不重复）
-  try{ if(typeof selectConv==='function' && String(currentConvId)===String(convId)) selectConv(convId); }catch(e){}
+  // ★ 2026-11-24：按 run 终态分流收口 ——
+  //   · cancelled/failed：**保留回放盒**（重载会把它清掉，只剩孤零零的用户提问，
+  //     用户视角即"点了恢复却无进展"），就地给一键继续入口；
+  //   · 其余（done / tail 超时 / 异常）：维持原路径，重载历史用落库消息替换临时盒。
+  if(_endStatus === 'cancelled' || _endStatus === 'failed'){
+    try{
+      const st = document.getElementById('chat-status');
+      if(st) st.textContent = '该轮已中断（手动停止 / 服务重启），上方为中断前的回放。';
+      const _bd = box.querySelector('.body');
+      if(_bd){
+        try{ _bd.classList.remove('streaming'); }catch(_e){}
+        const _nt = document.createElement('div');
+        _nt.className = 'turn-recover-note';
+        _nt.style.cssText = 'margin-top:8px;padding:7px 10px;border-left:3px solid #1c7ed6;'
+          + 'background:rgba(28,126,214,.10);color:#1864ab;font-size:12.5px;line-height:1.6;';
+        _nt.innerHTML = '该轮已被中断，上方是中断前的回放。要拿到完整回答，需要重新执行本轮提问：';
+        _appendContinueBtn(convId, _nt, {});
+        _bd.appendChild(_nt);
+      }
+    }catch(_e){}
+  }else{
+    // 后端此刻已把本轮固化为真实消息 → 重载历史，用落库消息替换临时盒（不重复）
+    try{ if(typeof selectConv==='function' && String(currentConvId)===String(convId)) selectConv(convId); }catch(e){}
+  }
 }
 
 async function pumpStream(aiBox, msg, atts, resumeOf){
