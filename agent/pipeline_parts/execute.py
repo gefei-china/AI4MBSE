@@ -805,6 +805,17 @@ class ExecuteMixin:
                         # 为什么这条是省钱闸不是提速闸：模型陷入循环时最典型的表现就是
                         # 同参数反复调同一工具，每次都真执行一遍。
                         _dup = _guard.probe_dup(tname, targs)
+                        # ★ 2026-11-24（与 stream.py 同源）：pass 已确认 ⇒ **执行前硬拦**。
+                        #   提示无效（模型会改写代码再验一次），必须真拦才兑现"不再重复校验"。
+                        if (str(tname) == "sysml_v2_validate"
+                                and _guard.pass_confirmed_n() >= 1):
+                            _guard.validation_stalls += 1
+                            _pay = _guard.validation_pass_blocked_payload()
+                            tool_results.append({
+                                "tool_call_id": tc.get("id", ""),
+                                "role": "tool", "name": tname,
+                                "content": json.dumps(_pay, ensure_ascii=False)})
+                            continue
                         if _dup:
                             _guard.dup_short_circuits += 1
                             # ★ 2026-11-21（与 stream.py 同源，两条 ReAct 路径必须同步）：

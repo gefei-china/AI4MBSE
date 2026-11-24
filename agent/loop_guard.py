@@ -457,6 +457,36 @@ class LoopGuard:
             return True
         return False
 
+    def pass_confirmed_n(self) -> int:
+        """本轮 run 内已出现多少次 pass 校验（0 = 还没通过）。
+
+        ★ 2026-11-24（run 74 实证）：仅"回一句不要再校验"是**无效**的 ——
+          模型收到提示后仍会改写代码再校验一次（实测第 3、4 次校验的代码
+          前 2000 字完全相同，说明它并没有真改出需要复验的新东西）。
+          ⇒ 调用方需要这个计数来做**硬拦截**（不再执行工具、并按次数收敛）。
+        """
+        return int((self.validation_pass_sigs or {}).get("pass", 0) or 0)
+
+    @staticmethod
+    def validation_pass_blocked_payload() -> dict:
+        """★★ 2026-11-24：pass 已确认后，对**再次校验**的硬拦截回执。
+
+        与 `validation_pass_repeat_payload` 的区别（两者都必须存在）：
+          · repeat_payload —— 校验**执行完**才发现的重复（已花掉 4.5~6s 工具时间）；
+          · blocked_payload —— 校验**执行前**就拦下（这才是"不再重复校验"的字面承诺）。
+        run 74 实测：仅发 repeat_payload 时模型又调了 1 次并真跑了 7.7 秒。
+        """
+        return {"ok": True, "_validation_stall": True, "_validation_pass": True,
+                "_validation_blocked": True,
+                "result": ("【本轮校验已通过，本次校验未执行】上一版代码 `判据：pass`，"
+                           "系统据此**不再执行**新的 sysml_v2_validate（本轮已生效）。\n"
+                           "为什么拦：一轮内重复校验同一份产物不会产生新信息，只会拖长交付时间。\n"
+                           "现在只有两条路，选一条：\n"
+                           "  ① 代码没实质改动 ⇒ **直接交付**（把已通过的代码作为正文），"
+                           "并用上一版 pass 作为待办「校验至无硬错」的验收回执置 completed；\n"
+                           "  ② 确实换了产物（不同视图/不同包）⇒ 先说明「换了什么」，"
+                           "系统才允许新一轮校验；不要靠反复微调同一份代码来碰运气。")}
+
     @staticmethod
     def validation_pass_repeat_payload() -> dict:
         """★ 2026-11-24：**校验已通过**时的短路回执（与「停滞」严格区分）。

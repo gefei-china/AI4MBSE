@@ -339,9 +339,17 @@ def t_g7():
                not probs, "; ".join(probs)[:300])
     # G7e：变异"删掉 import"也必须被抓（NameError 与 AttributeError 同样掀翻整轮）
     ex = srcs[_GUARD_CALLSITES[0]]
-    noimp = ex.replace(
-        "from agent.loop_guard import LoopGuard, is_correctable_failure",
-        "from agent.loop_guard import LoopGuard", 1)
+    # ★ 2026-11-24：import 已改为**多行括号**形式（`from agent.loop_guard import (\n
+    #   LoopGuard, is_correctable_failure, ...`），原先按单行字面量替换⇒永远不命中
+    #   ⇒ caught=False 假红。改为正则把整段括号 import 收成只留 LoopGuard。
+    import re as _re2
+    noimp = _re2.sub(
+        r"from agent\.loop_guard import \([^)]*\)",
+        "from agent.loop_guard import LoopGuard", ex, count=1)
+    if noimp == ex:      # 兜底：单行形式（未来若改回）
+        noimp = ex.replace(
+            "from agent.loop_guard import LoopGuard, is_correctable_failure",
+            "from agent.loop_guard import LoopGuard", 1)
     caught = bool(noimp != ex) and any(
         "NameError" in p for p in _guard_api_audit({_GUARD_CALLSITES[0]: noimp,
                                                     _GUARD_CALLSITES[1]: srcs[_GUARD_CALLSITES[1]]}))

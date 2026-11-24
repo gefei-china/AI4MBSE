@@ -63,6 +63,30 @@ def main():
     lg4 = LoopGuard()
     for _ in range(3):
         lg4.validation_stalled("sysml_v2_validate", {"result": block})
+    # ★★ 2026-11-24（run 74/75 实证，用户报"提示已通过还在校验"）：
+    #   只回一句提示是无效的 —— 模型会改写代码再验一次。必须能查到"已通过"的计数，
+    #   供调用方**执行前硬拦**；且硬拦文案必须明说"本次校验未执行"（与事后提示区分）。
+    _lg5 = LoopGuard()
+    check("P10 pass 前 pass_confirmed_n 为 0（未通过时不拦）",
+          _lg5.pass_confirmed_n() == 0)
+    _lg5.validation_stalled("sysml_v2_validate", _pass)
+    check("P11 出现 pass 后 pass_confirmed_n ≥ 1（可供硬拦判定）",
+          _lg5.pass_confirmed_n() >= 1, "n=%d" % _lg5.pass_confirmed_n())
+    _blk = _lg5.validation_pass_blocked_payload()
+    check("P12 硬拦回执明说「本次校验未执行」（区别于事后提示）",
+          _blk.get("_validation_blocked") is True
+          and "本次校验未执行" in _blk["result"]
+          and "不再执行" in _blk["result"])
+    # S 段源码接线：两条 ReAct 路径都要有执行前硬拦
+    _st = open("agent/pipeline_parts/stream.py", encoding="utf-8").read()
+    _ex = open("agent/pipeline_parts/execute.py", encoding="utf-8").read()
+    check("P13 流式路径有 pass 执行前硬拦（pass_confirmed_n 判定）",
+          "pass_confirmed_n() >= 1" in _st and "validation_pass_blocked_payload" in _st)
+    check("P14 非流式路径同样有 pass 执行前硬拦",
+          "pass_confirmed_n() >= 1" in _ex and "validation_pass_blocked_payload" in _ex)
+    check("P15 硬拦回执不被事后停滞检查覆盖（_validation_blocked 短路）",
+          'result.get("_validation_blocked")' in _st)
+
     check("P9 停滞后再 pass ⇒ 计数复位（不是永久黑名单）",
           (not lg4.validation_stalled("sysml_v2_validate", _pass))
           and (not lg4.validation_stalled("sysml_v2_validate", {"result": block})))

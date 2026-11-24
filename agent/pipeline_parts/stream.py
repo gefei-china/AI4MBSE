@@ -6144,6 +6144,11 @@ class StreamMixin:
             #   用于"重复调用收敛闸"，见 round 末尾 `_dup_streak >= 2` 处注释。
             #   初值必须在**外层循环之外**：跨轮累计才有意义（每轮归零就永远打不到 2）。
             _dup_streak = 0
+            # ★ 2026-11-24（run 74 实证）：pass 已确认后被**硬拦**的校验次数（独立计数）。
+            #   为什么不并进 `_dup_streak`：它会在"真执行"分支被归零（见 6616 行），
+            #   而 pass 拦截之后紧接着往往有一次真执行（模型去写产物）⇒ 归一零
+            #   就让收敛闸永远不响 ⇒ 又变回"无限续跑"。独立计数才能可靠收敛。
+            _pass_block_streak = 0
             # ★ 2026-11-20：本轮是否命中"校验停滞"（用于收敛闸强指令改口径）。
             _validate_stalled = False
             # P0-2：多轮 ReAct——探测→执行工具→观察回填→再探测，直到无 tool_calls 或达上限（防死循环）
@@ -6569,7 +6574,22 @@ class StreamMixin:
                             #   参数不同，旧守卫一次都没挡住，单独耗掉 4 分钟。
                             _probe_n = _lg.probe_cap(tname)
                             _dup = 0 if _probe_n else _lg.probe_dup(tname, targs)
-                            if _probe_n:
+                            # ★★ 2026-11-24（run 74 实证，用户报"明明提示已通过还在校验"）：
+                            #   **执行前硬拦截** —— 本轮 run 内 validate 已经 pass 过，
+                            #   之后的校验**不再执行**（省 4.5~7.7s 工具时间 + 一轮 LLM 往返）。
+                            #   为什么不能只靠"回一句不要再校验"：实测模型收到该提示后
+                            #   仍改写代码再校验一次（第 3/4 次校验传入的代码前 2000 字完全相同，
+                            #   说明并没有真改出需要复验的新东西）⇒ 提示无效，必须真拦。
+                            #   `_pass_block_streak` 用**独立计数**（不被真执行归零）：
+                            #   `_dup_streak` 会被 `else` 分支的清零逻辑吃掉，run 74 就是这样
+                            #   让收敛闸一直不响的。
+                            if (str(tname) == "sysml_v2_validate"
+                                    and _lg.pass_confirmed_n() >= 1):
+                                _pass_block_streak += 1
+                                _dup_streak += 1
+                                result = _lg.validation_pass_blocked_payload()
+                                _validate_stalled = True
+                            elif _probe_n:
                                 _lg.probe_cap_hits += 1
                                 _dup_streak += 1
                                 result = _lg.probe_cap_payload(tname, _probe_n)
@@ -6654,7 +6674,14 @@ class StreamMixin:
                             #   38k→78k，每轮 14~30s）。修法：本分支停滞即置位 +
                             #   计入连续重复 —— 第 2 次停滞的 round 末就触发"校验停滞收敛"
                             #   break，把浪费从 5 轮压到 1~2 轮。
-                            if _lg.validation_stalled(tname, result):
+                            # ★★ 2026-11-24（run 75 实证）：**已硬拦的回执不得被本段覆盖**。
+                            #   硬拦文案里本身就含"判据：pass"字样，本段 pass 分支会把它
+                            #   改写成"无需重复校验"（实测用户看到的仍是那句旧提示），
+                            #   于是"本次校验未执行"这个**关键事实**被抹掉，
+                            #   模型也无从知道系统真的拒绝了执行。
+                            if (isinstance(result, dict) and result.get("_validation_blocked")):
+                                pass      # 硬拦回执原样保留（下方统一读 _t_ok/_r_full）
+                            elif _lg.validation_stalled(tname, result):
                                 _lg.validation_stalls += 1
                                 # ★ 2026-11-24：按停滞**类别**选文案 ——
                                 #   pass 重复（已达标）绝不能用"停滞/有错"那份，
@@ -7021,6 +7048,25 @@ class StreamMixin:
                             #   连续 3 次直接收敛（交给下方兜底流式生成，基于已有信息作答）。
                             #   为什么用"连续"而不是"累计"：多步任务里合法地回头重查同一个工具
                             #   是常见的；只有**中间没有任何新进展**的连续重复才是空转。
+                            # ★★ 2026-11-24（run 74 实证，用户报"提示已通过还在校验"）：
+                            #   **pass 拦截要走独立收敛分支，且必须排在 `_dup_streak` 判断之前**。
+                            #   理由：pass 校验被硬拦时 `_dup_streak` 也 +1，但紧接着模型常去
+                            #   写产物（一次真执行 ⇒ `_dup_streak` 归零），于是靠 `_dup_streak`
+                            #   永远收敛不了。这里用 `_pass_block_streak`：拦满 2 次即收敛，
+                            #   不再给它"再改一版再校验"的机会（那正是烧掉 87s/轮的地方）。
+                            if _pass_block_streak >= 2:
+                                _pb_delta = (
+                                    f"（{agent_def.name}）本轮校验**已通过**，"
+                                    f"系统已拦截 {_pass_block_streak} 次重复校验 "
+                                    f"⇒ 收敛：直接交付已通过的代码，不再校验。")
+                                exec_notices.append(({"kind": "progress", "text": _pb_delta}))
+                                yield {"type": "progress", "delta": _pb_delta,
+                                       "kind": "progress", "round": _rnd + 1, "phase": "plan"}
+                                yield {"type": "stage", "name": "校验已通过收敛",
+                                       "status": "done",
+                                       "detail": f"重复校验已被拦截 {_pass_block_streak} 次："
+                                                 f"以已通过的代码收尾交付"}
+                                break
                             if _dup_streak >= 2:
                                 # ★ 2026-10-28（conv 9738 实证）：**不再直接终止循环**。
                                 #   真机现场：模型已经定位到目标包（2115385083629469696）、
