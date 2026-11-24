@@ -15,7 +15,7 @@ import sqlite3
 from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse
 
-from core.deps import db_session, current_user, require_permission
+from core.deps import db_session, current_user, require_permission, require_any_permission
 from repositories.user_repo import UserRepo
 from core.audit import audit, audit_user
 from models import RoleIn, UserIn, UserStatusIn, DepartmentIn
@@ -52,7 +52,21 @@ SEED_PERM_DOMAINS = [
         {"key": "user_manage", "label": "用户管理"}, {"key": "role_manage", "label": "角色管理"},
         {"key": "audit_view", "label": "审计查看"}, {"key": "integration_config", "label": "集成配置"},
         {"key": "ops_manage", "label": "运维管理"}]},
+    # 2026-11-24（P4）：system_config 一直在角色 permissions JSON 里被读写
+    # （设计师/管理员都带 read+write），却从未进权限域表 ⇒ _sanitize_permissions
+    # 会在角色保存时把它静默剥离（潜伏炸弹）。补为正式内置域，矩阵 UI 可视可配。
+    {"key": "system_config", "label": "系统配置", "ops": [
+        {"key": "read", "label": "读取"}, {"key": "write", "label": "修改"}]},
 ]
+
+# ── 写操作权限口径（2026-11-24 P4 收口）──
+# 背景：用户/角色/部门写端点此前只挂 current_user（"登录了就行"），权限极简的
+# 自定义角色（如载荷审评专家，permissions={}）也能增删用户与角色。
+# 收口原则：首选 admin:user_manage / admin:role_manage（系统管理域）；
+# 兼容路径 system_config:write —— 既有部署的实际操作者角色（设计师）持该键，
+# 收紧的同时不砸运维者自己的门（管理员角色 admin 域非空即超管放行，不变）。
+USER_MANAGE_PERMS = [("admin", "user_manage"), ("system_config", "write")]
+ROLE_MANAGE_PERMS = [("admin", "role_manage"), ("system_config", "write")]
 
 # ── 权限域表读写（2026-09-01 表化：运行时从表读，缺表/空表回退种子）──
 def ensure_permission_tables(conn):
@@ -76,6 +90,7 @@ def ensure_permission_tables(conn):
     )""")
     n = conn.execute("SELECT COUNT(*) FROM permission_domains").fetchone()[0]
     if n > 0:
+        _topup_builtin_seeds(conn)   # 2026-11-24：存量库增量补种缺失的内置域（幂等）
         return False
     for dom in SEED_PERM_DOMAINS:
         conn.execute(
@@ -87,6 +102,28 @@ def ensure_permission_tables(conn):
                 (dom["key"], op["key"], op["label"]))
     conn.commit()
     return True
+
+
+def _topup_builtin_seeds(conn):
+    """内置种子增量补种（幂等，2026-11-24 P4）。
+
+    此前只在空表时播种 ⇒ 后续版本新增的内置域（如 system_config）永远到不了
+    存量库，且 _sanitize_permissions 会把角色 JSON 里的该域静默剥离。
+    只补缺失的域键（已存在的行零改动），域内操作项 INSERT OR IGNORE。
+    """
+    have = {r[0] for r in conn.execute("SELECT domain_key FROM permission_domains").fetchall()}
+    missing = [d for d in SEED_PERM_DOMAINS if d["key"] not in have]
+    if not missing:
+        return
+    for dom in missing:
+        conn.execute(
+            "INSERT INTO permission_domains (domain_key, label, builtin, sort_order) VALUES (?,?,1,0)",
+            (dom["key"], dom["label"]))
+        for op in dom["ops"]:
+            conn.execute(
+                "INSERT OR IGNORE INTO permission_ops (domain_key, op_key, label, builtin) VALUES (?,?,?,1)",
+                (dom["key"], op["key"], op["label"]))
+    conn.commit()
 
 
 def load_permission_domains(conn) -> list:
@@ -258,7 +295,7 @@ def list_roles(conn=Depends(db_session)):
 
 
 @router.post("/api/roles")
-def create_role(role: RoleIn, conn=Depends(db_session), user=Depends(current_user)):
+def create_role(role: RoleIn, conn=Depends(db_session), user=Depends(require_any_permission(ROLE_MANAGE_PERMS))):
     repo = UserRepo(conn)
     if repo.get_role_by_name(role.name):
         return JSONResponse({"error": f"角色名「{role.name}」已存在"}, 400)
@@ -268,7 +305,7 @@ def create_role(role: RoleIn, conn=Depends(db_session), user=Depends(current_use
 
 
 @router.put("/api/roles/{role_id}")
-def update_role(role_id: int, role: RoleIn, conn=Depends(db_session), user=Depends(current_user)):
+def update_role(role_id: int, role: RoleIn, conn=Depends(db_session), user=Depends(require_any_permission(ROLE_MANAGE_PERMS))):
     repo = UserRepo(conn)
     existing = repo.get_role(role_id)
     if not existing:
@@ -285,7 +322,7 @@ def update_role(role_id: int, role: RoleIn, conn=Depends(db_session), user=Depen
 
 
 @router.delete("/api/roles/{role_id}")
-def delete_role(role_id: int, conn=Depends(db_session), user=Depends(current_user)):
+def delete_role(role_id: int, conn=Depends(db_session), user=Depends(require_any_permission(ROLE_MANAGE_PERMS))):
     repo = UserRepo(conn)
     role = repo.get_role(role_id)
     if not role:
@@ -325,7 +362,7 @@ def list_users(conn=Depends(db_session)):
 
 
 @router.post("/api/users")
-def create_user(user: UserIn, conn=Depends(db_session), u=Depends(current_user)):
+def create_user(user: UserIn, conn=Depends(db_session), u=Depends(require_any_permission(USER_MANAGE_PERMS))):
     repo = UserRepo(conn)
     if repo.get_user_by_username(user.username):
         return JSONResponse({"error": f"用户名「{user.username}」已存在"}, 400)
@@ -341,7 +378,7 @@ def create_user(user: UserIn, conn=Depends(db_session), u=Depends(current_user))
 
 
 @router.put("/api/users/{user_id}")
-def update_user(user_id: int, user: UserIn, conn=Depends(db_session), u=Depends(current_user)):
+def update_user(user_id: int, user: UserIn, conn=Depends(db_session), u=Depends(require_any_permission(USER_MANAGE_PERMS))):
     repo = UserRepo(conn)
     if not repo.get_user(user_id):
         return JSONResponse({"error": "用户不存在"}, 404)
@@ -356,7 +393,7 @@ def update_user(user_id: int, user: UserIn, conn=Depends(db_session), u=Depends(
 
 
 @router.patch("/api/users/{user_id}/status")
-def update_user_status(user_id: int, body: UserStatusIn, conn=Depends(db_session), u=Depends(current_user)):
+def update_user_status(user_id: int, body: UserStatusIn, conn=Depends(db_session), u=Depends(require_any_permission(USER_MANAGE_PERMS))):
     """启用 / 停用用户。"""
     repo = UserRepo(conn)
     existing = repo.get_user(user_id)
@@ -370,7 +407,7 @@ def update_user_status(user_id: int, body: UserStatusIn, conn=Depends(db_session
 
 
 @router.delete("/api/users/{user_id}")
-def delete_user(user_id: int, conn=Depends(db_session), u=Depends(current_user)):
+def delete_user(user_id: int, conn=Depends(db_session), u=Depends(require_any_permission(USER_MANAGE_PERMS))):
     """删除用户；禁止删除当前登录用户；有会话/对话引用时拒绝。"""
     repo = UserRepo(conn)
     existing = repo.get_user(user_id)
@@ -396,7 +433,7 @@ def list_departments(conn=Depends(db_session)):
 
 
 @router.post("/api/departments")
-def create_department(dep: DepartmentIn, conn=Depends(db_session), u=Depends(current_user)):
+def create_department(dep: DepartmentIn, conn=Depends(db_session), u=Depends(require_any_permission(USER_MANAGE_PERMS))):
     repo = UserRepo(conn)
     name = dep.name.strip()
     if not name:
@@ -409,7 +446,7 @@ def create_department(dep: DepartmentIn, conn=Depends(db_session), u=Depends(cur
 
 
 @router.put("/api/departments/{dep_id}")
-def update_department(dep_id: int, dep: DepartmentIn, conn=Depends(db_session), u=Depends(current_user)):
+def update_department(dep_id: int, dep: DepartmentIn, conn=Depends(db_session), u=Depends(require_any_permission(USER_MANAGE_PERMS))):
     repo = UserRepo(conn)
     existing = repo.get_department(dep_id)
     if not existing:
@@ -429,7 +466,7 @@ def update_department(dep_id: int, dep: DepartmentIn, conn=Depends(db_session), 
 
 
 @router.delete("/api/departments/{dep_id}")
-def delete_department(dep_id: int, conn=Depends(db_session), u=Depends(current_user)):
+def delete_department(dep_id: int, conn=Depends(db_session), u=Depends(require_any_permission(USER_MANAGE_PERMS))):
     repo = UserRepo(conn)
     dep = repo.get_department(dep_id)
     if not dep:

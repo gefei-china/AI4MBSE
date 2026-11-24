@@ -29,29 +29,49 @@ def _rows(conn, sql, args=()):
 @router.get("/api/monitor/dashboard")
 def monitor_dashboard(days: int = 7, conn=Depends(db_session)):
     """统一监控仪表盘：真实采集的系统/运行/LLM 指标 + 趋势 + 节点耗时 + 最近告警。"""
-    # ── 运行聚合（近 N 天）──
-    runs = _rows(conn, "SELECT * FROM flow_runs WHERE created_at >= datetime('now', ?) ORDER BY id DESC LIMIT 500",
-                 (f"-{days} days",))
-    total = len(runs)
-    ok = sum(1 for r in runs if r.get("status") == "completed")
-    err = sum(1 for r in runs if r.get("status") == "partial")
-    avg_ms = int(sum(r.get("total_latency_ms") or 0 for r in runs) / total) if total else 0
-    # ── LLM 用量聚合（近 N 天）──
-    usage = _rows(conn, "SELECT * FROM llm_usage_stats WHERE created_at >= datetime('now', ?) ORDER BY id DESC LIMIT 1000",
-                  (f"-{days} days",))
-    mock_n = sum(1 for u in usage if u.get("used_mock"))
-    total_tok = sum((u.get("prompt_tokens") or 0) + (u.get("completion_tokens") or 0) for u in usage)
-    cost = round(sum(u.get("estimated_cost") or 0 for u in usage), 6)
-    # ── S0 补充（2026-10-29）：LLM 用量的**业务口径**汇总 ────────────────────
-    # 上面三个量是**全量**（含探针）。实测 `chat_probe` 占某窗口成本达 51%
-    #   ⇒ 只给全量会让"这台机器一天花了多少"和"业务花了多少"混成一个数。
-    # 为什么在这里加、而不让前端自己 filter：
-    #   ① `usage` 是 LIMIT 1000 的截断样本，前端再聚合会二次截断，口径不可控；
-    #   ② 探针判定必须走 `core/probe_mark`（单一真源），不能在 JS 里再写一份正则。
-    _probe_n = sum(1 for u in usage if (u.get("is_probe") or 0))
-    _biz = [u for u in usage if not (u.get("is_probe") or 0)]
-    biz_tok = sum((u.get("prompt_tokens") or 0) + (u.get("completion_tokens") or 0) for u in _biz)
-    biz_cost = round(sum(u.get("estimated_cost") or 0 for u in _biz), 6)
+    # ── 运行聚合（近 N 天）── 2026-11-24（P1）改源：
+    # 旧源 flow_runs / flow_run_steps 是画布工作流遗留**死表**（2026-11-05
+    # workflows/persistence.py 随画布一并删除后全库再无写入者），运行 KPI 恒 0，
+    # 造成「系统没在跑」的假象。新源 = 编排真源：
+    #   · orch_checkpoints：一 run 一行，phase ∈ done/failed/cancelled/interrupted/summarizing
+    #   · orch_run_spans：节点级 span（kind + status + latency_ms）
+    # 编排表缺失（老库/夹具库）时回退旧表查询，零回归。
+    orch = _orch_run_rows(conn, days)
+    if orch is not None:
+        total = len(orch)
+        ok = sum(1 for r in orch if r.get("phase") == "done")
+        err = sum(1 for r in orch if r.get("phase") == "failed")
+        durs = [d for d in (_run_dur_ms(r) for r in orch) if d is not None]
+        avg_ms = int(sum(durs) / len(durs)) if durs else 0
+    else:
+        runs = _rows(conn, "SELECT * FROM flow_runs WHERE created_at >= datetime('now', ?) ORDER BY id DESC LIMIT 500",
+                     (f"-{days} days",))
+        total = len(runs)
+        ok = sum(1 for r in runs if r.get("status") == "completed")
+        err = sum(1 for r in runs if r.get("status") == "partial")
+        avg_ms = int(sum(r.get("total_latency_ms") or 0 for r in runs) / total) if total else 0
+    # ── LLM 用量聚合（近 N 天）── 2026-11-24（P3）改 SQL 全窗聚合：
+    # 旧实现取 LIMIT 1000 行在 Python 求和——窗口超 1000 笔时 calls/mock 率/cost
+    # 是「前 1000 笔」的截断口径，与同页 llm_health（全窗）数字对不上
+    # （实测 1000 vs 3128）。改为一条聚合 SQL，口径与 llm_health 对齐。
+    # S0 业务/探针双口径保留（注释史见下方旧实现）。
+    agg = _rows(conn, """SELECT COUNT(*) calls,
+        SUM(CASE WHEN COALESCE(used_mock,0)=1 THEN 1 ELSE 0 END) mock_n,
+        SUM(COALESCE(prompt_tokens,0)+COALESCE(completion_tokens,0)) total_tok,
+        SUM(COALESCE(estimated_cost,0)) cost,
+        SUM(CASE WHEN COALESCE(is_probe,0)=0 THEN 1 ELSE 0 END) biz_n,
+        SUM(CASE WHEN COALESCE(is_probe,0)=1 THEN 1 ELSE 0 END) probe_n,
+        SUM(CASE WHEN COALESCE(is_probe,0)=0 THEN COALESCE(prompt_tokens,0)+COALESCE(completion_tokens,0) ELSE 0 END) biz_tok,
+        SUM(CASE WHEN COALESCE(is_probe,0)=0 THEN COALESCE(estimated_cost,0) ELSE 0 END) biz_cost
+        FROM llm_usage_stats WHERE created_at >= datetime('now', ?)""", (f"-{days} days",))[0]
+    _calls = agg["calls"] or 0
+    _mock_n = agg["mock_n"] or 0
+    _probe_n = agg["probe_n"] or 0
+    _biz_n = agg["biz_n"] or 0
+    total_tok = agg["total_tok"] or 0
+    cost = round(agg["cost"] or 0, 6)
+    biz_tok = agg["biz_tok"] or 0
+    biz_cost = round(agg["biz_cost"] or 0, 6)
     # ── 系统级（真实进程信息 + DB 文件大小）──
     proc = {"pid": os.getpid(), "uptime_s": int(time.time() - _PROC_START), "db_size_kb": 0}
     try:
@@ -62,10 +82,15 @@ def monitor_dashboard(days: int = 7, conn=Depends(db_session)):
     open_alerts = _rows(conn, "SELECT COUNT(*) c FROM alert_events WHERE status='open'")[0]["c"]
     # ── 近 N 天趋势（按天分组：运行成功/失败/平均耗时 + LLM 调用/Token）──
     trend = _build_trend(conn, days)
-    # ── 节点类型耗时分布 ──
-    node_stats = _rows(conn, """SELECT node_type, COUNT(*) count, AVG(latency_ms) avg_ms,
-        SUM(CASE WHEN status='error' THEN 1 ELSE 0 END) errors
-        FROM flow_run_steps GROUP BY node_type ORDER BY count DESC LIMIT 10""")
+    # ── 节点类型耗时分布 ── 2026-11-24（P1）：改读 orch_run_spans（kind），死表回退
+    try:
+        node_stats = _rows(conn, """SELECT kind AS node_type, COUNT(*) count, AVG(latency_ms) avg_ms,
+            SUM(CASE WHEN status='error' THEN 1 ELSE 0 END) errors
+            FROM orch_run_spans GROUP BY kind ORDER BY count DESC LIMIT 10""")
+    except Exception:
+        node_stats = _rows(conn, """SELECT node_type, COUNT(*) count, AVG(latency_ms) avg_ms,
+            SUM(CASE WHEN status='error' THEN 1 ELSE 0 END) errors
+            FROM flow_run_steps GROUP BY node_type ORDER BY count DESC LIMIT 10""")
     # ── 最近告警（未确认优先）──
     recent_alerts = _rows(conn, """SELECT * FROM alert_events
         ORDER BY (status='open') DESC, id DESC LIMIT 8""")
@@ -81,13 +106,13 @@ def monitor_dashboard(days: int = 7, conn=Depends(db_session)):
         "days": days,
         "runs": {"total": total, "success": ok, "failed": err, "success_rate": round(ok * 100 / total, 1) if total else 0,
                  "avg_latency_ms": avg_ms},
-        "llm": {"calls": len(usage), "mock_rate": round(mock_n * 100 / len(usage), 1) if usage else 0,
+        "llm": {"calls": _calls, "mock_rate": round(_mock_n * 100 / _calls, 1) if _calls else 0,
                 "total_tokens": total_tok, "estimated_cost": cost,
                 # S0：业务口径（已排除探针）+ 探针单列。两口径都下发，前端可并排展示，
                 # 也可让调用方判断"探针占了多少"——**不删数据、不改既有键**（零回归）。
-                "calls_biz": len(_biz), "calls_probe": _probe_n,
+                "calls_biz": _biz_n, "calls_probe": _probe_n,
                 "tokens_biz": biz_tok, "cost_biz": biz_cost,
-                "probe_rate": round(_probe_n * 100.0 / len(usage), 1) if usage else 0},
+                "probe_rate": round(_probe_n * 100.0 / _calls, 1) if _calls else 0},
         "llm_health": llm_health,
         "system": proc,
         "subs_active": active_subs, "open_alerts": open_alerts,
@@ -110,15 +135,48 @@ def _db_size_kb(conn) -> int:
     return 0
 
 
+def _orch_run_rows(conn, days: int):
+    """近 N 天编排 run（orch_checkpoints，一 run 一行）。表不存在 → None（调用方回退死表）。
+
+    2026-11-24（P1）：flow_runs 是画布工作流死表，编排运行 KPI 的唯一真源。
+    """
+    try:
+        return _rows(conn, "SELECT phase, created_at, updated_at FROM orch_checkpoints "
+                           "WHERE created_at >= datetime('now', ?) ORDER BY id DESC LIMIT 2000",
+                     (f"-{days} days",))
+    except Exception:
+        return None
+
+
+def _run_dur_ms(r) -> "int | None":
+    """run 耗时（ms）= updated_at - created_at（orch_checkpoints 无独立耗时列）。"""
+    import datetime as _dt
+    try:
+        a = _dt.datetime.strptime(r.get("created_at") or "", "%Y-%m-%d %H:%M:%S")
+        b = _dt.datetime.strptime(r.get("updated_at") or "", "%Y-%m-%d %H:%M:%S")
+        return max(0, int((b - a).total_seconds() * 1000))
+    except Exception:
+        return None
+
+
 def _build_trend(conn, days: int) -> list:
     """近 N 天按天分组趋势（补齐无数据日期为 0）。"""
     days = max(days, 1)
-    run_rows = _rows(conn, """SELECT substr(created_at,1,10) d,
-        COUNT(*) c, SUM(CASE WHEN status='completed' THEN 1 ELSE 0 END) ok,
-        SUM(CASE WHEN status='partial' THEN 1 ELSE 0 END) fail,
-        AVG(total_latency_ms) avg_ms
-        FROM flow_runs WHERE created_at >= datetime('now', ?)
-        GROUP BY d ORDER BY d""", (f"-{days} days",))
+    # 2026-11-24（P1）：趋势运行列同样改读编排真源，死表回退（口径与 dashboard 主卡一致）
+    try:
+        run_rows = _rows(conn, """SELECT substr(created_at,1,10) d,
+            COUNT(*) c, SUM(CASE WHEN phase='done' THEN 1 ELSE 0 END) ok,
+            SUM(CASE WHEN phase='failed' THEN 1 ELSE 0 END) fail,
+            AVG((julianday(updated_at)-julianday(created_at))*86400000.0) avg_ms
+            FROM orch_checkpoints WHERE created_at >= datetime('now', ?)
+            GROUP BY d ORDER BY d""", (f"-{days} days",))
+    except Exception:
+        run_rows = _rows(conn, """SELECT substr(created_at,1,10) d,
+            COUNT(*) c, SUM(CASE WHEN status='completed' THEN 1 ELSE 0 END) ok,
+            SUM(CASE WHEN status='partial' THEN 1 ELSE 0 END) fail,
+            AVG(total_latency_ms) avg_ms
+            FROM flow_runs WHERE created_at >= datetime('now', ?)
+            GROUP BY d ORDER BY d""", (f"-{days} days",))
     # S0（2026-10-28）口径隔离：`chat_probe` 等探针实测占 7 天成本 51%，
     #   若与业务调用混在一列，趋势图上"业务量"会被探针削平/放大。
     #   **不删数据**（探针健康本身要能看），改为分列返回：业务 / 探针。
@@ -511,13 +569,15 @@ def supervisor_scan(max_runs: int = 1, dry_run: bool = True):
 
 
 # ── 告警规则 CRUD + 启停 ──
+# 2026-11-24（P4）：规则增删改此前**不写审计**——告警规则决定「什么算事故」，
+# 改动不留痕等于监控口径可以被无声篡改。统一补 audit()（归属 = 当前登录用户）。
 @router.get("/api/monitor/alert-rules")
 def list_alert_rules(conn=Depends(db_session)):
     return _rows(conn, "SELECT * FROM alert_rules ORDER BY id")
 
 
 @router.post("/api/monitor/alert-rules")
-def create_alert_rule(r: AlertRuleIn, conn=Depends(db_session)):
+def create_alert_rule(r: AlertRuleIn, conn=Depends(db_session), user=Depends(current_user)):
     # P0-d：白名单加入周期评估器的全局指标（run 级四个 + GLOBAL_METRICS）
     from core.alert_evaluator import GLOBAL_METRICS
     allowed = ("success_rate", "avg_latency", "error_count", "mock_rate") + GLOBAL_METRICS
@@ -530,11 +590,17 @@ def create_alert_rule(r: AlertRuleIn, conn=Depends(db_session)):
         "VALUES (?,?,?,?,?,?,?,?)",
         (r.name, r.metric, r.operator, r.threshold, r.level, r.notify_url, r.secret, r.status))
     conn.commit()
+    try:
+        from core.audit import audit, audit_user
+        audit(audit_user(user), "alert_rule_create",
+              f"新增告警规则: {r.name}（{r.metric} {r.operator} {r.threshold}）", conn=conn)
+    except Exception:
+        pass
     return {"ok": True, "id": cur.lastrowid}
 
 
 @router.put("/api/monitor/alert-rules/{rid}")
-def update_alert_rule(rid: int, r: AlertRuleIn, conn=Depends(db_session)):
+def update_alert_rule(rid: int, r: AlertRuleIn, conn=Depends(db_session), user=Depends(current_user)):
     row = conn.execute("SELECT id FROM alert_rules WHERE id=?", (rid,)).fetchone()
     if not row:
         return JSONResponse({"error": "告警规则不存在"}, 404)
@@ -546,24 +612,42 @@ def update_alert_rule(rid: int, r: AlertRuleIn, conn=Depends(db_session)):
         "notify_url=?, secret=?, status=?, updated_at=datetime('now') WHERE id=?",
         (r.name, r.metric, r.operator, r.threshold, r.level, r.notify_url, r.secret, r.status, rid))
     conn.commit()
+    try:
+        from core.audit import audit, audit_user
+        audit(audit_user(user), "alert_rule_update",
+              f"更新告警规则 #{rid}: {r.name}（{r.metric} {r.operator} {r.threshold}）", conn=conn)
+    except Exception:
+        pass
     return {"ok": True, "id": rid}
 
 
 @router.delete("/api/monitor/alert-rules/{rid}")
-def delete_alert_rule(rid: int, conn=Depends(db_session)):
+def delete_alert_rule(rid: int, conn=Depends(db_session), user=Depends(current_user)):
+    row = conn.execute("SELECT name FROM alert_rules WHERE id=?", (rid,)).fetchone()
     conn.execute("DELETE FROM alert_rules WHERE id=?", (rid,))
     conn.commit()
+    try:
+        from core.audit import audit, audit_user
+        audit(audit_user(user), "alert_rule_delete",
+              f"删除告警规则 #{rid}: {(row['name'] if row else '?')}", conn=conn)
+    except Exception:
+        pass
     return {"ok": True, "id": rid}
 
 
 @router.post("/api/monitor/alert-rules/{rid}/toggle")
-def toggle_alert_rule(rid: int, conn=Depends(db_session)):
+def toggle_alert_rule(rid: int, conn=Depends(db_session), user=Depends(current_user)):
     row = conn.execute("SELECT status FROM alert_rules WHERE id=?", (rid,)).fetchone()
     if not row:
         return JSONResponse({"error": "告警规则不存在"}, 404)
     new = "paused" if row["status"] == "active" else "active"
     conn.execute("UPDATE alert_rules SET status=?, updated_at=datetime('now') WHERE id=?", (new, rid))
     conn.commit()
+    try:
+        from core.audit import audit, audit_user
+        audit(audit_user(user), "alert_rule_toggle", f"告警规则 #{rid} 启停 → {new}", conn=conn)
+    except Exception:
+        pass
     return {"ok": True, "id": rid, "status": new}
 
 

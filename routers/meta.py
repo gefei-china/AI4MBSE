@@ -216,7 +216,7 @@ def get_settings(conn=Depends(db_session)):
 
 
 @router.put("/api/settings/{key}")
-def update_setting(key: str, body: dict, conn=Depends(db_session)):
+def update_setting(key: str, body: dict, conn=Depends(db_session), user=Depends(current_user)):
     # 白名单准入（2026-10-23）：本入口此前无任何校验，曾把 5 个"零消费点"无效键
     # （query_route 等）写进 settings 表 —— 界面能改、改了不生效。
     # 合法键唯一权威 = core/setting_keys.py（审计脚本 --strict 反向防腐烂）。
@@ -227,7 +227,14 @@ def update_setting(key: str, body: dict, conn=Depends(db_session)):
              "error": "未知配置键 %r（无消费点，写了也不会生效）。合法键：%s"
                       % (key, "、".join(valid_keys_hint()))},
             400)
+    # 2026-11-24（P4）：改设置此前**不写审计**——settings 直接影响系统行为，
+    # 与告警规则同理，改动必须留痕（归属 = 当前登录用户）。
     MetaRepo(conn).upsert_setting(key, body["value"])
+    try:
+        audit(audit_user(user), "settings_update",
+              f"更新设置 {key} = {str(body.get('value'))[:200]}", conn=conn)
+    except Exception:
+        pass
     return {"ok": True}
 
 

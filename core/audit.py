@@ -373,3 +373,77 @@ def verify_chain(limit: int = 0, conn=None) -> dict:
         return _check(conn)
     with db_conn() as c:
         return _check(c)
+
+
+def repair_chain(conn=None, dry_run: bool = True, max_rows: int = 0) -> dict:
+    """审计哈希链修复（2026-11-24 P2）：从第一个断点起向后重链。
+
+    背景：进程崩溃 / 双写者竞争可造成中间某行 prev_hash 不衔接（verify_chain 报
+    「prev_hash 不衔接」）。该行之后的行虽然彼此自洽，但因首行 prev 指向了不存在的
+    上游，整段尾部都会被判 broken ⇒ audit_chain_ok 告警持续触发（实测 hit_count
+    1157 且永不闭合）。修法：定位第一个断点，从该行起逐行重写 prev_hash/hash
+    （摘要入参不含 id/created_at，重链不改变任何行的业务内容）；未入链行
+    （hash 为空）不是链节点，保持原样跳过。
+
+    安全约束：
+    - 若校验发现任何「内容与摘要不符」（篡改型断点）→ **拒绝修复**（重链会洗掉
+      篡改证据，那是审计链存在的意义，绝不自动抹平）；
+    - dry_run=True（默认）只诊断不动库；执行修复必须在**服务停机窗口**（避免与
+      在线审计写入竞争链尾）；
+    - max_rows>0 时限制重链行数上限，超限拒绝（防误操作大范围重写）；
+    - 修复成功后由调用方写一条 audit_chain_repair 审计事件（自动入新链尾）。
+    """
+    def _fix(c):
+        # 前置校验：存在篡改型断点（内容与摘要不符）→ 拒绝重链
+        v = verify_chain(limit=0, conn=c)
+        tamper = [b for b in (v.get("broken") or []) if "内容与摘要不符" in str(b.get("reason", ""))]
+        out = {"verify": {"total": v["total"], "unchained": v["unchained"],
+                          "broken_count": v["broken_count"], "ok": v["ok"]}}
+        if tamper:
+            out.update(ok=False, action="refused",
+                       error=f"存在 {len(tamper)} 处内容与摘要不符（疑似篡改），重链会抹掉证据，拒绝自动修复；请人工核查这些行",
+                       tampered_ids=[b["id"] for b in tamper[:20]])
+            return out
+        rows = c.execute(
+            "SELECT id, user_name, event_type, detail, result, branch, ip_address, "
+            "user_agent, request_id, prev_hash, hash FROM audit_logs ORDER BY id").fetchall()
+        prev = _GENESIS
+        broken_at = None
+        planned = []
+        for r in rows:
+            h = r["hash"] or ""
+            ph = r["prev_hash"] or ""
+            if not h:
+                continue                      # 未入链行：跳过，不作为链节点
+            if broken_at is None and ph != prev:
+                broken_at = r["id"]
+            if broken_at is not None:
+                new_h = _row_hash(prev, r["user_name"], r["event_type"], r["detail"],
+                                  r["result"], r["branch"] or "", r["ip_address"] or "",
+                                  r["user_agent"] or "", r["request_id"] or "")
+                planned.append({"id": r["id"], "prev_hash": prev, "hash": new_h})
+                prev = new_h
+            else:
+                prev = h
+        out.update(ok=True, broken_at=broken_at, would_relink=len(planned),
+                   planned_head=planned[:3], relinked=0)
+        if dry_run or broken_at is None:
+            out["action"] = "none" if broken_at is None else "dry_run"
+            return out
+        if max_rows and len(planned) > max_rows:
+            out["ok"] = False
+            out["action"] = "refused"
+            out["error"] = f"待重链行数 {len(planned)} 超过 max_rows={max_rows}，拒绝执行"
+            return out
+        with _chain_lock:
+            for p in planned:
+                c.execute("UPDATE audit_logs SET prev_hash=?, hash=? WHERE id=?",
+                          (p["prev_hash"], p["hash"], p["id"]))
+            out["relinked"] = len(planned)
+            out["action"] = "relinked"
+        return out
+
+    if conn is not None:
+        return _fix(conn)
+    with db_conn() as c:
+        return _fix(c)
