@@ -342,6 +342,10 @@ class LoopGuard:
         self.dup_short_circuits = 0
         self.probe_cap_hits = 0          # 试探式检索撞上限次数（2026-11-20）
         self.validation_sigs: dict = {}  # 校验回执签名 -> 次数（停滞短路）
+        #: ★ 2026-11-24：pass 回执计数（"已达标还在重复确认" ⇒ 同样短路，但文案不同）
+        self.validation_pass_sigs: dict = {}
+        #: 最近一次停滞短路的类别（'block' | 'pass'），供调用方选正确文案
+        self._last_stall_kind = ""
         self.validation_stalls = 0
         self.timeouts = 0
         self.stop_reason = ""
@@ -411,6 +415,36 @@ class LoopGuard:
         import re as _re
         txt = str(result if isinstance(result, str) else
                   (result or {}).get("result") or "")
+        # ★★ 2026-11-24（run 69 实证，用户报"多次校验没变化、一直不结束"）：
+        #   **只有硬错（block）才算停滞；pass / report（n_hard=0）一律视为健康并复位计数。**
+        #
+        #   为什么必须这样改 —— 踩到的是一处**死锁**：
+        #     · 待办验收闸的判据是「verdict=pass 或 n_hard=0」；
+        #     · 而本闸此前把**pass 回执**（两次 pass 的签名完全相同）也算成"连续 3 次同签名"
+        #       ⇒ 用 `validation_stall_payload()` 把 pass 文本覆盖成"校验停滞、条数没变"；
+        #     · 验收闸读最后一次校验回执 ⇒ 看不到 pass ⇒ 待办「校验至无硬错」永远打不上勾；
+        #     · 完成度评估判"未完成" ⇒ 自动续跑 ⇒ 再校验 ⇒ 又被覆盖成停滞…（run 69 转了 5 次）
+        #   ⇒ 表面症状是"反复校验没变化"，真因是**守卫自己把成功改写成失败**。
+        #   语义澄清：停滞闸要防的是"改不动同一批硬错还反复重跑"，
+        #   pass / report 不是"没变化"，是"已经达标"—— 达标就该闭嘴。
+        #   语义澄清：停滞闸要防的是"改不动同一批硬错还反复重跑"，
+        #   pass / report 不是"没变化"，是"已经达标"—— 达标就该闭嘴。
+        if ("判据：pass" in txt or "判据:pass" in txt or "判据：通过" in txt
+                or "有语义错但无硬错" in txt):
+            self.validation_sigs.clear()
+            # ★ 2026-11-24（run 71 实证）：**重复的 pass 也要短路**。
+            #   那轮 8 次校验全部 pass，每次白花 4.5~6s 工具时间 + 一轮 10s 的 LLM 往返
+            #   （合计约 2 分钟），只因模型"每改一版就再校验一次"却不确认已经通过。
+            #   与 block 停滞的区别：block 是"改不动"，pass 重复是"已经达标还在确认"，
+            #   处置相同（不再执行、回喂明确结论），但**文案必须不同**（见下方 payload），
+            #   否则会把"已通过"说成"停滞/有错"，误导模型去改本来正确的代码。
+            _pk = "pass"
+            _pn = int(self.validation_pass_sigs.get(_pk, 0)) + 1
+            self.validation_pass_sigs[_pk] = _pn
+            if _pn >= 2:
+                self._last_stall_kind = "pass"
+                return True
+            return False
         sigs = tuple(sorted(_re.findall(
             r"(?:词法|语法|语义|ERROR|判据)\s*[:：]?\s*([A-Za-z0-9]+)", txt)))
         if not sigs:
@@ -418,7 +452,28 @@ class LoopGuard:
         key = "|".join(sigs)
         n = int(self.validation_sigs.get(key, 0)) + 1
         self.validation_sigs[key] = n
-        return n >= 3
+        if n >= 3:
+            self._last_stall_kind = "block"
+            return True
+        return False
+
+    @staticmethod
+    def validation_pass_repeat_payload() -> dict:
+        """★ 2026-11-24：**校验已通过**时的短路回执（与「停滞」严格区分）。
+
+        为什么必须另写一份而不复用 `validation_stall_payload`：
+          后者开头就写"连续多次校验得到的计数签名完全相同"+"逐条读诊断、看同一类写法"，
+          而此刻代码**是通过的**。拿它回喂等于告诉模型"你还有错要改" ⇒
+          它会去改本来正确的代码，或再校验一次确认（正是要终止的那个循环）。
+        """
+        return {"ok": True, "_validation_stall": True, "_validation_pass": True,
+                "result": ("【校验已通过，无需重复校验】本次校验 `判据：pass`（无词法/语法错），"
+                           "且上一版同样通过 —— **不要再调用 sysml_v2_validate**。\n"
+                           "当前代码已是合格产物：\n"
+                           "  ① 直接把已通过的代码作为交付正文（不要再改写后重校验）；\n"
+                           "  ② 继续做剩下的步骤（写产物/回读确认/更新待办状态）；\n"
+                           "  ③ 若待办里有「校验至无硬错」，用本次 pass 作为验收回执直接置 completed。")}
+
 
     @staticmethod
     def validation_stall_payload() -> dict:

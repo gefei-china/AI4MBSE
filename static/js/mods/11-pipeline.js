@@ -1938,7 +1938,11 @@ function renderClarify(ev){
   const bar = document.createElement('div');
   bar.id = 'clarify-bar';
   bar.style.cssText = 'border:1px dashed var(--line);background:#f7f8fa;border-radius:6px;padding:6px 8px;font-size:12.5px;color:var(--mut);margin-bottom:6px;';
-  bar.innerHTML = `${_und}⚠ 把握不大（${pct}%），${_det}已按「${esc(ev.intent)}」继续执行。理解有误？${btns}`;
+  // ★ 2026-11-24（run 67 实证，用户报"0.95 置信还写把握不大，自相矛盾"）：措辞按校准置信分级。
+  //   ≥85% 说「把握较高」，<85% 才说「把握不大」——原文案是写死的"把握不大"，
+  //   高置信命中时等于界面在自我否定（后端同轮已做手选主 Agent 的弹出抑制）。
+  const _confWord = pct >= 85 ? '把握较高' : '把握不大';
+  bar.innerHTML = `${_und}⚠ ${_confWord}（${pct}%），${_det}已按「${esc(ev.intent)}」继续执行。理解有误？${btns}`;
   inner.insertBefore(bar, inner.firstChild);
   const st = document.getElementById('chat-status');
   if(st) st.textContent = _b && _b.goal

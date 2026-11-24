@@ -350,9 +350,18 @@ async def iter_with_heartbeat_async(iterator, interval_s: float = 15.0, comment:
         _want_detach = False
         if detach_ctx and isinstance(detach_ctx, dict):
             try:
-                _want_detach = bool(detach_ctx.get("detach", lambda: False)())
-                # 事件源尚未产出终态（DONE）才算"还在跑"；已自然结束无需转后台
-                _want_detach = _want_detach and not box.get("worker_done", False)
+                # ★★ 2026-11-24（run 70/72 实证，两次都是"正文落库、run 永久 running"）：
+                #   **必须先判 worker 是否已结束，再问"要不要 detach"**。
+                #   原顺序是「先调 detach()（上层据此置'已认领'标记）→ 再用 worker_done 否决」
+                #   ⇒ 正常跑完（客户端已收到 done、worker 已 close 事件源）时：
+                #     ① detach() 返回 True ⇒ 上层 claimed=True（内层 finally 据此**跳过写终态**）；
+                #     ② `and not worker_done` 把 `_want_detach` 打成 False ⇒ 不走后台分支；
+                #     ③ 结果：内层以为"后台接手了"、后台其实没接 ⇒ run 永远停在 running。
+                #   日志特征正是：只有「内层收口让位给后台（detach 已认领）」，
+                #   既没有「转后台续跑」也没有「后台整轮完成」。
+                #   修法：worker 已结束 ⇒ 根本不问 detach（保持"未认领"），走原路径正常收口。
+                if not box.get("worker_done", False):
+                    _want_detach = bool(detach_ctx.get("detach", lambda: False)())
             except Exception:
                 _want_detach = False
         if _want_detach:
@@ -367,6 +376,19 @@ async def iter_with_heartbeat_async(iterator, interval_s: float = 15.0, comment:
                         try:
                             done, frame = await asyncio.wait_for(q.get(), timeout=interval_s)
                         except asyncio.TimeoutError:
+                            # ★★ 2026-11-24（run 66/67/70 实证）：**必须**识别"worker 已结束
+                            #   且队列已空"这一终止条件。
+                            #   现场：worker 先把 `(True, _DONE)` 放进队列，内层消费循环
+                            #   已把它读走（客户端因此收到了 done 帧并正常关连接），
+                            #   之后 detach 才被认领 ⇒ 本 drain 面对的是一个**永远不会有
+                            #   第二个 DONE** 的队列 ⇒ `on_done` 永不触发 ⇒ run 永远停在
+                            #   `running`（LiveRun 探测报活跃、orch_stale_runs 虚高、
+                            #   用户重开会话看到幽灵"运行中"）。
+                            #   判据：`box["worker_done"]` 为真（worker 已 close 事件源）
+                            #   ⇒ 视同自然结束，按 done 收口。
+                            if box.get("worker_done", False):
+                                _natural = True
+                                break
                             continue
                         if done:
                             _natural = True      # 只有收到 DONE 才算整轮自然结束
@@ -402,7 +424,19 @@ async def iter_with_heartbeat_async(iterator, interval_s: float = 15.0, comment:
                     detach_ctx["on_detach"](_detach_task)
                 return          # ★ 关键：detach 时跳过下面的 stop/close
             except Exception:
-                _want_detach = False   # 转后台失败 ⇒ 退回原止损路径
+                # ★ 2026-11-24：转后台**失败必须撤销认领**。
+                #   `detach` 判定为真时上层已经置了"认领"标记（内层收口据此跳过写终态），
+                #   若这里退回原路径却把标记留着 ⇒ 内层不写终态、后台也没接手
+                #   ⇒ run 永久 `running`（跑完的轮显示"运行中"，用户重开会话看到幽灵）。
+                #   现场（run 70）：日志只有「内层收口让位给后台」，没有任何
+                #   「转后台续跑 / 后台整轮完成」⇒ 恰好是这条路径。
+                _want_detach = False
+                _abort = detach_ctx.get("on_detach_abort")
+                if callable(_abort):
+                    try:
+                        _abort()
+                    except Exception:
+                        pass
         # ── 原路径（未启用 detach / 主动停止 / 转后台失败）─────────────
         stop.set()             # 先叫停 worker，再关事件源（顺序反了会漏帧）
         # ⚠️ 2026-10-27：这里通常是**尽力而为**（worker 正在 `__next__` 里跑 LLM 时，

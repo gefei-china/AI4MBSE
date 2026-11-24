@@ -40,8 +40,32 @@ def main():
     lg = LoopGuard()
     flags = [lg.validation_stalled("sysml_v2_validate", {"result": block}) for _ in range(3)]
     check("P5 同 block 签名第 3 次命中停滞", flags == [False, False, True], str(flags))
-    check("P6 停滞 payload 含'不要再用同样参数重跑'",
-          "不要再用同样参数重跑" in lg.validation_stall_payload()["result"])
+    # ★ 2026-11-24：期望串去字面化 —— 2026-11-23（5c043e2）把 payload 文案从
+    #   "不要再用同样参数重跑" 改成 "不要用同样参数重跑"，该断言随之断裂（字段一直在）。
+    #   判据意图不变：payload 必须明确劝阻"同样参数重跑"，故用更短的稳定子串。
+    check("P6 停滞 payload 含'不要用同样参数重跑'",
+          "不要用同样参数重跑" in lg.validation_stall_payload()["result"])
+    # ★ 2026-11-24（run 69 死锁实证）：pass / report（n_hard=0）**永不算停滞**，
+    #   否则停滞 payload 会覆盖已经通过的校验回执 ⇒ 待办验收永远读不到 pass ⇒ 无限续跑。
+    lg2 = LoopGuard()
+    _pass = {"result": "【SysML v2 校验】判据：pass —— 通过 —— 无词法/语法错"}
+    # ★ 2026-11-24（run 71 实证 8 次 pass 白烧 2 分钟）：pass **第 2 次**起短路，
+    #   但必须是"已通过/勿重复"的文案，不能是"停滞/有错"那份（否则会让模型改好的代码）。
+    _pf = [lg2.validation_stalled("sysml_v2_validate", _pass) for _ in range(3)]
+    check("P7 pass 第 2 次起短路（已达标不再重复校验）", _pf == [False, True, True], str(_pf))
+    check("P7b pass 短路文案是'已通过'而非'停滞/有错'",
+          ("已通过" in lg2.validation_pass_repeat_payload()["result"])
+          and ("不要再调用" in lg2.validation_pass_repeat_payload()["result"]))
+    lg3 = LoopGuard()
+    _report = {"result": "【SysML v2 校验】判据：report —— 有语义错但无硬错（不阻断） 语义:54"}
+    check("P8 report(n_hard=0) 首次不判停滞（已达验收口径）",
+          not lg3.validation_stalled("sysml_v2_validate", _report))
+    lg4 = LoopGuard()
+    for _ in range(3):
+        lg4.validation_stalled("sysml_v2_validate", {"result": block})
+    check("P9 停滞后再 pass ⇒ 计数复位（不是永久黑名单）",
+          (not lg4.validation_stalled("sysml_v2_validate", _pass))
+          and (not lg4.validation_stalled("sysml_v2_validate", {"result": block})))
 
     print("\n=== B 行为验证：短路路径必须真能跑，不能只靠源码字符串匹配 ===")
     # ★★ 2026-11-21 事故：上一版门禁只做 `"xxx" in source` 字符串匹配，

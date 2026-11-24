@@ -100,6 +100,83 @@ def main():
     asyncio.run(compat())
     rec("C1 未传 detach_ctx 不报错（向后兼容）", True)
 
+    # ── D：转后台失败必须撤销认领（run 70 实证）─────────────────────────
+    # 现场：日志只有「内层收口让位给后台（detach 已认领）」，**没有**「转后台续跑」，
+    #   也没有「后台整轮完成」⇒ `on_detach` 从未执行（create_task/回调抛异常被吞）。
+    #   旧代码只把 `_want_detach=False` 退回原路径，却把上层"已认领"的标记留着
+    #   ⇒ 内层 finally 以为后台接手而跳过写终态、后台其实没接 ⇒ run 永久 running。
+    #   现在必须回调 `on_detach_abort` 撤销认领，让内层照常写终态。
+    from core.sse import iter_with_heartbeat_async as _iwa
+    _d = {"claimed": 0, "aborted": 0}
+
+    def src_d():
+        for i in range(3):
+            yield {"type": "token", "delta": "z"}
+            time.sleep(0.02)
+
+    async def case_d():
+        agen = _iwa(src_d(), interval_s=0.05, detach_ctx={
+            "detach": lambda: True,
+            "on_detach": lambda task: (_ for _ in ()).throw(RuntimeError("模拟转后台失败")),
+            "on_detach_abort": lambda: _d.__setitem__("aborted", _d["aborted"] + 1),
+        })
+        # 只读一帧就断（模拟客户端早退）
+        await agen.__anext__()
+        await agen.aclose()
+        await asyncio.sleep(0.3)
+
+    asyncio.run(case_d())
+    rec("D1 转后台失败 ⇒ 回调 on_detach_abort 撤销认领（不再永久 running）",
+        _d["aborted"] >= 1, "aborted=%d" % _d["aborted"])
+
+    # ── E：drain 的 worker_done 兜底（DONE 被消费后仍能收口）────────────
+    # worker 先把 DONE 入队、消费侧读走后才断连 ⇒ drain 面对"永远不会有第二个 DONE"
+    # 的队列。判据 box["worker_done"] 为真即视同自然结束。
+    _e = {"done": 0, "cancel": 0}
+
+    def src_e():
+        yield {"type": "token", "delta": "q"}
+        time.sleep(0.05)
+
+    async def case_e():
+        agen = _iwa(src_e(), interval_s=0.05, detach_ctx={
+            "detach": lambda: True,
+            "on_done": lambda: _e.__setitem__("done", _e["done"] + 1),
+            "on_cancel": lambda: _e.__setitem__("cancel", _e["cancel"] + 1),
+        })
+        async for _fr in agen:
+            pass
+        await asyncio.sleep(0.4)
+
+    asyncio.run(case_e())
+    rec("E1 自然结束时不得误写 cancelled", _e["cancel"] == 0, "cancel=%d" % _e["cancel"])
+
+    # ── F：worker 已自然结束时**不得认领 detach**（run 70/72 实证）──────────
+    # 一旦认领，内层 finally 会跳过写 run 终态，而后台又不会接手
+    # ⇒ 正文落库、run 永久 running。判据：正常跑完时 detach() 回调**从未被调用**。
+    _f = {"detach_calls": 0, "done": 0, "aborted": 0}
+
+    def src_f():
+        yield {"type": "token", "delta": "f"}
+        time.sleep(0.02)
+
+    async def case_f():
+        agen = _iwa(src_f(), interval_s=0.05, detach_ctx={
+            "detach": lambda: (_f.__setitem__("detach_calls", _f["detach_calls"] + 1), True)[1],
+            "on_detach": lambda task: None,
+            "on_detach_abort": lambda: _f.__setitem__("aborted", _f["aborted"] + 1),
+            "on_done": lambda: _f.__setitem__("done", _f["done"] + 1),
+        })
+        async for _fr in agen:
+            pass
+        await asyncio.sleep(0.3)
+
+    asyncio.run(case_f())
+    rec("F1 正常跑完（worker 已结束）⇒ 不调用 detach、不认领（内层照常写终态）",
+        _f["detach_calls"] == 0, "detach_calls=%d" % _f["detach_calls"])
+    rec("F2 该路径不得误报 on_detach_abort", _f["aborted"] == 0,
+        "aborted=%d" % _f["aborted"])
+
     ok = all(_RES)
     print("\n=== 结果：%d/%d 通过 ===" % (sum(_RES), len(_RES)))
     return 0 if ok else 1

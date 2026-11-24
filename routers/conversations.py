@@ -1001,7 +1001,22 @@ async def chat_stream(conv_id: int, body: ChatIn, conn=Depends(db_session),
               % (cid, rid, _det_grace), flush=True)
 
     def _detach_start_watcher(rid, cid, grace_s):
-        """每条脱离 run 起一个 watcher：grace 内无订阅认领则 cancel 排空 task。"""
+        """每条脱离 run 起一个 watcher：grace 内无订阅认领则收口。
+
+        ★ 2026-11-24（run 68 实证：cancel_reason=grace_expired 但 3 秒后照样产出
+          10,175 字正文）：**只 `task.cancel()` 是假停** —— 它停的只是"排空队列的
+          drain task"，真正跑 LLM 的 worker 不受影响，于是出现
+          「run 记账为取消（算失败）+ 正文照常落库（算成功）」的账实不符，
+          而 grace 本意正是"用户走了就别再烧 token"。
+          修法：到期时走**与 /interrupt 同一套协作式停止** ——
+            ① `mark_stopped(conv_id)`：断连判定据此不再续跑；
+            ② 取消已登记的子任务（`agent.orch_interrupt`），让 worker 在产出热路径上收敛；
+            ③ 再 `task.cancel()` 停 drain。
+          诚实说明：协作式停止的代价是"正在飞行的那一次 LLM 调用会跑完"
+          （见 orchestration.py:286 的既有说明），所以**末尾仍可能出现少量正文**；
+          这类"收口时已产出内容"的 run 由 `run_frame_store.reap_stale_runs` 的
+          「有 assistant 消息 ⇒ 补 done」判据做会计纠正，不会污染成功率。
+        """
         async def _watch():
             try:
                 while True:
@@ -1012,6 +1027,27 @@ async def chat_stream(conv_id: int, body: ChatIn, conn=Depends(db_session),
                     if _reg.expired_ids(grace_s):
                         if cur.task is not None:
                             cur.reason = "grace_expired"
+                            # ① 写停止标记（最高优先级，防断连判定又续跑）
+                            try:
+                                _reg.mark_stopped(int(cid))
+                            except Exception:
+                                pass
+                            # ② 协作式停子任务，让 worker 热路径收敛
+                            try:
+                                from agent.orch_interrupt import (active_run as _act,
+                                                                  request_interrupt as _req_int)
+                                with db_conn() as _gc:
+                                    _ar = _act(_gc, int(cid))
+                                if _ar:
+                                    with db_conn() as _gc2:
+                                        _req_int(_gc2, int(_ar["run_id"]),
+                                                 reason="grace_expired")
+                                    print("[detach] conv=%s run=%s grace 到期：已协作式停子任务 %s"
+                                          % (cid, rid, _ar["run_id"]), flush=True)
+                            except Exception as _e_st:
+                                print("[detach] conv=%s run=%s grace 协作停止跳过：%r"
+                                      % (cid, rid, _e_st), flush=True)
+                            # ③ 停 drain
                             print("[detach] conv=%s run=%s grace=%.0fs 到期，收口"
                                   % (cid, rid, grace_s), flush=True)
                             cur.task.cancel()
@@ -1370,6 +1406,10 @@ async def chat_stream(conv_id: int, body: ChatIn, conn=Depends(db_session),
                         (_fr_tee.close() if _fr_tee else None),
                         _detach_mark_done(_fr_run_id, conv_id)),
                     "on_cancel": lambda: _detach_mark_cancelled(_fr_run_id, conv_id),
+                    # ★ 2026-11-24：转后台失败 ⇒ 撤销认领，让内层 finally 照常写终态。
+                    #   （run 70 实证：不撤销 ⇒ 内层以为"后台接手了"而跳过，
+                    #     后台其实没接 ⇒ run 永久 running。）
+                    "on_detach_abort": lambda: _detach_claimed.__setitem__(0, False),
                 } if (_det_enabled and _fr_run_id) else None,
             )
             async for raw in _frames:

@@ -827,6 +827,18 @@ class ExecuteMixin:
                                 "content": json.dumps(_pay, ensure_ascii=False)})
                             continue
                         result = _guard.call(self._exec_tool_call, tname, targs)
+                        # ★ 2026-11-24（与 stream.py 同源）：真执行返回后也要判校验停滞，
+                        #   否则"每版代码都不同 ⇒ 去重不命中"的重复校验在本路径完全没有闸
+                        #   （run 71 实测 8 次全 pass，白烧约 2 分钟工具+往返时间）。
+                        #   按类别选文案：pass 重复用「已通过，勿重复校验」，block 用「停滞自查」。
+                        try:
+                            if _guard.validation_stalled(tname, result):
+                                _guard.validation_stalls += 1
+                                result = (_guard.validation_pass_repeat_payload()
+                                          if getattr(_guard, "_last_stall_kind", "") == "pass"
+                                          else _guard.validation_stall_payload())
+                        except Exception:
+                            pass
                         # ★ harness 持续工作：计入全程工具史（完成度评估器的输入）
                         _ac_tool_n += 1
                         _ac_tools_hist.append({"name": tname, "ok": bool(result.get("ok")),

@@ -114,15 +114,88 @@ def reap_restarted_runs(conn, reason="process_restart"):
     ⇒ 前端显示运行中告警、`/subscribe` 白等满 `tail_max_s`（60s）。
 
     ⚠️ 必须放在迁移之后调用（表不存在时返回 0，不抛）。
+
+    ★ 2026-11-24（run 66/67 实证）：**不再一刀切记 cancelled**。
+      真相是那两轮**都已跑完并产出了正文**（run 67 甚至落了 21,470 字），只是终态没写
+      进程就重启了。一刀切记 cancelled 会把成功轮混进失败桶 ⇒ 运行成功率被系统性低估
+      （dashboard 改读 orch_checkpoints 后这类失真会直接显示成"失败 33 次"）。
+      现在先按"有正文落库 ⇒ 已完成"认领，剩下的才记 process_restart。
     """
     try:
+        # ① 已对齐 message_id 或同会话在 run 开始后产出过 assistant 消息 ⇒ 已完成
+        cur = conn.execute(
+            "UPDATE run_sessions SET status='done', "
+            "cancel_reason=CASE WHEN COALESCE(message_id,0)>0 THEN '' ELSE 'reaped_after_finalize' END, "
+            "ended_at=COALESCE(ended_at,?) WHERE status='running' AND ("
+            "  COALESCE(message_id,0)>0 OR EXISTS ("
+            "    SELECT 1 FROM messages m WHERE m.conversation_id=run_sessions.conversation_id "
+            "    AND m.role='assistant' AND m.created_at >= run_sessions.started_at))", (_now(),))
+        n_done = int(cur.rowcount or 0)
+        # ② 其余（真的没产出正文就死了）⇒ cancelled/process_restart
         cur = conn.execute(
             "UPDATE run_sessions SET status='cancelled', cancel_reason=?, ended_at=? "
             "WHERE status='running'", (reason, _now()))
+        n_cancel = int(cur.rowcount or 0)
         conn.commit()
-        return int(cur.rowcount or 0)
+        return n_done + n_cancel
     except Exception:
         return 0
+
+
+def reap_stale_runs(conn, stale_min: int = 15):
+    """**运行期**僵尸 run 清扫（2026-11-24，run 66 实证）。
+
+    run 66 的现场：正文 02:30:01 已固化落库、最后一帧 02:30:02 写完，但 run 终态
+    一次都没写（ended_at=NULL）——收口链路在某一步断了（没有异常、没有重启）。
+    启动期的 `reap_restarted_runs` 管不到它（进程没重启），它就永远挂在 `running`：
+    `/live-run` 报活跃、`orch_stale_runs` 告警虚高、会话侧"运行中"幽灵。
+
+    两条判据（任一命中即收口，都要求 status='running'）：
+      1. **消息已固化**（`message_id>0`）⇒ 正文都落库了，run 却没写终态 ⇒ 补 `done`。
+      2. **帧活动停滞** 超过 `stale_min` 分钟（最后一帧时间早于阈值）⇒ 活的 run
+         一定会持续产帧（token 每秒、轮间 ping 每 15s、detach drain 逐帧落库），
+         静默这么久只能是链路已死 ⇒ 补 `cancelled/stale`。
+         阈值取 15 分钟：正常最慢的轮（非流式大调用）也远小于此；调小会误伤长轮。
+
+    搭乘告警循环每 300s 跑一次（零新线程，与能力度量聚合同模式）。
+    返回 {'done': n1, 'stale': n2}（表不存在等异常返回 {'done':0,'stale':0}，不抛）。
+    """
+    out = {"done": 0, "stale": 0}
+    try:
+        # ① 正文已固化（message_id 已对齐）、终态缺失 ⇒ 补 done
+        cur = conn.execute(
+            "UPDATE run_sessions SET status='done', ended_at=COALESCE(ended_at,?) "
+            "WHERE status='running' AND COALESCE(message_id,0)>0", (_now(),))
+        out["done"] = int(cur.rowcount or 0)
+        # ② 停滞但**该轮正文已落库**（同会话在 run 开始后产出了 assistant 消息）⇒ 补 done。
+        #   为什么必须有这条：真机 run 66/67 的 message_id 从未回填（align_message 没走到），
+        #   只按 message_id 判会把"跑完了"误记成 cancelled ⇒ 运行成功率被系统性低估。
+        cur = conn.execute(
+            "UPDATE run_sessions SET status='done', cancel_reason='reaped_after_finalize', "
+            "ended_at=COALESCE(ended_at,?) "
+            "WHERE status='running' AND COALESCE(message_id,0)=0 AND started_at IS NOT NULL "
+            "AND started_at < datetime('now', ?) AND EXISTS ("
+            "  SELECT 1 FROM messages m WHERE m.conversation_id=run_sessions.conversation_id "
+            "  AND m.role='assistant' AND m.created_at >= run_sessions.started_at) "
+            "AND NOT EXISTS ("
+            "  SELECT 1 FROM run_frames f WHERE f.run_id=run_sessions.run_id "
+            "  AND f.created_at >= datetime('now', ?))",
+            (_now(), "-%d minutes" % int(stale_min), "-%d minutes" % int(stale_min)))
+        out["done"] += int(cur.rowcount or 0)
+        # ③ 停滞且无正文落库 ⇒ 真死（链路中断）⇒ cancelled/stale
+        cur = conn.execute(
+            "UPDATE run_sessions SET status='cancelled', cancel_reason='stale', "
+            "ended_at=COALESCE(ended_at,?) "
+            "WHERE status='running' AND COALESCE(message_id,0)=0 AND started_at IS NOT NULL "
+            "AND started_at < datetime('now', ?) AND NOT EXISTS ("
+            "  SELECT 1 FROM run_frames f WHERE f.run_id=run_sessions.run_id "
+            "  AND f.created_at >= datetime('now', ?))",
+            (_now(), "-%d minutes" % int(stale_min), "-%d minutes" % int(stale_min)))
+        out["stale"] = int(cur.rowcount or 0)
+        conn.commit()
+    except Exception:
+        pass
+    return out
 
 
 def prune_runs(conn, conversation_id, keep=20, keep_days=KEEP_DAYS):

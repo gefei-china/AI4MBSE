@@ -5546,16 +5546,33 @@ class StreamMixin:
                    "exec_subject": _exec_subject}
             # P0-1 置信度三级决策：中置信（弱语义/继承/LLM<0.85）→ 澄清提示（不阻塞执行，供前端改选重发）
             # V2.7：指定智能体时同样给出提示（识别结果与执行 Agent 不一致时如实说明）
+            # ★ 2026-11-24（run 67 实证，用户报"点了发送瞬间弹一大坨/无意义的把握不大"）：
+            #   **澄清条降噪** —— 用户**手动选了主 Agent**（manual）或经团队路由定向
+            #   （team_route）时，"识别意见与执行主体不一致"是**设计使然**（主 Agent 覆盖路由，
+            #   R1 决策），且 reasoning 帧已如实写明「已按你选择的 X 执行（识别意见：Y，仅供编排参考）」。
+            #   此时再弹"把握不大，可改选"是零信息量噪音：置信 0.95（校准 0.9675）还写"把握不大"自相矛盾。
+            #   抑制条件：执行主体来自手动/团队路由 **且** 校准置信 ≥ 0.85 ——
+            #   真正低置信的弱语义/泛词澄清不受影响（那类 source=route 且置信 <0.85）。
             if _intent_meta["needs_clarification"]:
-                yield {"type": "clarify", "intent": intent, "confidence": _intent_meta["confidence"],
-                       # 同理：澄清条上"把握不大（X%）"也应用校准值，否则「rule_scored
-                       # 0.95 却说把握不大」自相矛盾。
-                       "calibrated_confidence": _intent_meta.get(
-                           "calibrated_confidence", _intent_meta["confidence"]),
-                       "route": _intent_meta["route"], "message": str(user_input),
-                       "detected": _detected if forced_intent and _detected != intent else None,
-                       "brief": _brief,
-                       "candidates": self._clarify_candidates(intent)}
+                _exec_src = _exec_subject.get("source", "route")
+                _cal_clar = float(_intent_meta.get("calibrated_confidence")
+                                  or _intent_meta.get("confidence") or 0)
+                _skip_clarify = (_exec_src in ("manual", "team_route") and _cal_clar >= 0.85)
+                if _skip_clarify:
+                    try:
+                        self._clarify_suppressed = True   # 观测留痕（stats/排障）
+                    except Exception:
+                        pass
+                else:
+                    yield {"type": "clarify", "intent": intent, "confidence": _intent_meta["confidence"],
+                           # 同理：澄清条上"把握不大（X%）"也应用校准值，否则「rule_scored
+                           # 0.95 却说把握不大」自相矛盾。
+                           "calibrated_confidence": _intent_meta.get(
+                               "calibrated_confidence", _intent_meta["confidence"]),
+                           "route": _intent_meta["route"], "message": str(user_input),
+                           "detected": _detected if forced_intent and _detected != intent else None,
+                           "brief": _brief,
+                           "candidates": self._clarify_candidates(intent)}
             # ── 承接轮判定（2026-10-17 米爸反馈，实证会话 9446）──
             #  上一轮走过 澄清→作答（answered 卡存在）且本轮是短输入 ⇒ 用户在回应
             #  AI 上一轮的邀请补充（「您可以直接告我分支名」→「取主分支最新版本数据」），
@@ -6627,9 +6644,28 @@ class StreamMixin:
                             # ★ 2026-11-20：校验停滞闸 —— 相同错误签名连续 3 次即短路。
                             #   真机 t3 连跑 8 次 validate，语义错恒 120 条（标准库未加载的
                             #   假错），重试只烧时间不产生新信息。
+                            # ★★ 2026-11-24（run 67 实证，用户报"多次校验没变化、跑了很久"）：
+                            #   **停滞回执必须推动收敛，而不是只换一句提示**。run 67 的 t1
+                            #   在停滞闸生效后，模型**无视**回执里"不要用同样参数重跑"的指令，
+                            #   又连续调了 5 次 validate（每次参数因重生成代码而微变 ⇒ probe_dup
+                            #   不命中 ⇒ 走的是本分支）——本分支此前**只换回执、不动收敛状态**
+                            #   （_validate_stalled 不置位、_dup_streak 不累计）⇒ round 末的
+                            #   收敛闸（`_dup_streak >= 2`）永远不响，5 轮全价烧掉（prompt
+                            #   38k→78k，每轮 14~30s）。修法：本分支停滞即置位 +
+                            #   计入连续重复 —— 第 2 次停滞的 round 末就触发"校验停滞收敛"
+                            #   break，把浪费从 5 轮压到 1~2 轮。
                             if _lg.validation_stalled(tname, result):
                                 _lg.validation_stalls += 1
-                                result = _lg.validation_stall_payload()
+                                # ★ 2026-11-24：按停滞**类别**选文案 ——
+                                #   pass 重复（已达标）绝不能用"停滞/有错"那份，
+                                #   否则会让模型去改本来正确的代码。
+                                result = (_lg.validation_pass_repeat_payload()
+                                          if getattr(_lg, "_last_stall_kind", "") == "pass"
+                                          else _lg.validation_stall_payload())
+                                _validate_stalled = True
+                                _dup_streak += 1
+                                # ★ pass 重复 ≠ 校验失败：不能当作"未验证"去阻断收尾
+                                #   （_validate_stalled 只用于收敛闸措辞，见 round 末分支）。
                             _t_ok = bool(result.get("ok"))
                             _r_full = str(result.get("result") or "")
                             # ★ 2026-10-27（真机 E2E 实测，conv 9698）：**记录已成功执行的写操作**。

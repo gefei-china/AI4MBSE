@@ -2051,7 +2051,31 @@ class IntentRouter:
         2026-09-26：L1 与 L2 **统一收口**（`_finalize_tasks`）并统一用**严格映射**
         （`_clause_to_intent_strict`：泛词不算），避免"两级语义不一致"——
         同一句话因为走了 L1 还是 L2 而得出不同的意图，是最难排查的一类不一致。
+
+        ★ 2026-11-24（run 67 实证，用户报"我只是让 AI 生成视图，为什么要编排 3 个阶段"）：
+          **结构化任务书护栏** —— 长输入 + 结构标记（【】小节 / 多行 / 编号列表）是
+          "一份完整任务书"，不是"一句话里的多阶段指令"。L2 并列清单切分会把任务书里
+          恰好含"需求/校验/设计"关键词的**小节**当成三个"阶段"强制编排
+          （那次把 1022 字任务书切成了 design → requirement_analysis → review，
+          用户视角是"我让生成一个视图，系统凭空多出两个阶段还弹澄清条"）。
+          护栏判据（满足任一即视为任务书，跳过切分）：
+            · 长度 ≥ 400 字（口头的多阶段指令——"先做需求分析，再建模，最后校验"
+              ——不可能写到这个长度；写这么长说明用户给的是任务书）；
+            · 含 ≥2 个【】小节标记且 ≥2 个换行（典型任务书排版）。
+          回退开关：`intent.multi_spec_guard=False`（逐字节回到旧行为）。
         """
+        try:
+            _guard_on = bool(self._cfg_get("multi_spec_guard", True))
+        except Exception:
+            _guard_on = True
+        if _guard_on and isinstance(text, str):
+            _t = text.strip()
+            _is_spec = (
+                len(_t) >= 400
+                or (_t.count("【") >= 2 and _t.count("\n") >= 2)
+            )
+            if _is_spec:
+                return []
         clauses = self._split_stage_clauses(text)
         if clauses:
             # L1 = 用户显式声明的阶段序（先…再…/然后/最后）⇒ 允许同意图不同对象的多阶段。

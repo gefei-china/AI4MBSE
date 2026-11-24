@@ -462,6 +462,18 @@ def start_alert_loop(interval_sec: float = 300, cooldown_min: int = 30) -> bool:
                     _cr.aggregate_capability_metrics(_c)
             except Exception as e:
                 print("[alert-loop] 能力度量聚合异常（不中断）: %s" % str(e)[:160], flush=True)
+            # ★ 2026-11-24（run 66 实证）：僵尸 run 清扫搭车本周期（零新线程）。
+            #   正文已固化但终态缺失 / 帧活动停滞的 running 补收口（详见 reap_stale_runs）。
+            try:
+                from database import db_conn as _dbc2
+                from services.run_frame_store import reap_stale_runs as _reap_stale
+                with _dbc2() as _c2:
+                    _z = _reap_stale(_c2)
+                if _z.get("done") or _z.get("stale"):
+                    print("[alert-loop] 僵尸 run 清扫：done=%d stale=%d"
+                          % (_z.get("done", 0), _z.get("stale", 0)), flush=True)
+            except Exception as e:
+                print("[alert-loop] 僵尸 run 清扫异常（不中断）: %s" % str(e)[:160], flush=True)
 
     _loop_stop.clear()
     _loop_thread = threading.Thread(target=_run, daemon=True, name="alert-evaluator")
