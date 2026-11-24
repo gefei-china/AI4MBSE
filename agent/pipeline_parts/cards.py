@@ -299,12 +299,50 @@ class CardMixin:
         _spec_ctx = re.search(
             r"视图含义|回答[「\"：:]|读者是|上游输入|下游消费者|"
             r"在建模流程中的位置|本视图回答|它不是把", user_input)
+        # ★★ 2026-11-24（真机 conv 1000000014 实证，用户报"生成了 8 个视图，
+        #   视图数量应该基于 view 数量来定"）：
+        #   **任务书的「视图声明」必须优先于一切关键词推断**。
+        #   那次用户给的是标准任务书：「【视图含义】参数图 … （正文描述该视图）… 生成符合
+        #   SysML v2 规范的代码」，全文只有 `【视图含义】参数图` 这一处**声明**要哪个视图，
+        #   但没有 `生成参数图` 这种紧邻句式 ⇒ 本函数返回 None ⇒ 落到
+        #   `_infer_view_types` 关键词匹配 ⇒ 正文里的「需求/结构/状态/用例/参数」
+        #   全被当诉求 ⇒ 一轮生成 **8 个视图**（其中 STM/UC 还是 0 元素空壳）。
+        #   修法：先认**声明式写法**（【视图含义】X / 【视图】X / 视图类型：X / 本视图：X），
+        #   声明了几个视图就只生成几个 —— 这正是用户说的"基于 view 数量来定"。
+        _decl = re.search(
+            r"(?:【视图含义】|【视图】|视图类型\s*[:：]|本视图\s*[:：]|目标视图\s*[:：])\s*"
+            r"(?P<names>[^\n]{1,40})", user_input)
+        if _decl:
+            _name_txt = _decl.group("names")
+            _alias = {"BDD": "BDD", "块定义图": "BDD", "结构图": "BDD",
+                      "IBD": "IBD", "内部块图": "IBD",
+                      "PKG": "PKG", "包图": "PKG",
+                      "PAR": "PAR", "参数图": "PAR", "参数视图": "PAR",
+                      "REQ": "REQ", "需求图": "REQ", "需求视图": "REQ",
+                      "UC": "UC", "用例图": "UC", "用例视图": "UC",
+                      "ACT": "ACT", "活动图": "ACT",
+                      "SEQ": "SEQ", "顺序图": "SEQ", "时序图": "SEQ",
+                      "STM": "STM", "状态图": "STM", "状态机图": "STM", "状态视图": "STM",
+                      "TRACE": "TRACE", "追溯图": "TRACE", "追溯视图": "TRACE"}
+            _declared: list[str] = []
+            for _k, _t in _alias.items():
+                _pat = (r"\b" + re.escape(_k) + r"\b") if _k.isascii() else re.escape(_k)
+                if re.search(_pat, _name_txt, re.I) and _t not in _declared:
+                    _declared.append(_t)
+            if _declared:
+                return _declared
         # 请求动词必须**紧邻视图词**（间隔≤3字）才算真诉求：
         # "生成需求图"/"只看状态机图" ✅；规范文本里零散的"生成可验证需求" ❌
         # （旧版只查全文是否有"生成"，被规范文本里的"生成"推翻排除 → 仍抽 3 视图）
-        _view_word = r"(BDD|IBD|PKG|PAR|REQ|UC|ACT|SEQ|STM|TRACE|需求图|参数图|结构图|状态图|用例图|活动图|顺序图|时序图|追溯图|视图)"
+        # ★★ 2026-11-24：**具体视图词必须排在泛词「视图」之前**，且 `.{0,3}` 改非贪婪。
+        #   实测「生成参数图视图」在旧写法下匹配成 group(1)='视图'（`.{0,3}` 贪婪吃掉
+        #   "参数图"，再命中泛词"视图"）⇒ `_word2type` 查不到 ⇒ 整个声明被丢弃 ⇒
+        #   退化成关键词全量推断。这是"明明说了参数图却生成 8 个视图"的直接原因之一。
+        _view_word = (r"(BDD|IBD|PKG|PAR|REQ|UC|ACT|SEQ|STM|TRACE|"
+                      r"需求图|参数图|结构图|状态图|状态机图|用例图|活动图|顺序图|时序图|"
+                      r"追溯图|块定义图|内部块图|包图|视图)")
         _ask_near = re.search(
-            r"(?:生成|画出|画个|给我|只看|只要|请建|请创建|来一个|输出一个).{0,3}" + _view_word,
+            r"(?:生成|画出|画个|给我|只看|只要|请建|请创建|来一个|输出一个).{0,3}?" + _view_word,
             user_input, re.I)
         if _spec_ctx:
             if not _ask_near:
@@ -566,9 +604,25 @@ class CardMixin:
             #      正是他需要的反馈。丢弃它等于把「缺什么」也一起藏了。
             if isinstance(views, dict):
                 _vs = views.get("views") or {}
+                # ★★ 2026-11-24（conv 1000000014 实证）：**逐视图剔除空壳**。
+                #   原实现只在"全部视图都空"时整体返回 None ⇒ 8 个视图里
+                #   STM(nodes=0)/UC(nodes=0) 两张空图照旧出现在切换区，
+                #   用户看到"视图 8 个"却有两个点进去什么都没有。
+                #   口径：**用户显式指定的保留**（空 = 缺输入的反馈，见下），
+                #   自动推断出来的空壳直接丢掉（它们只是关键词误命中）。
+                if _vs and not user_views:
+                    _keep = {k: v for k, v in _vs.items()
+                             if isinstance(v, dict) and (v.get("nodes") or v.get("edges"))}
+                    if _keep and len(_keep) != len(_vs):
+                        try:
+                            _dropped = sorted(set(_vs) - set(_keep))
+                            views["views"] = _keep
+                            views["empty_dropped"] = _dropped
+                        except Exception:
+                            pass
                 if _vs and not user_views and not any(
                         (isinstance(v, dict) and (v.get("nodes") or v.get("edges")))
-                        for v in _vs.values()):
+                        for v in (views.get("views") or {}).values()):
                     return None
             return views
         except Exception:

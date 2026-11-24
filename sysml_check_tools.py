@@ -152,11 +152,20 @@ def _render(r, scope_note, max_items):
 
     v = r.get("verdict")
     head = _VERDICT_HEAD.get(v, v)
+    # ★★ 2026-11-24（用户报"校验只显示词法、语法，没有语义校验码"）：
+    #   三个计数原本放在**第 3 行**，而前端工具卡折叠态只显示结果的前 60 字
+    #   （`_toolSumm(res, 60)`）⇒ 恰好截在「口径：单产物口径（…）…」处，
+    #   **语义条数从来没进过用户的视野**（run 76 那天实际有 643 条语义错，界面上看不到）。
+    #   修法：把「判据 + 三路计数」压进**首行**，保证 60 字内可见；
+    #   口径/用时/ERROR/WARN 移到第 2 行。字段名与顺序保持原样（下游按词解析不受影响）。
     lines = [
-        f"【SysML v2 校验】判据：{v} —— {head}",
-        f"口径：{scope_note}｜用时 {r.get('elapsed', 0)}s",
+        f"【SysML v2 校验】判据：{v}"
+        f"（词法 {r.get('n_lexical', 0)} / 语法 {r.get('n_syntax', 0)} / "
+        f"语义 {r.get('n_semantic', 0)}）—— {head}",
+        f"口径：{scope_note}｜用时 {r.get('elapsed', 0)}s｜"
         f"计数：词法 {r.get('n_lexical', 0)} / 语法 {r.get('n_syntax', 0)} / "
-        f"语义 {r.get('n_semantic', 0)}｜ERROR 共 {r.get('n_error', 0)} 条，WARN {r.get('n_warn', 0)} 条",
+        f"语义 {r.get('n_semantic', 0)}｜ERROR 共 {r.get('n_error', 0)} 条，"
+        f"WARN {r.get('n_warn', 0)} 条",
     ]
     items = svc.diagnostics(r, max_items=max_items)
     if items:

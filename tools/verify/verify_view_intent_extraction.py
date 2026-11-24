@@ -160,11 +160,27 @@ def group_a(sample):
     spec = spec or ("【视图含义】需求图回答「系统要做到什么」。它不是把整车需求抄一遍。"
                     "读者是设计者。上游输入：整车需求。下游消费者：结构视图、参数视图。"
                     "【本视图回答的核心问题】追溯来源…")
-    chk("A6 真机视图含义规范 ⇒ 不抽视图（修掉 PAR/REQ/TRACE 误命中）",
-        m._extract_view_types(spec) is None, str(m._extract_view_types(spec)))
+    # ★★ 2026-11-24 语义修正（用户："视图数量应该基于 view 数量来定"）：
+    #   旧判据是「规范文本 ⇒ 一个视图都不抽」。但那批真机文本**结尾就有**
+    #   「生成符合 SysML v2 规范的代码。」——它本来就是一份**视图任务书**，
+    #   只是声明方式为 `【视图含义】需求图`（不是"生成需求图"这种紧邻句式）。
+    #   旧实现因此抽不到声明，退化成关键词全量推断，一轮生成 3~8 个视图
+    #   （conv 1000000014 实测 8 个，其中 STM/UC 还是 0 元素空壳）。
+    #   新口径：**任务书声明了几个视图就生成几个**。
+    _a6 = m._extract_view_types(spec)
+    chk("A6 ★任务书【视图含义】声明 ⇒ 只抽该视图（REQ，不再全量推断）",
+        _a6 == ["REQ"], str(_a6))
+    chk("A6b ★该文本若走旧的关键词推断会给出 ≥3 个视图（证明 A6 有牙齿）",
+        len(m._infer_view_types(spec) or []) >= 3,
+        "infer=%s" % (m._infer_view_types(spec),))
     chk("A7 规范里明确「请生成需求图」⇒ 仍抽 REQ（不误伤真诉求）",
         m._extract_view_types(spec + "\n请生成需求图") == ["REQ"],
         str(m._extract_view_types(spec + "\n请生成需求图")))
+    # 多视图声明：声明几个就几个（用户显式要两个，就生成两个）
+    _multi = "【视图】参数图和追溯图\n生成符合 SysML v2 规范的代码。"
+    chk("A8 声明多个视图 ⇒ 按声明数量抽（PAR+TRACE）",
+        m._extract_view_types(_multi) == ["PAR", "TRACE"],
+        str(m._extract_view_types(_multi)))
 
 
 def group_b(sample):

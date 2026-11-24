@@ -426,11 +426,19 @@ class LoopGuard:
         #     · 完成度评估判"未完成" ⇒ 自动续跑 ⇒ 再校验 ⇒ 又被覆盖成停滞…（run 69 转了 5 次）
         #   ⇒ 表面症状是"反复校验没变化"，真因是**守卫自己把成功改写成失败**。
         #   语义澄清：停滞闸要防的是"改不动同一批硬错还反复重跑"，
-        #   pass / report 不是"没变化"，是"已经达标"—— 达标就该闭嘴。
-        #   语义澄清：停滞闸要防的是"改不动同一批硬错还反复重跑"，
-        #   pass / report 不是"没变化"，是"已经达标"—— 达标就该闭嘴。
-        if ("判据：pass" in txt or "判据:pass" in txt or "判据：通过" in txt
-                or "有语义错但无硬错" in txt):
+        #   pass 不是"没变化"，是"已经达标"—— 达标就该闭嘴。
+        #
+        # ★★ 2026-11-24（run 76 实证，用户报"已经通过了为什么还调用 5 次"）：
+        #   **`report` 绝不能与 `pass` 混为一谈** —— 上一版把「有语义错但无硬错」也归进
+        #   pass 分支，而 run 76 那次 report 实际是 **643 条语义错**
+        #   （`attribute '座舱热容' : '热容'` 之类类型引用全都不存在）。
+        #   ⇒ 系统据此宣称"上一版代码 判据：pass、不要再校验"，把后续 5 次校验全部硬拦。
+        #   后果比不拦更糟：模型**看得见 643 个错**却被告知"已通过、不许复验"，
+        #   于是既修不了也验不了 ⇒ 用户看到"通过了却还在反复调用"。
+        #   现在只有**真正的 pass**（词法/语法/语义全 0 或判据明写 pass）才算达标；
+        #   report 走下方签名停滞判定（同批语义错改不动时仍会短路，但**不谎称已通过**）。
+        _is_true_pass = ("判据：pass" in txt or "判据:pass" in txt or "判据：通过" in txt)
+        if _is_true_pass:
             self.validation_sigs.clear()
             # ★ 2026-11-24（run 71 实证）：**重复的 pass 也要短路**。
             #   那轮 8 次校验全部 pass，每次白花 4.5~6s 工具时间 + 一轮 10s 的 LLM 往返
@@ -445,6 +453,11 @@ class LoopGuard:
                 self._last_stall_kind = "pass"
                 return True
             return False
+        # report（有语义错但无硬错）**不重置** pass 计数吗？
+        #   要重置：语义错被改掉之后判据会从 report 变 pass，此时若还记着"上轮 pass"
+        #   就会立刻触发 pass 硬拦。反过来 report 也不累加 pass 计数。
+        #   （pass 计数只在真 pass 时递增，report 既不增也不清 —— 保留历史以便
+        #     "pass → 改坏 → report" 后再次修好时不必重新数两次。）
         sigs = tuple(sorted(_re.findall(
             r"(?:词法|语法|语义|ERROR|判据)\s*[:：]?\s*([A-Za-z0-9]+)", txt)))
         if not sigs:
@@ -486,6 +499,28 @@ class LoopGuard:
                            "并用上一版 pass 作为待办「校验至无硬错」的验收回执置 completed；\n"
                            "  ② 确实换了产物（不同视图/不同包）⇒ 先说明「换了什么」，"
                            "系统才允许新一轮校验；不要靠反复微调同一份代码来碰运气。")}
+
+    @staticmethod
+    def validation_stall_blocked_payload() -> dict:
+        """★★ 2026-11-24：停滞已确认后，对**再次校验**的硬拦截回执。
+
+        run 77 实证：停滞回执只替换了文本、工具照样真跑 —— 模型连发 5 次，
+        每次白花 5s。这里改成**执行前就拦**（`_validation_blocked` 让上层知道
+        "本次未执行"，不要把它当真实校验结果读）。
+
+        与 `validation_pass_blocked_payload` 的差别只在**出口建议**：
+        停滞意味着"有未消除的错但改不动了"，所以出口是「如实标注未消除项」，
+        不是"直接交付已通过的代码"。
+        """
+        return {"ok": True, "_validation_stall": True, "_validation_blocked": True,
+                "result": ("【校验已判定停滞，本次校验未执行】同一批错误连续多次校验的"
+                           "计数签名完全相同（条数不降）⇒ 系统不再执行新的 sysml_v2_validate。\n"
+                           "现在请：\n"
+                           "  ① **不要再调用校验**（调用会被直接拦下，不产生任何新信息）；\n"
+                           "  ② 若能看见具体错因（如某类类型引用不存在），**只做一次针对性修改**，"
+                           "改完在正文里说明改了哪一处，不要再靠反复校验试探；\n"
+                           "  ③ 收尾时**如实列出仍未消除的语义错条目数与类型**，"
+                           "不要声称「已全部修复/已通过校验」。")}
 
     @staticmethod
     def validation_pass_repeat_payload() -> dict:

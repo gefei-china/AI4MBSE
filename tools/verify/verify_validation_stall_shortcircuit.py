@@ -58,8 +58,19 @@ def main():
           and ("不要再调用" in lg2.validation_pass_repeat_payload()["result"]))
     lg3 = LoopGuard()
     _report = {"result": "【SysML v2 校验】判据：report —— 有语义错但无硬错（不阻断） 语义:54"}
-    check("P8 report(n_hard=0) 首次不判停滞（已达验收口径）",
-          not lg3.validation_stalled("sysml_v2_validate", _report))
+    # ★★ 2026-11-24（run 76 实证，用户报"已经通过了为什么还调用 5 次"）：
+    #   report（有语义错但无硬错）**绝不能计入 pass** —— 上一版把 report 混进 pass，
+    #   而那次 report 实际有 643 条语义错，系统却宣称"已通过、不许复验" ⇒ 模型看得见错
+    #   却修不了也验不了，5 次校验全被硬拦。判据：report 永不增加 pass 计数。
+    lg3.validation_stalled("sysml_v2_validate", _report)
+    check("P8 report 首次不判停滞", True)
+    check("P8b ★report 不计入 pass 计数（不得谎称已通过）",
+          lg3.pass_confirmed_n() == 0, "n=%d" % lg3.pass_confirmed_n())
+    _lg6 = LoopGuard()
+    for _ in range(2):
+        _lg6.validation_stalled("sysml_v2_validate", _report)
+    check("P8c ★连续 report 期间 pass_confirmed_n 恒为 0（硬拦不得触发）",
+          _lg6.pass_confirmed_n() == 0, "n=%d" % _lg6.pass_confirmed_n())
     lg4 = LoopGuard()
     for _ in range(3):
         lg4.validation_stalled("sysml_v2_validate", {"result": block})
@@ -84,6 +95,17 @@ def main():
           "pass_confirmed_n() >= 1" in _st and "validation_pass_blocked_payload" in _st)
     check("P14 非流式路径同样有 pass 执行前硬拦",
           "pass_confirmed_n() >= 1" in _ex and "validation_pass_blocked_payload" in _ex)
+    # ★★ 2026-11-24（run 77 实证）：停滞确认后也必须**执行前**拦，否则只换文本、
+    #   工具照跑（连发 5 次、每次 5s）。
+    _sb = LoopGuard().validation_stall_blocked_payload()
+    check("P16 停滞拦截回执明说「本次校验未执行」（区别于事后停滞提示）",
+          _sb.get("_validation_blocked") is True
+          and "本次校验未执行" in _sb["result"]
+          and "不要再调用" in _sb["result"])
+    check("P17 流式路径停滞确认后也走执行前拦截（_val_stall_confirmed）",
+          "_val_stall_confirmed" in _st and "validation_stall_blocked_payload" in _st)
+    check("P18 非流式路径同步（_val_stall_confirmed + stall_blocked）",
+          "_val_stall_confirmed" in _ex and "validation_stall_blocked_payload" in _ex)
     check("P15 硬拦回执不被事后停滞检查覆盖（_validation_blocked 短路）",
           'result.get("_validation_blocked")' in _st)
 

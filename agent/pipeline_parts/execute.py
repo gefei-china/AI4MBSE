@@ -805,17 +805,22 @@ class ExecuteMixin:
                         # 为什么这条是省钱闸不是提速闸：模型陷入循环时最典型的表现就是
                         # 同参数反复调同一工具，每次都真执行一遍。
                         _dup = _guard.probe_dup(tname, targs)
-                        # ★ 2026-11-24（与 stream.py 同源）：pass 已确认 ⇒ **执行前硬拦**。
-                        #   提示无效（模型会改写代码再验一次），必须真拦才兑现"不再重复校验"。
-                        if (str(tname) == "sysml_v2_validate"
-                                and _guard.pass_confirmed_n() >= 1):
-                            _guard.validation_stalls += 1
-                            _pay = _guard.validation_pass_blocked_payload()
-                            tool_results.append({
-                                "tool_call_id": tc.get("id", ""),
-                                "role": "tool", "name": tname,
-                                "content": json.dumps(_pay, ensure_ascii=False)})
-                            continue
+                        # ★ 2026-11-24（与 stream.py 同源）：pass 已确认 / 停滞已确认 ⇒
+                        #   **执行前硬拦**。提示无效（模型会改写代码再验一次），必须真拦
+                        #   才兑现"不再重复校验"；run 77 实测只发提示时连跑 5 次校验。
+                        if str(tname) == "sysml_v2_validate":
+                            _blk = None
+                            if _guard.pass_confirmed_n() >= 1:
+                                _blk = _guard.validation_pass_blocked_payload()
+                            elif getattr(self, "_val_stall_confirmed", False):
+                                _blk = _guard.validation_stall_blocked_payload()
+                            if _blk is not None:
+                                _guard.validation_stalls += 1
+                                tool_results.append({
+                                    "tool_call_id": tc.get("id", ""),
+                                    "role": "tool", "name": tname,
+                                    "content": json.dumps(_blk, ensure_ascii=False)})
+                                continue
                         if _dup:
                             _guard.dup_short_circuits += 1
                             # ★ 2026-11-21（与 stream.py 同源，两条 ReAct 路径必须同步）：
@@ -828,6 +833,7 @@ class ExecuteMixin:
                             if (_is_validation_block(tname, _dup_prev)
                                     and _guard.validation_stalled(tname, {"result": _dup_prev})):
                                 _guard.validation_stalls += 1
+                                self._val_stall_confirmed = True   # ★ 后续校验一律执行前拦下
                                 _pay = _guard.validation_stall_payload()
                             else:
                                 # ★ 2026-10-28：回喂体统一由 LoopGuard 生成（与 stream.py 同源）
@@ -845,9 +851,12 @@ class ExecuteMixin:
                         try:
                             if _guard.validation_stalled(tname, result):
                                 _guard.validation_stalls += 1
+                                _kind = getattr(_guard, "_last_stall_kind", "")
                                 result = (_guard.validation_pass_repeat_payload()
-                                          if getattr(_guard, "_last_stall_kind", "") == "pass"
+                                          if _kind == "pass"
                                           else _guard.validation_stall_payload())
+                                if _kind != "pass":
+                                    self._val_stall_confirmed = True   # ★ 同上
                         except Exception:
                             pass
                         # ★ harness 持续工作：计入全程工具史（完成度评估器的输入）
