@@ -111,7 +111,7 @@ def _plugin_of(conn, table, row_id):
 def _tool_readiness(config_raw):
     """工具配置就绪度。与注入侧同一个判据（`agent/tool_readiness.readiness`）。"""
     try:
-        from agent.tool_readiness import readiness
+        from core.domain.tool_readiness import readiness
         return readiness(json.loads(config_raw or "{}") if isinstance(config_raw, str) else (config_raw or {}))
     except Exception:            # noqa: BLE001
         return True, ""
@@ -126,7 +126,7 @@ def _builtin_names():
     反过来 `validate` 行被停用，仍被注入）。抄一份名单必然漂移 ⇒ 直接引用。
     """
     try:
-        from agent.pipeline_parts.tools import BUILTIN_DESC
+        from services.builtin_tool_registry import BUILTIN_DESC
         return set(BUILTIN_DESC.keys())
     except Exception:            # noqa: BLE001
         return set()

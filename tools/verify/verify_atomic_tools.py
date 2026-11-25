@@ -13,7 +13,7 @@
 ## 接线必须同时满足四处（漏一处就"看着像成功、实际调不到"）
 
   ① `BUILTINS`（workflows/tools.py）—— 编排侧执行分发
-  ② `BUILTIN_DESC`（agent/pipeline_parts/tools.py）—— 运行时注入的唯一事实源
+  ② `BUILTIN_DESC`（services/builtin_tool_registry.py）—— 运行时注入的唯一事实源
   ③ `_do_execute` 分发（**两处**：workflows + agent/pipeline_parts）—— 两套独立实现
   ④ `__all__`（agent/pipeline_parts/common.py）—— 下划线名字必须显式导出
 
@@ -47,7 +47,8 @@ def read(p):
 
 # ── A. 四处接线（静态） ──
 wft = read("workflows/tools.py")
-apt = read("agent/pipeline_parts/tools.py")
+apt = read("services/builtin_tool_registry.py")
+tp = read("agent/pipeline_parts/tools.py")
 cmn = read("agent/pipeline_parts/common.py")
 
 rec("A1 BUILTINS 已登记（编排侧）",
@@ -64,7 +65,7 @@ rec("A4 __all__ 显式导出下划线名字（否则 import * 跳过）",
     "_CODE_TOOL_NAMES" in _all_block and "_DOC_TOOL_NAMES" in _all_block,
     "block_len=%d" % len(_all_block))
 rec("A5 Agent 侧有执行分发（模型真正走的那条）",
-    "exec_code_tool(name" in apt and "exec_doc_tool(name" in apt)
+    "exec_code_tool(name" in tp and "exec_doc_tool(name" in tp)
 rec("A6 编排侧有执行分发",
     "exec_code_tool(name" in wft and "exec_doc_tool(name" in wft)
 

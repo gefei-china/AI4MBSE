@@ -563,7 +563,7 @@ def _derive_capability_effect(name: str, script: str, schema: dict) -> tuple:
     se, risk, rule = "read", "low", "default_read"
     # ① schema 契约（与 MCP 同一判据：有 approvalId 参数 ⇒ 平台要求审批 ⇒ 写）
     try:
-        from agent.tool_side_effect import derive as _d
+        from core.domain.tool_side_effect import derive as _d
         _d_se, _d_risk, _d_rule = _d({"name": name, "description": "",
                                       "inputSchema": schema or {}})
         if _d_se != "read":

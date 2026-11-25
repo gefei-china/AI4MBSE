@@ -335,7 +335,8 @@ def c_group():
     src = open(os.path.join(_ROOT, "agent", "pipeline_parts", "stream.py"),
                encoding="utf-8").read().replace("\r\n", "\n")
     check("C5 主链路接线：done 前调用后置处理 + progress 事件 + done.data 字段",
-          "from requirement_postprocess import process_for_run" in src
+          ("from services.requirement_postprocess import process_for_run" in src
+           or "from requirement_postprocess import process_for_run" in src)
           and "（需求沉淀）" in src
           and '"requirement_postprocess"' in src, "接线缺失")
 
