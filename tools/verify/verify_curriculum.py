@@ -212,7 +212,7 @@ check("B3 两处键集合一致", set(_dflt) == set(_sch),
 check("B4 组内 6 键（1 开关 + 4 口径 + 1 上限）", len(_dflt) == 6, sorted(_dflt))
 check("B4b enabled 是 bool 型（as_bool 口径）", _sch.get("enabled", {}).get("type") == "bool")
 # B5 引擎零写语句（静态：代码区无写 SQL 关键词）
-_eng_src = _read(os.path.join("core", "curriculum.py"))
+_eng_src = _read(os.path.join("services", "curriculum.py"))
 _code = re.sub(r'""".*?"""', "", _eng_src, flags=re.S)      # 去 docstring 防误伤
 check("B5a 引擎无写语句（INSERT/UPDATE/DELETE/CREATE/DROP/ALTER/REPLACE）",
       not re.search(r"\b(INSERT|UPDATE|DELETE|CREATE|DROP|ALTER|REPLACE)\b", _code))
@@ -614,7 +614,7 @@ _forbidden = ("INSERT INTO agent_tasks", "INSERT INTO job_jobs",
               "task_queue", "job_queue", "jq.submit",
               "hil_confirmations", "HILService", "hil_service")
 _hits = []
-for _rel in ("core/curriculum.py", "repositories/curriculum_repo.py",
+for _rel in ("services/curriculum.py", "repositories/curriculum_repo.py",
              "routers/curriculum.py"):
     _s = _read(_rel)
     _s = re.sub(r'""".*?"""', "", _s, flags=re.S)          # 剥 docstring（文案可谈表名）

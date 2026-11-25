@@ -1,0 +1,644 @@
+# -*- coding: utf-8 -*-
+"""P0-C 第二步（2026-10-04）：把**长任务业务端点**接到作业队列。
+
+## 为什么需要这一步
+`core/job_queue.py` 提供了"提交即返回 + 进度可查 + 租约回收 + 有上限重试"的队列能力，
+但截至上一轮**全仓没有任何业务端点使用它**（已grep 复核：`job_queue` 只出现在
+schema / 自身 / 门禁脚本里）。也就是说：能力齐了，**最后一公里没通**——
+工程入库实测 13.4 分钟、SysML 批量入库同理，仍旧同步占着 HTTP 连接，
+请求断开即前功尽弃（详见 core/job_queue.py 顶部的问题陈述）。
+
+## 接哪些端点（按实测耗时排序，不按代码顺序）
+| kind | 业务 | 实测/预估耗时 | 原端点 |
+|---|---|---|---|
+| `doc_ingest` | 文档入库（解析→分块→向量化→落库→上传即抽取） | 三份规范 ≈ 13.4 min | POST /api/documents/upload |
+| `project_ingest` | 工程入库（逐版本候选化→融合闸→落图） | 分钟级 | POST /api/knowledge/project-ingest/commit |
+| `v2g_extract` | 向量转图谱抽取（LLM，受本体 schema 约束） | 十秒~分钟级 | POST /api/knowledge/v2g/extract |
+| `doc_reindex` | 重索引（全量重新向量化） | 与chunk 数成正比 | POST /api/documents/{id}/reindex |
+| `doc_retry` | 失败文档重试（整条管道重跑） | 同 doc_ingest | POST /api/documents/{id}/retry |
+| `knowledge_reconcile` | 写后调和（规则预处理 + 冲突检测） | 万级实体分钟级 | POST /api/knowledge/reconcile |
+
+**未接的**：编排（/chat 走 orchestrator，已有独立的 checkpoint + resume 通道，
+语义是"断点续跑"而非"重跑一遍"，套队列会与 resume 幂等打架）；
+图谱批量实例化（graph/bulk，实测亚秒级，异步化反而增加往返）。
+
+## 三条硬性设计约束（都是踩过坑才定下来的，改动前先读）
+
+### ① 长作业**必须续租**，否则会被自己的 worker 回收并双跑
+`job_queue.pick_next` 会把「running 且租约过期」的作业重新捞回来（这是崩溃恢复的正确设计）。
+入库实测 13.4 分钟，而默认租约 300 s ⇒ 不续租的话，**单 worker 也会把自己的作业重领一遍**：
+候选表被写两次、embedding 白烧一次、audit 出现两条重复记录。
+⇒ 长 handler 一律用 `LeaseKeeper` 起后台心跳线程（连接独立，不与业务连接抢事务）。
+
+### ② 幂等键必须锚定「**当次在途**作业」，不能锚定「历史上做过」
+这是本仓反复踩过的同一型错误（见 MEMORY「兜底判据必须锚定当次操作」）：
+若`submit()` 的去重判据是"这个 doc_id 提交过"，那么用户**第二次点「重试」会被永久吞掉**
+（返回的是上一次的终态 job，看起来"点了没反应"）—— 功能被焊死。
+⇒ 业务端点一律用 `job_queue.submit(..., reuse_terminal=False)`：
+**只对在途（queued/running）去重，终态一律新建**。
+这既挡住"手抖点两下"，又不挡"我要重跑一次"。
+
+### ③ handler 不得复用 worker 的连接
+`job_queue._run_one` 把连接用于回报终态；handler 若在同一连接上跑 13 分钟事务，
+worker 的心跳/进度上报会被拖到事务提交后才落库 ⇒ 进度页看起来"卡住不动"。
+⇒ 每个 handler 自开连接、自行commit/close（与 core/orch_supervisor 同一范式）。
+
+## 进度语义（与 job_queue 的既有声明一致）
+progress/stage 仅供人看；**业务判据只取 status**（终态/非终态）。
+入库过程中能给出的真实阶段只有 parse→chunk→embed→insert 四段的边界，
+管道内部不再细分（要细分就得改ingest_document 的签名，收益不抵风险）。
+"""
+import json
+import os
+import threading
+import time
+import traceback
+
+__all__ = ["register_all", "KINDS", "LeaseKeeper", "handler_doc_ingest",
+           "handler_doc_retry", "handler_doc_reindex", "handler_project_ingest",
+           "handler_v2g_extract", "handler_knowledge_reconcile",
+           "handler_config_sandbox"]
+
+
+# ══════════════════════════════════════════════════════════════════
+# 租约心跳（约束①）
+# ══════════════════════════════════════════════════════════════════
+class LeaseKeeper:
+    """长作业执行期间的**租约续期**守护（后台 daemon 线程）。
+
+    为什么必须：作业排队时租约由 `pick_next` 写死 `lease_until = now + lease_s`，
+    之后只有调用 `heartbeat()` 才会延长。入库实测 13.4 min> 默认租约 300 s，
+    ⇒ 不续租 ⇒租约过期 ⇒ `pick_next` 把这条running 作业**当成崩溃残留重新捞回**，
+    单worker 也会双跑（重复写候选表 + embedding 白烧 + audit 重复）。
+
+    线程安全：心跳线程**自开连接**，不复用业务连接（避免与长事务互锁）；
+    业务连接此刻可能正持有写锁，让心跳去写会直接database is locked。
+    心跳失败只计数不抛 —— 心跳是"尽力续命"，抢不到锁时业务本身仍在推进，
+    下一轮再续；真正判"作业还活着"的依据仍是 status + 业务进度。
+    """
+
+    def __init__(self, job_id: int, lease_s: int = 900, interval_s: float = 0.0):
+        self.job_id = int(job_id)
+        self.lease_s = int(lease_s or 900)
+        #续租间隔取租约的 1/3：容忍连续两次心跳失败仍不丢租约
+        self.interval_s = float(interval_s or max(5.0, self.lease_s / 3.0))
+        self._stop = threading.Event()
+        self._thread = None
+        self.beats = 0
+        self.errors = 0
+
+    def _loop(self) -> None:
+        from core import job_queue as jq
+        while not self._stop.wait(self.interval_s):
+            conn = None
+            try:
+                conn = jq._conn()
+                if jq.heartbeat(conn, self.job_id, lease_s=self.lease_s):
+                    self.beats += 1
+                else:
+                    self.errors += 1
+            except Exception:
+                self.errors += 1
+            finally:
+                try:
+                    if conn is not None:
+                        conn.close()
+                except Exception:
+                    pass
+
+    def __enter__(self):
+        self._thread = threading.Thread(
+            target=self._loop, daemon=True,
+            name="job-lease-%d" % self.job_id)
+        self._thread.start()
+        return self
+
+    def __exit__(self, *_exc) -> bool:
+        self._stop.set()
+        if self._thread is not None:
+            self._thread.join(timeout=3)
+        return False      # 不吞异常
+
+
+def _own_conn():
+    """handler 自开连接（约束③）。"""
+    from database import get_db
+    return get_db()
+
+
+def _report(job: dict, percent=None, stage: str = "") -> None:
+    """上报进度（用独立短连接，绝不复用业务连接）。"""
+    conn = None
+    try:
+        from core import job_queue as jq
+        conn = jq._conn()
+        jq.progress(conn, int(job["id"]), percent, stage)
+    except Exception:
+        pass
+    finally:
+        try:
+            if conn is not None:
+                conn.close()
+        except Exception:
+            pass
+
+
+def _err(exc: BaseException) -> str:
+    return "%s: %s" % (type(exc).__name__, str(exc)[:300])
+
+
+# ══════════════════════════════════════════════════════════════════
+# handler：文档域
+# ══════════════════════════════════════════════════════════════════
+def handler_doc_ingest(payload: dict, job: dict) -> dict:
+    """文档入库（异步版 upload）：从**源文件副本**跑完整条管道。
+
+    为什么不直接传文件字节：作业 payload 是 JSON 文本，大文件塞进去既撑爆
+    `job_jobs.payload`，也让"提交"这一步本身变慢（违背"提交即返回"）。
+    ⇒ HTTP 侧只做轻量登记（documents行 + 副本落盘，见 knowledge_pipeline.
+    stage_upload_document），worker 再从副本读回 —— 与失败重试
+    （retry_document）**走完全相同的代码路径**，行为天然一致。
+    """
+    from knowledge_pipeline import run_staged_ingest
+    doc_id = int(payload.get("doc_id") or 0)
+    if not doc_id:
+        raise ValueError("缺少 doc_id")
+    conn = _own_conn()
+    try:
+        with LeaseKeeper(int(job["id"]), lease_s=int(payload.get("lease_s") or 900)):
+            _report(job, 5, "解析文档（文本抽取 / OCR）…")
+            res = run_staged_ingest(conn, doc_id, metadata=payload.get("metadata") or None)
+            if res.get("parse_status") == "failed":
+                _report(job, 100, "入库失败：%s" % (res.get("error") or "")[:80])
+                #⚠️ 管道失败**不抛异常**：抛出去会让 worker 按attempt 盲目重试，
+                #   而"解析失败"重试多少次都是同一结果（扫描件/损坏文件），
+                #   白烧 embedding 额度。用 raise 表达"环境性失败才可重试"。
+                res["failed_stage"] = "ingest"
+                return res
+            _report(job, 80, "落库完成，正在抽取候选…")
+            _report(job, 100, "入库完成")
+            return res
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+def handler_doc_retry(payload: dict, job: dict) -> dict:
+    """失败文档重试（从源文件副本重跑整条管道）。"""
+    from knowledge_pipeline import retry_document, search as _kp_search
+    doc_id = int(payload.get("doc_id") or 0)
+    if not doc_id:
+        raise ValueError("缺少 doc_id")
+    conn = _own_conn()
+    try:
+        with LeaseKeeper(int(job["id"]), lease_s=int(payload.get("lease_s") or 900)):
+            _report(job, 10, "重置文档状态并重跑管道…")
+            res = _kp_search.retry_document(conn, doc_id)
+            if res.get("parse_status") == "failed":
+                res["failed_stage"] = "retry"
+                return res
+            # 与同步端点保持一致：抽取开关关闭时回填 extraction='disabled'
+            try:
+                import json as _j
+                _sw = {r["key"]: r["value"] for r in conn.execute(
+                    "SELECT key, value FROM settings").fetchall()}
+                if (_sw.get("file_auto_extract_enabled") or "0") != "1":
+                    _cur = _j.loads(conn.execute(
+                        "SELECT pipeline_detail FROM documents WHERE id=?",
+                        (doc_id,)).fetchone()[0] or "{}")
+                    _cur["extraction"] = "disabled"
+                    conn.execute("UPDATE documents SET pipeline_detail=? WHERE id=?",
+                                 (_j.dumps(_cur, ensure_ascii=False), doc_id))
+                    conn.commit()
+            except Exception:
+                pass
+            _report(job, 100, "重试完成")
+            return res
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+def handler_doc_reindex(payload: dict, job: dict) -> dict:
+    """重索引：按当前 embedder 全量重新向量化（保留 section / bm25_text）。"""
+    from knowledge_pipeline import reindex_document
+    doc_id = int(payload.get("doc_id") or 0)
+    if not doc_id:
+        raise ValueError("缺少 doc_id")
+    conn = _own_conn()
+    try:
+        with LeaseKeeper(int(job["id"]), lease_s=int(payload.get("lease_s") or 900)):
+            _report(job, 10, "重新向量化全部分块…")
+            res = reindex_document(conn, doc_id)
+            if res.get("parse_status") == "failed":
+                res["failed_stage"] = "reindex"
+                return res
+            _report(job, 100, "重索引完成")
+            return res
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+# ══════════════════════════════════════════════════════════════════
+# handler：知识库域
+# ══════════════════════════════════════════════════════════════════
+def handler_project_ingest(payload: dict, job: dict) -> dict:
+    """工程入库（逐版本候选化 → 融合闸 → 自动批准 → 落个人分支图库）。
+
+    失败语义：整体失败（含"工程不存在""没有可入库版本"）抛异常 → worker 按
+    attempt 重试；但 `status='partial'`（部分版本失败）**视为成功**返回 ——
+    部分成果已经落库且project_ingest_logs 有台账，静默重跑会造成重复写入。
+    """
+    from services.knowledge_service import KnowledgeService
+    from database import get_db
+    project_id = str(payload.get("project_id") or "")
+    if not project_id:
+        raise ValueError("缺少 project_id")
+    # 该服务在调用内部频繁 commit（分阶段写库），给它独立连接
+    conn = get_db()
+    try:
+        with LeaseKeeper(int(job["id"]), lease_s=int(payload.get("lease_s") or 900)):
+            _report(job, 5, "逐版本候选化与融合…")
+            res = KnowledgeService(conn).project_ingest_commit(
+                project_id, actor=payload.get("actor") or "system",
+                target_branch=payload.get("target_branch") or "personal",
+                version_ids=payload.get("version_ids") or None)
+            if not res.get("ok"):
+                #环境性问题（工程不存在 / 无版本）才值得重试
+                if res.get("status") == "failed" and not res.get("versions"):
+                    raise RuntimeError(res.get("error") or "工程入库失败")
+                res.setdefault("degraded", True)
+            _report(job, 100, "工程入库完成（%s）" % (res.get("status") or "?"))
+            return res
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+def handler_v2g_extract(payload: dict, job: dict) -> dict:
+    """向量转图谱抽取（LLM，受本体 schema 约束）。"""
+    from services.knowledge_service import KnowledgeService
+    from database import get_db
+    conn = get_db()
+    try:
+        with LeaseKeeper(int(job["id"]), lease_s=int(payload.get("lease_s") or 900)):
+            _report(job, 10, "命中分块并抽取候选…")
+            res = KnowledgeService(conn).v2g_extract(
+                str(payload.get("query") or ""), payload.get("chunk_ids") or None,
+                int(payload.get("top_k") or 5), payload.get("doc_id") or None,
+                actor=payload.get("actor") or "system")
+            _report(job, 100, "抽取完成：候选 %d"
+                    % ((res.get("node_count") or 0) + (res.get("edge_count") or 0)))
+            return res
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+def handler_knowledge_reconcile(payload: dict, job: dict) -> dict:
+    """写后调和（规则预处理 + 冲突检测）。幂等作业，可重复执行。"""
+    from services.knowledge_service import KnowledgeService
+    from database import get_db
+    conn = get_db()
+    try:
+        with LeaseKeeper(int(job["id"]), lease_s=int(payload.get("lease_s") or 900)):
+            _report(job, 20, "规则预处理（Blocking 化消歧）…")
+            res = KnowledgeService(conn).knowledge_reconcile(
+                actor=payload.get("actor") or "system")
+            _report(job, 100, "调和完成")
+            return res
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+# ══════════════════════════════════════════════════════════════════
+# handler：自进化域（P1-4）
+# ══════════════════════════════════════════════════════════════════
+def handler_config_sandbox(payload: dict, job: dict) -> dict:
+    """P1-4 沙箱 A/B 评估：影子配置 vs 活配置各跑 CI 门禁集，差分判回归。
+
+    为什么走队列：full 口径 = 整套 CI 门禁跑两遍，分钟级（远超 HTTP
+    合理等待）。三条既有约束全部遵守：自开连接（③）、LeaseKeeper 续租
+    （①——full 跑 >默认租约 300s，不续租会被自己的 worker 当崩溃残留
+    重领 ⇒ 双臂双跑 + 重复写 run 行）、进度经 _report 上报。
+    评估期间零生产副作用由 core/sandbox 保证（每臂独立临时库/配置副本）。
+    """
+    run_id = int(payload.get("run_id") or 0)
+    if not run_id:
+        raise ValueError("缺少 run_id")
+    conn = _own_conn()
+    try:
+        with LeaseKeeper(int(job["id"]), lease_s=int(payload.get("lease_s") or 1800)):
+            _report(job, 1, "沙箱评估启动（run#%s）…" % run_id)
+            from core import sandbox as _sandbox
+            run = _sandbox.evaluate(conn, run_id, job=job,
+                                    progress=lambda p, s: _report(job, p, s))
+            return {"run_id": run_id, "status": run.get("status"),
+                    "verdict": run.get("verdict", "")}
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+# ══════════════════════════════════════════════════════════════════
+# handler：评测域（2026-10-23 评估批 2 / T1：前端"立即跑批"的通道）
+# ══════════════════════════════════════════════════════════════════
+def _run_eval_script(script, args, job, timeout_s, lease_s, label):
+    """评测 CLI 的统一子进程封装。
+
+    为什么子进程而不是 import 调用：评测脚本自己 chdir/插 sys.path/开
+    只读连接（约束 ③ handler 不复用 worker 连接的极端版），且 eval_nightly
+    会再起子评测进程 —— 进程隔离最不容易把 worker 拖死。timeout 兜底防
+    僵尸（子进程卡死 → 超时 → 作业判失败可见，而不是永远 running）。
+    """
+    import subprocess
+    import sys as _sys
+    from core.paths import repo_root as _repo_root
+    repo = _repo_root()
+    cmd = [_sys.executable, "-X", "utf8",
+           os.path.join(repo, "tools", "eval", script)] + list(args)
+    with LeaseKeeper(int(job["id"]), lease_s=lease_s):
+        _report(job, 5, "%s：启动 %s…" % (label, script))
+        try:
+            proc = subprocess.run(cmd, cwd=repo, timeout=timeout_s,
+                                  capture_output=True, text=True,
+                                  encoding="utf-8", errors="replace")
+        except subprocess.TimeoutExpired:
+            raise RuntimeError("%s 超时（>%ds）—— 已终止" % (label, timeout_s))
+        tail = ((proc.stdout or "") + "\n" + (proc.stderr or ""))[-1500:].strip()
+        if proc.returncode != 0:
+            raise RuntimeError("%s 失败（exit=%d）：%s"
+                               % (label, proc.returncode, tail[-600:]))
+        _report(job, 100, "%s 完成" % label)
+        return {"exit": 0, "script": script, "tail": tail}
+
+
+def handler_eval_trace(payload: dict, job: dict) -> dict:
+    """Trace 一致性评测（确定性口径，~15s）。结果经 --save 落库，前端立即可见。"""
+    return _run_eval_script(
+        "eval_trace_consistency.py",
+        ["--no-llm", "--save", "--baseline",
+         os.path.join("docs", "评测", "nightly", "latest-trace-report.json"),
+         "--out", os.path.join("tmp", "p21", "eval_trace_consistency.json")],
+        job, timeout_s=300, lease_s=600, label="Trace 一致性评测")
+
+
+def handler_eval_gen(payload: dict, job: dict) -> dict:
+    """生成质量评测 + LLM 忠实度评判（~80s，调 LLM）。结果落库。"""
+    return _run_eval_script(
+        "eval_generation_quality.py",
+        ["--llm-judge", "--save",
+         "--out", os.path.join("tmp", "p21", "eval_generation_quality.json")],
+        job, timeout_s=600, lease_s=900, label="生成质量评测")
+
+
+def handler_eval_rag(payload: dict, job: dict) -> dict:
+    """RAG 检索评测（三域 + 负对照，分钟级）→ save_report 落库。"""
+    out = os.path.join("tmp", "p21", "eval_report_manual.json")
+    r = _run_eval_script(
+        "run_eval.py", ["--tag", "manual", "--control", "--out", out],
+        job, timeout_s=1200, lease_s=1500, label="RAG 检索评测")
+    # 落库（run_eval 本身只出 JSON；save_report 是唯一的 rag 落库口）
+    from core.paths import repo_root as _repo_root
+    repo = _repo_root()
+    import subprocess
+    import sys as _sys
+    proc = subprocess.run(
+        [_sys.executable, "-X", "utf8",
+         os.path.join(repo, "tools", "eval", "save_report.py"), out],
+        cwd=repo, timeout=120, capture_output=True, text=True,
+        encoding="utf-8", errors="replace")
+    if proc.returncode != 0:
+        raise RuntimeError("评测完成但落库失败（exit=%d）：%s"
+                           % (proc.returncode, (proc.stderr or "")[-400:]))
+    r["tail"] += "\n" + (proc.stdout or "")[-300:]
+    return r
+
+
+def handler_build_evalset(payload: dict, job: dict) -> dict:
+    """重建评测集（语料/证据变更后）+ 发布 datasets/（dataset_id 随内容更新）。"""
+    return _run_eval_script(
+        "build_evalset.py", [], job, timeout_s=600, lease_s=900, label="重建评测集")
+
+
+def handler_eval_nightly(payload: dict, job: dict) -> dict:
+    """本地 nightly 全批（5 步 + 3 门禁，4~8 分钟）。
+
+    刻意**不带 --commit**：手动触发与定时跑批的提交语义分离——手动结果
+    进 latest 快照供人 review，要不要提交由人决定（jobs 面板看到绿了
+    再说），避免"网页点一下就往远端推提交"。
+    """
+    return _run_eval_script(
+        "run_nightly_local.py", [], job, timeout_s=1800, lease_s=1800,
+        label="nightly 全批")
+
+
+# ══════════════════════════════════════════════════════════════════
+# handler：自进化三引擎（2026-10-29）
+# ══════════════════════════════════════════════════════════════════
+# ★ 为什么这三个之前不在队列里：代码都写好了，但**没有任何触发点** ⇒
+#   生产库实测：config_proposals 0 行、online_eval_queue 0 行、
+#   skills.source 无一条 'ai_improve' ⇒ 进化闭环"感知层完备、决策/行动层空转"。
+#   典型断链：SkillImprover 的候选条件是"失败次数 ≥ improve_min_fail(3)"，
+#   而生产库里 Requirement_Analysis_Pre-check 失败 17 次、智源平台管理失败 16 次，
+#   **素材一直在，引擎从未被叫醒**。
+#
+# ⚠️ 三条纪律（全守）：
+#   ① **只提议、不自动应用**：本组 handler 一律不写生产配置、不发布技能、不改线上参数。
+#      · config_proposal → 只写 pending 提案队列，等人裁决（P1-4 晋升通道另有 HIL 闸门）；
+#      · skill_improve  → 只产 status='draft_revision' 草稿，等人审核发布；
+#      · online_eval    → 只把候选入队，等人标注。
+#   ② **失败必须可见**：任一引擎报错都进 failures 并在作业结果里带回，
+#      不静默吞（"引擎坏了"长得像"没有问题"是最贵的失败）。
+#   ③ **默认 dry-run 语义**：需要落库的引擎一律显式 apply，且仅写"待人处理"的队列。
+
+
+def handler_skill_improve(payload: dict, job: dict) -> dict:
+    """技能自改进：扫描达到失败阈值的技能 → LLM 修订 → 产出 draft_revision 草稿。
+
+    产出**只是草稿**（status='draft_revision'），人工审核后才发布 —— 沿用
+    既有「人工审核发布」安全策略，自动化不得越过发布闸门。
+
+    ⚠️ 2026-10-29 实测踩到的坑：`SkillImprover.run_all()` 返回的字段是
+      **`{proposed, names, skipped}`**，不是 `{revised, ...}`。
+      初版 handler 按 `revised` 读 ⇒ 恒为 0 ⇒ 明明产出了草稿，作业结果却报 0
+      （"看起来没干活"）。真跑即复现：单独调 `improve_skill` 成功产出 v11，
+      而 handler 回报 `revised: 0`。
+      ⇒ 读第三方返回值**必须先核对字段名**，不能凭印象写。
+    """
+    limit = int(payload.get("limit") or 5)
+    conn = _own_conn()
+    try:
+        with LeaseKeeper(int(job["id"]), lease_s=600):
+            _report(job, 1, "扫描技能失败样本…")
+            from services.skill_improve import SkillImprover
+            cands = SkillImprover.candidates(conn)
+            _report(job, 40, "候选 %d 个，开始 LLM 修订…" % len(cands))
+            res = SkillImprover.run_all(conn, limit=limit)
+            # run_all 内部用 ProposalRepo 之外的自有 INSERT，仍需显式提交
+            try:
+                conn.commit()
+            except Exception:
+                pass
+            names = list(res.get("names") or [])
+            return {"candidates": len(cands),
+                    "proposed": int(res.get("proposed") or 0),
+                    "names": names,
+                    "skipped": bool(res.get("skipped"))}
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+def handler_config_proposal(payload: dict, job: dict) -> dict:
+    """配置提案生成：首坏步模式 → 规则命中 → 落 pending 提案队列。
+
+    ★ 绝不写生产配置 —— 提案只进 `config_proposals`（status='pending'），
+    由人在设置页裁决；真要应用须走 P1-4 的「沙箱 A/B + HIL 批准」通道。
+
+    ⚠️ 2026-10-29 实测踩到的坑：**必须显式 commit**。
+      `core/config_proposal.generate()` 内部经 `ProposalRepo.insert_proposal`
+      走 `BaseRepo.execute` —— 该层**只执行不提交**（事务边界由调用方定）。
+      Web 请求路径有 `db_session` 依赖兜底提交，所以 API 上一直"看起来正常"；
+      但 handler 走 `_own_conn()` 自己开连接、finally 里 close() ⇒
+      **未提交事务直接回滚** ⇒ 日志/返回值都说 `created: 5`，
+      库里却是 0 行（"看起来入队成功、实际一条没留"）。
+      首次真跑即复现：返回 created=5、`SELECT COUNT(*)` 恒为 0。
+    """
+    conn = _own_conn()
+    try:
+        with LeaseKeeper(int(job["id"]), lease_s=600):
+            _report(job, 1, "聚合首坏步模式…")
+            from core import config_proposal as _cp
+            res = _cp.generate(conn)
+            # ★ 显式提交（见 docstring）。generate 内部不 commit 是既有设计，
+            #   不能改它（Web 路径依赖请求级事务），故在 handler 侧收口。
+            try:
+                conn.commit()
+            except Exception:
+                pass
+            _report(job, 90, "提案入队 %d 条（指纹去重跳过 %d）"
+                    % (int(res.get("created") or 0), int(res.get("skipped") or 0)))
+            return {"created": int(res.get("created") or 0),
+                    "skipped": int(res.get("skipped") or 0),
+                    "llm_drafted": int(res.get("llm_drafted") or 0),
+                    "patterns_summary": res.get("patterns_summary") or {}}
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+def handler_online_eval_sample(payload: dict, job: dict) -> dict:
+    """在线评测采样：负反馈优先 > 低置信优先 > 随机 5% → 入队待标注。
+
+    ⚠️ 采样器默认 dry-run（不写库），本 handler **显式 apply=True** ——
+    只写 `online_eval_queue`（待人工标注队列），不动任何模型/配置。
+    """
+    conn = _own_conn()
+    try:
+        with LeaseKeeper(int(job["id"]), lease_s=600):
+            _report(job, 1, "采样候选（负反馈优先）…")
+            from core import online_eval as _oe
+            res = _oe.sample_candidates(conn, apply=True)
+            # ★ 2026-11-06 P1：作业执行完立刻回填反馈状态（异步窗口的补丁）。
+            #   不这么做，用户会在「我的反馈」看到「待采样」而数据其实已入队。
+            try:
+                from services.evolution_tick import reconcile_feedback_states as _rec
+                rec = _rec(conn, apply=True)
+            except Exception as _e:
+                rec = {"error": str(_e)[:120]}
+            fails = list(res.get("failures") or [])
+            if fails:
+                # 采样源级失败必须可见：静默跳过会让"采样器坏了"长得像"没有负反馈"
+                _report(job, 90, "⚠ 采样源失败 %d 项" % len(fails))
+            return {"inserted": int(res.get("inserted") or 0),
+                    "candidates": len(res.get("candidates") or []),
+                    "plan": res.get("plan") or {},
+                    "feedback_reconciled": rec,
+                    "failures": fails}
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+# ══════════════════════════════════════════════════════════════════
+# 注册表
+# ══════════════════════════════════════════════════════════════════
+KINDS = {
+    "doc_ingest": handler_doc_ingest,
+    "doc_retry": handler_doc_retry,
+    "doc_reindex": handler_doc_reindex,
+    "project_ingest": handler_project_ingest,
+    "v2g_extract": handler_v2g_extract,
+    "knowledge_reconcile": handler_knowledge_reconcile,
+    "config_sandbox": handler_config_sandbox,
+    "eval_trace": handler_eval_trace,
+    "eval_gen": handler_eval_gen,
+    "eval_rag": handler_eval_rag,
+    "build_evalset": handler_build_evalset,
+    "eval_nightly": handler_eval_nightly,
+    # 自进化三引擎（2026-10-29）：此前无触发点 ⇒ 提案/采样队列常年 0 行
+    "skill_improve": handler_skill_improve,
+    "config_proposal": handler_config_proposal,
+    "online_eval_sample": handler_online_eval_sample,
+}
+
+
+def register_all() -> list:
+    """把全部业务 handler 注册进队列。返回 kind 列表（便于门禁断言）。"""
+    from core import job_queue as jq
+    for kind, fn in KINDS.items():
+        jq.register_handler(kind, fn)
+    return sorted(KINDS)
+
+
+def describe() -> dict:
+    """给 /api/jobs/kinds 用：可提交的业务作业类型 + 必填 payload 字段 + 分组。
+
+    ★ 2026-10-29：新增 `group` 字段。动机：前端此前**硬编码**了一份 kind 列表
+      （static/js/mods/48-eval.js 的 _EVAL_JOBS），后端新增 kind 时前端看不见 ——
+      这正是"同一枚举写两份必然漂移"。现由前端按 group 动态渲染，
+      后端注册即前端可见。
+      group 取值：ops（数据运维域）| eval（评测域）| evolution（自进化域）。
+    """
+    return {
+        "doc_ingest": {"label": "文档入库", "required": ["doc_id"], "group": "ops"},
+        "doc_retry": {"label": "失败文档重试", "required": ["doc_id"], "group": "ops"},
+        "doc_reindex": {"label": "文档重索引", "required": ["doc_id"], "group": "ops"},
+        "project_ingest": {"label": "工程入库", "required": ["project_id"], "group": "ops"},
+        "v2g_extract": {"label": "向量转图谱抽取", "required": ["query"], "group": "ops"},
+        "knowledge_reconcile": {"label": "写后调和", "required": [], "group": "ops"},
+        "config_sandbox": {"label": "配置沙箱 A/B 评估", "required": ["run_id"], "group": "evolution"},
+        # 评测域（T1：前端"立即跑批"；payload 无必填项）
+        "eval_trace": {"label": "Trace 一致性评测（~15s）", "required": [], "group": "eval"},
+        "eval_gen": {"label": "生成质量评测 + LLM 忠实度（~80s）", "required": [], "group": "eval"},
+        "eval_rag": {"label": "RAG 检索评测（三域+负对照，分钟级）", "required": [], "group": "eval"},
+        "build_evalset": {"label": "重建评测集（语料变更后，~40s）", "required": [], "group": "eval"},
+        "eval_nightly": {"label": "nightly 全批（5 步 + 3 门禁，4~8 分钟）", "required": [], "group": "eval"},
+        # 自进化三引擎（2026-10-29）
+        "skill_improve": {"label": "技能自改进（失败样本 → LLM 修订草稿）", "required": [], "group": "evolution"},
+        "config_proposal": {"label": "配置提案生成（首坏步模式 → 提案队列）", "required": [], "group": "evolution"},
+        "online_eval_sample": {"label": "在线评测采样（负反馈优先 → 待标注队列）", "required": [], "group": "evolution"},
+    }

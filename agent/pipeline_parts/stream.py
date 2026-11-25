@@ -329,7 +329,7 @@ def _code_stages() -> set:
     """产码阶段集合。真实来源 `agents.is_code_stage`（`core.agent_catalog`，带缓存）；
     读不到回落 `_CODE_STAGE_INTENTS` 兜底常量。"""
     try:
-        from core.agent_catalog import code_stages
+        from services.agent_catalog import code_stages
         got = code_stages()
         if got:
             return set(got)

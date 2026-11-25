@@ -1691,7 +1691,7 @@ class IntentRouter:
             #   漏改则该阶段永远无法被路由命中（且无任何报错）。
             _stage_names = None
             try:
-                from core.agent_catalog import stage_intents as _si
+                from services.agent_catalog import stage_intents as _si
                 _stage_names = _si()
             except Exception:
                 _stage_names = None

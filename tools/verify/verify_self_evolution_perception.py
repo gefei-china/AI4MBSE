@@ -87,7 +87,7 @@ check("M2 去掉 created_by 后 G3 越权判据必须判红",
       "SELECT * FROM feedback WHERE id=? AND created_by=?" not in mut2)
 
 # ── G4 触发器红线（AST，不受 docstring 干扰）────────────────────
-tick = src("core/evolution_tick.py")
+tick = src("services/evolution_tick.py")
 called = calls_of(tick)
 FORBIDDEN = {"execute_confirmation", "apply_config_change", "save_override", "decide"}
 check("G4 触发器不调用任何自动生效函数",
@@ -161,8 +161,8 @@ check("G8 INSERT 动态判列（老库零漂移）",
       'PRAGMA table_info(config_proposals)' in pr and "_extra" in pr)
 
 # ── G9 异步状态回填接线（2026-11-06 端到端实跑抓到的缺陷）──
-tick2 = src("core/evolution_tick.py")
-jh = src("core/job_handlers.py")
+tick2 = src("services/evolution_tick.py")
+jh = src("services/job_handlers.py")
 check("G9 reconcile_feedback_states 已定义且幂等",
       "def reconcile_feedback_states(" in tick2 and "forward-only" in tick2)
 check("G9 采样作业执行后调用回填（异步窗口补丁）",
@@ -245,7 +245,7 @@ check("M5 去掉精确偏移后 G11 判据必须判红", not _g11_ok(_mut5))
 #        用户看到「已采样」但它自己的采样还没发生，时间线出现「消费早于创建」。
 #   根因：reconcile 只按 message_id 匹配、按 id 取第一条，不校验时间先后。
 #   修法：逐条反馈只认「它创建之后」的第一个队列项；timeline 优先按 link_id 精确取。
-tick3 = src("core/evolution_tick.py")
+tick3 = src("services/evolution_tick.py")
 repo3 = src("repositories/conversation_repo.py")
 
 check("G12 reconcile 按 created_at 限定队列项（不挂历史采样）",

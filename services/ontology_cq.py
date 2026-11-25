@@ -281,7 +281,7 @@ def run_cqs(conn, source: str = "", record: bool = True, qid: int | None = None)
             # /mbse/$/ping ⇒ 404 ⇒ 恒 unknown（真机 2026-11-22 抓到）。
             _base, _ds = _fuseki_rt.endpoint_parts(_fuseki_rt.resolve_endpoint())
             if _fuseki_rt.ping(_base):
-                from core.fuseki_freshness import check_freshness
+                from services.fuseki_freshness import check_freshness
                 sp_fresh = check_freshness(conn)
             else:
                 sp_fresh = {"status": "unknown", "reason": "Fuseki 不可达"}

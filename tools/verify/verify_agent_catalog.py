@@ -1,4 +1,4 @@
-"""自检：Agent 流水线角色目录（`core/agent_catalog.py`）。
+"""自检：Agent 流水线角色目录（`services/agent_catalog.py`）。
 
 口径：裸跑；只读生产库（不写），另用内存库夹具验兜底与缓存隔离。
 
@@ -239,7 +239,7 @@ print("=" * 70)
 print("[5] 变异自证（改坏实现 ⇒ 判据必须翻红）")
 print("=" * 70)
 
-_SRC = read_src("core/agent_catalog.py")
+_SRC = read_src("services/agent_catalog.py")
 
 
 def _mutate(old: str, new: str):

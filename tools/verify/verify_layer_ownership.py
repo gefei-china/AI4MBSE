@@ -48,6 +48,7 @@ P1 把 **75 个顶层模块**（原 1.6 MB，散在仓库根）搬进了 4 个�
 from __future__ import annotations
 
 import ast
+import importlib
 import json
 import os
 import re
@@ -312,10 +313,15 @@ def main():
     bad_b = []
     for mod, info in mods.items():
         want = info["path"][:-3].replace("/", ".")
+        # ⚠️ 旧路径**不一定在根目录**：P1 收敛批 #3 的 9 个模块原本在 `core/`，
+        #    垫片也留在 `core/X.py` ⇒ 旧模块名是 `core.X` 而不是 `X`。
+        #    必须从归属表的 legacy_path 推导，不能拿模块名硬猜。
+        old_mod = (info.get("legacy_path") or (mod + ".py"))[:-3].replace("/", ".")
         try:
-            m = __import__(mod)
+            # `__import__("core.X")` 只返回顶层 `core` 包 ⇒ 必须用 importlib
+            m = importlib.import_module(old_mod)
         except Exception as e:                                # noqa: BLE001
-            bad_b.append("%s import 失败 %s" % (mod, type(e).__name__))
+            bad_b.append("%s import 失败 %s" % (old_mod, type(e).__name__))
             continue
         if m.__name__ != want:
             bad_b.append("%s 旧路径拿到的是 %s，不是 %s" % (mod, m.__name__, want))
@@ -330,16 +336,22 @@ def main():
           " | ".join(bad_b[:5]))
 
     # C 依赖方向：分两段
-    #   C1 = **P1 归位模块**（75 个）必须零越界（除登记豁免）—— 新代码的硬约束
-    #   C2 = **全仓**（含 core/ 与 services/ 的存量）只卡增量 —— 存量 87 处是既有债，
-    #        P1 不改行为，故记基线不修；要降必须真改代码后下调基线。
+    #   C1 = **P1 归位模块**（归属表 path 指向的模块）必须零越界 —— 新代码硬约束
+    #   C2 = **全仓**（含 core/ 与 services/ 的存量）只卡增量 —— 基线现为 45，
+    #        是按批归位/下沉后下调的；要降必须真改代码后同步下调基线。
     ex = man.get("exemptions", {})
     moved_paths = {i["path"] for i in mods.values()}
     sub = {k: {p: s for p, s in v.items() if p in moved_paths} for k, v in files_by_layer.items()}
     bad_c1 = check_direction(sub, ex)
-    check("[C1] 75 个归位模块的层方向零越界（豁免 %d 条，均为存量且带 reason）" % len(ex),
-          not bad_c1, " | ".join(bad_c1[:6]))
-    bad_c2 = check_direction(files_by_layer, ex)
+    check("[C1] %d 个归位模块的层方向零越界（豁免 %d 条，均为存量且带 reason）"
+          % (len(moved_paths), len(ex)), not bad_c1, " | ".join(bad_c1[:6]))
+    # ⚠️ 垫片位于分层目录内时（如 `core/action_binding_runtime.py` 指向
+    #    `services.action_binding_runtime`），它的 `from services import X` 是
+    #    **兼容机制本身**，不能被当成 core→services 越界。否则 C2 会虚报 16 处。
+    shim_paths = {i["legacy_path"] for i in mods.values() if i.get("shim")}
+    no_shim_files = {k: {p: s for p, s in v.items() if p not in shim_paths}
+                     for k, v in files_by_layer.items()}
+    bad_c2 = check_direction(no_shim_files, ex)
     base_dir = man["policy"].get("direction_baseline", 0)
     check("[C2] 全仓层间越界不许增长（基线 %d 处，现测 %d 处）" % (base_dir, len(bad_c2)),
           len(bad_c2) <= base_dir,

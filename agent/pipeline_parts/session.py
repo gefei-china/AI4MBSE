@@ -96,7 +96,7 @@ class SessionMixin:
           DB 不可读时 `agent_catalog` 自动回落本类常量，**行为与改造前逐字节一致**。
         """
         try:
-            from core.agent_catalog import standard_intents as _std
+            from services.agent_catalog import standard_intents as _std
             _labels = _std()
         except Exception:
             _labels = self._STANDARD_INTENT_LABELS

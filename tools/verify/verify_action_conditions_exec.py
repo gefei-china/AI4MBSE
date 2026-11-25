@@ -279,10 +279,10 @@ def main():
         _RESULTS.append((0 <= i_post < i_record, "S7 post 先于幂等记账",
                          "post=%s record=%s" % (i_post, i_record)))
         _RESULTS.append((("_ac.VALID_STATUS" in open(
-            os.path.join(_ROOT, "core", "action_binding_runtime.py"),
+            os.path.join(_ROOT, "services", "action_binding_runtime.py"),
             encoding="utf-8").read()) or
             ("action_conditions" in open(
-                os.path.join(_ROOT, "core", "action_binding_runtime.py"),
+                os.path.join(_ROOT, "services", "action_binding_runtime.py"),
                 encoding="utf-8").read()),
             "S8 四态口径单一真源", ""))
 

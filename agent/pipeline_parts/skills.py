@@ -421,7 +421,7 @@ class SkillMixin:
     def _ORCH_AGENTS(self) -> str:
         """默认编排候选池（逗号串）。读 `agents.is_orch_default`，读不到回落兜底常量。"""
         try:
-            from core.agent_catalog import orch_default_csv
+            from services.agent_catalog import orch_default_csv
             v = orch_default_csv()
             if v:
                 return v

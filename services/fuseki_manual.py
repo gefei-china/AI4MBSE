@@ -48,7 +48,7 @@ def normalize_lines(ttl: str) -> set:
 
 def collect_manual(cli, base_ttl: str, timeout: float = 30.0) -> set:
     """回读 Fuseki，取出既非 base 也非 temporal 的三元组（即手工写入）。"""
-    from core.fuseki_freshness import actual_triples
+    from services.fuseki_freshness import actual_triples
     actual = actual_triples(cli)
     base = normalize_lines(base_ttl)
     return {ln for ln in actual if ln not in base and not is_temporal(ln)}

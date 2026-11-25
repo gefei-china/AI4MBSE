@@ -48,7 +48,7 @@ _MUT_DETAIL = []    # 变异期的中间断言：红是预期，仅供人核对
 _IN_MUT = [False]
 
 JQ_SRC = os.path.join(ROOT, "core", "job_queue.py")
-JH_SRC = os.path.join(ROOT, "core", "job_handlers.py")
+JH_SRC = os.path.join(ROOT, "services", "job_handlers.py")
 KP_SRC = os.path.join(ROOT, "knowledge_pipeline", "ingest.py")
 
 DDL = """

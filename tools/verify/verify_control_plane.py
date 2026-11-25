@@ -132,7 +132,7 @@ def a_group():
 
     # A1 模块存在 + 导出的入口齐全
     p = os.path.join(_ROOT, "core", "idempotency.py")
-    ck("A1 core/idempotency.py 存在", os.path.isfile(p))
+    ck("A1 services/idempotency.py 存在", os.path.isfile(p))
     if not os.path.isfile(p):
         return
     import core.idempotency as idem
@@ -143,16 +143,17 @@ def a_group():
     # A2 写类判定**与写前确认闸同源**（不是另写一套）
     #    判据：idempotency 里必须出现 `hil_service` + `classify_action`，
     #    且**不得**自己维护一份工具名白名单（那是第二套口径 ⇒ 必然漂移）。
-    code = _code("core/idempotency.py")
+    code = _code("services/idempotency.py")
     ck("A2 写类判定复用 hil_service.classify_action",
-       "from hil_service import classify_action" in code,
+       ("from services.hil_service import classify_action" in code
+       or "from hil_service import classify_action" in code),
        "未复用 ⇒ 与写前确认闸判定口径可能不一致（写操作被漏判为读）")
     _has_own_list = ("WRITE_TOOLS" in code) or ("_WRITE_TOOL_NAMES" in code)
     ck("A2b ★ 不另立工具名白名单（防第二套口径）", not _has_own_list)
 
     # A3 键的四段组成：scope|tool|args_hash|ordinal
-    _dksrc = _func_src("core/idempotency.py", "derive_key")
-    kc = _func_code("core/idempotency.py", "derive_key")
+    _dksrc = _func_src("services/idempotency.py", "derive_key")
+    kc = _func_code("services/idempotency.py", "derive_key")
     ck("A3 幂等键含 scope/tool/args_hash/ordinal 四段",
        all(t in kc for t in ("scope", "tool", "ahash", "ordinal")),
        "缺段会让重试/多次调用无法区分")
@@ -167,7 +168,7 @@ def a_group():
        "变异后仍是四段 ⇒ 判据不敏感")
 
     # A4 作用域只在编排子任务内（run + task_key 都非空）
-    sc = _func_code("core/idempotency.py", "derive_scope")
+    sc = _func_code("services/idempotency.py", "derive_scope")
     ck("A4 scope 要求 run_ctx 与 task_key 同时存在",
        "_tool_run_ctx" in sc and "_tool_task_key" in sc and "if run_id and task_key" in sc,
        "缺一即会让会话直答路径也进幂等（把用户重复发言当重放）")

@@ -36,7 +36,7 @@ def freshness(conn=Depends(db_session),
     四态：fresh / stale / unknown / skipped。stale 时才应调用 POST /sync；
     unknown（回读异常）不要盲目重灌 —— 没验成不等于验出旧了。
     """
-    from core.fuseki_freshness import check_freshness
+    from services.fuseki_freshness import check_freshness
     from core.config import get as _cfg_get
     out = check_freshness(conn)
     out["autosync_enabled"] = bool(_cfg_get("graph_db", "fuseki_autosync"))
@@ -47,7 +47,7 @@ def freshness(conn=Depends(db_session),
 def replay_queue(conn=Depends(db_session),
                  user=Depends(require_permission("kb_ontology", "view"))):
     """P0-0 第十批：写后投影失败队列可见性（降级必须可见，不能只打日志）。"""
-    from core.fuseki_projection import queue_status
+    from services.fuseki_projection import queue_status
     return queue_status(conn)
 
 
@@ -55,7 +55,7 @@ def replay_queue(conn=Depends(db_session),
 def replay_now(conn=Depends(db_session),
                user=Depends(require_permission("kb_ontology", "edit"))):
     """手动重放队列；每项按当前 DB 重算 after，重复调用不产生副作用。"""
-    from core.fuseki_projection import replay
+    from services.fuseki_projection import replay
     return replay(conn)
 
 

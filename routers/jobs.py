@@ -43,7 +43,7 @@ def _limit_default(default: int = 50, cap: int = 200) -> int:
 @router.get("/api/jobs/kinds")
 def job_kinds(user=Depends(current_user)):
     """可提交的作业类型（前端"提交作业"面板据此渲染表单，避免硬编码 kind 字符串）。"""
-    from core.job_handlers import describe
+    from services.job_handlers import describe
     return {"items": describe()}
 
 
@@ -92,7 +92,7 @@ def submit_job(body: dict, conn=Depends(db_session),
     幂等判据必须锚定「当次在途操作」，锚成「历史上做过」会把重试功能永久焊死。
     """
     from core import job_queue as jq
-    from core.job_handlers import KINDS
+    from services.job_handlers import KINDS
     kind = (body or {}).get("kind") or ""
     if kind not in KINDS:
         return JSONResponse(
