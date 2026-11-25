@@ -48,7 +48,7 @@
       "database",
       "models"
     ],
-    "direction_baseline": 19,
+    "direction_baseline": 6,
     "direction_baseline_note": "全仓（core+services+adapters+core.domain）层间越界总数基线，2026-11-25 实测。只卡增量：新增越界即红；要降低必须真改代码后下调此值。"
   },
   "modules": {
@@ -779,6 +779,30 @@
       "shim": true,
       "cli": false,
       "bytes": 24814
+    },
+    "sandbox_eval": {
+      "layer": "services",
+      "path": "services/sandbox.py",
+      "legacy_path": "core/sandbox.py",
+      "shim": true,
+      "cli": false,
+      "bytes": 30763
+    },
+    "capability_effective": {
+      "layer": "services",
+      "path": "services/capability_effective.py",
+      "legacy_path": "core/capability_effective.py",
+      "shim": true,
+      "cli": false,
+      "bytes": 30194
+    },
+    "orch_supervisor": {
+      "layer": "services",
+      "path": "services/orch_supervisor.py",
+      "legacy_path": "core/orch_supervisor.py",
+      "shim": true,
+      "cli": false,
+      "bytes": 19585
     }
   },
   "exemptions": {
@@ -789,6 +813,10 @@
     "services/knowledge_reflow.py::agent": "知识回流需调用 AgentPipeline（函数内懒加载，避免 import 环）。",
     "services/mcp_health.py::agent": "复用 agent.mcp_tool_meta 的效果级别判定（唯一真源，另抄一份必漂移）。",
     "services/memory_service.py::agent": "复用 agent.memory_recall 的噪声闸门（唯一实现，另抄一份必漂移）。",
-    "services/requirement_quality.py::agent": "需求质量检查需调用 AgentPipeline（函数内懒加载，避免 import 环）。"
+    "services/requirement_quality.py::agent": "需求质量检查需调用 AgentPipeline（函数内懒加载，避免 import 环）。",
+    "services/capability_effective.py::agent": "存量债：能力有效性需读 AgentRegistry.DEFINITIONS 的真实声明（唯一真源，另抄必漂移）；P1 归位不改行为，登记待下沉 DEFINITIONS。",
+    "services/orch_supervisor.py::agent": "存量债：编排 supervisor 运行时加载 agent 定义并调用 orch_checkpoint；属真反向依赖，收敛方向=把 checkpoint 与定义读取下沉 core/domain 或直接归入 agent 层。",
+    "services/orch_supervisor.py::agent.orch_checkpoint": "同上：orch_checkpoint 的标记接口目前只在 agent 层，待下沉。",
+    "core/run_registry.py::agent.orch_checkpoint": "存量债：孤儿回收需标记 checkpoint.phase=interrupted（唯一实现在 agent/orch_checkpoint）；收敛方向=下沉标记接口到 core/domain。"
   }
 }

@@ -158,7 +158,7 @@ def reap_orphans(conn, ttl_s: int | None = None, dry_run: bool = False, audit=Tr
     # ⚠️ 不改变任何行为：状态仍是 failed、error 文本不变，只是补一列归因。
     # ⚠️ 分类失败不得阻断回收（归因是旁路）；分类器不可用时留空，**不编造**类别。
     try:
-        from services.failure_class import classify as _cls
+        from core.domain.failure_class import classify as _cls
         _ek = str(_cls(reason, ok=False) or "")
     except Exception:
         _ek = ""

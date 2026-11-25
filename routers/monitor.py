@@ -538,7 +538,7 @@ def supervisor_status(dry_run: bool = True, max_runs: int = 3):
     这是上线前确认"这个开关打开后会不会误投正在跑的批次"的唯一手段
     （最大风险是 stale 阈值配得比单轮编排还短 ⇒ 把活着的批次误判为死）。
     """
-    from core.orch_supervisor import supervisor_status as _st, scan_once
+    from services.orch_supervisor import supervisor_status as _st, scan_once
     from core.config import get as _cfg_get
     out = {"ok": True, **_st(), "dry_run": bool(dry_run)}
     if dry_run:
@@ -560,7 +560,7 @@ def supervisor_scan(max_runs: int = 1, dry_run: bool = True):
     保留 dry_run 是因为这会调 LLM：与 `reap_orphans` 同款理由 —— 保护性操作
     必须能先看清影响面。
     """
-    from core.orch_supervisor import scan_once
+    from services.orch_supervisor import scan_once
     #⚠️ dry_run 必须映射成 max_runs=0（"预演"），**绝不能兜成 1** ——
     #   scan_once 的 max_runs=0 是"走判定不触发"，而传 1 会真的 apply_resume
     #   并起线程调 LLM。一个"预览"按钮若默认触发真执行，是最危险的一类默认值。

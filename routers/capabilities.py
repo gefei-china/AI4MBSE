@@ -33,7 +33,7 @@
 """
 from fastapi import APIRouter, Depends, Query
 
-from core.capability_effective import ENTRY_LABELS, build_ledger
+from services.capability_effective import ENTRY_LABELS, build_ledger
 from core.deps import db_session
 
 router = APIRouter(tags=["能力中心 · 账本"])

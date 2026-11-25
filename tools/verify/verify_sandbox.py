@@ -567,7 +567,7 @@ check("E5 sandbox_repo 只碰 sandbox_runs 一张表（引擎数据面可断言�
       set(_stmts) == {"sandbox_runs"}, _stmts)
 _promo_src = open(os.path.join(ROOT, "services", "config_promotion.py"),
                   encoding="utf-8").read()
-_sb_src = open(os.path.join(ROOT, "core", "adapters/sandbox.py"), encoding="utf-8").read()
+_sb_src = open(os.path.join(ROOT, "services", "sandbox.py"), encoding="utf-8").read()
 check("E6 ★config_promotion 唯一配置写入口是 save_override（无 settings 直写/无 _CONFIG 直改）",
       _promo_src.count("save_override(") == 1
       and "INSERT INTO settings" not in _promo_src

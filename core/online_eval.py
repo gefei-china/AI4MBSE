@@ -426,7 +426,7 @@ def _score_one(m: dict) -> tuple:
       · 无引用：1 - 无据声称（含可核查实体=1 ⇒ 0 分；不含=1 分）
     任何分母为 0 的指标返 None 不返 0（"没测到"≠"测到 0 分"，模块头纪律③）。
     """
-    from tools.eval.eval_generation_quality import evaluate_answers
+    from core.domain.eval_quality import evaluate_answers
     res = evaluate_answers([m])
     detail = {"citation_valid_rate": res.get("citation_valid_rate"),
               "citation_usage_rate": res.get("citation_usage_rate"),
