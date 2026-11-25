@@ -13,7 +13,7 @@ while _svroot and not _svos.path.isdir(_svos.path.join(_svroot, 'tools')):
     _svroot = _svos.path.dirname(_svroot)
 if _svroot and _svroot not in _svsys.path:
     _svsys.path.insert(0, _svroot)
-from tools.stream_source import read_stream_source, read_stream_source_bytes  # noqa: E402  # noqa: E402
+from tools.stream_source import read_stream_source, write_stream_source, read_stream_source_bytes  # noqa: E402  # noqa: E402
 import os
 import sys
 
@@ -79,7 +79,7 @@ def main():
         check("M0 变异锚点存在", False)
     else:
         try:
-            open(fp, "wb").write(mutated)
+            write_stream_source(mutated)
             import importlib
             import agent.pipeline_parts.stream as _st
             importlib.reload(_st)
@@ -87,7 +87,7 @@ def main():
             check("M1 两个 sysml 都被折叠后 P1 判据翻红",
                   "```sysml" not in o2, repr(o2[:200]))
         finally:
-            open(fp, "wb").write(orig)
+            write_stream_source(orig)
             import importlib
             import agent.pipeline_parts.stream as _st
             importlib.reload(_st)

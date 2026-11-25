@@ -36,7 +36,7 @@ while _svroot and not _svos.path.isdir(_svos.path.join(_svroot, 'tools')):
     _svroot = _svos.path.dirname(_svroot)
 if _svroot and _svroot not in _svsys.path:
     _svsys.path.insert(0, _svroot)
-from tools.stream_source import read_stream_source  # noqa: E402
+from tools.stream_source import read_stream_source, write_stream_source  # noqa: E402
 
 import ast
 import os
@@ -165,8 +165,7 @@ def main() -> int:
         assert "stream=False" in seg_old, "收尾段内没有 stream=False，变异锚点失效"
         seg_new = seg_old.replace("stream=False", "stream=True", 1)
         mutated = src[:start] + seg_new + src[j:]
-        with open(STREAM, "w", encoding="utf-8") as f:
-            f.write(mutated)
+        write_stream_source(mutated)
         try:
             red = not all(p for _, p in structure_checks())
             print(f"[变异自证] 结构判据 {'已变红（真判据）' if red else '**仍是绿 ⇒ 空转断言**'}")
@@ -176,8 +175,7 @@ def main() -> int:
                         print(f"           ★ 变红：{nm}")
             ok = ok and red
         finally:
-            with open(STREAM, "w", encoding="utf-8") as f:
-                f.write(src)
+            write_stream_source(src)
         assert read_stream_source() == src, "回滚失败！"
         print("[OK  ] 回滚校验：生产代码已逐字还原")
         print("=" * 72)

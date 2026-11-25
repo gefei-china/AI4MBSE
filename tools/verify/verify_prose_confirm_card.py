@@ -20,7 +20,7 @@ while _svroot and not _svos.path.isdir(_svos.path.join(_svroot, 'tools')):
     _svroot = _svos.path.dirname(_svroot)
 if _svroot and _svroot not in _svsys.path:
     _svsys.path.insert(0, _svroot)
-from tools.stream_source import read_stream_source, read_stream_source_bytes  # noqa: E402  # noqa: E402
+from tools.stream_source import read_stream_source, write_stream_source, read_stream_source_bytes  # noqa: E402  # noqa: E402
 import os
 import sys
 
@@ -93,14 +93,14 @@ def main():
         check("M0 变异锚点存在", False)
     else:
         try:
-            open(fp, "wb").write(mutated)
+            write_stream_source(mutated)
             import importlib
             import agent.pipeline_parts.stream as _st
             importlib.reload(_st)
             check("M1 探测关掉后 P1 用例失败（断言非空转）",
                   _st.detect_prose_confirm("请你确认后执行。") is None)
         finally:
-            open(fp, "wb").write(orig)
+            write_stream_source(orig)
             import importlib
             import agent.pipeline_parts.stream as _st
             importlib.reload(_st)

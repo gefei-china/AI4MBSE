@@ -128,17 +128,14 @@ finally:
     V.ANCHOR_INDEX.clear()
     V.ANCHOR_INDEX.update(saved)
 
-print("[4] 写回面棘轮（拆分第二步的已知债，只降不升）", flush=True)
-# 读侧已全部收口到视图（0 个直读点）；**写侧**还有若干门禁在做
-# 「变异 → 整文件改写 → 回滚」：`open(fp, "wb").write(whole_src)`。
-# 拆分后这类写法会把「拼接后的全文」写进某一个分片 ⇒ 直接写坏源码，
-# 所以第二步之前必须改成「按锚点定位分片读写」（module_for / 新增 read_part）。
-# 在此之前用**棘轮**钉住数量：新增写回型门禁必须先登记，不许悄悄变多。
-# 实测基线（2026-11-25）：**7 个变异点 × (写入 + 回滚) = 14 次调用**，分布在
-# verify_chat_task_intent / verify_dedup_and_finalize_hint / verify_final_artifact_only /
-# verify_partial_persist_on_failure / verify_proc_attribution / verify_prose_confirm_card /
-# verify_stream_repair_loop。预算就钉在 14：新增必须先把上面的「按锚点读写」做完。
-WRITE_BACK_BUDGET = 14
+print("[4] 写回面（已收口：预算归零）", flush=True)
+# 读侧收口之后，写侧是拆分第二步的**最后一个**硬阻塞：门禁做「变异 → 整文件改写 →
+# 回滚」时若直接 `open(fp,"wb").write(拼接全文)`，拆分后就把全文写进某一个分片
+# ⇒ 直接写坏源码（而且是变异门禁在写，坏了极难归因）。
+# 2026-11-25 已把 7 个变异点（14 次调用）全部切到 `write_stream_source()`，
+# 由视图自己算「变化落在哪一片」、只写那一片；未拆分时与整文件写行为等价。
+# 预算因此**归零**：再出现「门禁自己 open(stream.py,"w")」就是回潮。
+WRITE_BACK_BUDGET = 0
 
 
 def _write_back_sites():
@@ -247,6 +244,88 @@ def _direct_readers():
 
 _DR = _direct_readers()
 check("V9 读侧直读点已归零（全部走 read_stream_source）", not _DR, _DR[:6])
+
+print("[5] 写回语义（W 组：只改受影响分片 / 行尾保持 / 缓存不骗人）", flush=True)
+# ⚠️ 这一组会**真的写** stream.py，故：先留字节快照 → 每步自证 → finally 逐字节还原。
+_raw0 = open(ABS, "rb").read()
+_sha0 = hashlib.sha256(_raw0).hexdigest()
+_txt0 = V.read_stream_source()
+try:
+    # W1 无变化写回：不得改动文件（否则「回滚」本身会制造噪声变更）
+    V.write_stream_source(_txt0)
+    check("W1 无变化写回不改文件", open(ABS, "rb").read() == _raw0)
+
+    # W2 单字符变异：内容变了、**行尾风格不能变**（CRLF 文件写成 LF 会破坏契约）
+    _mut = _txt0.replace("def execute_stream", "def execute_xtream", 1)
+    check("W0 变异锚点存在", _mut != _txt0)
+    V.write_stream_source(_mut)
+    _b2 = open(ABS, "rb").read()
+    check("W2 变异真的落盘", b"def execute_xtream" in _b2)
+    check("W2b 行尾风格保持（CRLF 数不变）",
+          _b2.count(b"\r\n") == _raw0.count(b"\r\n"),
+          "%d vs %d" % (_b2.count(b"\r\n"), _raw0.count(b"\r\n")))
+    check("W3 写回后视图立即可见（缓存不骗人）", "def execute_xtream" in V.read_stream_source())
+
+    # W4 还原：逐字节回到快照（这是所有变异门禁的底线，必须由视图保证）
+    V.write_stream_source(_txt0)
+    check("W4 还原逐字节一致",
+          hashlib.sha256(open(ABS, "rb").read()).hexdigest() == _sha0)
+finally:
+    with open(ABS, "wb") as _f:
+        _f.write(_raw0)
+    V.invalidate_cache()
+check("W4b finally 还原后仍与快照一致",
+      hashlib.sha256(open(ABS, "rb").read()).hexdigest() == _sha0)
+
+# W5 分片定位算法（纯函数，虚拟两片，不碰磁盘）：
+#    「拆分后行为是否正确」现在就能验，不必等真拆了才发现算法错。
+_p1, _p2 = b"aaa\nbbb\n", b"ccc\nddd\n"
+_idx, _part = V._locate_changed_part([_p1, _p2], _p1 + _p2.replace(b"ccc", b"cXc"))
+check("W5 改动落在第 2 片 ⇒ 定位到 idx=1 且只改该片",
+      _idx == 1 and _part == b"cXc\nddd\n", "%s %r" % (_idx, _part))
+_idx1, _part1 = V._locate_changed_part([_p1, _p2], _p1.replace(b"bbb", b"bXb") + _p2)
+check("W5b 改动落在第 1 片 ⇒ 定位到 idx=0", _idx1 == 0 and _part1 == b"aaa\nbXb\n")
+
+_cross_raised = False
+try:
+    # 同时删掉第 1 片尾部与第 2 片首部 ⇒ 变化区间跨越分片边界
+    V._locate_changed_part([_p1, _p2], _p1[:4] + _p2[4:])
+except V.StreamSourceError:
+    _cross_raised = True
+check("W5c 改动跨越分片边界 ⇒ 抛错（绝不静默写错片）", _cross_raised)
+
+_idx_none, _part_none = V._locate_changed_part([_p1, _p2], _p1 + _p2)
+check("W5d 无变化 ⇒ 返回 None（不产生无谓写盘）",
+      _idx_none is None and _part_none is None)
+
+# W6 anchor 与改动不一致 ⇒ 必须拒绝（防"锚点说在这片、实际改的是那片"）
+_anchor_rejected = False
+try:
+    V.write_stream_source(_txt0.replace("def execute_stream", "def execute_xtream", 1),
+                          anchor="__no_such_anchor_in_any_part__")
+except V.StreamSourceError:
+    _anchor_rejected = True
+except OSError:
+    _anchor_rejected = False
+finally:
+    with open(ABS, "wb") as _f:
+        _f.write(_raw0)
+    V.invalidate_cache()
+check("W6 anchor 与改动不一致 ⇒ 拒绝写回", _anchor_rejected)
+check("W6b W6 之后源码未被写坏",
+      hashlib.sha256(open(ABS, "rb").read()).hexdigest() == _sha0)
+
+# W7 变异自证：把定位函数改坏（恒返回第 0 片）⇒ W5 那条判据必须翻红
+_orig_locate = V._locate_changed_part
+try:
+    def _bad_locate(old_parts, new_bytes):
+        return 0, new_bytes
+    V._locate_changed_part = _bad_locate
+    _bidx, _bpart = V._locate_changed_part([_p1, _p2], _p1 + _p2.replace(b"ccc", b"cXc"))
+    check("W7 恒返回第 0 片的坏实现 ⇒ W5 判据能抓到",
+          not (_bidx == 1 and _bpart == b"cXc\nddd\n"))
+finally:
+    V._locate_changed_part = _orig_locate
 
 print("\n===")
 print("%d PASS / %d FAIL" % (len(PASS), len(FAIL)))

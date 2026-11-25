@@ -47,7 +47,7 @@ while _svroot and not _svos.path.isdir(_svos.path.join(_svroot, 'tools')):
     _svroot = _svos.path.dirname(_svroot)
 if _svroot and _svroot not in _svsys.path:
     _svsys.path.insert(0, _svroot)
-from tools.stream_source import read_stream_source  # noqa: E402
+from tools.stream_source import read_stream_source, write_stream_source  # noqa: E402
 from _tmpdir import mkdtemp  # 共享：创建即登记，atexit 退出时自动回收临时目录
 
 import os
@@ -251,16 +251,14 @@ def main() -> int:
     assert a2 in src, "锚点2 未找到"
     mutated = src.replace(a1, "if False:  # 变异", 1).replace(a2, "if False:  # 变异", 1)
     try:
-        with open(STREAM, "w", encoding="utf-8") as f:
-            f.write(mutated)
+        write_stream_source(mutated)
         dm = _run_probe(_make_db(LONG), "", LONG)
         red = dm != 1
         print(f"[变异自证] 实测 {dm} 条 ⇒ "
               f"{'已变红（去重判据有效）' if red else '**仍是绿 ⇒ 判据空转**'}")
         ok = ok and red
     finally:
-        with open(STREAM, "w", encoding="utf-8") as f:
-            f.write(src)
+        write_stream_source(src)
     assert read_stream_source() == src, "回滚失败！stream.py 未逐字还原"
     print("[OK  ] 回滚校验：stream.py 已逐字还原")
 
