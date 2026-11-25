@@ -12,6 +12,14 @@
           编排层在汇总前只发一张卡并 return
   M 变异：把 needs_user 从 NON_RETRYABLE 去掉 → C 判据必须翻红
 """
+import os as _svos
+import sys as _svsys
+_svroot = _svos.path.dirname(_svos.path.abspath(__file__))
+while _svroot and not _svos.path.isdir(_svos.path.join(_svroot, 'tools')):
+    _svroot = _svos.path.dirname(_svroot)
+if _svroot and _svroot not in _svsys.path:
+    _svsys.path.insert(0, _svroot)
+from tools.stream_source import read_stream_source  # noqa: E402
 # CI-OPTIONAL: 编排澄清卡冒泡：纯函数+静态源码门禁，改动热路径时需人工确认接线，暂不进 CI
 
 import os
@@ -53,7 +61,7 @@ def main():
 
     print("\n=== S 源码契约 ===")
     p = os.path.join(ROOT, "agent/pipeline_parts/stream.py")
-    src = open(p, encoding="utf-8").read()
+    src = read_stream_source()
     check("S1 子任务事件 switch 捕获 clarify_ask（此前无分支被静默丢弃）",
           'elif _et in ("clarify_ask", "hil_confirm"):' in src)
     check("S2 用 run 级 _orch_pending 汇总，而不是每任务直接发卡",

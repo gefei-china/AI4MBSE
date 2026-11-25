@@ -14,6 +14,14 @@
 
 运行：python tools/verify/verify_subtask_context.py
 """
+import os as _svos
+import sys as _svsys
+_svroot = _svos.path.dirname(_svos.path.abspath(__file__))
+while _svroot and not _svos.path.isdir(_svos.path.join(_svroot, 'tools')):
+    _svroot = _svos.path.dirname(_svroot)
+if _svroot and _svroot not in _svsys.path:
+    _svsys.path.insert(0, _svroot)
+from tools.stream_source import read_stream_source  # noqa: E402
 import pathlib
 import re
 import sys
@@ -161,7 +169,7 @@ def main():
        f"len={len(pr_prompt)}")
 
     # ── B 挂钩层 ──
-    src_stream = (ROOT / "agent" / "pipeline_parts" / "stream.py").read_text(encoding="utf-8")
+    src_stream = read_stream_source()
     src_planner = _src_planner
     ck("B1 流式路径接 plan_subtask_attachments（①）",
        "plan_subtask_attachments" in src_stream and "_att_manifest" in src_stream)

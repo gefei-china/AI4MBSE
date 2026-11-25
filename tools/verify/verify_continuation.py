@@ -15,6 +15,14 @@
 
 用隔离副本库：tmp/uisafe_r5.db（由 mbse.db 经 sqlite3.backup() 拷贝）。
 """
+import os as _svos
+import sys as _svsys
+_svroot = _svos.path.dirname(_svos.path.abspath(__file__))
+while _svroot and not _svos.path.isdir(_svos.path.join(_svroot, 'tools')):
+    _svroot = _svos.path.dirname(_svroot)
+if _svroot and _svroot not in _svsys.path:
+    _svsys.path.insert(0, _svroot)
+from tools.stream_source import read_stream_source  # noqa: E402
 
 # ── 已接进 CI（2026-10-05 第二轮第 2 项修复后）──────────
 # 修复要点：carry 词表已收敛到 common.TOPIC_CARRY_WORDS（共享常量）；
@@ -48,6 +56,8 @@ def ck(name, cond, detail=""):
 
 
 def read(p):
+    if p.replace('\\', '/').endswith('pipeline_parts/stream.py'):
+        return read_stream_source()
     with io.open(p, "r", encoding="utf-8") as f:
         return f.read()
 

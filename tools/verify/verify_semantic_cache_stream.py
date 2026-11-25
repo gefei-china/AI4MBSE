@@ -22,6 +22,14 @@
   [9] dry_run / resume ⇒ 不读缓存
   [10] 源码级：读取与写入两处都存在（防被后续重构悄悄删掉）
 """
+import os as _svos
+import sys as _svsys
+_svroot = _svos.path.dirname(_svos.path.abspath(__file__))
+while _svroot and not _svos.path.isdir(_svos.path.join(_svroot, 'tools')):
+    _svroot = _svos.path.dirname(_svroot)
+if _svroot and _svroot not in _svsys.path:
+    _svsys.path.insert(0, _svroot)
+from tools.stream_source import read_stream_source  # noqa: E402
 import os
 import sys
 import json
@@ -107,8 +115,7 @@ _sec["threshold"] = 0.99      # 收紧，避免近义句误命中干扰判据
 print("=" * 78)
 print("[10] 源码接线")
 print("=" * 78)
-_src = open(os.path.join(_ROOT, "agent", "pipeline_parts", "stream.py"),
-            encoding="utf-8").read()
+_src = read_stream_source()
 check("[10] stream.py 存在缓存读取（SemanticCache.get）", "SemanticCache.get" in _src)
 check("[10] stream.py 存在缓存写入（SemanticCache.put）", "SemanticCache.put" in _src)
 check("[10] 命中时用 iter_stream_chunks 伪装流式", "iter_stream_chunks(_cache_answer)" in _src)

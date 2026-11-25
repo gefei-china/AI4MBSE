@@ -21,6 +21,14 @@
     <repo>\\.venv\\Scripts\\python.exe -X utf8 tools/verify/verify_orch_summary_budget.py
 退出码：全绿 0 / 有失败 1。
 """
+import os as _svos
+import sys as _svsys
+_svroot = _svos.path.dirname(_svos.path.abspath(__file__))
+while _svroot and not _svos.path.isdir(_svos.path.join(_svroot, 'tools')):
+    _svroot = _svos.path.dirname(_svroot)
+if _svroot and _svroot not in _svsys.path:
+    _svsys.path.insert(0, _svroot)
+from tools.stream_source import read_stream_source  # noqa: E402
 import os
 import re
 import sys
@@ -474,8 +482,7 @@ def main():
     #     注：前四项（I1~I4）修的是「**切**得太狠」，这一项修的是「**换**错了东西」——
     #     同为「汇总看不到交付物」，症状相似、根因不同，别混改。
     try:
-        _ssrc5 = open(os.path.join(repo, "agent", "pipeline_parts", "stream.py"),
-                      encoding="utf-8", errors="replace").read()
+        _ssrc5 = read_stream_source()
         f_i5 = check_summary_input(_ssrc5)
         if f_i5:
             _rec(FAIL, "I5 汇总输入含完整交付物（真实实现）", "; ".join(f_i5))
@@ -497,8 +504,7 @@ def main():
     try:
         psrc = open(os.path.join(repo, "workflows", "planner.py"), encoding="utf-8", errors="replace").read()
         qsrc = open(os.path.join(repo, "services/task_queue.py"), encoding="utf-8", errors="replace").read()
-        ssrc = open(os.path.join(repo, "agent", "pipeline_parts", "stream.py"),
-                    encoding="utf-8", errors="replace").read()
+        ssrc = read_stream_source()
         rsrc = open(os.path.join(repo, "workflows", "refine.py"),
                     encoding="utf-8", errors="replace").read()
         _checks = [

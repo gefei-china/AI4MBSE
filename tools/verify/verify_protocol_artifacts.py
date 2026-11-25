@@ -31,6 +31,14 @@
 
 **运行**：`.venv/Scripts/python.exe -X utf8 tools/verify/verify_protocol_artifacts.py`
 """
+import os as _svos
+import sys as _svsys
+_svroot = _svos.path.dirname(_svos.path.abspath(__file__))
+while _svroot and not _svos.path.isdir(_svos.path.join(_svroot, 'tools')):
+    _svroot = _svos.path.dirname(_svroot)
+if _svroot and _svroot not in _svsys.path:
+    _svsys.path.insert(0, _svroot)
+from tools.stream_source import read_stream_source  # noqa: E402
 import io
 from _tmpdir import mkdtemp  # 共享：创建即登记，atexit 退出时自动回收临时目录
 import os
@@ -66,7 +74,7 @@ sys.path.insert(0, ROOT)
 from services.subtask_protocol import (extract_protocol_json, validate,  # noqa: E402
                                        normalize_text)
 
-s_src = io.open(STREAM, encoding="utf-8").read()
+s_src = read_stream_source()
 p_src = io.open(PROTO, encoding="utf-8").read()
 c_src = io.open(CONFIG, encoding="utf-8").read()
 

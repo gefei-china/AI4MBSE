@@ -36,6 +36,14 @@
 
 复现：`.venv/Scripts/python.exe -X utf8 tools/verify/verify_autonomy_and_clarify.py`
 """
+import os as _svos
+import sys as _svsys
+_svroot = _svos.path.dirname(_svos.path.abspath(__file__))
+while _svroot and not _svos.path.isdir(_svos.path.join(_svroot, 'tools')):
+    _svroot = _svos.path.dirname(_svroot)
+if _svroot and _svroot not in _svsys.path:
+    _svsys.path.insert(0, _svroot)
+from tools.stream_source import read_stream_source  # noqa: E402
 import io
 import os
 import re
@@ -100,7 +108,7 @@ def main():
     from agent import auto_continue as A
 
     print("=== ① 闸门源码不变式（含两个新触发信号）===")
-    _stream = _read("agent/pipeline_parts/stream.py")
+    _stream = read_stream_source()
     ok("闸门包含 has_continue_cue + looks_awaiting_permission",
        gate_requires_new_signals(_stream),
        "" if gate_requires_new_signals(_stream)

@@ -26,6 +26,14 @@
 
 用法：./.venv/Scripts/python.exe -X utf8 tools/verify/verify_intent_no_demote.py
 """
+import os as _svos
+import sys as _svsys
+_svroot = _svos.path.dirname(_svos.path.abspath(__file__))
+while _svroot and not _svos.path.isdir(_svos.path.join(_svroot, 'tools')):
+    _svroot = _svos.path.dirname(_svroot)
+if _svroot and _svroot not in _svsys.path:
+    _svsys.path.insert(0, _svroot)
+from tools.stream_source import read_stream_source  # noqa: E402
 import io
 import os
 import re
@@ -43,6 +51,8 @@ def rec(name, cond, detail=""):
 
 
 def read(p):
+    if p.replace('\\', '/').endswith('pipeline_parts/stream.py'):
+        return read_stream_source()
     with io.open(os.path.join(ROOT, p), encoding="utf-8") as f:
         return f.read()
 

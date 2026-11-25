@@ -4,6 +4,14 @@
 离线可跑，不依赖 8000 端口服务：
   .venv\\Scripts\\python.exe -X utf8 tools\\verify\\verify_s4_prompt.py
 """
+import os as _svos
+import sys as _svsys
+_svroot = _svos.path.dirname(_svos.path.abspath(__file__))
+while _svroot and not _svos.path.isdir(_svos.path.join(_svroot, 'tools')):
+    _svroot = _svos.path.dirname(_svroot)
+if _svroot and _svroot not in _svsys.path:
+    _svsys.path.insert(0, _svroot)
+from tools.stream_source import read_stream_source  # noqa: E402
 import pathlib
 import re
 import sys
@@ -26,7 +34,7 @@ def check(name, cond, detail=""):
 
 
 PS = (ROOT / "agent" / "pipeline_parts" / "prompt.py").read_text(encoding="utf-8")
-ST = (ROOT / "agent" / "pipeline_parts" / "stream.py").read_text(encoding="utf-8")
+ST = read_stream_source()
 EX = (ROOT / "agent" / "pipeline_parts" / "execute.py").read_text(encoding="utf-8")
 CM = (ROOT / "agent" / "pipeline_parts" / "common.py").read_text(encoding="utf-8")
 

@@ -6,6 +6,14 @@
 
 运行：.venv\Scripts\python.exe -X utf8 tools\verify\verify_s4_calls.py
 """
+import os as _svos
+import sys as _svsys
+_svroot = _svos.path.dirname(_svos.path.abspath(__file__))
+while _svroot and not _svos.path.isdir(_svos.path.join(_svroot, 'tools')):
+    _svroot = _svos.path.dirname(_svroot)
+if _svroot and _svroot not in _svsys.path:
+    _svsys.path.insert(0, _svroot)
+from tools.stream_source import read_stream_source  # noqa: E402
 import io
 import os
 import re
@@ -43,6 +51,8 @@ def chk(name, ok, detail=""):
 
 
 def read(rel):
+    if rel.replace('\\', '/').endswith('pipeline_parts/stream.py'):
+        return read_stream_source()
     return io.open(os.path.join(ROOT, rel), encoding="utf-8").read()
 
 
@@ -219,7 +229,14 @@ chk("2.4c fallback_top_k 为正（混合检索异常时的兜底条数）", _fb 
 #   旧写法」面前必然误报 ⇒ 改为 **ast 级**提取：只认真 Call 节点（注释/字符串
 #   免疫、无重复计数），并可分辨 top_k 是关键字实参还是第 3 位置实参、
 #   实参值是常量（硬编码）还是变量/表达式。
-_HY_ALIAS = re.compile(r"from\s+knowledge_engine\s+import\s+hybrid_search\s+as\s+(\w+)")
+# ⚠️ 2026-11-25（P1 分层归位）：`knowledge_engine.py` 已搬到 `services/`，
+#    import 随之变成 `from services.knowledge_engine import hybrid_search as _hybrid`
+#    ⇒ 原来写死「顶层模块名」的正则**一条都匹配不上**，别名集合只剩 {"hybrid_search"}，
+#    4 个真实调用点全数漏掉、2.6 直接假红（实测 rag 调用点=0）。
+#    修法不是把 `services.` 硬编进去（下次再搬又会静默失效），而是允许任意包前缀
+#    —— 判据语义不变（认的是别名到函数的绑定关系），只是不再依赖模块的物理位置。
+_HY_ALIAS = re.compile(
+    r"from\s+(?:[\w]+\.)*knowledge_engine\s+import\s+hybrid_search\s+as\s+(\w+)")
 
 
 def _hybrid_call_sites(rel):

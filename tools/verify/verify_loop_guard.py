@@ -21,6 +21,14 @@ G7 判据函数的**调用形态**必须是模块函数直调（AST 级）——
     AttributeError 掀翻整轮（用户侧「本轮未产出正文内容 / 任务终止」）。
     G6a/G6f 那种"文件里出现过 import / 模块里 def 过该名字"的文本检查**抓不到**它。
 """
+import os as _svos
+import sys as _svsys
+_svroot = _svos.path.dirname(_svos.path.abspath(__file__))
+while _svroot and not _svos.path.isdir(_svos.path.join(_svroot, 'tools')):
+    _svroot = _svos.path.dirname(_svroot)
+if _svroot and _svroot not in _svsys.path:
+    _svsys.path.insert(0, _svroot)
+from tools.stream_source import read_stream_source  # noqa: E402
 import os
 import sys
 import time
@@ -202,7 +210,7 @@ def t_g5():
 def t_g6():
     print("\n=== G6 两条 loop 路径护栏同源 ===")
     ex = open(os.path.join(ROOT, "agent", "pipeline_parts", "execute.py"), encoding="utf-8").read()
-    st = open(os.path.join(ROOT, "agent", "pipeline_parts", "stream.py"), encoding="utf-8").read()
+    st = read_stream_source()
     ok = _rec("G6a execute.py 引用 loop_guard", "from agent.loop_guard import" in ex)
     ok &= _rec("G6b stream.py 引用 loop_guard", "from agent.loop_guard import" in st)
     # 关键：不能再出现裸的 self._exec_tool_call( （绕过护栏）

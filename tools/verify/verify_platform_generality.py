@@ -34,6 +34,14 @@
     ./.venv/Scripts/python.exe -X utf8 tools/verify/verify_platform_generality.py
 """
 from __future__ import annotations
+import os as _svos
+import sys as _svsys
+_svroot = _svos.path.dirname(_svos.path.abspath(__file__))
+while _svroot and not _svos.path.isdir(_svos.path.join(_svroot, 'tools')):
+    _svroot = _svos.path.dirname(_svroot)
+if _svroot and _svroot not in _svsys.path:
+    _svsys.path.insert(0, _svroot)
+from tools.stream_source import read_stream_source  # noqa: E402
 
 import ast
 import os
@@ -65,7 +73,7 @@ def check(name, ok, detail=""):
 
 def g_group():
     print("\n=== G 组 · 通用性（正文回落）===")
-    src = open(STREAM, encoding="utf-8").read()
+    src = read_stream_source()
 
     # G1 物化接线（**向后**扫：structure_check 之前就是接线代码）
     # ⚠️ 窗口用**字符**而非行数：固定行数会随代码增删而失效（R2 已栽过一次）。
@@ -139,7 +147,7 @@ def s_group():
 
 def r_group():
     print("\n=== R 组 · 健壮性（异常不阻断）===")
-    src = open(STREAM, encoding="utf-8").read()
+    src = read_stream_source()
     i = src.find("structure_check")
     seg = src[max(0, i - 300):i + 600] if i >= 0 else ""
     check("R1 校验调用被 try 包住且降级不抛",

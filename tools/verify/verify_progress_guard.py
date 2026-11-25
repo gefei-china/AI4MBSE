@@ -32,6 +32,14 @@ D 变异自证：把阈值改成"永不触发"/"过松"，B1 必须变红
 
 运行：python tools/verify/verify_progress_guard.py
 """
+import os as _svos
+import sys as _svsys
+_svroot = _svos.path.dirname(_svos.path.abspath(__file__))
+while _svroot and not _svos.path.isdir(_svos.path.join(_svroot, 'tools')):
+    _svroot = _svos.path.dirname(_svroot)
+if _svroot and _svroot not in _svsys.path:
+    _svsys.path.insert(0, _svroot)
+from tools.stream_source import read_stream_source  # noqa: E402
 import pathlib
 import re
 import sys
@@ -158,7 +166,7 @@ def main():
         ck("B 真库回放可执行", False, f"{type(e).__name__}: {e}")
 
     # ── C 挂钩层 ──
-    src = (ROOT / "agent" / "pipeline_parts" / "stream.py").read_text(encoding="utf-8")
+    src = read_stream_source()
     ck("C1 stream.py 已接 tracker（实例化 + 判定 + 收尾）",
        "ProgressTracker" in src and "_pg.observe(" in src and "_pg_stop_now" in src)
     i_backfill = src.find("messages.extend(results)")

@@ -10,6 +10,14 @@
 
 用法：.venv\\Scripts\\python.exe -X utf8 tools/verify/verify_abort_and_continue.py
 """
+import os as _svos
+import sys as _svsys
+_svroot = _svos.path.dirname(_svos.path.abspath(__file__))
+while _svroot and not _svos.path.isdir(_svos.path.join(_svroot, 'tools')):
+    _svroot = _svos.path.dirname(_svroot)
+if _svroot and _svroot not in _svsys.path:
+    _svsys.path.insert(0, _svroot)
+from tools.stream_source import read_stream_source  # noqa: E402
 import os
 import re
 import sys
@@ -91,7 +99,7 @@ for text, prev, want in [("谢谢", "design", "chat"), ("你好", None, "chat"),
     rec("B 反例「%s」不弹澄清" % text, not r._last_meta.get("needs_clarification"))
 
 # ── C. 结构与开关存在（防止"改了但没接线"） ───────────────────────
-sp = open(os.path.join(ROOT, "agent", "pipeline_parts", "stream.py"), encoding="utf-8").read()
+sp = read_stream_source()
 rec("C1 续写不再降级到通用问答Agent", "continue_uses_main_agent" in sp)
 rec("C2 继承登记已补回读分支", "self._team_main_agent = _bound" in sp)
 

@@ -40,6 +40,14 @@ llm_content = "".join(full)      # ← 只在**循环正常结束后**才赋值
 
 复现：`.venv/Scripts/python.exe -X utf8 tools/verify/verify_partial_persist_on_failure.py`
 """
+import os as _svos
+import sys as _svsys
+_svroot = _svos.path.dirname(_svos.path.abspath(__file__))
+while _svroot and not _svos.path.isdir(_svos.path.join(_svroot, 'tools')):
+    _svroot = _svos.path.dirname(_svroot)
+if _svroot and _svroot not in _svsys.path:
+    _svsys.path.insert(0, _svroot)
+from tools.stream_source import read_stream_source  # noqa: E402
 import os
 import sqlite3
 import sys
@@ -229,7 +237,7 @@ def main():
 
     print("=== ① 源码画像：两条生成分支必须**同一种**累积方式 ===")
     import io
-    src = io.open(os.path.join(ROOT, "agent/pipeline_parts/stream.py"), encoding="utf-8").read()
+    src = read_stream_source()
     code = _strip_comments(src)          # ⚠️ 判据只看代码，不看注释（见 _strip_comments）
     # 非工具分支（原病灶）：不得再出现"先攒 full、循环后统一赋值"
     bad_pattern = 'full.append(delta["content"])'
@@ -324,7 +332,7 @@ def main():
             importlib.reload(S)
             importlib.reload(sys.modules["agent.pipeline"])
             # 逐字节还原自证：防止"看起来还原了其实没还原"（本仓铁律）
-            _now = io.open(path, encoding="utf-8").read()
+            _now = read_stream_source()
             ok("变异已逐字节还原", _now == backup,
                "" if _now == backup else "还原后内容与备份不一致！")
 

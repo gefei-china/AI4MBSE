@@ -20,6 +20,14 @@
 
 退出码 0 = 全绿。
 """
+import os as _svos
+import sys as _svsys
+_svroot = _svos.path.dirname(_svos.path.abspath(__file__))
+while _svroot and not _svos.path.isdir(_svos.path.join(_svroot, 'tools')):
+    _svroot = _svos.path.dirname(_svroot)
+if _svroot and _svroot not in _svsys.path:
+    _svsys.path.insert(0, _svroot)
+from tools.stream_source import read_stream_source  # noqa: E402
 import os
 import sys
 
@@ -42,8 +50,7 @@ def check(label, cond, detail=""):
         print("  ✗ %s   %s" % (label, detail))
 
 
-with open(SRC, encoding="utf-8") as f:
-    st = f.read()
+st = read_stream_source()
 
 CLARIFY_BREAK = "if _clarify_req:\n                            break"
 CONFIRM_BREAK = "if _hil_confirm_req:\n                            break"

@@ -15,6 +15,14 @@
   N node 运行：真跑前端函数，断言 HTML 里出现 Agent/技能徽章（不是只看源码字符串）
   M 变异：把 _ctx_skill 打回 None ⇒ 判据必须翻红
 """
+import os as _svos
+import sys as _svsys
+_svroot = _svos.path.dirname(_svos.path.abspath(__file__))
+while _svroot and not _svos.path.isdir(_svos.path.join(_svroot, 'tools')):
+    _svroot = _svos.path.dirname(_svroot)
+if _svroot and _svroot not in _svsys.path:
+    _svsys.path.insert(0, _svroot)
+from tools.stream_source import read_stream_source, read_stream_source_bytes  # noqa: E402  # noqa: E402
 # CI-OPTIONAL: 执行环节归属标识：后端字段接线 + 前端两套渲染 + node 实跑徽章；静态判据为主，暂不进 CI
 
 import json
@@ -41,6 +49,8 @@ def check(name, ok, detail=""):
 
 
 def read(p):
+    if p.replace('\\', '/').endswith('pipeline_parts/stream.py'):
+        return read_stream_source()
     with open(os.path.join(ROOT, p), encoding="utf-8", errors="replace") as f:
         return f.read()
 
@@ -133,7 +143,7 @@ console.log(JSON.stringify({
 
     print("\n=== M 变异自证：把 _ctx_skill 打回 None，S1 必须翻红 ===")
     fp = os.path.join(ROOT, "agent/pipeline_parts/stream.py")
-    orig = open(fp, "rb").read()
+    orig = read_stream_source_bytes()
     # ★ 2026-11-20：锚点必须**换行无关**。本机 `core.autocrlf=true` ⇒ checkout 后工作区是
     #   CRLF，而 Linux CI 是 LF；带 `\n` 的多行锚点在两种环境下命中情况不同
     #   ⇒ 门禁会"本机绿、CI 红"（合并到 master 后实测踩到：M0 直接报"锚点未命中"）。
@@ -146,12 +156,12 @@ console.log(JSON.stringify({
     else:
         try:
             open(fp, "wb").write(mutated)
-            m = open(fp, encoding="utf-8").read()
+            m = read_stream_source()
             check("M1 去掉白名单接线后 S1 判据翻红（断言非空转）",
                   'if _wl_skill:' not in m)
         finally:
             open(fp, "wb").write(orig)
-            m2 = open(fp, encoding="utf-8").read()
+            m2 = read_stream_source()
             check("M2 还原后接线复位", 'if _wl_skill:' in m2)
 
     print("\n结果：%d PASS / %d FAIL" % (PASS, FAIL))

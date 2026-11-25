@@ -41,6 +41,15 @@ C 变异自证
 
 运行：python tools/verify/verify_trace_inherit.py
 """
+import os as _svos
+import sys as _svsys
+_svroot = _svos.path.dirname(_svos.path.abspath(__file__))
+while _svroot and not _svos.path.isdir(_svos.path.join(_svroot, 'tools')):
+    _svroot = _svos.path.dirname(_svroot)
+if _svroot and _svroot not in _svsys.path:
+    _svsys.path.insert(0, _svroot)
+from tools.stream_source import read_stream_source  # noqa: E402
+from tools.module_source import read_module_source  # noqa: E402
 import pathlib
 import re
 import sys
@@ -125,7 +134,8 @@ def main():
         if not p.exists():
             ck(f"B1 {rel} 存在", False)
             continue
-        src = p.read_text(encoding="utf-8")
+        src = (read_stream_source() if rel.endswith("stream.py")
+               else p.read_text(encoding="utf-8"))
         # 裸 submit：`xxx.submit(` 且不是包装器内部的 `pool.submit(lambda`
         for m in re.finditer(r"(\w+)\.submit\(", src):
             line_start = src.rfind("\n", 0, m.start()) + 1
@@ -136,7 +146,7 @@ def main():
     ck("B1 三处编排提交点无裸 submit（这是本次事故的直接成因）",
        not bare, "; ".join(bare[:3]))
 
-    src_stream = (ROOT / "agent" / "pipeline_parts" / "stream.py").read_text(encoding="utf-8")
+    src_stream = read_stream_source()
     ck("B2 首跑路径用 _submit_with_ctx",
        "_submit_with_ctx(_exec_pool, _worker" in src_stream)
     ck("B3 补跑路径用 _submit_with_ctx（原来这里是裸 submit）",
@@ -164,7 +174,7 @@ def main():
     src_flows = (ROOT / "routers" / "studio_parts" / "flows.py").read_text(encoding="utf-8")
     ck("B10 画布异步流程端点已移除（flows.py 不再有 run-async 线程）",
        "run-async" not in src_flows and "_run_worker" not in src_flows)
-    src_sup = (ROOT / "core" / "orch_supervisor.py").read_text(encoding="utf-8")
+    src_sup = read_module_source(_svos.path.join(str(ROOT), "core", "orch_supervisor.py"))
     ck("B11 断点续跑线程显式绑定归属（无常驻上下文可继承）",
        "inherit_trace as _it" in src_sup)
 

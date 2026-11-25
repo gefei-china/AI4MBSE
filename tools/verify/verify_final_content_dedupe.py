@@ -13,6 +13,14 @@
 
 运行：python tools/verify/verify_final_content_dedupe.py
 """
+import os as _svos
+import sys as _svsys
+_svroot = _svos.path.dirname(_svos.path.abspath(__file__))
+while _svroot and not _svos.path.isdir(_svos.path.join(_svroot, 'tools')):
+    _svroot = _svos.path.dirname(_svroot)
+if _svroot and _svroot not in _svsys.path:
+    _svsys.path.insert(0, _svroot)
+from tools.stream_source import read_stream_source  # noqa: E402
 import io
 import re
 import sys
@@ -101,7 +109,7 @@ def main():
     ck("B3 拼接降级出口同样收敛（降级 return 在 try 外独立执行）",
        len(re.findall(r"dedupe_interim_code_blocks", planner_src)) >= 2)
 
-    stream_src = (ROOT / "agent" / "pipeline_parts" / "stream.py").read_text(encoding="utf-8")
+    stream_src = read_stream_source()
     m_push = re.search(r"\n(\s*)for _chunk in iter_stream_chunks\(orch_content\)", stream_src)
     m_dedup = re.search(r"\n(\s*)orch_content, _fc_removed = _dedupe_fc\(orch_content\)", stream_src)
     ok_order = bool(m_push and m_dedup and m_dedup.start() < m_push.start())

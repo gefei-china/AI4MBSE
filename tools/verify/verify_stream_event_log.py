@@ -19,6 +19,14 @@
 ⚠️ **变异自证在内存副本上做**（沿用本仓范式：不写回生产源文件，
    避开 2026-10-12 实测踩过的「变异体残留被误判成产品缺陷」事故）。
 """
+import os as _svos
+import sys as _svsys
+_svroot = _svos.path.dirname(_svos.path.abspath(__file__))
+while _svroot and not _svos.path.isdir(_svos.path.join(_svroot, 'tools')):
+    _svroot = _svos.path.dirname(_svroot)
+if _svroot and _svroot not in _svsys.path:
+    _svsys.path.insert(0, _svroot)
+from tools.stream_source import read_stream_source  # noqa: E402
 import io
 import json
 import os
@@ -58,6 +66,8 @@ def check(name, ok, detail=""):
 
 
 def read(rel):
+    if rel.replace('\\', '/').endswith('pipeline_parts/stream.py'):
+        return read_stream_source()
     p = os.path.join(ROOT, rel)
     return io.open(p, encoding="utf-8").read() if os.path.exists(p) else ""
 

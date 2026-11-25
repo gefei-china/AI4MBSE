@@ -12,6 +12,14 @@
    没有这道门，下次往 `gates()` 加键、另一条路径不读，仍然会静默漂移。
 """
 
+import os as _svos
+import sys as _svsys
+_svroot = _svos.path.dirname(_svos.path.abspath(__file__))
+while _svroot and not _svos.path.isdir(_svos.path.join(_svroot, 'tools')):
+    _svroot = _svos.path.dirname(_svroot)
+if _svroot and _svroot not in _svsys.path:
+    _svsys.path.insert(0, _svroot)
+from tools.stream_source import read_stream_source  # noqa: E402
 import io
 import os
 import re
@@ -240,7 +248,7 @@ print("=" * 74)
 print("[4] 双路径一致性：闸门同源、决策同源（本脚本的主要理由）")
 print("=" * 74)
 
-_s_stream = read_src("agent/pipeline_parts/stream.py")
+_s_stream = read_stream_source()
 _s_planner = read_src("workflows/planner.py")
 
 check("4.1 流式路径从 services.replan_loop 读闸门",

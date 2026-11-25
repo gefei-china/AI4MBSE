@@ -15,6 +15,14 @@
 只写正向断言（"代码里有这句话"）会出现"假绿"——本仓已经为此踩过多次
 （`verify_team_defined_orchestration` 的 G10/G12 曾因判据过宽而变异后仍绿）。
 """
+import os as _svos
+import sys as _svsys
+_svroot = _svos.path.dirname(_svos.path.abspath(__file__))
+while _svroot and not _svos.path.isdir(_svos.path.join(_svroot, 'tools')):
+    _svroot = _svos.path.dirname(_svroot)
+if _svroot and _svroot not in _svsys.path:
+    _svsys.path.insert(0, _svroot)
+from tools.stream_source import read_stream_source  # noqa: E402
 import ast
 import os
 import re
@@ -82,6 +90,20 @@ def _func_src(rel, name):
             ls = _lines(rel)
             return "\n".join(ls[n.lineno - 1:(n.end_lineno or n.lineno)])
     return ""
+
+
+def _async_for_pos(text):
+    """返回 text 里**第一条 `async for` 语句**的字符偏移（找不到 -1）。
+
+    ⚠️ 2026-11-25 实测：C6/C6b/C6c 原先按字面量
+    `"async for _f in _event_stream_inner"` 定位，而 `event_stream` 在
+    8abeb7b 之后改成 `_inner = _event_stream_inner(...)` + `async for _f in _inner:`
+    ⇒ 锚点恒 -1 ⇒ 三条判据**全红**，而实现其实完全正确（acquire 在 for 之前、
+    __aexit__ 在 finally 里）。这是一条**资源泄漏守卫的假红**，长期被当"已知红"忽略。
+    判据应认「async for 这条语句」，而不是认被迭代的变量名（名字会随重构漂移）。
+    """
+    m = re.search(r"^[ \t]*async\s+for\b", text, re.M)
+    return m.start() if m else -1
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -222,7 +244,7 @@ def c_group():
     #   ⚠️ 用 AST 取函数体（不走字符串 find —— docstring 里的示例会截断切片）。
     _wrap = _func_src("routers/conversations.py", "event_stream")
     _gate_pos = _wrap.find("await _gate.__aenter__()")
-    _for_pos = _wrap.find("async for _f in _event_stream_inner")
+    _for_pos = _async_for_pos(_wrap)
     _exit_pos = _wrap.find("_gate.__aexit__")
     ck("C6 ★ 闸的 acquire 在流循环之前", 0 <= _gate_pos < _for_pos,
        "gate=%s for=%s" % (_gate_pos, _for_pos))
@@ -241,7 +263,7 @@ def c_group():
         _mut = _wrap.replace("await _gate.__aenter__()", "pass", 1)
         _mut = _mut.replace("finally:", "await _gate.__aenter__()\n        finally:", 1)
         _mut_gate = _mut.find("await _gate.__aenter__()")
-        _mut_for = _mut.find("async for _f in _event_stream_inner")
+        _mut_for = _async_for_pos(_mut)
         ck("C7 ★变异：把 acquire 挪到 for 之后 ⇒ C6 判据能抓到",
            _mut_gate > _mut_for > 0,
            "变异后 gate=%s for=%s（应 gate>for）" % (_mut_gate, _mut_for))
@@ -258,7 +280,7 @@ def c_group():
 # ══════════════════════════════════════════════════════════════════════
 def d_group():
     print("\n=== D 组 · 长任务编排 ===")
-    src = _read("agent/pipeline_parts/stream.py")
+    src = read_stream_source()
     code = _code("agent/pipeline_parts/stream.py")
 
     # D1 超时分支不得再硬写空 payload

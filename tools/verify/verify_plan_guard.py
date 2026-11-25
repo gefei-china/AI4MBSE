@@ -13,6 +13,14 @@
 
 from __future__ import annotations
 
+import os as _svos
+import sys as _svsys
+_svroot = _svos.path.dirname(_svos.path.abspath(__file__))
+while _svroot and not _svos.path.isdir(_svos.path.join(_svroot, 'tools')):
+    _svroot = _svos.path.dirname(_svroot)
+if _svroot and _svroot not in _svsys.path:
+    _svsys.path.insert(0, _svroot)
+from tools.stream_source import read_stream_source  # noqa: E402
 import io
 import json
 import os
@@ -417,7 +425,7 @@ print("=" * 70)
 print("[9] 接线覆盖：流式与非流式**两条**建计划路径都必须调用校验器")
 print("=" * 70)
 
-_s_stream = io.open(os.path.join(REPO, "agent/pipeline_parts/stream.py"), encoding="utf-8").read()
+_s_stream = read_stream_source()
 _s_planner = io.open(os.path.join(REPO, "workflows/planner.py"), encoding="utf-8").read()
 
 check("9.1 非流式路径（_planner_core）调用校验器", "validate_pipeline_plan(" in _s_planner)

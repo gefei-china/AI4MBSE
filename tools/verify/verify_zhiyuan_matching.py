@@ -9,6 +9,14 @@
     ./.venv/Scripts/python.exe -X utf8 tools/verify/verify_zhiyuan_matching.py
 """
 from __future__ import annotations
+import os as _svos
+import sys as _svsys
+_svroot = _svos.path.dirname(_svos.path.abspath(__file__))
+while _svroot and not _svos.path.isdir(_svos.path.join(_svroot, 'tools')):
+    _svroot = _svos.path.dirname(_svroot)
+if _svroot and _svroot not in _svsys.path:
+    _svsys.path.insert(0, _svroot)
+from tools.stream_source import read_stream_source  # noqa: E402
 
 import inspect
 import os
@@ -342,7 +350,7 @@ check("[D6] execute 路径的白名单是**独占式**（skill 白名单直接�
 import ast  # noqa: E402
 
 _stream_path = os.path.join(REPO, "agent/pipeline_parts/stream.py")
-_stream_src = open(_stream_path, encoding="utf-8").read()
+_stream_src = read_stream_source()
 _tree = ast.parse(_stream_src)
 
 

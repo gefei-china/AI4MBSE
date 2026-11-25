@@ -15,6 +15,14 @@ P1-2 要解决的实测问题：6/89 次落在 needs_user ⇒ 全转澄清卡 �
 """
 from __future__ import annotations
 
+import os as _svos
+import sys as _svsys
+_svroot = _svos.path.dirname(_svos.path.abspath(__file__))
+while _svroot and not _svos.path.isdir(_svos.path.join(_svroot, 'tools')):
+    _svroot = _svos.path.dirname(_svroot)
+if _svroot and _svroot not in _svsys.path:
+    _svsys.path.insert(0, _svroot)
+from tools.stream_source import read_stream_source  # noqa: E402
 import os
 import sys
 
@@ -170,8 +178,7 @@ def main():
           ac.default_progress_verdict({"done": False, "next_step": "x"}) is None)
 
     # ══════════════ C. 接线 ══════════════
-    sp = open(os.path.join(_ROOT, "agent", "pipeline_parts", "stream.py"),
-              encoding="utf-8").read()
+    sp = read_stream_source()
     ex = open(os.path.join(_ROOT, "agent", "pipeline_parts", "execute.py"),
               encoding="utf-8").read()
     cfg = open(os.path.join(_ROOT, "core", "config.py"), encoding="utf-8").read()

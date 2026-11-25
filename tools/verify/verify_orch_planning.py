@@ -24,6 +24,14 @@
 
 **运行**：`.venv/Scripts/python.exe -X utf8 tools/verify/verify_orch_planning.py`
 """
+import os as _svos
+import sys as _svsys
+_svroot = _svos.path.dirname(_svos.path.abspath(__file__))
+while _svroot and not _svos.path.isdir(_svos.path.join(_svroot, 'tools')):
+    _svroot = _svos.path.dirname(_svroot)
+if _svroot and _svroot not in _svsys.path:
+    _svsys.path.insert(0, _svroot)
+from tools.stream_source import read_stream_source  # noqa: E402
 import io
 import os
 import re
@@ -67,7 +75,7 @@ def task_fields(prompt_src):
 
 
 print("=== A. 主路径 prompt 含 expected_output ===")
-s_src = io.open(STREAM, encoding="utf-8").read()
+s_src = read_stream_source()
 p_src = io.open(PLANNER, encoding="utf-8").read()
 
 check("A1 stream.py 出现 expected_output 字段声明",

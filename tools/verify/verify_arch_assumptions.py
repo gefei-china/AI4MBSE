@@ -40,6 +40,14 @@
     ./.venv/Scripts/python.exe -X utf8 tools/verify/verify_arch_assumptions.py
 """
 from __future__ import annotations
+import os as _svos
+import sys as _svsys
+_svroot = _svos.path.dirname(_svos.path.abspath(__file__))
+while _svroot and not _svos.path.isdir(_svos.path.join(_svroot, 'tools')):
+    _svroot = _svos.path.dirname(_svroot)
+if _svroot and _svroot not in _svsys.path:
+    _svsys.path.insert(0, _svroot)
+from tools.stream_source import read_stream_source  # noqa: E402
 
 import ast
 import json
@@ -150,7 +158,7 @@ def b_group():
               "视图 skill %d 个，其中 %d 个真被用过" % (len(sk), used_n))
 
         # B1b skill 有没有被真的消费（挂到子任务上透传）
-        st = open(STREAM, encoding="utf-8").read()
+        st = read_stream_source()
         check("B1b skill 被主/子链路透传消费（skill_name=）",
               "skill_name=" in st, "stream.py 未见 skill_name 透传")
 
@@ -183,7 +191,7 @@ def b_group():
 
 def c_group():
     print("\n=== C 组 · 主/子职责边界 ===")
-    st = open(STREAM, encoding="utf-8").read()
+    st = read_stream_source()
     oc = open(ORCH, encoding="utf-8").read()
 
     # C1 主 Agent 四项职责在代码里有实现点

@@ -47,7 +47,7 @@ PASS 3.6 基线：不传采样参数 -> 真实 provider，三键均 None（回�
 PASS 3.7 回归：传 max_tokens=1500 -> 真实 provider（不再静默 Mock）且 provider 实收 1500  | used_mock=False seen={'model': None, 'temperature': None, 'max_tokens': 1500, 'kwargs_keys': ['_intent']}
 PASS 3.8 回归：传 model/temperature -> 真实 provider 且 provider 实收传值  | used_mock=False seen={'model': 'x', 'temperature': 0.1, 'max_tokens': None, 'kwargs_keys': ['_intent']}
 PASS 3.8b 其余 kwargs（_intent 等）仍原样透传，未被 pop 误伤  | kwargs_keys=['_intent']
-PASS 3.9 既有调用点仍传采样参数：norm_apply.py（temperature/max_tokens）——现已真正生效
+PASS 3.9 既有调用点仍传采样参数：services/norm_apply.py（temperature/max_tokens）——现已真正生效
 PASS 3.10 workflows/engine.py 已无 LLM 调用（画布 LLM 节点已移除，防回潮）
 PASS 3.11 证据：refine.py 按轮次循环调用（首评 + 最多 max_rounds 次修订）
 PASS 3.12 证据：_max_rounds 默认 2 / _pass_score 默认 70（core.config 可覆盖）

@@ -7,6 +7,14 @@ sysml_v2_validate 连跑 3 次，第 2/3 次被 dedup 短路（lat 91/97ms）却
 根因：validation_stalled 只装在"真执行"分支之后，dedup 短路分支走不到。
 修法：短路当下用 is_validation_block_result + validation_stalled 检测，命中改回喂停滞说明。
 """
+import os as _svos
+import sys as _svsys
+_svroot = _svos.path.dirname(_svos.path.abspath(__file__))
+while _svroot and not _svos.path.isdir(_svos.path.join(_svroot, 'tools')):
+    _svroot = _svos.path.dirname(_svroot)
+if _svroot and _svroot not in _svsys.path:
+    _svsys.path.insert(0, _svroot)
+from tools.stream_source import read_stream_source  # noqa: E402
 import os
 import sys
 
@@ -89,7 +97,7 @@ def main():
           and "本次校验未执行" in _blk["result"]
           and "不再执行" in _blk["result"])
     # S 段源码接线：两条 ReAct 路径都要有执行前硬拦
-    _st = open("agent/pipeline_parts/stream.py", encoding="utf-8").read()
+    _st = read_stream_source()
     _ex = open("agent/pipeline_parts/execute.py", encoding="utf-8").read()
     check("P13 流式路径有 pass 执行前硬拦（pass_confirmed_n 判定）",
           "pass_confirmed_n() >= 1" in _st and "validation_pass_blocked_payload" in _st)
@@ -140,7 +148,7 @@ def main():
     check("B3 实例调用该函数确实抛 AttributeError（旧写法必炸，反证非空转）", _raised)
 
     print("\n=== S 源码接线（两条 ReAct 路径必须同源）===")
-    s = open(os.path.join(ROOT, "agent/pipeline_parts/stream.py"), encoding="utf-8").read()
+    s = read_stream_source()
     e = open(os.path.join(ROOT, "agent/pipeline_parts/execute.py"), encoding="utf-8").read()
     check("S1 流式：短路分支用模块级别名判 block", "_is_validation_block(tname, _dup_prev)" in s)
     check("S2 流式：短路分支调 validation_stalled", "validation_stalled(tname, {\"result\": _dup_prev})" in s)

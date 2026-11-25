@@ -14,6 +14,14 @@
 用法：.venv\\Scripts\\python.exe -X utf8 tools/verify/verify_attempt_trace.py
 退出码：全绿 0 / 有失败 1。
 """
+import os as _svos
+import sys as _svsys
+_svroot = _svos.path.dirname(_svos.path.abspath(__file__))
+while _svroot and not _svos.path.isdir(_svos.path.join(_svroot, 'tools')):
+    _svroot = _svos.path.dirname(_svroot)
+if _svroot and _svroot not in _svsys.path:
+    _svsys.path.insert(0, _svroot)
+from tools.stream_source import read_stream_source  # noqa: E402
 import json
 import os
 import sys
@@ -90,8 +98,7 @@ def main():
     print("\n[D] 后端：execute.py 与 stream.py 同口径")
     ex = open(os.path.join(ROOT, "agent", "pipeline_parts", "execute.py"),
               encoding="utf-8").read()
-    st = open(os.path.join(ROOT, "agent", "pipeline_parts", "stream.py"),
-              encoding="utf-8").read()
+    st = read_stream_source()
     for label, src in (("execute", ex), ("stream", st)):
         ck("D1 %s 初始化 _ac_attempts" % label, "_ac_attempts = []" in src)
         ck("D1b %s 调用同一 record 函数" % label,

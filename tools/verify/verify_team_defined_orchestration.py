@@ -20,6 +20,14 @@ planner 只拿到一串意图名。这两类缺陷**都不会报错**，只是�
 
 运行：`./.venv/Scripts/python.exe -X utf8 tools/verify/verify_team_defined_orchestration.py`
 """
+import os as _svos
+import sys as _svsys
+_svroot = _svos.path.dirname(_svos.path.abspath(__file__))
+while _svroot and not _svos.path.isdir(_svos.path.join(_svroot, 'tools')):
+    _svroot = _svos.path.dirname(_svroot)
+if _svroot and _svroot not in _svsys.path:
+    _svsys.path.insert(0, _svroot)
+from tools.stream_source import read_stream_source  # noqa: E402
 import json
 import os
 import sqlite3
@@ -219,7 +227,7 @@ _orch = open(os.path.join(ROOT, "agent", "pipeline_parts", "orchestration.py"),
              encoding="utf-8").read()
 ck('_kw["team_prompt"]' in _orch and "**_kw)" in _orch,
    "G5 _try_orchestrate_team 把团队定义传下去（_kw[team_prompt] + **_kw 展开）")
-_st = open(os.path.join(ROOT, "agent", "pipeline_parts", "stream.py"), encoding="utf-8").read()
+_st = read_stream_source()
 ck("roster_block" in _st, "G6 流式编排注入成员名册（capabilities 是近义成员唯一区分依据）")
 ck('(team_def or {}).get("system_prompt")' in _st,
    "G7 ★拆解规则取 team_def 全文（不再 [:300] 截断）")

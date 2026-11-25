@@ -139,7 +139,7 @@ def _mismatch(conn):
 
 def load_migration(mutate=None):
     """加载迁移模块源码，可选文本变换后 exec —— 变异自证用。"""
-    path = os.path.join(ROOT, "database", "migrations", "core/domain/glossary.py")
+    path = os.path.join(ROOT, "database", "migrations", "glossary.py")
     with open(path, encoding="utf-8") as f:
         src = f.read()
     if mutate:

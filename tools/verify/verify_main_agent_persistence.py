@@ -29,6 +29,14 @@ S4 未配 kb_required 的 Agent ⇒ 流里**不出现**「知识库检索」stag
 S5 配了 kb_required / 有 # 标签时 ⇒ 该 stage 正常出现（不误伤）
 """
 from __future__ import annotations
+import os as _svos
+import sys as _svsys
+_svroot = _svos.path.dirname(_svos.path.abspath(__file__))
+while _svroot and not _svos.path.isdir(_svos.path.join(_svroot, 'tools')):
+    _svroot = _svos.path.dirname(_svroot)
+if _svroot and _svroot not in _svsys.path:
+    _svsys.path.insert(0, _svroot)
+from tools.stream_source import read_stream_source  # noqa: E402
 
 import json
 import re
@@ -103,7 +111,7 @@ def main() -> int:
         "缺 team ⇒ 澄清续答后执行主体静默掉回通用 Agent（会话 9372 实证）")
 
     section("S4 · 未触发检索时不得出现「知识库检索」环节（静态）")
-    st = (ROOT / "agent/pipeline_parts/stream.py").read_text(encoding="utf-8", errors="ignore")
+    st = read_stream_source()
     # 取「知识库检索 done」那一行，往前找最近的 `if should_retrieve:`，
     # 且两者之间不得夹着另一个 `yield`（否则说明守卫管不到这个 yield）。
     lines = st.splitlines()

@@ -10,6 +10,14 @@ P2-2 sendChat 拆分后职责函数仍在调用链上（行为不变）
 用法：.venv\\Scripts\\python.exe -X utf8 tools/verify/verify_p1_p2_hardening.py
 退出码：全绿 0 / 有失败 1。
 """
+import os as _svos
+import sys as _svsys
+_svroot = _svos.path.dirname(_svos.path.abspath(__file__))
+while _svroot and not _svos.path.isdir(_svos.path.join(_svroot, 'tools')):
+    _svroot = _svos.path.dirname(_svroot)
+if _svroot and _svroot not in _svsys.path:
+    _svsys.path.insert(0, _svroot)
+from tools.stream_source import read_stream_source  # noqa: E402
 import os
 import sys
 import sqlite3
@@ -27,6 +35,8 @@ def ck(tag, ok, detail=""):
 
 
 def read(rel):
+    if rel.replace('\\', '/').endswith('pipeline_parts/stream.py'):
+        return read_stream_source()
     with open(os.path.join(ROOT, rel), "r", encoding="utf-8") as f:
         return f.read()
 

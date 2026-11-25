@@ -16,6 +16,14 @@
 · 被验的是**真实 helper** 的判据 + 三条路径的**源码接线**。
 """
 
+import os as _svos
+import sys as _svsys
+_svroot = _svos.path.dirname(_svos.path.abspath(__file__))
+while _svroot and not _svos.path.isdir(_svos.path.join(_svroot, 'tools')):
+    _svroot = _svos.path.dirname(_svroot)
+if _svroot and _svroot not in _svsys.path:
+    _svsys.path.insert(0, _svroot)
+from tools.stream_source import read_stream_source  # noqa: E402
 import io
 import json
 import os
@@ -136,7 +144,7 @@ try:
 
     _s_exec = read_src("agent/pipeline_parts/execute.py")
     _s_orch = read_src("agent/pipeline_parts/orchestration.py")
-    _s_stream = read_src("agent/pipeline_parts/stream.py")
+    _s_stream = read_stream_source()
     _s_utils = read_src("agent/utils.py")
 
     check("3.1 execute.py（单 Agent 路径）调用共享实现",

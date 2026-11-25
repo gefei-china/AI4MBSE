@@ -31,6 +31,14 @@
 为什么值得单独成门禁：它守的是**用户看得见的东西**。
 前面 20+ 个门禁守的是"系统内部算得对不对"，这一条守"用户看到的是不是人话"。
 """
+import os as _svos
+import sys as _svsys
+_svroot = _svos.path.dirname(_svos.path.abspath(__file__))
+while _svroot and not _svos.path.isdir(_svos.path.join(_svroot, 'tools')):
+    _svroot = _svos.path.dirname(_svroot)
+if _svroot and _svroot not in _svsys.path:
+    _svsys.path.insert(0, _svroot)
+from tools.stream_source import read_stream_source  # noqa: E402
 import os
 import re
 import sys
@@ -194,7 +202,7 @@ def _read(rel):
 
 
 _w_planner = _read("workflows/planner.py")
-_w_stream = _read("agent/pipeline_parts/stream.py")
+_w_stream = read_stream_source()
 _w_router = _read("routers/conversations.py")
 _w_proto = _read("services/subtask_protocol.py")
 

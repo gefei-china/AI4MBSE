@@ -22,6 +22,14 @@
 
 from __future__ import annotations
 
+import os as _svos
+import sys as _svsys
+_svroot = _svos.path.dirname(_svos.path.abspath(__file__))
+while _svroot and not _svos.path.isdir(_svos.path.join(_svroot, 'tools')):
+    _svroot = _svos.path.dirname(_svroot)
+if _svroot and _svroot not in _svsys.path:
+    _svsys.path.insert(0, _svroot)
+from tools.stream_source import read_stream_source  # noqa: E402
 import json
 import os
 import sqlite3
@@ -178,8 +186,7 @@ def group_b():
 # C. 收尾告知不得被 `_full_content` 覆盖
 # ══════════════════════════════════════════════════════════════════════════
 def group_c():
-    src = open(os.path.join(_ROOT, "agent", "pipeline_parts", "stream.py"),
-               encoding="utf-8").read()
+    src = read_stream_source()
     # C1：真机症状 —— 9730 的答复里没有清单（证明"生成了但没落地"）
     with _db() as c:
         row = c.execute("select content from messages where conversation_id=? "
@@ -287,8 +294,7 @@ def group_d():
           "只读步骤不要等确认" in TODO_RULES_TEXT, "")
 
     # D12：澄清延后的接线存在且有界（最多 2 次 + 要求剩余项减少）
-    _s = open(os.path.join(_ROOT, "agent", "pipeline_parts", "stream.py"),
-              encoding="utf-8").read()
+    _s = read_stream_source()
     check("D12", "待办未做完时延后澄清（有界：≤2 次且要求剩余项减少）",
           "_ac.defer_clarify(" in _s, "未见延后接线")
     # D12a：顺序不变式 —— 待办闸必须**恰好一次**且**早于**延后判断。

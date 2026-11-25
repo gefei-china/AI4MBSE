@@ -8,6 +8,14 @@ P3 问题3：服务端兜底固化写入前同连接二次复查，消除竞态�
 用法：./.venv/Scripts/python.exe -X utf8 tools/verify/verify_three_issue_fixes.py
 """
 from __future__ import annotations
+import os as _svos
+import sys as _svsys
+_svroot = _svos.path.dirname(_svos.path.abspath(__file__))
+while _svroot and not _svos.path.isdir(_svos.path.join(_svroot, 'tools')):
+    _svroot = _svos.path.dirname(_svroot)
+if _svroot and _svroot not in _svsys.path:
+    _svsys.path.insert(0, _svroot)
+from tools.stream_source import read_stream_source  # noqa: E402
 import os, sys
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
@@ -18,7 +26,7 @@ if _ROOT not in sys.path:
 CONV = os.path.join(_ROOT, "routers", "conversations.py")
 STREAM = os.path.join(_ROOT, "agent", "pipeline_parts", "stream.py")
 conv = open(CONV, encoding="utf-8").read()
-stream = open(STREAM, encoding="utf-8").read()
+stream = read_stream_source()
 
 results = []
 def rec(name, ok, detail=""):

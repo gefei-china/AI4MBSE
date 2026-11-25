@@ -29,6 +29,14 @@
 
 **运行**：`.venv/Scripts/python.exe -X utf8 tools/verify/verify_ck_phase_consistency.py`
 """
+import os as _svos
+import sys as _svsys
+_svroot = _svos.path.dirname(_svos.path.abspath(__file__))
+while _svroot and not _svos.path.isdir(_svos.path.join(_svroot, 'tools')):
+    _svroot = _svos.path.dirname(_svroot)
+if _svroot and _svroot not in _svsys.path:
+    _svsys.path.insert(0, _svroot)
+from tools.stream_source import read_stream_source  # noqa: E402
 import io
 import os
 import re
@@ -65,7 +73,7 @@ def derive_phase(agg_status, degraded):
     return "failed" if agg_status in ("partial", "failed") else "done"
 
 
-s_src = io.open(STREAM, encoding="utf-8").read()
+s_src = read_stream_source()
 c_src = io.open(CKPT, encoding="utf-8").read()
 
 print("=== A. 收尾 phase 由 _agg_status 推导 ===")

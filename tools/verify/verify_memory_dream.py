@@ -22,6 +22,7 @@ Anthropic 原文的两类事故，正好对应本门禁的两端：
 import hashlib
 import json
 import os
+import re
 import sqlite3
 import sys
 
@@ -31,6 +32,18 @@ if ROOT not in sys.path:
 os.chdir(ROOT)
 
 PASS, FAIL, SKIPPED = [], [], []
+
+
+def _blank_transcript_search(src):
+    """M1 变异：把「证据检索」置空（在该 import 之前插 `return []`）。
+
+    ⚠️ 2026-11-25：原写法把锚点写死成 `from transcript_fts import search_transcripts`，
+    P1 归位把该 import 改成了 `from services.transcript_fts import ...` ⇒ `str.replace`
+    一次都没命中，`changed == src` ⇒ 变异自证直接判「锚点失效」恒红（实测）。
+    改为正则匹配「任意包前缀 + 同一函数名」：搬迁后仍然命中，且不命中就照样红（不静默）。
+    """
+    return re.sub(r"(\n    )(from\s+[\w.]*transcript_fts\s+import\s+search_transcripts)",
+                  r"\1return []\1\2", src, count=1)
 
 
 def check(name, cond, detail=""):
@@ -255,9 +268,7 @@ def main():
 
     print("\n[3] 变异自证（每条都必须让对应判据翻红）", flush=True)
     mutants = (
-        ("M1 证据检索置空 ⇒ F2 必须红", "F2",
-         lambda s: s.replace("    from transcript_fts import search_transcripts",
-                             "    return []\n    from transcript_fts import search_transcripts", 1)),
+        ("M1 证据检索置空 ⇒ F2 必须红", "F2", _blank_transcript_search),
         ("M2 去掉 HIL 门 ⇒ F3 必须红", "F3",
          lambda s: s.replace("    if not hil_approved:", "    if False:", 1)),
         ("M3 索引不截断 ⇒ F5 必须红", "F5",

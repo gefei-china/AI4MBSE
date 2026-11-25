@@ -6,6 +6,14 @@
 """
 # CI-OPTIONAL: 最终产物折叠：纯函数+静态源码门禁，含源码变异自证，暂不进 CI
 
+import os as _svos
+import sys as _svsys
+_svroot = _svos.path.dirname(_svos.path.abspath(__file__))
+while _svroot and not _svos.path.isdir(_svos.path.join(_svroot, 'tools')):
+    _svroot = _svos.path.dirname(_svroot)
+if _svroot and _svroot not in _svsys.path:
+    _svsys.path.insert(0, _svroot)
+from tools.stream_source import read_stream_source, read_stream_source_bytes  # noqa: E402  # noqa: E402
 import os
 import sys
 
@@ -49,7 +57,7 @@ def main():
     check("P5 无围栏时逐字节原样", fold("普通正文。") == ("普通正文。", []))
 
     print("\n=== S 源码契约 ===")
-    s = open(os.path.join(ROOT, "agent/pipeline_parts/stream.py"), encoding="utf-8").read()
+    s = read_stream_source()
     check("S1 流式推送前先折叠（不是 done 时才变）",
           s.index("_collapse_intermediate_artifacts(orch_content)") <
           s.index("for _chunk in iter_stream_chunks(orch_content)"))
@@ -63,7 +71,7 @@ def main():
 
     print("\n=== M 变异自证：让最后一个 sysml 也不保留，P1 必须翻红 ===")
     fp = os.path.join(ROOT, "agent/pipeline_parts/stream.py")
-    orig = open(fp, "rb").read()
+    orig = read_stream_source_bytes()
     mutated = orig.decode("utf-8").replace(
         "fold = bool(_last_sysml >= 0 and i in sysml_idx and i != _last_sysml)",
         "fold = bool(i in sysml_idx)").encode("utf-8")

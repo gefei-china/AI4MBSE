@@ -29,6 +29,14 @@ P4 绑定与执行不一致无说明
    main_agent=智源对接agent、实际执行知识问答Agent，exec.notices=null。
    根因：团队路由定向只 yield reasoning，没 append 到 exec_notices。
 """
+import os as _svos
+import sys as _svsys
+_svroot = _svos.path.dirname(_svos.path.abspath(__file__))
+while _svroot and not _svos.path.isdir(_svos.path.join(_svroot, 'tools')):
+    _svroot = _svos.path.dirname(_svroot)
+if _svroot and _svroot not in _svsys.path:
+    _svsys.path.insert(0, _svroot)
+from tools.stream_source import read_stream_source  # noqa: E402
 import os
 import sqlite3
 
@@ -183,7 +191,7 @@ def _code_only(path: str) -> str:
 
 def test_p1_reasoning_no_unconditional_retrieval_claim():
     """★ P1：检索零命中时不得再声称"基于检索到的互联数据"。"""
-    src = open(os.path.join(ROOT, "agent/pipeline_parts/stream.py"), encoding="utf-8").read()
+    src = read_stream_source()
     assert "未命中任何条目" in src, "缺少零命中的明确文案"
     assert "无检索依据" in src, "缺少「无检索依据」的口径声明"
     # 关键：必须按实际命中数分支，而不是无条件拼接
@@ -192,7 +200,7 @@ def test_p1_reasoning_no_unconditional_retrieval_claim():
 
 def test_p2_card_data_has_intent_confidence():
     """★ P2：card_data 必须同时提供意图置信度与检索置信度（分列，不混用）。"""
-    src = open(os.path.join(ROOT, "agent/pipeline_parts/stream.py"), encoding="utf-8").read()
+    src = read_stream_source()
     assert '"intent_confidence"' in src, "card_data 缺 intent_confidence"
     assert '"intent_route"' in src, "card_data 缺 intent_route"
 
@@ -225,7 +233,7 @@ def test_p4_team_direct_notice_is_persisted():
     变异自证：删掉 `exec_notices.append({"kind": "progress", "text": _subj_note})`
     ⇒ `_subj_note` 附近再无 append ⇒ 判红（验证见下方 `_assert_invariant` 的注释）。
     """
-    src = open(os.path.join(ROOT, "agent/pipeline_parts/stream.py"), encoding="utf-8").read()
+    src = read_stream_source()
     idx = src.find("_subj_note = (")
     assert idx > 0, "找不到团队定向说明的赋值点（_subj_note）"
     seg = src[max(0, idx - 1200): idx + 900]

@@ -40,6 +40,14 @@
     ./.venv/Scripts/python.exe -X utf8 tools/verify/verify_dedup_and_finalize_hint.py
 """
 from __future__ import annotations
+import os as _svos
+import sys as _svsys
+_svroot = _svos.path.dirname(_svos.path.abspath(__file__))
+while _svroot and not _svos.path.isdir(_svos.path.join(_svroot, 'tools')):
+    _svroot = _svos.path.dirname(_svroot)
+if _svroot and _svroot not in _svsys.path:
+    _svsys.path.insert(0, _svroot)
+from tools.stream_source import read_stream_source  # noqa: E402
 from _tmpdir import mkdtemp  # 共享：创建即登记，atexit 退出时自动回收临时目录
 
 import os
@@ -183,8 +191,7 @@ def main() -> int:
     #   而 return 要取 `_last["id"]` ⇒ IndexError 被 `except: pass` 吞掉 ⇒ 去重从未生效。
     #   ⇒ 行为级判据改由 tools/verify/verify_partial_dedup.py 承担（走真实路由函数 + 真实连接）。
     #   这里只保留「两条路径都在源码里有去重代码」的**弱**断言，并显式标注它抓不到执行期缺陷。
-    with open(STREAM, encoding="utf-8") as f:
-        src = f.read()
+    src = read_stream_source()
     with open(ROUTER, encoding="utf-8") as f:
         rsrc = f.read()
     for name, passed, weak in [
@@ -236,8 +243,7 @@ def main() -> int:
     #   （同一条消息去掉后缀后与 `text` 完全相同 ⇒ 也满足 startswith）。
     #   ⇒ 与"多条件守卫"同理：变异要抽掉**全部**守卫，才等于"守卫真的没了"。
     print("\n[变异自证] 摘掉全部去重判据，应判红")
-    with open(STREAM, encoding="utf-8") as f:
-        src = f.read()
+    src = read_stream_source()
     a1 = "if _lc.strip() and _lc.strip() == text.strip():"
     a2 = ("if text.strip() and text.strip().startswith(_lc.strip()[:200]) \\\n"
           "                            and len(_lc.strip()) >= 200:")
@@ -255,8 +261,7 @@ def main() -> int:
     finally:
         with open(STREAM, "w", encoding="utf-8") as f:
             f.write(src)
-    with open(STREAM, encoding="utf-8") as f:
-        assert f.read() == src, "回滚失败！stream.py 未逐字还原"
+    assert read_stream_source() == src, "回滚失败！stream.py 未逐字还原"
     print("[OK  ] 回滚校验：stream.py 已逐字还原")
 
     print("=" * 74)

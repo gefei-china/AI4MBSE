@@ -28,6 +28,14 @@ B IO 层：cfg 读取 fail-safe；_evaluate_completion 正常/异常路径（mon
 C 接线：stream/execute 结构标记；prompt 纯追加；前端环节块
 D 变异自证：M1 decide 翻转为「恒续跑」⇒ 四道闸用例全红；M2 stream 评估门删除 ⇒ 接线红
 """
+import os as _svos
+import sys as _svsys
+_svroot = _svos.path.dirname(_svos.path.abspath(__file__))
+while _svroot and not _svos.path.isdir(_svos.path.join(_svroot, 'tools')):
+    _svroot = _svos.path.dirname(_svroot)
+if _svroot and _svroot not in _svsys.path:
+    _svsys.path.insert(0, _svroot)
+from tools.stream_source import read_stream_source  # noqa: E402
 import os
 import sys
 import io as _io
@@ -171,7 +179,7 @@ def _read(p):
     return _io.open(ROOT / p, encoding="utf-8").read()
 
 
-_s = _read("agent/pipeline_parts/stream.py")
+_s = read_stream_source()
 _e = _read("agent/pipeline_parts/execute.py")
 _m = _read("agent/pipeline_parts/common.py")
 _f = _read("static/js/mods/11-pipeline.js")

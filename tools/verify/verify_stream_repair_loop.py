@@ -29,6 +29,14 @@ v6 报出 78 个语法错后，收尾只写了 28 token ⇒ **「报了错没人
     ./.venv/Scripts/python.exe -X utf8 tools/verify/verify_stream_repair_loop.py
 """
 from __future__ import annotations
+import os as _svos
+import sys as _svsys
+_svroot = _svos.path.dirname(_svos.path.abspath(__file__))
+while _svroot and not _svos.path.isdir(_svos.path.join(_svroot, 'tools')):
+    _svroot = _svos.path.dirname(_svroot)
+if _svroot and _svroot not in _svsys.path:
+    _svsys.path.insert(0, _svroot)
+from tools.stream_source import read_stream_source  # noqa: E402
 
 import ast
 import os
@@ -40,8 +48,7 @@ STREAM = os.path.join(_ROOT, "agent", "pipeline_parts", "stream.py")
 
 
 def structure_checks() -> list[tuple[str, bool]]:
-    with open(STREAM, encoding="utf-8") as f:
-        src = f.read()
+    src = read_stream_source()
     out = []
 
     # ⚠️ 判据必须**定位到收尾那一段**，不能全文件 `in`：
@@ -102,8 +109,7 @@ def structure_checks() -> list[tuple[str, bool]]:
 
 def scope_check() -> list[tuple[str, bool]]:
     """作用域检查：修复循环里的变量不能「读了却从未赋值」。"""
-    with open(STREAM, encoding="utf-8") as f:
-        tree = ast.parse(f.read())
+    tree = ast.parse(read_stream_source())
     watched = {"_repair_msgs", "_repair_tools", "_got_ok", "_pm", "_pcalls",
                "_tc", "_fn", "_tn", "_ta", "_res"}
     out = []
@@ -121,8 +127,7 @@ def scope_check() -> list[tuple[str, bool]]:
 
 
 def compile_check() -> list[tuple[str, bool]]:
-    with open(STREAM, encoding="utf-8") as f:
-        src = f.read()
+    src = read_stream_source()
     try:
         compile(src, STREAM, "exec")
         return [("stream.py 语法可编译", True)]
@@ -148,8 +153,7 @@ def main() -> int:
     print("=" * 72)
     if ok:
         print("\n[变异自证] 把收尾段内的非流式探针改成流式，判据应变红")
-        with open(STREAM, encoding="utf-8") as f:
-            src = f.read()
+        src = read_stream_source()
         # ★ 必须**在收尾段内**做替换：首版用 `src.replace("stream=False", ..., 1)`
         #   替换的是**文件里第一个** stream=False（在收尾段之外）
         #   ⇒ 收尾段没变 ⇒ 判据仍绿 ⇒ **空转断言**。
@@ -174,8 +178,7 @@ def main() -> int:
         finally:
             with open(STREAM, "w", encoding="utf-8") as f:
                 f.write(src)
-        with open(STREAM, encoding="utf-8") as f:
-            assert f.read() == src, "回滚失败！"
+        assert read_stream_source() == src, "回滚失败！"
         print("[OK  ] 回滚校验：生产代码已逐字还原")
         print("=" * 72)
         print(f"最终结论：{'全部通过' if ok else '未通过'}")

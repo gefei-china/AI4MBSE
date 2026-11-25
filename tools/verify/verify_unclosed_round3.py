@@ -30,6 +30,14 @@
 用法：.venv\\Scripts\\python.exe -X utf8 tools/verify/verify_unclosed_round3.py
 退出码：全绿 0 / 有失败 1。
 """
+import os as _svos
+import sys as _svsys
+_svroot = _svos.path.dirname(_svos.path.abspath(__file__))
+while _svroot and not _svos.path.isdir(_svos.path.join(_svroot, 'tools')):
+    _svroot = _svos.path.dirname(_svroot)
+if _svroot and _svroot not in _svsys.path:
+    _svsys.path.insert(0, _svroot)
+from tools.stream_source import read_stream_source  # noqa: E402
 import os
 import sqlite3
 import sys
@@ -111,7 +119,7 @@ def group_a():
     ck("A9c 安全阀：池子会空 ⇒ 退回原池", keep_n == ["智源数据读写agent"])
 
     src = open(os.path.join(ROOT, "workflows", "planner.py"), encoding="utf-8").read()
-    ssrc = open(os.path.join(ROOT, "agent", "pipeline_parts", "stream.py"), encoding="utf-8").read()
+    ssrc = read_stream_source()
     tsrc = open(os.path.join(ROOT, "agent", "pipeline_parts", "tools.py"), encoding="utf-8").read()
 
     ck("A10 非流式：只有 verdict==no 才剔池",

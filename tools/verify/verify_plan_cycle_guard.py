@@ -23,6 +23,14 @@
 
 **运行**：`.venv/Scripts/python.exe -X utf8 tools/verify/verify_plan_cycle_guard.py`
 """
+import os as _svos
+import sys as _svsys
+_svroot = _svos.path.dirname(_svos.path.abspath(__file__))
+while _svroot and not _svos.path.isdir(_svos.path.join(_svroot, 'tools')):
+    _svroot = _svos.path.dirname(_svroot)
+if _svroot and _svroot not in _svsys.path:
+    _svsys.path.insert(0, _svroot)
+from tools.stream_source import read_stream_source  # noqa: E402
 import io
 from _tmpdir import mkdtemp  # 共享：创建即登记，atexit 退出时自动回收临时目录
 import os
@@ -162,7 +170,7 @@ finally:
     shutil.rmtree(TMP, ignore_errors=True)
 
 print("\n=== E. 主路径对异常有明确降级（不是静默 return）===")
-s_src = io.open(STREAM, encoding="utf-8").read()
+s_src = read_stream_source()
 check("E1 create_plan 被 try 包住", re.search(r'try:\s*\n\s*TaskQueue\.create_plan\(', s_src) is not None)
 check("E2 捕获的是 ValueError（精确）", "except ValueError as _vde" in s_src)
 check("E3 写了 blocked 任务行留痕（可在库里查到原因）",

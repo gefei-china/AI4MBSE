@@ -7,6 +7,14 @@
 """
 # CI-OPTIONAL: 工具试探预算：纯函数+静态源码门禁，含源码变异自证，暂不进 CI
 
+import os as _svos
+import sys as _svsys
+_svroot = _svos.path.dirname(_svos.path.abspath(__file__))
+while _svroot and not _svos.path.isdir(_svos.path.join(_svroot, 'tools')):
+    _svroot = _svos.path.dirname(_svroot)
+if _svroot and _svroot not in _svsys.path:
+    _svsys.path.insert(0, _svroot)
+from tools.stream_source import read_stream_source  # noqa: E402
 import os
 import sys
 
@@ -64,7 +72,7 @@ def main():
           LoopGuard().validation_stalled("query_projects", {"result": r1}) is False)
 
     print("\n=== S 源码契约 ===")
-    s = open(os.path.join(ROOT, "agent/pipeline_parts/stream.py"), encoding="utf-8").read()
+    s = read_stream_source()
     check("S1 主 ReAct 循环同时接了两条守卫",
           "_lg.probe_cap(tname)" in s and "_lg.validation_stalled(tname, result)" in s)
     check("S2 短路计数可观测（写进 usage）",

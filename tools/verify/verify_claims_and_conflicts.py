@@ -43,6 +43,14 @@
     ./.venv/Scripts/python.exe -X utf8 tools/verify/verify_claims_and_conflicts.py
 """
 from __future__ import annotations
+import os as _svos
+import sys as _svsys
+_svroot = _svos.path.dirname(_svos.path.abspath(__file__))
+while _svroot and not _svos.path.isdir(_svos.path.join(_svroot, 'tools')):
+    _svroot = _svos.path.dirname(_svroot)
+if _svroot and _svroot not in _svsys.path:
+    _svsys.path.insert(0, _svroot)
+from tools.stream_source import read_stream_source  # noqa: E402
 
 import ast
 import os
@@ -327,7 +335,7 @@ def w_group():
           "return 共 %d 处，带 conflicts 的 %d 处" % (len(rets), with_cf))
 
     # W3 prompt 契约里必须含 claims + subject（不注入 = 协议永不落地）
-    ssrc = open(STREAM, encoding="utf-8").read()
+    ssrc = read_stream_source()
     i = ssrc.find("【交付格式】")
     check("W3a 子任务 prompt 含【交付格式】契约段", i >= 0)
     seg = ssrc[i:i + 2200] if i >= 0 else ""
@@ -386,7 +394,7 @@ def mutation_selfproof():
     #   否则就成了"另写一条断言再声称它证明了 W3b 有牙齿"（自证不成立）。
     _IN_MUT[0] = True
     try:
-        src = open(STREAM, encoding="utf-8").read()
+        src = read_stream_source()
         i = src.find("【交付格式】")
         mutated = src[:i] + src[i:].replace('"claims":[', '"Xclaims":[', 1) \
             if i >= 0 else src

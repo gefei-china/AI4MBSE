@@ -46,6 +46,14 @@
     ./.venv/Scripts/python.exe -X utf8 tools/verify/verify_requirement_optimization.py
 """
 from __future__ import annotations
+import os as _svos
+import sys as _svsys
+_svroot = _svos.path.dirname(_svos.path.abspath(__file__))
+while _svroot and not _svos.path.isdir(_svos.path.join(_svroot, 'tools')):
+    _svroot = _svos.path.dirname(_svroot)
+if _svroot and _svroot not in _svsys.path:
+    _svsys.path.insert(0, _svroot)
+from tools.stream_source import read_stream_source  # noqa: E402
 from _tmpdir import mkdtemp
 
 import os
@@ -332,8 +340,7 @@ def c_group():
           {"alive_before": _alive_before, "alive_after": _alive_after})
     shutil.rmtree(_d3, ignore_errors=True)
 
-    src = open(os.path.join(_ROOT, "agent", "pipeline_parts", "stream.py"),
-               encoding="utf-8").read().replace("\r\n", "\n")
+    src = read_stream_source().replace("\r\n", "\n")
     check("C5 主链路接线：done 前调用后置处理 + progress 事件 + done.data 字段",
           ("from services.requirement_postprocess import process_for_run" in src
            or "from requirement_postprocess import process_for_run" in src)

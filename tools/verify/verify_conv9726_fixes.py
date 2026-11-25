@@ -28,6 +28,14 @@
 
 from __future__ import annotations
 
+import os as _svos
+import sys as _svsys
+_svroot = _svos.path.dirname(_svos.path.abspath(__file__))
+while _svroot and not _svos.path.isdir(_svos.path.join(_svroot, 'tools')):
+    _svroot = _svos.path.dirname(_svroot)
+if _svroot and _svroot not in _svsys.path:
+    _svsys.path.insert(0, _svroot)
+from tools.stream_source import read_stream_source  # noqa: E402
 import json
 import os
 import sqlite3
@@ -265,8 +273,7 @@ def group_c():
           and ("跑校验" in nt) and ("写入平台" in nt), nt[:120])
 
     # C5：接线 —— stream.py 在「降级收尾」时把清单写进答复
-    src = open(os.path.join(_ROOT, "agent", "pipeline_parts", "stream.py"),
-               encoding="utf-8").read()
+    src = read_stream_source()
     check("C5", "stream.py 已接「降级收尾 ⇒ 写待续清单」",
           'build_degrade_notice' in src and '降级收尾' in src, "未见接线")
 
@@ -300,8 +307,7 @@ def group_d():
           isinstance(g.get("todo_enabled"), bool)
           and isinstance(g.get("harness_enabled"), bool), str(g)[:120])
 
-    src = open(os.path.join(_ROOT, "agent", "pipeline_parts", "stream.py"),
-               encoding="utf-8").read()
+    src = read_stream_source()
     check("D3", "卡片落库带 gates（会话内可证伪「我以为开了」）",
           '"gates": _gates_safe()' in src, "stream.py 未见 gates 字段")
     # D3b：gates 装配必须 fail-safe（诊断信息不得带崩落库）

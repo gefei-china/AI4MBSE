@@ -35,6 +35,14 @@
 用法：./.venv/Scripts/python.exe -X utf8 tools/verify/verify_code_fence_and_partial_archive.py
 """
 from __future__ import annotations
+import os as _svos
+import sys as _svsys
+_svroot = _svos.path.dirname(_svos.path.abspath(__file__))
+while _svroot and not _svos.path.isdir(_svos.path.join(_svroot, 'tools')):
+    _svroot = _svos.path.dirname(_svroot)
+if _svroot and _svroot not in _svsys.path:
+    _svsys.path.insert(0, _svroot)
+from tools.stream_source import read_stream_source  # noqa: E402
 from _tmpdir import mkdtemp  # 共享：创建即登记，atexit 退出时自动回收临时目录
 
 import os
@@ -176,8 +184,7 @@ def main() -> int:
     chk("M2 旧实现下版本归 0", m2.get("versions", -1) == 0, m2)
 
     print("\n[S] 弱断言：两条固化路径源码都含归档调用（执行期缺陷由 B2 抓）")
-    with open(STREAM, encoding="utf-8") as f:
-        ssrc = f.read()
+    ssrc = read_stream_source()
     with open(ROUTER, encoding="utf-8") as f:
         rsrc = f.read()
     chk("S1 stream._persist_partial_stream 含归档调用",

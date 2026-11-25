@@ -14,6 +14,14 @@
 """
 from __future__ import annotations
 
+import os as _svos
+import sys as _svsys
+_svroot = _svos.path.dirname(_svos.path.abspath(__file__))
+while _svroot and not _svos.path.isdir(_svos.path.join(_svroot, 'tools')):
+    _svroot = _svos.path.dirname(_svroot)
+if _svroot and _svroot not in _svsys.path:
+    _svsys.path.insert(0, _svroot)
+from tools.stream_source import read_stream_source  # noqa: E402
 import contextlib
 import io
 import json
@@ -139,8 +147,7 @@ def _run(conn, mode, **kw):
 
 def case_code() -> None:
     print("\nA. 代码级")
-    s = io.open(os.path.join(REPO, "agent", "pipeline_parts", "stream.py"),
-                encoding="utf-8").read()
+    s = read_stream_source()
     a = io.open(os.path.join(REPO, "agent", "pipeline_parts", "autopilot.py"),
                 encoding="utf-8").read()
     i_call = s.find("self.orch_enforce_run(")

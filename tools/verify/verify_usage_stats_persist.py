@@ -11,6 +11,14 @@
 """
 # CI-OPTIONAL: 统计落库：纯函数+静态源码门禁，依赖 card/summary 当前结构，暂不进 CI
 
+import os as _svos
+import sys as _svsys
+_svroot = _svos.path.dirname(_svos.path.abspath(__file__))
+while _svroot and not _svos.path.isdir(_svos.path.join(_svroot, 'tools')):
+    _svroot = _svos.path.dirname(_svroot)
+if _svroot and _svroot not in _svsys.path:
+    _svsys.path.insert(0, _svroot)
+from tools.stream_source import read_stream_source  # noqa: E402
 import os
 import sys
 
@@ -54,7 +62,7 @@ def main():
           s2["tokens"] == 77 and s2["tool_calls"] == 1, str(s2))
 
     print("\n=== S 源码契约 ===")
-    src = open(os.path.join(ROOT, "agent/pipeline_parts/stream.py"), encoding="utf-8").read()
+    src = read_stream_source()
     check("S1 落库前统一挂 usage + summary 的助手存在",
           "def _attach_usage_summary(" in src and 'card_obj["summary"] = _sum' in src)
     check("S2 编排路径调用（两条 card_data 装配均覆盖）",

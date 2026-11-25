@@ -30,6 +30,14 @@
     <repo>\\.venv\\Scripts\\python.exe -X utf8 tools/verify/verify_orch_resume.py
 退出码：全绿 0 / 有失败或空转 1。
 """
+import os as _svos
+import sys as _svsys
+_svroot = _svos.path.dirname(_svos.path.abspath(__file__))
+while _svroot and not _svos.path.isdir(_svos.path.join(_svroot, 'tools')):
+    _svroot = _svos.path.dirname(_svroot)
+if _svroot and _svroot not in _svsys.path:
+    _svsys.path.insert(0, _svroot)
+from tools.stream_source import read_stream_source  # noqa: E402
 import json
 import os
 import re
@@ -341,7 +349,7 @@ def t_i9():
 
 def t_i10():
     print("\n=== I10 接线契约：resume 下跳过 planner 与 create_plan ===")
-    src = open(STREAM_SRC, encoding="utf-8").read()
+    src = read_stream_source()
     ok = _rec("I10a execute_stream 接受 resume_run_id",
               "resume_run_id: int = 0" in src)
     ok &= _rec("I10b resume 直达通道存在（绕过意图识别后的启发式判定）",
@@ -554,7 +562,7 @@ def t_i14():
 def t_i15():
     """C-1 顺带修掉的缺陷：resume 不得插空 user 消息。"""
     print("\n=== C-1b resume 不得产生新一轮 user 消息 ===")
-    src = open(STREAM_SRC, encoding="utf-8").read()
+    src = read_stream_source()
     # ⚠️ 2026-10-21 更新（2026-10-17「澄清续答 DB 层收口」起的形态变更）：
     #   入口条件新增 `and not resume_of_user_msg_id` —— 澄清续答也不新起 user
     #   轮次，改为追加到触发澄清的那条 user 消息上。原断言钉的精确串

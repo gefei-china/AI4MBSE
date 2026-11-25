@@ -20,6 +20,15 @@
 
 运行：`.venv/Scripts/python.exe -X utf8 tools/verify/verify_capability_chain.py`
 """
+import os as _svos
+import sys as _svsys
+_svroot = _svos.path.dirname(_svos.path.abspath(__file__))
+while _svroot and not _svos.path.isdir(_svos.path.join(_svroot, 'tools')):
+    _svroot = _svos.path.dirname(_svroot)
+if _svroot and _svroot not in _svsys.path:
+    _svsys.path.insert(0, _svroot)
+from tools.stream_source import read_stream_source
+from tools.module_source import read_module_source  # noqa: E402  # noqa: E402
 import io
 import json
 import os
@@ -318,7 +327,7 @@ _src_tools = _code_lines(_read("agent/pipeline_parts/tools.py"))
 check("F2 INSERT 列清单含 trace_id", "capability_id, trace_id" in _src_tools)
 check("F3 取值走「实例属性 → ContextVar」两级（子任务/线程都能拿到）",
       '_tool_trace_id' in _src_tools and 'trace_id' in _src_tools)
-_src_stream = _code_lines(_read("agent/pipeline_parts/stream.py"))
+_src_stream = _code_lines(read_stream_source())
 check("F4 execute_stream 入口落 trace 到实例",
       'self._tool_trace_id = str((_trace or {}).get("trace_id") or "")' in _src_stream)
 check("F5 编排子任务沿用外层 trace（不新开）",
@@ -382,7 +391,7 @@ check("F11 取值口径收口到 core.audit.current_trace_id（不在各处自�
 #   绝大部分流量（误导空图），且 run_id / trace_id 两套体系使「按轮归批」不可达。
 #   修法：顶层轮次（conversation_id 真）就地分配 TaskQueue.new_run_id（与编排同源），
 #   嵌套子 Agent（conversation_id=0，复用父编排 run）保持 0 不重分配。门禁断言这两段都还在。
-_src_stream_run = _read("agent/pipeline_parts/stream.py")
+_src_stream_run = read_stream_source()
 check("F12 主路径 run_id 归正：顶层轮次分配 new_run_id、嵌套保持 0（不再恒 0）",
       ('self._tool_run_ctx = int(TaskQueue.new_run_id' in _src_stream_run)
       and ('if conversation_id:' in _src_stream_run)
@@ -476,8 +485,11 @@ _m4 = _src_tools.replace("capability_id, trace_id", "capability_id", 1)
 _mut("M4 INSERT 不写 trace_id", "capability_id, trace_id" not in _m4)
 
 # M5：exec 变异孪生体——collect_declared 不登记全局技能池 ⇒ E2 必须红
-_src_ce = io.open(os.path.join(ROOT, "core", "capability_effective.py"),
-                  encoding="utf-8").read()
+# ⚠️ `core/capability_effective.py` 在 P1 归位后是 5 行垫片 ⇒ 直接读源码时
+#    M5 的变异锚点（`se["skill_pool"].append("全局")`）根本不在文本里，
+#    `_m5_src == _src_ce` ⇒ 变异"未生效" ⇒ 变异自证形同虚设。
+#    read_module_source() 穿透垫片读真实实现（services/capability_effective.py）。
+_src_ce = read_module_source(os.path.join(ROOT, "core", "capability_effective.py"))
 _m5_src = _src_ce.replace('se["skill_pool"].append("全局")', "pass", 1)
 if _m5_src == _src_ce:
     _mut("M5 不登记全局技能池", False, "锚点未命中（变异未生效）")

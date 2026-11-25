@@ -14,6 +14,14 @@
 2. `claims.kind=fact` 但该子任务**零条可回查依据** ⇒ 降 `to_verify`（"fact" 的定义就是可独立复核）；
 3. **fail-open**：无连接 / 老库缺表 / 路径校验异常 ⇒ **不降级**（宁可漏判，不可误降）。
 """
+import os as _svos
+import sys as _svsys
+_svroot = _svos.path.dirname(_svos.path.abspath(__file__))
+while _svroot and not _svos.path.isdir(_svos.path.join(_svroot, 'tools')):
+    _svroot = _svos.path.dirname(_svroot)
+if _svroot and _svroot not in _svsys.path:
+    _svsys.path.insert(0, _svroot)
+from tools.stream_source import read_stream_source  # noqa: E402
 import os
 import sqlite3
 import sys
@@ -195,7 +203,7 @@ try:
 
     # ── D 接线 ──
     hr("[D] 接线：必须在写 summary_json 之前")
-    src = open(os.path.join(ROOT, "agent/pipeline_parts/stream.py"), encoding="utf-8").read()
+    src = read_stream_source()
     i_enf = src.find("evidence_check import enforce")
     i_json = src.find("UPDATE agent_tasks SET summary_json=?")
     check("D1 stream.py 调用了 evidence_check.enforce", i_enf > 0)

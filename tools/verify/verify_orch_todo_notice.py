@@ -29,6 +29,14 @@
 退出码：0=全绿 / 1=有失败
 """
 from __future__ import annotations
+import os as _svos
+import sys as _svsys
+_svroot = _svos.path.dirname(_svos.path.abspath(__file__))
+while _svroot and not _svos.path.isdir(_svos.path.join(_svroot, 'tools')):
+    _svroot = _svos.path.dirname(_svroot)
+if _svroot and _svroot not in _svsys.path:
+    _svsys.path.insert(0, _svroot)
+from tools.stream_source import read_stream_source  # noqa: E402
 
 import contextlib
 import os
@@ -146,7 +154,7 @@ def _notice(conn, run_id: int = RUN):
 # ── A. 代码级 ─────────────────────────────────────────────────
 def case_code() -> None:
     print("\nA. 代码级（调用点 / 守卫 / 零执行 / 台账）")
-    s = open(STREAM, encoding="utf-8").read()
+    s = read_stream_source()
     a = open(AUTOPILOT, encoding="utf-8").read()
     t = open(TODOSTORE, encoding="utf-8").read()
 

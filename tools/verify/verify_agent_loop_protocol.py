@@ -11,6 +11,14 @@
 
 运行：`python tools/verify/verify_agent_loop_protocol.py`
 """
+import os as _svos
+import sys as _svsys
+_svroot = _svos.path.dirname(_svos.path.abspath(__file__))
+while _svroot and not _svos.path.isdir(_svos.path.join(_svroot, 'tools')):
+    _svroot = _svos.path.dirname(_svroot)
+if _svroot and _svroot not in _svsys.path:
+    _svsys.path.insert(0, _svroot)
+from tools.stream_source import read_stream_source  # noqa: E402
 import json
 import os
 import sys
@@ -82,7 +90,7 @@ ck("拒绝执行" in _tr["result"], "C11 截断文案明确「拒绝执行」而
 print("\n== D. 两处接线同源（防「补一边忘一边」） ==")
 _sp = os.path.join(ROOT, "agent", "pipeline_parts", "stream.py")
 _ex = os.path.join(ROOT, "agent", "pipeline_parts", "execute.py")
-_s = open(_sp, encoding="utf-8").read()
+_s = read_stream_source()
 _e = open(_ex, encoding="utf-8").read()
 ck("from agent import loop_protocol as _lproto" in _s, "D1 stream.py 导入 loop_protocol")
 ck("from agent import loop_protocol as _lproto" in _e, "D2 execute.py 导入 loop_protocol")
@@ -404,7 +412,7 @@ ck(all(m.get("role") != "assistant" for m in _mf[-1:]),
    "G7 不追加 assistant 空消息（部分 provider 对tool_call 后的空 assistant 敏感）")
 
 # G8 接线（源码级：两条路径都要有）
-_e_s = open(os.path.join(ROOT, "agent", "pipeline_parts", "stream.py"), encoding="utf-8").read()
+_e_s = read_stream_source()
 _e_e = open(os.path.join(ROOT, "agent", "pipeline_parts", "execute.py"), encoding="utf-8").read()
 ck("finalize_messages(messages" in _e_s, "G8 stream 收尾走 finalize_messages（同源）")
 ck("should_finalize(" in _e_e and "finalize_messages(messages" in _e_e,
@@ -571,7 +579,7 @@ ck(len(_fuv.pop(999005)) <= _fuv.MAX_ITEM_LEN + 8, "H10 超长截断而非丢弃
 _fuv.drop(999001), _fuv.drop(999002), _fuv.drop(999003), _fuv.drop(999005)
 
 # ── 接线（源码级：两处消费点 + 收尾清理 + 归属校验）──
-_h_s = open(os.path.join(ROOT, "agent", "pipeline_parts", "stream.py"), encoding="utf-8").read()
+_h_s = read_stream_source()
 ck(_fuv.__name__ in _h_s or "from agent import followup as _fup" in _h_s,
    "H11 stream.py 导入 follow-up 队列")
 ck(_h_s.count("_fup.pending_count(") >= 2,

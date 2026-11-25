@@ -49,6 +49,15 @@
     ./.venv/Scripts/python.exe -X utf8 tools/verify/verify_orch_interrupt.py
 """
 from __future__ import annotations
+import os as _svos
+import sys as _svsys
+_svroot = _svos.path.dirname(_svos.path.abspath(__file__))
+while _svroot and not _svos.path.isdir(_svos.path.join(_svroot, 'tools')):
+    _svroot = _svos.path.dirname(_svroot)
+if _svroot and _svroot not in _svsys.path:
+    _svsys.path.insert(0, _svroot)
+from tools.stream_source import read_stream_source  # noqa: E402
+from tools.module_source import read_module_source  # noqa: E402
 from _tmpdir import mkdtemp
 
 import inspect
@@ -60,6 +69,25 @@ import time
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _ROOT = os.path.dirname(os.path.dirname(_HERE))
+
+
+def _find_code_pos(src, needle):
+    """返回 needle 在「代码行」中的下标（行首只有缩进），找不到返回 -1。
+
+    ⚠️ 2026-11-25 实测：`src.find("while TaskQueue.pending_count(...)")` 命中的是
+    stream.py:210 **文档字符串里引用的同一句话**（`"`while TaskQueue..."`），
+    于是 seg 落在注释区、W1 判成"主循环没有停止检查" ⇒ 恒红（假红）。
+    文本级判据必须先排除注释/字符串引用：真代码行的行首只能是缩进。
+    """
+    start = 0
+    while True:
+        i = src.find(needle, start)
+        if i < 0:
+            return -1
+        ls = src.rfind("\n", 0, i) + 1
+        if src[ls:i].strip() == "":
+            return i
+        start = i + 1
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
@@ -184,8 +212,7 @@ def s_group():
     # ★ 浏览器实测后的修正：探针若走编排**主连接**，会与主连接持有的未提交写事务纠缠
     #   （本轮实测 3 个并发 run 时报 `database is locked`，服务无响应）。
     #   判据：主循环调用点必须传 None（= 让探针自己开独立短连接）。
-    _srcp = open(os.path.join(_ROOT, "agent", "pipeline_parts", "stream.py"),
-                 encoding="utf-8").read().replace("\r\n", "\n")
+    _srcp = read_stream_source().replace("\r\n", "\n")
     check("S2b 中断探针走独立连接（主循环调用点传 None，不用主连接）",
           "_int_stop(None, run_id)" in _srcp and "_int_stop(conn, run_id)" not in _srcp,
           "探针仍在用编排主连接")
@@ -257,8 +284,9 @@ def r_group():
     check("R7 ★自动重投守护路径必须排除 interrupted（用户停止 ≠ 可自愈故障）",
           not any(int(x["run_id"]) == 83001 for x in lst3),
           {"include_interrupted=False 仍返回": [x.get("run_id") for x in lst3]})
-    _sup = open(os.path.join(_ROOT, "core", "orch_supervisor.py"),
-                encoding="utf-8").read().replace("\r\n", "\n")
+    # ⚠️ P1 归位后该路径是 5 行垫片 ⇒ 直接读源码会把 R7b 判成恒红（实测）。
+    #    read_module_source() 穿透垫片，读真实实现（services/orch_supervisor.py）。
+    _sup = read_module_source(os.path.join(_ROOT, "core", "orch_supervisor.py"))
     check("R7b 守护调用点真的传了 include_interrupted=False（不是只加了参数）",
           "include_interrupted=False" in _sup, "守护仍会重投中断批次")
     c.close()
@@ -266,9 +294,9 @@ def r_group():
 
 def w_group():
     print("\n=== W 组 · 接线 ===")
-    sp = os.path.join(_ROOT, "agent", "pipeline_parts", "stream.py")
-    src = open(sp, encoding="utf-8").read().replace("\r\n", "\n")
-    i_loop = src.find("while TaskQueue.pending_count(conn, run_id) > 0")
+    # 走统一源码视图（stream.py 拆分契约：门禁不直读单文件路径）
+    src = read_stream_source()
+    i_loop = _find_code_pos(src, "while TaskQueue.pending_count(conn, run_id) > 0")
     seg = src[i_loop:i_loop + 2600] if i_loop > 0 else ""
     check("W1 主循环在派发边界检查停止（_int_stop 出现在主循环体内）",
           i_loop > 0 and "_int_stop(None, run_id)" in seg, seg[:160])
@@ -356,9 +384,8 @@ def m_group():
           bool(d2.get("requeue_ids")), d2)
 
     # M3：把主循环的停止检查删掉 ⇒ W1 判据必须翻红
-    sp = os.path.join(_ROOT, "agent", "pipeline_parts", "stream.py")
-    srcs = open(sp, encoding="utf-8").read().replace("\r\n", "\n")
-    i = srcs.find("while TaskQueue.pending_count(conn, run_id) > 0")
+    srcs = read_stream_source()
+    i = _find_code_pos(srcs, "while TaskQueue.pending_count(conn, run_id) > 0")
     seg = srcs[i:i + 2600]
     # ⚠️ 变异锚点必须跟实现同步：探针调用已改成 `_int_stop(None, run_id)`
     #   （独立连接纪律）。锚点写成旧串会让变异**根本没生效** ⇒ 断言空转通过。

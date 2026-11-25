@@ -12,6 +12,14 @@
 
 运行：`python tools/verify/verify_partial_policy.py`
 """
+import os as _svos
+import sys as _svsys
+_svroot = _svos.path.dirname(_svos.path.abspath(__file__))
+while _svroot and not _svos.path.isdir(_svos.path.join(_svroot, 'tools')):
+    _svroot = _svos.path.dirname(_svroot)
+if _svroot and _svroot not in _svsys.path:
+    _svsys.path.insert(0, _svroot)
+from tools.stream_source import read_stream_source  # noqa: E402
 import importlib.util
 import os
 import sys
@@ -398,8 +406,7 @@ ck("E6c 反向确认：原版下该样本**只靠 missing** 就能判 blocked（
    P.classify_partial(S_MISSING_EXTERNAL_ONLY)["cause"])
 
 print("\n[F] 接入点（静态断言：改了模型不接线 = 白改）")
-_stream = open(os.path.join(ROOT, "agent", "pipeline_parts", "stream.py"),
-               encoding="utf-8").read()
+_stream = read_stream_source()
 _orch = open(os.path.join(ROOT, "agent", "pipeline_parts", "orchestration.py"),
              encoding="utf-8").read()
 _cfg = open(os.path.join(ROOT, "core", "config.py"), encoding="utf-8").read()

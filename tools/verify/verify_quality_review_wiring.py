@@ -46,6 +46,14 @@
 当期真库实测（2026-10-18）：conv#9360 两次编排 4 次 plan_eval = 2+2 rounds、2 次 plan_refine，
 reflection 双留痕 score 85/90、rounds 2、conflicts 0 —— **#14 不改代码，再次确认**。
 """
+import os as _svos
+import sys as _svsys
+_svroot = _svos.path.dirname(_svos.path.abspath(__file__))
+while _svroot and not _svos.path.isdir(_svos.path.join(_svroot, 'tools')):
+    _svroot = _svos.path.dirname(_svroot)
+if _svroot and _svroot not in _svsys.path:
+    _svsys.path.insert(0, _svroot)
+from tools.stream_source import read_stream_source  # noqa: E402
 import io
 import json
 import os
@@ -94,6 +102,8 @@ def skip(name, why):
 
 
 def read(rel):
+    if rel.replace('\\', '/').endswith('pipeline_parts/stream.py'):
+        return read_stream_source()
     p = os.path.join(ROOT, rel)
     return io.open(p, encoding="utf-8").read() if os.path.exists(p) else ""
 

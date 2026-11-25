@@ -41,6 +41,14 @@ citations: 0            ← 前端可点条目为空
 
 from __future__ import annotations
 
+import os as _svos
+import sys as _svsys
+_svroot = _svos.path.dirname(_svos.path.abspath(__file__))
+while _svroot and not _svos.path.isdir(_svos.path.join(_svroot, 'tools')):
+    _svroot = _svos.path.dirname(_svroot)
+if _svroot and _svroot not in _svsys.path:
+    _svsys.path.insert(0, _svroot)
+from tools.stream_source import read_stream_source  # noqa: E402
 import io
 import os
 import sqlite3
@@ -226,7 +234,7 @@ def group_a():
 def group_b():
     ctx = _src("agent/pipeline_parts/context.py")
     tools = _src("agent/pipeline_parts/tools.py")
-    stream = _src("agent/pipeline_parts/stream.py")
+    stream = read_stream_source()
     execute = _src("agent/pipeline_parts/execute.py")
     common = _src("agent/pipeline_parts/common.py")
 

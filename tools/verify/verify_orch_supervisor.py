@@ -25,7 +25,11 @@ if hasattr(sys.stdout, "reconfigure"):
 
 PASS, FAIL, VACUOUS = "PASS", "FAIL", "VACUOUS"
 _results = []
-SUP_SRC = os.path.join(ROOT, "core", "orch_supervisor.py")
+# ⚠️ P1 归位后 `core/orch_supervisor.py` 只剩 5 行垫片（转发到 services/orch_supervisor.py）。
+#    按旧路径直接读源码 ⇒ 本门禁所有「源码里有 X」的断言恒红（实测 3 条）。
+#    resolve_source() 穿透垫片，判据语义不变、且与模块物理位置解耦。
+from tools.module_source import resolve_source  # noqa: E402
+SUP_SRC = resolve_source(os.path.join(ROOT, "core", "orch_supervisor.py"))
 
 
 def _rec(name, ok, detail="", kind=PASS):

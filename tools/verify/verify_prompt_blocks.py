@@ -26,6 +26,14 @@ stub 的每个 `_build_*` 返回**带调用指纹**的字符串（`<<_build_role
   旧 skill_block 构造（两路）↔ 新 `build_skill_block`；旧 slots 块 ↔ 新 `build_slots_block`。
   多组 ctx（含空 slots / 空工具 / 空报告 / 长正文等边界）逐组比对，并含 4 条变异自证。
 """
+import os as _svos
+import sys as _svsys
+_svroot = _svos.path.dirname(_svos.path.abspath(__file__))
+while _svroot and not _svos.path.isdir(_svos.path.join(_svroot, 'tools')):
+    _svroot = _svos.path.dirname(_svroot)
+if _svroot and _svroot not in _svsys.path:
+    _svsys.path.insert(0, _svroot)
+from tools.stream_source import read_stream_source  # noqa: E402
 import ast
 import io
 import os
@@ -182,7 +190,7 @@ check("0.2b 基线版**不含** build_prompt_blocks（确认它真的是重构�
       "build_prompt_blocks(" not in OLD_EXEC and "build_prompt_blocks(" not in OLD_STREAM)
 check("0.3 当前工作区已无内联 dict（重构已生效）",
       "assemble_system_prompt({" not in io.open(_P + "/execute.py", encoding="utf-8").read()
-      and "assemble_system_prompt({" not in io.open(_P + "/stream.py", encoding="utf-8").read())
+      and "assemble_system_prompt({" not in read_stream_source())
 check("0.4 旧 dict 字面量抽取成功", bool(_extract_prompt_dict(OLD_EXEC))
       and bool(_extract_prompt_dict(OLD_STREAM)))
 

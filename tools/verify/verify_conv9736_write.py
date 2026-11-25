@@ -21,6 +21,14 @@
 
 from __future__ import annotations
 
+import os as _svos
+import sys as _svsys
+_svroot = _svos.path.dirname(_svos.path.abspath(__file__))
+while _svroot and not _svos.path.isdir(_svos.path.join(_svroot, 'tools')):
+    _svroot = _svos.path.dirname(_svroot)
+if _svroot and _svroot not in _svsys.path:
+    _svsys.path.insert(0, _svroot)
+from tools.stream_source import read_stream_source  # noqa: E402
 import json
 import os
 import sqlite3
@@ -151,8 +159,7 @@ def group_a():
     # A8：★ 收敛闸不得直接终止 —— 应注入「停止勘查、立即执行」强指令
     #   真机 9738：模型已定位到目标包、也提高了 import，却把同一 parentId 查 3 次
     #   ⇒ 旧逻辑 break ⇒ 交付里写"下一步我会校验+导入"，本轮一次没做。
-    _s3 = open(os.path.join(_ROOT, "agent", "pipeline_parts", "stream.py"),
-               encoding="utf-8").read()
+    _s3 = read_stream_source()
     check("A8", "重复调用收敛：先注入强指令并 continue（不再直接 break）",
           "【禁止重复勘查】" in _s3 and "_dup_redirect < 2" in _s3, "仍是直接 break")
     check("A9", "强指令明确要求「import 一次写完 + 回读确认」",
@@ -356,8 +363,7 @@ def group_e():
           merge_round_content(a, b) == a + "\n\n" + b, merge_round_content(a, b)[:60])
 
     # E5：接线（stream 的续跑累加点必须走 merge）
-    s = open(os.path.join(_ROOT, "agent", "pipeline_parts", "stream.py"),
-             encoding="utf-8").read()
+    s = read_stream_source()
     check("E5", "stream 续跑/强制阻断两处累加都改走 merge_round_content",
           s.count("_ac.merge_round_content(") >= 2, f"n={s.count('_ac.merge_round_content(')}")
     # E6：告知类文本（待续清单）仍为追加（不能被去重吞掉）

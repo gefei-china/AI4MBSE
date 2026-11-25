@@ -17,6 +17,14 @@ database.get_db），断言对象是「机制」而非本次部署恰好配了�
 [8] 的夹具 DDL **故意带一个「毒默认」** `DEFAULT 'poison-project'`（等价于现存库里的
 `DEFAULT 'project-satnet-broadband'`）：凡是漏给 project_id 的写入路径，落库值就会是它。
 """
+import os as _svos
+import sys as _svsys
+_svroot = _svos.path.dirname(_svos.path.abspath(__file__))
+while _svroot and not _svos.path.isdir(_svos.path.join(_svroot, 'tools')):
+    _svroot = _svos.path.dirname(_svroot)
+if _svroot and _svroot not in _svsys.path:
+    _svsys.path.insert(0, _svroot)
+from tools.stream_source import read_stream_source  # noqa: E402
 import ast
 import json
 import os
@@ -426,7 +434,7 @@ check("summarize_status 既有口径未被改动（全 full → full）",
 # ─────────────────────────────────────────────────────────────────────────────
 hr("[5] 源码级：两条编排路径都写 orchestrated_status（同一功能不留路径差异）")
 
-_str_src = open(os.path.join(ROOT, "agent/pipeline_parts/stream.py"), encoding="utf-8").read()
+_str_src = read_stream_source()
 _orc_src = open(os.path.join(ROOT, "agent/pipeline_parts/orchestration.py"), encoding="utf-8").read()
 check("流式编排路径写 orchestrated_status", '"orchestrated_status": _agg_status' in _str_src)
 check("非流式编排路径也写 orchestrated_status（此前缺失）",

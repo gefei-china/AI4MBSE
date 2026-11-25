@@ -43,6 +43,14 @@
     ./.venv/Scripts/python.exe -X utf8 tools/verify/verify_cancel_and_reap.py
 """
 from __future__ import annotations
+import os as _svos
+import sys as _svsys
+_svroot = _svos.path.dirname(_svos.path.abspath(__file__))
+while _svroot and not _svos.path.isdir(_svos.path.join(_svroot, 'tools')):
+    _svroot = _svos.path.dirname(_svroot)
+if _svroot and _svroot not in _svsys.path:
+    _svsys.path.insert(0, _svroot)
+from tools.stream_source import read_stream_source  # noqa: E402
 from _tmpdir import mkdtemp  # 共享：创建即登记，atexit 退出时自动回收临时目录
 
 import ast
@@ -222,7 +230,7 @@ def r_group():
 
 def w_group():
     print("\n=== W 组 · 主路径接线 ===")
-    src = open(STREAM, encoding="utf-8").read()
+    src = read_stream_source()
     # ⚠️ 必须定位**调用处**（`_cancel_probe(...)`）而不是**定义处**
     #   （`def _cancel_probe` 里没有 break）—— 首版用 `find("is_cancel_requested")`
     #   命中的是函数体/定义，⇒ W1b 误判红。判红的是判据，不是代码。

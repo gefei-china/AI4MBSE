@@ -38,6 +38,14 @@
     ./.venv/Scripts/python.exe -X utf8 tools/verify/verify_artifact_validator.py
 """
 from __future__ import annotations
+import os as _svos
+import sys as _svsys
+_svroot = _svos.path.dirname(_svos.path.abspath(__file__))
+while _svroot and not _svos.path.isdir(_svos.path.join(_svroot, 'tools')):
+    _svroot = _svos.path.dirname(_svroot)
+if _svroot and _svroot not in _svsys.path:
+    _svsys.path.insert(0, _svroot)
+from tools.stream_source import read_stream_source  # noqa: E402
 
 import ast
 import os
@@ -188,7 +196,7 @@ def x_group(av):
 
 def w_group():
     print("\n=== W 组 · 主路径真的调用了 ===")
-    src = open(STREAM, encoding="utf-8").read()
+    src = read_stream_source()
     check("W1 物化环节调用了 validate_artifact",
           "validate_artifact" in src and "artifact_validator" in src)
     check("W2 校验结果随产物落库（structure_check）",

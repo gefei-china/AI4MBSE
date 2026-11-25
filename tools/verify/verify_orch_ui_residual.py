@@ -14,6 +14,14 @@
 用 Node 直接加载 `11-pipeline.js` / `06-cards.js` 的**真实函数源码**执行，
 并给 `_procSumText` 配一条**变异自证**（旧实现必须泄出 `<`，证明判据能判红）。
 """
+import os as _svos
+import sys as _svsys
+_svroot = _svos.path.dirname(_svos.path.abspath(__file__))
+while _svroot and not _svos.path.isdir(_svos.path.join(_svroot, 'tools')):
+    _svroot = _svos.path.dirname(_svroot)
+if _svroot and _svroot not in _svsys.path:
+    _svsys.path.insert(0, _svroot)
+from tools.stream_source import read_stream_source  # noqa: E402
 import json
 import os
 import subprocess
@@ -31,6 +39,8 @@ def chk(label, ok, detail=""):
 
 
 def read(rel):
+    if rel.replace('\\', '/').endswith('pipeline_parts/stream.py'):
+        return read_stream_source()
     with open(os.path.join(ROOT, rel), encoding="utf-8") as f:
         return f.read()
 

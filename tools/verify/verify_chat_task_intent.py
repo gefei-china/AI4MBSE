@@ -44,6 +44,14 @@
     ./.venv/Scripts/python.exe -X utf8 tools/verify/verify_chat_task_intent.py
 """
 from __future__ import annotations
+import os as _svos
+import sys as _svsys
+_svroot = _svos.path.dirname(_svos.path.abspath(__file__))
+while _svroot and not _svos.path.isdir(_svos.path.join(_svroot, 'tools')):
+    _svroot = _svos.path.dirname(_svroot)
+if _svroot and _svroot not in _svsys.path:
+    _svsys.path.insert(0, _svroot)
+from tools.stream_source import read_stream_source  # noqa: E402
 
 import ast
 import json
@@ -264,8 +272,7 @@ def main() -> int:
 
     # ── 变异自证：摘掉 stream.py 里一处 _intent，必须判红 ────────────────
     print("\n[变异自证] 摘掉 stream.py 的一处 `_intent=CHAT_TASK_PROBE`，应判红")
-    with open(STREAM, encoding="utf-8") as f:
-        src = f.read()
+    src = read_stream_source()
     # ⚠️ 锚点用「子串」而非整行：2026-10-10 P1-b 给调用点追加了 `_model_params`，
     #   整行匹配会随接线参数变化而失效（判据自身变红，真代码没问题）。
     #   判据要守住的是「**这个调用点带 _intent**」，不是「这行长什么样」。
@@ -285,8 +292,7 @@ def main() -> int:
             f.write(src)
 
     # 收尾独立校验：不能省（它能抓住"回滚代码本身写错"）
-    with open(STREAM, encoding="utf-8") as f:
-        assert f.read() == src, "回滚失败！stream.py 未逐字还原"
+    assert read_stream_source() == src, "回滚失败！stream.py 未逐字还原"
     print("[OK  ] 回滚校验：stream.py 已逐字还原")
 
     print("=" * 74)

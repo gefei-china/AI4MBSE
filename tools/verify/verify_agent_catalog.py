@@ -12,6 +12,14 @@
 
 from __future__ import annotations
 
+import os as _svos
+import sys as _svsys
+_svroot = _svos.path.dirname(_svos.path.abspath(__file__))
+while _svroot and not _svos.path.isdir(_svos.path.join(_svroot, 'tools')):
+    _svroot = _svos.path.dirname(_svroot)
+if _svroot and _svroot not in _svsys.path:
+    _svsys.path.insert(0, _svroot)
+from tools.stream_source import read_stream_source  # noqa: E402
 import io
 import os
 import re
@@ -205,7 +213,7 @@ _s = code_only(read_src("agent/pipeline_parts/session.py"))
 check("4.1 session 的落库标签改读目录",
       "agent_catalog import standard_intents" in _s.replace("  ", " "), "")
 
-_s = code_only(read_src("agent/pipeline_parts/stream.py"))
+_s = code_only(read_stream_source())
 check("4.2 stream 产码判定改读目录", "_code_stages()" in _s and "agent_catalog" in _s)
 check("4.3 stream 不再引用幽灵名 multi_design / sysml_view_generation",
       "multi_design" not in _s and "sysml_view_generation" not in _s,
@@ -229,7 +237,7 @@ check("4.8 plan_guard 只在目录真读表时才标 agents.stage_order（防把
       '== "db"' in _s or "== 'db'" in _s, "")
 
 # 旧硬编码若仍存在，必须只是**兜底常量**（出现在 fallback 命名的变量里）
-_s = read_src("agent/pipeline_parts/stream.py")
+_s = read_stream_source()
 check("4.9 stream 的旧常量已重命名/标注为兜底",
       "_CODE_STAGE_INTENTS = {" in _s and "兜底" in _s.split("_CODE_STAGE_INTENTS = {")[0][-400:])
 

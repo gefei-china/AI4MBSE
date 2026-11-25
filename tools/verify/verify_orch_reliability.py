@@ -22,6 +22,14 @@
 # 修复要点：编排可靠性。原 `src_of` 用 `textwrap.dedent(getsource(flow))` —— 该函数体内多行 prompt\n#   含**顶格行** ⇒ dedent 算出公共缩进 0 ⇒ 原样返回（首行仍 4 格）⇒ exec 抛\n#   IndentationError；而 M1「锚点命中」却仍报 hits=1（按行内容匹配，与缩进无关）\n#   ⇒ 典型「锚点中了、执行炸了」。改用 _srctool.src_of（按首行缩进剥离）。\n#   M3 锚点同步改为按行内容定位（源码已重构 uniq → _shown）。
 # 双环境实测：生产库 + 全新干净库 均 rc=0。
 
+import os as _svos
+import sys as _svsys
+_svroot = _svos.path.dirname(_svos.path.abspath(__file__))
+while _svroot and not _svos.path.isdir(_svos.path.join(_svroot, 'tools')):
+    _svroot = _svos.path.dirname(_svroot)
+if _svroot and _svroot not in _svsys.path:
+    _svsys.path.insert(0, _svroot)
+from tools.stream_source import read_stream_source  # noqa: E402
 import inspect
 from _tmpdir import mkdtemp  # 共享：创建即登记，atexit 退出时自动回收临时目录
 import os
@@ -318,7 +326,7 @@ check("H4b 活跃批（ready）绝不被清", _kept_ready in _left)
 _c.close()
 
 # 源码级：流式路径不再复用会话 id + 不再 clear_run
-_s_src = open("agent/pipeline_parts/stream.py", encoding="utf-8").read()
+_s_src = read_stream_source()
 check("H5 流式路径改用 new_run_id 落计划", "TaskQueue.new_run_id(conn)" in _s_src
       and "TaskQueue.create_plan(conn, run_id, plan" in _s_src)
 check("H5b 流式路径不再 clear_run（那正是覆盖历史的原因）",

@@ -327,9 +327,26 @@ jobs:
       #   ④ 产品代码里旧路径 import 必须为 0，且 `__file__` 不许再当仓库根用
       #      （11 个模块曾用它拼 checker.jar / sysml.library / mbse.db，搬目录后会静默错位）。
       # 存量越界（core/ 与 services/ 共 87 处）**只卡增量**，基线写在 layer_ownership.json。
-      - name: Guard 分层归属与依赖方向（15 项 + 5 变异 + 真实树变异已验）
+      - name: Guard 分层归属与依赖方向（18 项 + 6 变异 + 真实树变异已验）
         if: ${{ !cancelled() }}
         run: python tools/verify/verify_layer_ownership.py
+
+      # ── stream.py 源码视图（P1 拆分契约第一步，2026-11-25）────────────
+      # 86 个门禁（132 个调用点）已把「读取 stream.py 源码」收口到 tools/stream_source.py；
+      # 本门禁钉住视图与真实文件逐字节等价 + 文本换行语义与 open().read() 一致
+      # （后者曾让 31 个门禁假红），并做 4 组变异自证。
+      - name: Guard stream 源码视图等价（27 项 + 4 变异 + 读侧归零/写侧棘轮）
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_stream_source_view.py
+
+      # ── 模块源码视图（垫片解析，2026-11-25）────────────────────────────
+      # P1 归位把 94 个旧路径变成 5 行垫片（sys.modules 转发）。门禁按旧路径读源码时
+      # 读到的是垫片 —— 「X in src」恒红（实测 4 个门禁），而「X not in src」**恒绿**
+      # （静默假绿，正是 P0 在治的病）。本门禁钉住「垫片能解析到真实实现」+「门禁不得
+      # open 垫片字面量」，含 2 组变异自证。
+      - name: Guard 模块源码视图（垫片解析，8 项 + 2 变异）
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_module_source_resolution.py
 
       # ── 样本问法可信度（2026-11-08）────────────────────────────────────
       # `query_trace.query` 存的一直是"上游拼装 + Glossary 归一化"后的串，

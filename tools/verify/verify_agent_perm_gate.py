@@ -11,6 +11,14 @@
 
 运行：`python tools/verify/verify_agent_perm_gate.py`
 """
+import os as _svos
+import sys as _svsys
+_svroot = _svos.path.dirname(_svos.path.abspath(__file__))
+while _svroot and not _svos.path.isdir(_svos.path.join(_svroot, 'tools')):
+    _svroot = _svos.path.dirname(_svroot)
+if _svroot and _svroot not in _svsys.path:
+    _svsys.path.insert(0, _svroot)
+from tools.stream_source import read_stream_source  # noqa: E402
 import os
 import re
 import sys
@@ -84,7 +92,7 @@ ck("tool_perm_denied" in _src, "拒绝写入 tool_perm_denied 审计事件")
 ck("user_name" in _src and "redact" in _src,
    "_log_tool_call 同时补 user_name 且脱敏 arguments")
 
-_s_src = open(os.path.join(ROOT, "agent", "pipeline_parts", "stream.py"), encoding="utf-8").read()
+_s_src = read_stream_source()
 ck("_tool_user" in _s_src, "stream.py（生产主路径）也透传 _tool_user")
 _e_src = open(os.path.join(ROOT, "agent", "pipeline_parts", "execute.py"), encoding="utf-8").read()
 ck("_tool_user" in _e_src, "execute.py（冷路径）也透传 _tool_user")

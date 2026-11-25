@@ -30,6 +30,14 @@
 
 复现：`.venv/Scripts/python.exe -X utf8 tools/verify/verify_truncation_policy.py`
 """
+import os as _svos
+import sys as _svsys
+_svroot = _svos.path.dirname(_svos.path.abspath(__file__))
+while _svroot and not _svos.path.isdir(_svos.path.join(_svroot, 'tools')):
+    _svroot = _svos.path.dirname(_svroot)
+if _svroot and _svroot not in _svsys.path:
+    _svsys.path.insert(0, _svroot)
+from tools.stream_source import read_stream_source  # noqa: E402
 import io
 import os
 import re
@@ -204,7 +212,7 @@ def main():
     ok("execute 传 role_cap=_AGENT_ROLE_CAP",
        "role_cap=_AGENT_ROLE_CAP" in _read("agent/pipeline_parts/execute.py"))
     ok("stream 传 role_cap=_AGENT_ROLE_CAP",
-       "role_cap=_AGENT_ROLE_CAP" in _read("agent/pipeline_parts/stream.py"))
+       "role_cap=_AGENT_ROLE_CAP" in read_stream_source())
 
     # ─── ⑤ 设置页 ↔ 后端 schema ─────────────────────────────────────────────
     print("\n=== ⑤ 设置页 ↔ 后端 CONFIG_SCHEMA 一致 ===")

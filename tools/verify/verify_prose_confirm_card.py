@@ -13,6 +13,14 @@ pending_clarify 为空 ⇒ 界面无卡、用户无处作答。
 """
 # CI-OPTIONAL: 散文式确认自动成卡：纯函数 + 源码接线 + 变异自证，暂不进 CI
 
+import os as _svos
+import sys as _svsys
+_svroot = _svos.path.dirname(_svos.path.abspath(__file__))
+while _svroot and not _svos.path.isdir(_svos.path.join(_svroot, 'tools')):
+    _svroot = _svos.path.dirname(_svroot)
+if _svroot and _svroot not in _svsys.path:
+    _svsys.path.insert(0, _svroot)
+from tools.stream_source import read_stream_source, read_stream_source_bytes  # noqa: E402  # noqa: E402
 import os
 import sys
 
@@ -60,7 +68,7 @@ def main():
           bool(det("模型与校验已完成。\n\n以上为写入确认单，请你确认后执行。")))
 
     print("\n=== S 源码接线 ===")
-    s = open(os.path.join(ROOT, "agent/pipeline_parts/stream.py"), encoding="utf-8").read()
+    s = read_stream_source()
     check("S1 主路径探测存在且是纯函数", "def detect_prose_confirm(" in s)
     check("S2 子任务（dry_run）不自己弹卡 —— 交给编排层统一",
           "if not dry_run:\n                    _prose_confirm_q = detect_prose_confirm(" in s)
@@ -75,7 +83,7 @@ def main():
 
     print("\n=== M 变异自证：探测恒 None，P1 必须翻红 ===")
     fp = os.path.join(ROOT, "agent/pipeline_parts/stream.py")
-    orig = open(fp, "rb").read()
+    orig = read_stream_source_bytes()
     # ★ 2026-11-20：锚点必须**换行无关**（本机 autocrlf=true ⇒ CRLF，CI 是 LF）。
     #   归一成 LF 再匹配；还原用 `orig` 原始字节，行尾逐字节不变。
     mutated = orig.decode("utf-8").replace("\r\n", "\n").replace(

@@ -34,6 +34,14 @@
 
 **运行**：`.venv/Scripts/python.exe -X utf8 tools/verify/verify_fact_inference.py`
 """
+import os as _svos
+import sys as _svsys
+_svroot = _svos.path.dirname(_svos.path.abspath(__file__))
+while _svroot and not _svos.path.isdir(_svos.path.join(_svroot, 'tools')):
+    _svroot = _svos.path.dirname(_svroot)
+if _svroot and _svroot not in _svsys.path:
+    _svsys.path.insert(0, _svroot)
+from tools.stream_source import read_stream_source  # noqa: E402
 import io
 import os
 import re
@@ -65,7 +73,7 @@ sys.path.insert(0, ROOT)
 from services import subtask_protocol as sp  # noqa: E402
 
 p_src = io.open(PROTO, encoding="utf-8").read()
-s_src = io.open(STREAM, encoding="utf-8").read()
+s_src = read_stream_source()
 
 # 合法的最小协议样本（task_key 必须给，否则 ok=False 只是占位告警，干扰判读）
 def P(evs, conf="0.8"):

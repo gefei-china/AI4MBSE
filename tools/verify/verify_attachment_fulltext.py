@@ -30,6 +30,14 @@ H3 变异自证（函数级内存孪生，不写生产文件）：
    M1 分段换回整篇截断 ⇒ H1 红（后段条款丢失）；
    M2 换回内联裸抽 ⇒ H2 红（水印残留）。
 """
+import os as _svos
+import sys as _svsys
+_svroot = _svos.path.dirname(_svos.path.abspath(__file__))
+while _svroot and not _svos.path.isdir(_svos.path.join(_svroot, 'tools')):
+    _svroot = _svos.path.dirname(_svroot)
+if _svroot and _svroot not in _svsys.path:
+    _svsys.path.insert(0, _svroot)
+from tools.stream_source import read_stream_source  # noqa: E402
 import inspect
 import io
 import os
@@ -156,9 +164,7 @@ def main() -> int:
     chk("H4g 注入文本同时含正文首部与提纲（分层都在）",
         _body[:200] in _injected and "5.3" in _injected)
     # H4h 变异自证：去掉提纲层 ⇒ H4f/H4g 必须 FAIL（证明守的靶子是真的）
-    _mut_stream = open(
-        os.path.join(ROOT, "agent", "pipeline_parts", "stream.py"),
-        encoding="utf-8").read()
+    _mut_stream = read_stream_source()
     chk("H4h 变异锚点命中（注入点仍在拼接提纲层）",
         "_att_outline" in _mut_stream and "章节提纲" in _mut_stream)
     # 反证：只取前 4 块的旧行为下，**第 5 块之后**的章节在注入文本里**不存在**。
@@ -344,8 +350,7 @@ def main() -> int:
                  encoding="utf-8").read()
     chk("H8n 继承方法只按 conversation_id 查（同会话约束，防跨用户取附件）",
         "WHERE conversation_id=?" in _hsrc)
-    _ssrc = open(os.path.join(ROOT, "agent", "pipeline_parts", "stream.py"),
-                 encoding="utf-8").read()
+    _ssrc = read_stream_source()
     chk("H8o stream 入口已接继承（编排分支在附件解析前 return ⇒ 必须入口接）",
         "_inherit_session_attachments" in _ssrc)
     _esrc = open(os.path.join(ROOT, "agent", "pipeline_parts", "execute.py"),

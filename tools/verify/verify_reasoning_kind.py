@@ -20,6 +20,14 @@
 3. 前端**仍保留** kind 兼容分支（老服务端灰度期发 reasoning+kind，行为不能变）——
    ⚠️ 这一条最关键：**只改后端不改编前端 = 改动完全无效**，而从返回值上看不出来。
 """
+import os as _svos
+import sys as _svsys
+_svroot = _svos.path.dirname(_svos.path.abspath(__file__))
+while _svroot and not _svos.path.isdir(_svos.path.join(_svroot, 'tools')):
+    _svroot = _svos.path.dirname(_svroot)
+if _svroot and _svroot not in _svsys.path:
+    _svsys.path.insert(0, _svroot)
+from tools.stream_source import read_stream_source  # noqa: E402
 import io
 import os
 import re
@@ -81,6 +89,8 @@ def _extract_fn(src, fname, with_header=False):
 
 
 def read(rel):
+    if rel.replace('\\', '/').endswith('pipeline_parts/stream.py'):
+        return read_stream_source()
     p = os.path.join(ROOT, rel)
     return io.open(p, encoding="utf-8").read() if os.path.exists(p) else ""
 

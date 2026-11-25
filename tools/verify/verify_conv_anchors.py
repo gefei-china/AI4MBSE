@@ -28,6 +28,14 @@
 
 含**变异自证**：把注入块去掉后第⑤项必须变红。
 """
+import os as _svos
+import sys as _svsys
+_svroot = _svos.path.dirname(_svos.path.abspath(__file__))
+while _svroot and not _svos.path.isdir(_svos.path.join(_svroot, 'tools')):
+    _svroot = _svos.path.dirname(_svroot)
+if _svroot and _svroot not in _svsys.path:
+    _svsys.path.insert(0, _svroot)
+from tools.stream_source import read_stream_source  # noqa: E402
 import json
 import os
 import sqlite3
@@ -61,8 +69,7 @@ def strip_comments(src):
 
 
 def main():
-    stream_src = open(os.path.join(ROOT, "agent", "pipeline_parts", "stream.py"),
-                      encoding="utf-8").read()
+    stream_src = read_stream_source()
     code = strip_comments(stream_src)
 
     print("=== ① 机制存在且与历史窗口解耦 ===")

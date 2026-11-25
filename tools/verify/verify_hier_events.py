@@ -40,6 +40,14 @@ timeline；而后端 `tool` 事件只有 `{name, arguments, call_id, latency_ms}
 
 用法： ./.venv/Scripts/python.exe -X utf8 tools/verify/verify_hier_events.py
 """
+import os as _svos
+import sys as _svsys
+_svroot = _svos.path.dirname(_svos.path.abspath(__file__))
+while _svroot and not _svos.path.isdir(_svos.path.join(_svroot, 'tools')):
+    _svroot = _svos.path.dirname(_svroot)
+if _svroot and _svroot not in _svsys.path:
+    _svsys.path.insert(0, _svroot)
+from tools.stream_source import read_stream_source  # noqa: E402
 import ast
 import io
 import os
@@ -85,7 +93,7 @@ def tool_yields(src):
 
 def main():
     print("=== 三级层级事件协议守卫 ===")
-    ssrc = io.open(STREAM, encoding="utf-8").read()
+    ssrc = read_stream_source()
     jsrc = io.open(JS, encoding="utf-8").read()
     css = io.open(CSS, encoding="utf-8").read()
 
