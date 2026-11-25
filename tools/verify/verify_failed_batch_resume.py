@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# CI-OPTIONAL: [local] tier=local（见 tools/gates_manifest.json）：failed 批次「为什么不能重投」：默认路径逐字节不变 + 显式 include_failed 的三类结局 + 真库 44 条现场复算。★ 归 local：C 组读生产真库的 orch_checkpoints/agent_tasks 存量（干净库无数据 ⇒ C1 必红）。实测 0.9s
 """failed 批次「为什么不能重投」门禁（2026-11-17）。
 
 ## 问题（用户提问驱动的实测）

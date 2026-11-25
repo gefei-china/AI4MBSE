@@ -876,8 +876,12 @@ class FlowPlannerMixin:
         from llm import llm_client
         from services.task_queue import TaskQueue
         from agent import AgentPipeline
-        import time as _t
-        t0 = _t.time()
+        # ⚠️ 别名必须与函数内所有局部变量/循环变量**不重名**：本函数下方有
+        #    `for _t in plan:`（写范围注入），循环结束后 `_t` 变成 dict
+        #    ⇒ 后面 `_t.time()` 抛 AttributeError: 'dict' object has no attribute 'time'。
+        #    这是**必然崩**（只要 plan 非空且进入写范围注入分支），不是偶发。
+        import time as _tm
+        t0 = _tm.time()
         # ★★ 2026-11-06：**编排子任务必须继承主 Agent 的 MCP 能力**（conv 990480 实证）。
         #   断链：本文件下面 `pipe = AgentPipeline()` 每次新建实例，从没人设
         #   `pipe._team_main_agent` ⇒ 子任务只用**成员自己**绑定的 MCP。
@@ -1054,7 +1058,7 @@ class FlowPlannerMixin:
                 llm = {}
             return {"content": content, "plan": [], "task_summary": {"counts": {}, "total": 0, "items": []},
                     "degraded": True, "data": {"degraded": True, "direct_agent": direct, "warnings": []},
-                    "llm": llm, "latency_ms": int((_t.time() - t0) * 1000)}
+                    "llm": llm, "latency_ms": int((_tm.time() - t0) * 1000)}
 
         # 3) 计划后技能校验（P1-2）
         warnings = []
@@ -1156,7 +1160,7 @@ class FlowPlannerMixin:
                 "degraded": True,
                 "data": {"degraded": True, "blocked_by": "plan_guard",
                          "warnings": warnings, "plan_guard": _plan_guard},
-                "llm": {}, "latency_ms": int((_t.time() - t0) * 1000),
+                "llm": {}, "latency_ms": int((_tm.time() - t0) * 1000),
             }
 
         # 4) DAG 执行（agent_tasks 队列）
@@ -1429,7 +1433,7 @@ class FlowPlannerMixin:
                      "reflection": reflection_meta,
                      "tasks": [{"key": it.get("task_key"), "title": it.get("title"),
                                 "agent": it.get("agent_id"), "status": it.get("status")} for it in summ["items"]]},
-            "llm": {}, "latency_ms": int((_t.time() - t0) * 1000),
+            "llm": {}, "latency_ms": int((_tm.time() - t0) * 1000),
         }
 
     def _run_task(self, tk: dict, goal: str, conn, attachments=None, done_items: list = None,

@@ -51,7 +51,7 @@ while _svroot and not _svos.path.isdir(_svos.path.join(_svroot, 'tools')):
     _svroot = _svos.path.dirname(_svroot)
 if _svroot and _svroot not in _svsys.path:
     _svsys.path.insert(0, _svroot)
-from tools.stream_source import read_stream_source  # noqa: E402
+from tools.stream_source import read_stream_source, write_stream_source  # noqa: E402
 
 import ast
 import json
@@ -183,9 +183,15 @@ def db_checks() -> list[tuple[str, bool]]:
         ratio = (rt / ct * 100.0) if ct else 0.0
         print(f"    [口径] 实施前主对话(intent='')：n={n} 思考占比={ratio:.1f}% "
               f"最长={ml / 1000:.0f}s")
+        # ★ 2026-11-25：把「实施前思考占比 > 30%」从硬判据降为**观测**。
+        #   为什么：它断言的是"修复前"这个历史状态，却从**持续写入的真库**里算 ——
+        #   修好之后新数据把比值摊薄（实测 6.3%），断言必然翻红，红因恰恰是"修复生效了"。
+        #   这类"随时间必然假红"的判据还有第二重毛病：它无法被证伪（历史数据一变就变）。
+        #   保留的硬判据只有"样本量足够"；比值本身照常打印，供人工看趋势。
+        print(f"    [观测] 思考占比={ratio:.1f}%（历史断言'修复前 >30%'已降级："
+              f"库持续写入后该值必然漂移，不能当常驻硬闸）")
         out += [
             (f"实施前主对话确有大量调用（n={n} > 100）", n > 100),
-            (f"实施前主对话思考占比高（{ratio:.1f}% > 30%）", ratio > 30.0),
         ]
     except Exception as e:  # noqa: BLE001
         out.append((f"⚠️ 真库口径复核跳过（{type(e).__name__}），非阻断", True))
@@ -282,14 +288,12 @@ def main() -> int:
 
     # ★ 回滚必须放 finally（此前教训：脚本崩在回滚之前 ⇒ 生产数据/代码被改坏）
     try:
-        with open(STREAM, "w", encoding="utf-8") as f:
-            f.write(mutated)
+        write_stream_source(mutated)
         red = not all(p for _, p in coverage_checks())
         print(f"[变异自证] {'已变红（覆盖面判据是有效的）' if red else '**仍是绿 ⇒ 覆盖面判据是空转断言**'}")
         ok = ok and red
     finally:
-        with open(STREAM, "w", encoding="utf-8") as f:
-            f.write(src)
+        write_stream_source(src)
 
     # 收尾独立校验：不能省（它能抓住"回滚代码本身写错"）
     assert read_stream_source() == src, "回滚失败！stream.py 未逐字还原"

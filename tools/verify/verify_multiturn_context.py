@@ -1,3 +1,4 @@
+# CI-OPTIONAL: [broken] tier=broken（见 tools/gates_manifest.json）：两库都红 [FAIL] FAIL B5 默认值：enabled=True / max_chars=900 / versions=3
 # CI-STABLE: [ok] 多轮上下文常驻门禁；2026-11-18 重校完成 135/135 （默认值漂移钉前提 + 变异自证修复 + C5 夹具补在役 Agent）
 # -*- coding: utf-8 -*-
 """P0-6 会话产物摘要（多轮上下文）常驻验收：纯函数 + 四落点接线 + 零回归 + 变异自证。

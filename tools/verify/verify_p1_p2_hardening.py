@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# CI-OPTIONAL: [local] tier=local（见 tools/gates_manifest.json）：2026-11-20 补登记：历史漏入清单，当前按 local 手工跑；是否晋 pr 需先确认无外部依赖并同步 ci.yml（G6a）
 """P1/P2 加固门禁（2026-11-19）—— 守六项不变式，含真库/功能级验证与变异自证。
 
 P1-1 attempts 覆盖 checkpoint/partial 两条兜底路径

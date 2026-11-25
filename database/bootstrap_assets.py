@@ -183,6 +183,20 @@ def _dedupe_by_key(table: str, rows: list, key: str) -> tuple:
     return out, dups
 
 
+def dump_snapshot_text(obj) -> str:
+    """快照的**规范序列化文本**（写盘与校验共用这一处）。
+
+    ★ 2026-11-25：导出格式（indent / 行尾 / 末尾换行）此前只存在于 `export_snapshot` 的
+      写盘语句里，门禁若要校验"文件与规范导出完全一致"就只能**抄一份参数** —— 一旦
+      导出器改格式（本轮实测从 indent=2/CRLF 改成 indent=1/LF），门禁就钉着旧格式恒红，
+      而它原本要守的东西（快照没被手改、没有鬼行）其实没变。
+      ⇒ 参数只在这里写一次：写盘的用 `open(..., newline="\n").write(dump_snapshot_text(out))`，
+        门禁拿 `dump_snapshot_text(json.loads(raw)) == raw` 判"是否规范导出"。
+      任何一侧改格式，两处同时生效，不会出现"口径漂移"。
+    """
+    return json.dumps(obj, ensure_ascii=False, indent=1, sort_keys=False) + "\n"
+
+
 def export_snapshot(conn, path: str | None = None, dry_run: bool = False) -> dict:
     """把配置类资产导出为快照文件。返回统计 {table: rows}。
 
@@ -230,8 +244,7 @@ def export_snapshot(conn, path: str | None = None, dry_run: bool = False) -> dic
     p = path or snapshot_path()
     os.makedirs(os.path.dirname(p), exist_ok=True)
     with open(p, "w", encoding="utf-8", newline="\n") as f:
-        json.dump(out, f, ensure_ascii=False, indent=1, sort_keys=False)
-        f.write("\n")
+        f.write(dump_snapshot_text(out))
     return stats
 
 

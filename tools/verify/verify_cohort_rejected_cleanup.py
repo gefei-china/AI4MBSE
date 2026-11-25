@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# CI-OPTIONAL: [local] tier=local（见 tools/gates_manifest.json）：2026-11-24 B3：假批准批次作废后状态锁定（cohort rejected / 107 明细 rejected / 无 inferred 残留），并与清理前备份逐行比对证明实体关系未误伤。需生产真库与 backups/ 下备份文件，CI 无此数据
 """B3 验证：假批准批次已作废，且清理未误伤其他表。
 
     .venv/Scripts/python.exe tools/verify/verify_cohort_rejected_cleanup.py

@@ -484,6 +484,11 @@ DEFAULT_CONFIG = {
         "continue_inherit": True,           # 短续问是否继承上一轮意图
         "generic_clarify": True,            # 仅命中泛词时是否出澄清候选
         "multi_intent_clarify": True,       # 多意图(≥2 段)时是否出澄清
+        # ★ 2026-11-25 补登记：agent/intent.py 早已读取该键（结构化任务书护栏，
+        #   run 67 实证），但配置真源里一直没有它 ⇒ 「幽灵开关」：代码能读、
+        #   用户改不了（只能改代码），门禁 verify_config_switches 的 [1] 恒红。
+        #   默认 True = 护栏生效；False 逐字节回到旧行为（把任务书小节当多阶段指令切分）。
+        "multi_spec_guard": True,           # 长任务书/【】小节不当作多阶段指令去切分
         "platform_read_route": True,        # 平台读取类请求是否前置到读路由
         "speech_act_de": True,              # 名词化判据是否容忍「动词+的+后缀」（False=严格紧邻）
         "inherit_silent": True,             # 承接上文的短句是否免澄清（False=回到旧行为）
@@ -2071,6 +2076,7 @@ CONFIG_SCHEMA = {
         "continue_inherit":        {"type": "bool", "desc": "短续问是否继承上一轮意图（False=不猜，交给 LLM）"},
         "generic_clarify":         {"type": "bool", "desc": "仅命中泛词时是否出澄清候选（False=回到静默兜底）"},
         "multi_intent_clarify":    {"type": "bool", "desc": "多意图(≥2 段)时是否出澄清候选（False=不澄清直接选一个）"},
+        "multi_spec_guard":        {"type": "bool", "desc": "结构化任务书护栏（长输入/【】小节不切分成多阶段）。False=逐字节回到旧行为，把任务书小节当「多阶段指令」强制编排"},
         "platform_read_route":     {"type": "bool", "desc": "平台读取类请求是否前置到读路由（False=逐字节回退）"},
         "speech_act_de":           {"type": "bool", "desc": "名词化判据是否容忍「动词+的+后缀」（True=修好「分析的用途」类；False=严格紧邻、逐字节回退）"},
         "inherit_silent":          {"type": "bool", "desc": "承接上文的短句是否免于澄清（True=不打断；False=逐字节回到旧行为）"},

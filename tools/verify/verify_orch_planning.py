@@ -63,14 +63,21 @@ def task_fields(prompt_src):
     """从一段 planner prompt 源码文本里抽出它列出的 JSON 字段名集合。
 
     做法：找形如 `"key": "t1", "title": ...` 的**字段声明段**（prompt 里给 LLM 看的
-    格式样例），把其中的键名收齐。用启发式：定位 `'{"tasks":` 到对应闭合的片段。
+    格式样例），把其中的键名收齐。用启发式：定位 `'{"tasks":'` 到该 JSON 样例**自身的闭合**。
     ⚠️ 刻意**不**去扫全文所有 `"xxx":`，否则会把 Python 字典字面量的键也算进来。
+
+    ★ 2026-11-25 修（实测假红）：原来截固定 1200 字符，而 `workflows/planner.py` 的样例
+      之后紧跟一段 Python 代码 `if _wr_verdict == "yes":` —— 窗口把 `"yes":` 吃进字段集合，
+      C1/C3 恒红（`planner-only=['yes']`）。这不是产品漂移，是**判据窗口越界**。
+      正解：截到 JSON 样例自己的闭合标记（`]}` 或转义版 `]}}`），字段段之后一律不看。
+      两种写法都要认：stream.py 是裸 `{"tasks": [...}]}`，planner.py 是 `{{ }}` 转义版。
     """
     m = re.search(r'\{"tasks":\s*\[', prompt_src)
     if not m:
         return set()
-    seg = prompt_src[m.start(): m.start() + 1200]
-    # 截到该片段里最后一个引号结束，避免吃到后面的代码
+    rest = prompt_src[m.start():]
+    close = re.search(r'\]\}\}?', rest)
+    seg = rest[: close.end()] if close else rest[:1200]
     return set(re.findall(r'"\s*([a-z_]+)\s*"\s*:', seg))
 
 

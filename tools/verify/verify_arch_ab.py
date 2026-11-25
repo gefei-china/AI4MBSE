@@ -1,3 +1,4 @@
+# CI-OPTIONAL: [local] tier=local（见 tools/gates_manifest.json）：P0-1/P0-2 常驻门禁：端到端 Golden Set v0 语料指纹与三条链路覆盖 + 架构级 A/B 跑批器的单变量/重跑/逐任务回归清单守卫（含 3 项变异自证）。需连真库 mbse.db 重算语料指纹，干净 checkout 无该库故不进 PR；不调用 LLM、不写库。2026-11-15 新增
 """CI-OPTIONAL: [local] P0-1/P0-2 常驻门禁：端到端 Golden Set + 架构级 A/B 跑批器。
 
 为什么是 local：本门禁要连真库 mbse.db 重算语料指纹（干净 checkout 无该库），

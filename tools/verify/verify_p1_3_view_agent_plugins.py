@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# CI-OPTIONAL: [local] tier=local（见 tools/gates_manifest.json）：P1-3 常驻门禁：8 个视图生成 Agent 已从**插件库**移除（D1 只清了 agents 表与资产快照）。R 组查 plugins.status=removed + capability_registry=disabled/deprecated + agents 无残留；C 组查承接方 9 个 Skill 仍 published 且挂在 view_expansion；M 组按 plugin_system/store/queri
 """P1-3 常驻门禁：8 个视图生成 Agent 已从插件库移除，且不会被重新发布回来。
 
 为什么需要单独一条（D1 那条门禁守不住）：

@@ -1,3 +1,4 @@
+# CI-OPTIONAL: [local] tier=local（见 tools/gates_manifest.json）：P0-0+A4 端到端（2026-11-21）：真发 HTTP 请求走「端点→统一写入口→仓储→回读核验」全链，含 E2b 判别性证据（绕过入口直写仓储能过 ⇒ 证明 E2 的 400 来自新增校验）。用 MBSE_DB_PATH 指向临时空库并在 import core.config 之前设置（脚本内含硬断言，绝不碰生产 mbse.db）。实测 9/9 全绿、3.8s、零 LLM 零外部网络。为何暂不进 pr：需导入全量 app，干净
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """端到端门禁：本体写链路（P0-0 + A4 + P1-8，2026-11-21 新增）。

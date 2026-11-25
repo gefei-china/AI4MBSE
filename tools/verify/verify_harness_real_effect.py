@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# CI-OPTIONAL: [local] tier=local（见 tools/gates_manifest.json）：harness 闸「真的会拦」：enforce/shadow 真机 A/B（唯一变量=mode）+ conv=0 不再假绿 + 真库台账证据。★ 归 local 而非 pr：A1 断言生产配置 harness_mode='enforce'，干净库/env 下取默认值会翻红 —— 它是「落地验收」而不是「代码回归」。实测 1.0s
 """harness 闸「真的会拦」门禁（2026-11-17，shadow→enforce 落地后的第一批判据）。
 
 ## 为什么需要这道门禁

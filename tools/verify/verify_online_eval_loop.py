@@ -32,6 +32,7 @@ import json
 import os
 import sqlite3
 import sys
+from _schema_ddl import ddl_for  # noqa: E402
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, ROOT)
@@ -43,7 +44,14 @@ _fails = []
 
 
 def _rec(name, ok, detail="", kind=PASS):
-    tag = {"PASS": PASS, "FAIL": FAIL, "VACUOUS": VAC}.get(kind, PASS)
+    # ⚠️ 2026-11-25 修显示缺陷：原来 tag 只由 `kind` 决定（默认 PASS），与 ok 无关
+    #   ⇒ 失败项被打印成 `[PASS] xxx <- 失败详情`，只有汇总计数是对的。
+    #   这种"打印说 PASS、汇总说 FAIL"的输出会让人误以为门禁在自相矛盾，
+    #   实际是显示错 —— 而它恰好制造"看起来是绿的"的假象（本仓 P0 在治的病之一）。
+    if kind == PASS:
+        tag = PASS if ok else FAIL
+    else:
+        tag = {"FAIL": FAIL, "VACUOUS": VAC}.get(kind, kind)
     print("  [%s] %s%s" % (tag, name, ("  <- " + str(detail)) if (detail and not ok) else ""))
     if ok:
         _n["pass"] += 1
@@ -229,13 +237,10 @@ def main():
     from services.orch_span import ConversationTracer
     c4 = sqlite3.connect(":memory:")
     c4.row_factory = sqlite3.Row
-    c4.execute("""CREATE TABLE orch_run_spans (
-        id INTEGER PRIMARY KEY AUTOINCREMENT, conversation_id INTEGER DEFAULT 0,
-        run_id INTEGER DEFAULT 0, kind TEXT DEFAULT '', name TEXT DEFAULT '',
-        parent_id INTEGER DEFAULT 0, status TEXT DEFAULT 'running',
-        started_at TEXT DEFAULT CURRENT_TIMESTAMP, ended_at TEXT,
-        latency_ms INTEGER DEFAULT 0, meta_json TEXT DEFAULT '{}',
-        created_at TEXT DEFAULT CURRENT_TIMESTAMP)""")
+    # 夹具 DDL 与产品同源（tools/verify/_schema_ddl.py）：手抄必然漂移。
+    #   实测 2026-11-25：手抄版缺 trace_id ⇒ span flush 报 no column named trace_id
+    #   （被"不影响主链路"吞掉）⇒ rows 为空 ⇒ 下面 conv[0] 抛 IndexError。
+    c4.execute(ddl_for("orch_run_spans"))
     tr = ConversationTracer(77, trace_id="tr-gate", enabled=True)
     tr.begin_conversation({"intent": "kb_qa"})
     with tr.turn(1):

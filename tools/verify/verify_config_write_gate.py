@@ -1,3 +1,4 @@
+# CI-OPTIONAL: [local] tier=local（见 tools/gates_manifest.json）：P0-5 配置读写端点权限门 + 变更留痕常驻门禁：AST 守 6 个 /api/system/config* 端点挂门、3 个写端点调用 _log_changes、secret 脱敏判据；真库事实守 3 个 preset 角色的 system_config:read/write 授权位且 admin 域未被污染；在 MBSE_DB_PATH 全库副本 + MBSE_CONFIG_PATH 临时文件上跑 TestClient 四档身份（
 """P0-5 常驻门禁：配置读写端点权限门 + 变更留痕（含端到端四档身份验收）。
 
 判「门挂没挂、留痕有没有」只看这一节：

@@ -1461,7 +1461,13 @@ def init_db():
         ended_at TEXT,
         latency_ms INTEGER DEFAULT 0,       -- 闭 span 时 Python 侧 monotonic 差值
         meta_json TEXT DEFAULT '{}',        -- 节点成本（tokens/attempts/offload_id/score…）
-        created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        trace_id TEXT DEFAULT ''            -- B1 跨层关联（2026-11-18）：与 llm_usage_stats / tool_call_logs 同源
+                                            -- ⚠️ 必须写进 CREATE TABLE 而不只靠 _migrate_columns：
+                                            --   ① 新库自包含（verify_orch_span S1d）；② 门禁夹具按本段
+                                            --   抄 SQL 建临时库，缺这一列会让带 trace_id 的 INSERT 直接崩
+                                            --   （实测 verify_replan_p1：no column named trace_id）。
+                                            --   老库仍由 migrations/columns.py 的 _add 补列，两条并存。
     )""")
     c.execute("CREATE INDEX IF NOT EXISTS idx_ors_conv_run "
               "ON orch_run_spans(conversation_id, run_id)")

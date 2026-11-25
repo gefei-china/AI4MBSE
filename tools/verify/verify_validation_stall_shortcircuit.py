@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# CI-OPTIONAL: [local] tier=local（见 tools/gates_manifest.json）：2026-11-21 补登记（同上，存量未分类欠账）。脚本自带声明「CI-OPTIONAL」，按 local 登记。实测零依赖、1.8s、21/21 全绿，后续可晋 pr。
 """门禁：校验停滞在"重复调用短路"分支也要短路（VALIDATION_STALL_IN_DUP_V1）——CI-OPTIONAL。
 
 真机 conv 999999977（2026-11-20，米爸报"会话因校验工具短路一直完不成"）：

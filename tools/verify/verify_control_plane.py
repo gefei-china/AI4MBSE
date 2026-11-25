@@ -41,8 +41,18 @@ def ck(name, ok, detail=""):
 
 
 def _read(rel):
-    with open(os.path.join(_ROOT, rel), encoding="utf-8") as f:
-        return f.read()
+    """读模块真实实现的源码（**穿透 5 行兼容垫片**）。
+
+    ★ 2026-11-25：P1 分层归位把 `orch_supervisor` 搬到了 `services/`，旧路径
+      `core/orch_supervisor.py` 只剩 5 行垫片。此处原先直接 `open()` ⇒
+      读到垫片 ⇒ B4~B10c 共 10 条断言**恒红**（"内容在不在源码里"打到垫片上）。
+      更危险的是反向断言（下方 `"core.idempotency" not in _code(f)`）：
+      读到垫片时它**恒绿**，等于静默失效。
+      ⇒ 源码断言必须与模块物理位置解耦，统一走 `tools.module_source`。
+      换行语义与 `open(..., encoding='utf-8').read()` 一致（仅 LF），断言里的 `\\n` 不受影响。
+    """
+    from tools.module_source import read_module_source
+    return read_module_source(rel)
 
 
 def _code(rel):

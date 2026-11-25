@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# CI-OPTIONAL: [local] tier=local（见 tools/gates_manifest.json）：2026-11-24 第二期：Ontology Query Service 真库实体/关系/邻域/深度上限 + Agent 命中带上下文与变异回落。需生产真库与 agent.rag；CI 无该数据
 """第二期「用得上」验证：Ontology Query Service + Agent 接入。
 
     .venv/Scripts/python.exe tools/verify/verify_ontology_runtime_context.py

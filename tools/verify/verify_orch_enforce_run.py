@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# CI-OPTIONAL: [local] tier=local（见 tools/gates_manifest.json）：编排主路径收口真执行只读验收：enforce/shadow 三态 + 白名单护栏 + 台账分母，16 项内存夹具实测 0.5s；属编排链路专项，登记 local
 """编排主路径收口只读验收门禁（2026-11-18）。
 
 修的是什么：编排的三处入口（resume / 团队 / 常规）都在收口前 return，

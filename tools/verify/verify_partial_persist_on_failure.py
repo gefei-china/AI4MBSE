@@ -47,7 +47,7 @@ while _svroot and not _svos.path.isdir(_svos.path.join(_svroot, 'tools')):
     _svroot = _svos.path.dirname(_svroot)
 if _svroot and _svroot not in _svsys.path:
     _svsys.path.insert(0, _svroot)
-from tools.stream_source import read_stream_source  # noqa: E402
+from tools.stream_source import read_stream_source, write_stream_source  # noqa: E402
 import os
 import sqlite3
 import sys
@@ -205,23 +205,38 @@ def _run_case(pipe, conv_id, monkey_llm=True, stop_after_tokens=None):
 
 
 def _mutate_drop_retention(src: str) -> str:
-    """变异：把**非工具生成分支里那两行"留存"**删掉 ⇒ 内容流出过、但没人记住它。
+    """变异：删掉**所有**「留存」累加语句 ⇒ 内容流出过、但没人记住它。
 
-    这是原缺陷的**等价效果**（旧代码是"循环后才赋值"，效果同样是"流出过、未留存"），
-    且锚点稳定（只在这一个分支的 span 内动，不依赖缩进细节）。
-    意义：验证门禁 ②真的依赖"留存"这件事，而不是被别的路径顺带满足。
+    这是原缺陷的**等价效果**（旧代码是"循环后才赋值"，效果同样是"流出过、未留存"）。
+
+    ★ 2026-11-25 修（实测变异失效）：原实现只删 `if not tool_injected:` 到
+      `st = getattr(llm_client, "stats"` 之间的两行，但同一文件里还有**工具轮后最终生成**
+      分支（`for chunk in chunks:` → `llm_content += / _streamed_acc[0] +=`）等另外的累加点，
+      夹具实际命中的若是另一条分支，删那两行**不改变行为** ⇒ 变异自证恒红
+      （实测：变异后仍 `候选字符=15`）。
+      正解：把**两个累加器**的所有写入点一起删掉 —— 这才是"流出但没记住"的完整等价形态。
+      自证：删完必须 `llm_content +=` 与 `_streamed_acc[0] +=` 均为 0 处。
     """
     import re
-    start = src.find("if not tool_injected:")
-    end = src.find('st = getattr(llm_client, "stats", {})', start)
-    if start < 0 or end < 0:
+    out = re.sub(r"\n\s*llm_content \+= [^\n]*", "", src)
+    out = re.sub(r"\n\s*_streamed_acc\[0\] \+= [^\n]*", "", out)
+
+    def _code_hits(t: str) -> int:
+        """只数**可执行代码**里的累加（注释里写了示例不算 —— 本文件注释确实写了旧写法）。"""
+        n = 0
+        for ln in t.splitlines():
+            s = ln.strip()
+            if s.startswith("#"):
+                continue
+            if "llm_content +=" in s or "_streamed_acc[0] +=" in s:
+                n += 1
+        return n
+
+    if _code_hits(out):
+        return src                      # 没删干净 ⇒ 视为注入失败（不假称已变异）
+    if out == src:
         return src
-    body = src[start:end]
-    mutated = re.sub(r"\n\s*llm_content \+= delta\[\"content\"\]", "", body)
-    mutated = re.sub(r"\n\s*_streamed_acc\[0\] \+= delta\[\"content\"\]", "", mutated)
-    if mutated == body:
-        return src
-    return src[:start] + mutated + src[end:]
+    return out
 
 
 def _rows(conn, conv_id):
@@ -301,7 +316,7 @@ def main():
     # 再跑一次"断开 → 固化"，库里累计仍应是 2 条（每轮 1 条），不得 4 条
     ok("首轮未产生重复行", len(asst) == 1, "%d 条" % len(asst))
 
-    print("\n=== ③ 变异自证：删掉『留存』两行 ⇒ ②必须变红 ===")
+    print("\n=== ③ 变异自证：删掉『留存』累加 ⇒ ②必须变红 ===")
     path = os.path.join(ROOT, "agent/pipeline_parts/stream.py")
     backup = src
     mutated = _mutate_drop_retention(src)
@@ -309,7 +324,7 @@ def main():
        "" if mutated != src else "锚点找不到：非工具分支结构已变，请更新 _mutate_drop_retention")
     if mutated != src:
         try:
-            io.open(path, "w", encoding="utf-8", newline="\n").write(mutated)
+            write_stream_source(mutated)
             import importlib
             importlib.reload(S)
             importlib.reload(sys.modules["agent.pipeline"])
@@ -321,13 +336,22 @@ def main():
             with db_conn() as conn:
                 rows2 = _rows(conn, cid2)
             asst2 = [r for r in rows2 if r["role"] == "assistant"]
-            # 内容仍然流出（用户照样看得到），但**没有一条落库** ⇒ 正是用户报的现象
+            # 内容仍然流出（用户照样看得到），但**已流出的正文没有一条落库** ⇒ 正是用户报的现象
             ok("变异后内容仍流出（证明'看得见'与'存下来'是两件事）", len(streamed2) >= 4,
                "%d 字" % len(streamed2))
-            ok("变异后已流出内容不再落库（门禁会响）", not asst2,
-               "已流出 %d 字 / assistant %d 条" % (len(streamed2), len(asst2)))
+            # ★ 2026-11-25 修（判据过期）：原断言是 `not asst2`（一条都不许有）。
+            #   但产品现在刻意保证「**至少落一条失败说明**」（_persist_partial_stream 的
+            #   force=True 分支：无正文时落"中断说明"，字符数 136，实测 conv 1000000068）
+            #   —— 这比原来的"刷新即蒸发"更好，却让 `not asst2` 永远为假 ⇒ 变异自证恒红。
+            #   正确判据：看**正文有没有保住**。变异后允许有行，但已流出文本必须不在其中
+            #   （只剩失败说明）。这样既保留"②依赖留存"的牙齿，又不会因产品改进而假红。
+            _asst2_txt = "".join((r["content"] or "") for r in asst2)
+            ok("变异后已流出正文不再落库（只剩失败说明，门禁会响）",
+               bool(streamed2.strip()) and streamed2.strip() not in _asst2_txt,
+               "已流出 %d 字 / assistant %d 条 / 落库正文 %d 字"
+               % (len(streamed2), len(asst2), len(_asst2_txt)))
         finally:
-            io.open(path, "w", encoding="utf-8", newline="\n").write(backup)
+            write_stream_source(backup)
             import importlib
             importlib.reload(S)
             importlib.reload(sys.modules["agent.pipeline"])

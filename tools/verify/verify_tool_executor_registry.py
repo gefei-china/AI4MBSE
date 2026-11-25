@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# CI-OPTIONAL: [local] tier=local（见 tools/gates_manifest.json）：2026-11-20 补登记：历史漏入清单，当前按 local 手工跑；是否晋 pr 需先确认无外部依赖并同步 ci.yml（G6a）
 """「工具名 → 执行器」注册表门禁（2026-11-19）。
 
 锁定的不变式：**「登记」与「接线」必须一致**。

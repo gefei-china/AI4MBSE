@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# CI-OPTIONAL: [local] tier=local（见 tools/gates_manifest.json）：2026-11-24 A5：属性 min/max/pattern 约束被两处校验器真实消费 + 真库维度口径纠正（unit/quantity_kind 已有，缺 min/max/pattern/default）。内存夹具 + 真库只读统计；CI 干净库无该维度数据
 """A5 验证：属性 min/max/pattern 约束真正被校验器消费（不是加了没人读的字段）。
 
     .venv/Scripts/python.exe tools/verify/verify_ontology_attr_constraints.py

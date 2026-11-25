@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# CI-OPTIONAL: [local] tier=local（见 tools/gates_manifest.json）：2026-11-24 C1：图库开启时绝不静默 Mock；RocksDB 并发冲突降级 Fuseki 并暴露原因，status 端点显示 effective_writer/degraded_reason。需真库与 Fuseki
 """C1 验证：图库开启时不得静默 Mock；RocksDB 损坏要降级 Fuseki 并暴露原因。
 
     .venv/Scripts/python.exe tools/verify/verify_graph_db_degraded.py

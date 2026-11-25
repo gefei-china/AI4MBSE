@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# CI-OPTIONAL: [local] tier=local（见 tools/gates_manifest.json）：2026-11-24 A6：SysML 元素类型覆盖率双口径统计。14 类现行口径需真库；22 类权威清单源文档未提供时显式 MISSING_AUTHORITY 不编造。需真库实体分布
 """A6：本体类型覆盖率双口径统计（SysML 元素 14 类现行 / PRD 22 类待权威清单）。
 
     .venv/Scripts/python.exe tools/verify/verify_ontology_type_coverage.py

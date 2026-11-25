@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# CI-OPTIONAL: [local] tier=local（见 tools/gates_manifest.json）：编排收口「待办验收如实告知」：run 维度统计 + 零执行 + 台账 orch_notice 行。★ 归 local：C 组读生产真库的 run 990231 存量（干净库无数据必红）。实测 1.1s
 """编排收口「待办验收如实告知」门禁（2026-11-17）。
 
 ## 修的是什么

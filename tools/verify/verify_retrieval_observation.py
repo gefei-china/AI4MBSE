@@ -126,10 +126,34 @@ print()
 print("== I 源码级：trace 必须在路由决策之后、用真实 route ==")
 src = open(os.path.join(_ROOT, "agent", "rag.py"), encoding="utf-8").read()
 _code = "\n".join(ln for ln in src.splitlines() if not ln.lstrip().startswith("#"))
-i_decide = _code.find("self.router.decide")
-i_trace = _code.find("from glossary import trace_query")
-check("I1 两者都存在", i_decide > 0 and i_trace > 0, (i_decide, i_trace))
-check("I2 trace 在 decide 之后（索引更大）", i_trace > i_decide,
+
+# ★ 2026-11-25 修（实测假红）：I1/I2/I6 原来锚在字面量
+#   `from glossary import trace_query` 上，而模块已搬进 core.domain、
+#   import 变成 `from core.domain.glossary import trace_query as _tq`
+#   ⇒ i_trace=-1，I1/I2/I6 三条连坐恒红。这与 memory_dream M1 是同一类缺陷：
+#   **判据写死了 import 的写法**。正解：按 AST 找**调用点**（认别名），只认语义不认写法。
+import ast as _ast
+
+_alias = set()
+for _n in _ast.walk(_ast.parse(src)):
+    if isinstance(_n, _ast.ImportFrom) and (_n.module or "").endswith("glossary"):
+        for _a in _n.names:
+            if _a.name == "trace_query":
+                _alias.add(_a.asname or _a.name)
+_trace_calls, _decide_calls = [], []
+for _n in _ast.walk(_ast.parse(src)):
+    if isinstance(_n, _ast.Call):
+        _f = _n.func
+        if isinstance(_f, _ast.Name) and _f.id in _alias:
+            _trace_calls.append(_n.lineno)
+        if (isinstance(_f, _ast.Attribute) and _f.attr == "decide"
+                and isinstance(_f.value, _ast.Attribute) and _f.value.attr == "router"):
+            _decide_calls.append(_n.lineno)
+
+i_decide = min(_decide_calls) if _decide_calls else -1
+i_trace = min(_trace_calls) if _trace_calls else -1
+check("I1 两者都存在", i_decide > 0 and i_trace > 0, ("decide@%s" % i_decide, "trace@%s" % i_trace))
+check("I2 trace 在 decide 之后（行号更大）", i_trace > i_decide,
       "decide@%d trace@%d" % (i_decide, i_trace))
 # 硬编码 route 必须消失（只允许出现在注释里——已剥离注释）
 check("I3 可执行代码里无硬编码 route=vector",
@@ -137,8 +161,10 @@ check("I3 可执行代码里无硬编码 route=vector",
 check("I4 trace 传的是 route 变量",
       re.search(r'"route":\s*route', _code) is not None)
 check("I5 trace 附带了路由理由（可按列聚合）", '"reason": reason' in _code)
-check("I6 三种路由都写（不再分支内调用）",
-      _code.count("from glossary import trace_query") == 1)
+# I6：全文件只有**一处** trace 调用（不再散落在分支内），且它在 decide 之后
+check("I6 三种路由都写（只有一处调用，且在决策之后）",
+      len(_trace_calls) == 1 and i_trace > i_decide,
+      "调用点=%s（decide@%d）" % (_trace_calls, i_decide))
 
 print()
 print("[RESULT] PASS %d / FAIL %d" % (len(_PASS), len(_FAIL)))

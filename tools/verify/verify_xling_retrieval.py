@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# CI-OPTIONAL: [local] tier=local（见 tools/gates_manifest.json）：跨语言检索门禁：守「中文问英文规范」这条路。该能力此前是隐式的（靠 embedding 自带多语对齐 + retrieval_relevance 的相关度修正），两者都没有门禁，任何改动都可能悄悄弄坏，而症状是「库里明明有、AI 说没有」，最难归因。T1~T5 术语扩展方向性与边界（纯英文不扩 / 无关中文不扩 / min_terms / 长词覆盖短词）；F1~F5 RRF 融合（两路共同项排第一 / 无重复 / cap / 不改入参 
 """跨语言检索常驻门禁 —— 守「中文问英文规范」这条路不被破坏。
 
 ## 为什么需要它

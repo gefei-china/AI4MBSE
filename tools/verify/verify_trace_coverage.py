@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# CI-OPTIONAL: [local] tier=local（见 tools/gates_manifest.json）：B1 跨层 trace 覆盖门禁（2026-11-18）：T1 七表(audit_logs/graph_edit_logs/knowledge_commits/harness_decisions/orch_run_spans/query_trace/hil_confirmations)补 trace_id 列+索引；T2 已接线四表写入能力就绪；T3 audit_logs 哈希链仍 ok（trace 刻意不进哈希，避免存量 7001 行
 """B1 跨层 trace 覆盖门禁（2026-11-18）。
 
 判据（确定性；真库只读 + 副本实写）：

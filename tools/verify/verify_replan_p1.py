@@ -45,6 +45,7 @@ import sqlite3
 import sys
 import tempfile
 import time
+from _schema_ddl import ddl_for  # noqa: E402
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, ROOT)
@@ -186,13 +187,8 @@ def _temp_db():
         os.remove(p)
     conn = sqlite3.connect(p)
     conn.row_factory = sqlite3.Row
-    conn.execute("""CREATE TABLE IF NOT EXISTS orch_run_spans (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        conversation_id INTEGER DEFAULT 0, run_id INTEGER DEFAULT 0,
-        kind TEXT DEFAULT '', name TEXT DEFAULT '', parent_id INTEGER DEFAULT 0,
-        status TEXT DEFAULT 'running', started_at TEXT DEFAULT CURRENT_TIMESTAMP,
-        ended_at TEXT, latency_ms INTEGER DEFAULT 0, meta_json TEXT DEFAULT '{}',
-        created_at TEXT DEFAULT CURRENT_TIMESTAMP)""")
+    # 夹具 DDL 与产品 DDL 同源（见 tools/verify/_schema_ddl.py）：手抄必然漂移。
+    conn.execute(ddl_for("orch_run_spans"))
     conn.commit()
     return p, conn
 

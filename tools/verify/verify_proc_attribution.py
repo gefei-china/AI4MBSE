@@ -22,7 +22,7 @@ while _svroot and not _svos.path.isdir(_svos.path.join(_svroot, 'tools')):
     _svroot = _svos.path.dirname(_svroot)
 if _svroot and _svroot not in _svsys.path:
     _svsys.path.insert(0, _svroot)
-from tools.stream_source import read_stream_source, read_stream_source_bytes  # noqa: E402  # noqa: E402
+from tools.stream_source import read_stream_source, write_stream_source, read_stream_source_bytes  # noqa: E402  # noqa: E402
 # CI-OPTIONAL: 执行环节归属标识：后端字段接线 + 前端两套渲染 + node 实跑徽章；静态判据为主，暂不进 CI
 
 import json
@@ -95,7 +95,16 @@ def main():
           "_bd('agent', t.agent) + _bd('skill', t.skill || t.skill_guide)" in hist)
     check("S13 历史：模板支持 badges 槽位",
           "${s.badges||''}" in hist)
-    check("S14 历史：有参与方汇总", "执行参与方（Agent ${_ag.size}" in hist)
+    # ★ 2026-11-25 反转判据（需求被否 ⇒ 判据必须跟着反转，而不是删掉这条）：
+    #   2026-11-20 米爸二次反馈「历史侧那块汇总默认展开、纵向间距大」⇒ 产品**已移除**
+    #   历史侧的「执行参与方」集中汇总块（见 06-cards.js:180 的留痕注释）。
+    #   旧断言仍要求它**存在** ⇒ 恒红，且红因是"照用户要求改对了"。
+    #   现在守的是：历史侧**不得**再长出该块（防回潮），实时侧仍必须有（11-pipeline.js）。
+    _live = read("static/js/mods/11-pipeline.js")
+    check("S14 历史：不再有集中汇总块（2026-11-20 已按用户要求移除）",
+          "执行参与方（Agent ${_ag.size}" not in hist)
+    check("S14b 实时：参与方汇总仍在（只移历史侧，不动执行过程侧）",
+          "执行参与方（Agent" in _live)
     check("S15 样式：三色徽章 + 参与方行",
           ".proc-badge.ba{" in read("static/css/app.css")
           and ".proc-badge.bs{" in read("static/css/app.css")
@@ -155,12 +164,12 @@ console.log(JSON.stringify({
         check("M0 变异锚点存在", False, "未命中接线锚点")
     else:
         try:
-            open(fp, "wb").write(mutated)
+            write_stream_source(mutated)
             m = read_stream_source()
             check("M1 去掉白名单接线后 S1 判据翻红（断言非空转）",
                   'if _wl_skill:' not in m)
         finally:
-            open(fp, "wb").write(orig)
+            write_stream_source(orig)
             m2 = read_stream_source()
             check("M2 还原后接线复位", 'if _wl_skill:' in m2)
 

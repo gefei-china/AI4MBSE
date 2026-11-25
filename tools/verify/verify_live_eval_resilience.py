@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# CI-OPTIONAL: [local] tier=local（见 tools/gates_manifest.json）：live 跑批抗 429：Retry-After 退避复用会话 + 单例异常隔离 + partial 增量落盘。实现是纯内存夹具（0.5s），但脚本名含 live_ 触发清单 G8 的「pr 层不得依赖服务」启发式，且 pr 层还须同步改 ci.yml（G6a）⇒ 登记 local，避免为一条快门禁改 CI 面
 """live 跑批抗 429 / 抗单例崩溃门禁（2026-11-17 真机事故驱动）。
 
 ## 事故

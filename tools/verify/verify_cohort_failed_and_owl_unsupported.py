@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# CI-OPTIONAL: [nightly] tier=nightly（见 tools/gates_manifest.json）：2026-11-24 D1/D5：推理批次有失败项时不得置 approved（防假批准），Turtle 未支持 OWL 构造须明确告警不静默丢。内存夹具，无外部依赖
 """D1/D5 验证：批次假批准修复 + Turtle 未支持构造告警。
 
     .venv/Scripts/python.exe tools/verify/verify_cohort_failed_and_owl_unsupported.py

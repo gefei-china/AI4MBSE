@@ -158,8 +158,15 @@ def _assign_texts():
         return out
     for node in ast.walk(tree):
         if isinstance(node, ast.Assign):
-            txt = "".join(s.value for s in ast.walk(node.value)
-                          if isinstance(s, ast.Constant) and isinstance(s.value, str))
+            # ⚠️ 2026-11-25：必须按**源码位置**排序后拼接，不能用 ast.walk 的遍历顺序。
+            #   ast.walk 是 BFS：对 `_pb_delta = (f"（{name}）" + ("A" if c else "B") + ...)`
+            #   它会先吐出 IfExp 分支里的常量，拼出来的文本不以「（」开头
+            #   ⇒ `_is_sys_prompt()` 判「无指纹」⇒ S3b 误红（实测 L7082 `_pb_delta`）。
+            #   文案本身是系统提示（以「（Agent名）」开头），错的是提取顺序。
+            _cs = [(s.lineno, s.col_offset, s.value) for s in ast.walk(node.value)
+                   if isinstance(s, ast.Constant) and isinstance(s.value, str)]
+            _cs.sort()
+            txt = "".join(c[2] for c in _cs)
             for t in node.targets:
                 if isinstance(t, ast.Name):
                     out.setdefault(t.id, []).append((node.lineno, txt))

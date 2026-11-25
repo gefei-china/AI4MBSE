@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# CI-OPTIONAL: [local] tier=local（见 tools/gates_manifest.json）：2026-11-24 A1：本体上下文必须真的进入模型可见文本（不是只挂在行上）。需生产真库经 _entity_link → _build_context 端到端；CI 无该数据
 """A1 验证：本体上下文必须真的进入模型可见文本（不是只挂在行上）。
 
     .venv/Scripts/python.exe tools/verify/verify_ontology_prompt_injection.py

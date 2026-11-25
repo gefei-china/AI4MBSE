@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# CI-OPTIONAL: [local] tier=local（见 tools/gates_manifest.json）：2026-11-24 C2：证明 shacl_findings 落库链路真能写（此前只有源码断言）。用 SQLite backup 复制真库到临时文件构造违规，不污染真库；CI 无生产真库
 """C2 验证：证明 shacl_findings 落库链路真的能写（此前只做过源码断言）。
 
     .venv/Scripts/python.exe tools/verify/verify_shacl_findings_write.py

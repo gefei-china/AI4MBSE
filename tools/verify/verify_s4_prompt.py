@@ -1,3 +1,4 @@
+# CI-OPTIONAL: [broken] tier=broken（见 tools/gates_manifest.json）：角色块上限与注入口径门禁（32 项）。2026-11-18 修复两处过期断言：_AGENT_ROLE_CAP 已从 common 单一真源读取（现 8000，2026-10-27 统一），execute.py 已与流式统一传 role_cap；干净环境代码断言 30/30，但 [4] 组需真库 prompts 表只读复核，干净 checkout 必红 ⇒ 保留 broken 记账，不进 CI。
 # 角色块上限门禁：断言从 common 单一真源读取（CAP=8000，2026-10-27 统一），不再写死 1200。
 """S4 验证（2026-09-17）：配置层去重 / 占位符 / Agent 角色块按意图注入。
 

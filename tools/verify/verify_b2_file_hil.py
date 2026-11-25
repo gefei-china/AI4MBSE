@@ -1,3 +1,4 @@
+# CI-OPTIONAL: [local] tier=local（见 tools/gates_manifest.json）：B2-4/B2-5 门禁（2026-11-18）：F 组受控工作区根约束（系统目录默认拒写、allow_roots 白名单、'..' 穿越被 realpath 解掉、exec 入口真拦、读不受限）；H 组 HIL deny 档（LEVELS 最严档、策略表能裁决出 deny、escalate 不放宽、deny 分支先于入队分支）；S 组 destructive 自批闸（真库副本造单：本人批自己被拦且仍 pending、他人批放行、可逆写
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """门禁：B2-4 受控工作区根约束 + B2-5 HIL deny 档与 destructive 自批闸（2026-11-18）

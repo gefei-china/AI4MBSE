@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# CI-OPTIONAL: [local] tier=local（见 tools/gates_manifest.json）：2026-11-21 补登记（同上，存量未分类欠账；出自并行会话，未声明 CI 口径）。实测 17/17 全绿、8.9s、自建临时 sqlite 不开 mbse.db ⇒ 具备晋 pr 条件，但晋 pr 需同时改 ci.yml（G6a），留给该脚本作者决定。
 """围栏错位抢救 + 停止固化归档（2026-11-21，真库 conv 999999977 实证）。
 
 ## 米爸报的两个问题与本次排查发现

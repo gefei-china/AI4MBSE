@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# CI-OPTIONAL: [local] tier=local（见 tools/gates_manifest.json）：陈旧待办清理：软删除/备份/回退/单一口径 16 项内存断言 + 真库 2 项（陈旧归零+deleted 留痕）。C 组读生产 agent_todos ⇒ local
 """陈旧待办清理工具门禁（2026-11-17，软删除 + 可回退）。
 
 断言：

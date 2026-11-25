@@ -1,3 +1,4 @@
+# CI-OPTIONAL: [local] tier=local（见 tools/gates_manifest.json）：P0-6 失败归因 + 子任务必含规则常驻门禁：AST 守 4 个终态写入点写 error_class、3 个重排队出口清旧标签、老库降级分支仍在；临时库夹具跑 cancel/cancel_run/fail/retry 并用改动前孪生体证明 include_rules=False 逐字节零回归；真库断言失败/取消任务error_class 非空率 ≥95% 且取值合法、cancelled 一律 interrupted；必含规则与 Gol
 """P0-6 常驻门禁：失败归因全覆盖 + 子任务必含规则 + 交接厚度口径勘误。
 
 判「门有没有牙齿」只看这一节：

@@ -31,6 +31,7 @@ _ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 os.chdir(_ROOT)
+from _schema_ddl import ddl_for  # noqa: E402
 
 _PASS, _FAIL = [], []
 
@@ -46,12 +47,11 @@ _TMP = os.path.join(_ROOT, "tmp", "_s1_gate.db")
 if os.path.exists(_TMP):
     os.remove(_TMP)
 con = sqlite3.connect(_TMP)
-con.execute("""CREATE TABLE orch_run_spans (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    conversation_id INTEGER DEFAULT 0, run_id INTEGER DEFAULT 0,
-    kind TEXT DEFAULT '', name TEXT DEFAULT '', parent_id INTEGER DEFAULT 0,
-    status TEXT DEFAULT 'running', started_at TEXT DEFAULT '', ended_at TEXT DEFAULT '',
-    latency_ms INTEGER DEFAULT 0, meta_json TEXT DEFAULT '', created_at TEXT DEFAULT '')""")
+# ⚠️ 夹具 DDL 与产品同源（tools/verify/_schema_ddl.py）：手抄必然漂移。
+#    实测 2026-11-25：手抄版没有 trace_id，而产品 span flush 会写该列
+#    ⇒ `[conv-trace] span 失败 ... no column named trace_id`（被"不影响主链路"吞掉）
+#    ⇒ 本门禁 A1/A2 读不到 span 行而判红，根因却是夹具缺列。
+con.execute(ddl_for("orch_run_spans"))
 con.commit()
 con.close()
 

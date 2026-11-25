@@ -1,3 +1,4 @@
+# CI-OPTIONAL: [local] tier=local（见 tools/gates_manifest.json）：2026-11-20 补登记：历史漏入清单，当前按 local 手工跑；是否晋 pr 需先确认无外部依赖并同步 ci.yml（G6a）
 """verify_three_issue_fixes — 三问题修复门禁（2026-11-19）
 
 P1 问题1：思考文案软化 + card 检索计数按引用登记簿回填（stream.py）

@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# CI-OPTIONAL: [local] tier=local（见 tools/gates_manifest.json）：2026-11-24 第三期：图库总开关部署级覆盖 + 启动钩子 + 推断裁决过滤的源码断言。需真库核实入图水位且不能写真库；CI 无该环境
 """第三期「连得通」验证：图库开关 + 增量同步钩子 + 推断裁决过滤。
 
     .venv/Scripts/python.exe tools/verify/verify_ontology_graph_enabled.py

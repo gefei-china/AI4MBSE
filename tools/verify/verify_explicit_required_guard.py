@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# CI-OPTIONAL: [local] tier=local（见 tools/gates_manifest.json）：用户点名交付物不得被 early_stop 取消（G08 事故）：纯函数 6 项 + 联动 3 项 + 真库根因 2 项，实测 0.4s；C 组读真库 ⇒ local
 """用户点名交付物不得被 early_stop 取消门禁（2026-11-18，G08 事故）。
 
 真机证据：GoldenSet G08 输入明确要求「打分、评估规范性、给出优化建议」，

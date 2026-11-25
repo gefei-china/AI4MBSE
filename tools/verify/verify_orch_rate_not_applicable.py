@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# CI-OPTIONAL: [local] tier=local（见 tools/gates_manifest.json）：编排完成率判据口径：无子任务=不适用（不伪造 rate=0）+ 链标注错配可见。纯内存 9 项实测 0.4s；C 组回放 tmp 报告 ⇒ local
 """编排完成率判据的口径门禁（2026-08-18，G07 事故）。
 
 ## 事故

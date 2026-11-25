@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# CI-OPTIONAL: [local] tier=local（见 tools/gates_manifest.json）：2026-11-24 第一期：实例级体检 deep 开关 + 真实扫描计数 + SHACL 发现落库开关。需生产真库（instances_scanned 金标 462）与 ingest_gate；CI 干净库无该数据
 """第一期「看得见」验证：实例级校验 + SHACL 发现落库。
 
 不依赖服务（直接调内部函数 + 真库只读），随时可跑：

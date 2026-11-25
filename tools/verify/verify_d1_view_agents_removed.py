@@ -159,8 +159,15 @@ def main() -> int:
 
     # ── S 快照 ────────────────────────────────────────────────────────
     raw = open(SNAP, "rb").read()
-    rec("S1", raw.count(b"\r\n") == raw.count(b"\n") and not raw.startswith(b"\xef\xbb\xbf"),
-        "快照纯 CRLF / 无 BOM（CRLF=%d）" % raw.count(b"\r\n"))
+    # ★ 2026-11-25 修（实测假红 / 假绿各一）：
+    #   原来 S1 要求「纯 CRLF」，S5 数 `      {`（6 空格缩进）—— 这两个都是**旧导出格式**
+    #   的字节特征。导出器早已改成 `indent=1 + 纯 LF`（见 bootstrap_assets.dump_snapshot_text），
+    #   于是 S1/S5 恒红（CRLF=0、6 空格块=0），而它们想守的东西（快照没被手改/没鬼行）没变。
+    #   正解：不再钉字节格式，改钉**规范导出**——用同一个序列化函数重算，
+    #   与磁盘字节逐字相等即"文件就是导出器产物"。格式变了门禁跟着变，不会漂。
+    from database.bootstrap_assets import dump_snapshot_text
+    rec("S1", not raw.startswith(b"\xef\xbb\xbf") and b"\r" not in raw,
+        "快照无 BOM / 纯 LF 行尾（CR=%d）" % raw.count(b"\r"))
     try:
         snap = json.loads(raw.decode("utf-8"))
         ok_json = True
@@ -175,14 +182,10 @@ def main() -> int:
         names = [r.get("name") for r in (snap.get("tables") or {}).get("agents") or []]
         rec("S4", "system_mgmt" in names and "测试agent" not in names,
             "快照保留项：system_mgmt 在、测试agent 不在（_keep_row 过滤）")
-        lines = raw.split(b"\r\n")
-        # 结构块数 == list 长度（防格式被整体重排后藏进幽灵行）
-        blks = sum(1 for b in lines if b == b"      {")
-        exp = (len(snap["tables"]["agents"]) + len(snap["tables"].get("tools") or [])
-               + len(snap["tables"].get("skills") or [])
-               + len(snap["relations"]["agent_tools"])
-               + len(snap["relations"]["agent_team_members"]))
-        rec("S5", blks == exp, "结构块数 == 5 个 list 长度之和（%d/%d）" % (blks, exp))
+        # S5：字节 == 规范导出（防手改 / 防格式被整体重排后藏鬼行）
+        _canon = dump_snapshot_text(snap).encode("utf-8")
+        rec("S5", raw == _canon,
+            "快照与规范导出逐字节一致（磁盘 %d B / 规范 %d B）" % (len(raw), len(_canon)))
         n_snap_sk = len([r for r in (snap.get("tables") or {}).get("skills") or []
                          if str(r.get("name") or "").startswith(SKILL_PREFIX)])
         rec("S6", n_snap_sk == 9, "快照里 9 个视图技能未被误删（实得 %d）" % n_snap_sk)

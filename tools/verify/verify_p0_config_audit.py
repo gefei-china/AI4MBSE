@@ -1,3 +1,4 @@
+# CI-OPTIONAL: [local] tier=local（见 tools/gates_manifest.json）：P0-4 配置审计防漂移门禁：重扫四组清单与 core/config_audit.py + 清单 JSON 逐项对拍，守 audit_flags 注入生效、schema()/save_override/前端零回归、importlib 独立加载降级不崩（含 9 项变异自证）。静态扫描 + 只读，不调 LLM、不写库；需仓库全量源码故归 local，不占用 broken/backlog 预算。2026-11-15 新增
 """P0-4 常驻门禁：配置审计清单防漂移 + `audit_flags` 注入真的生效 + 零回归。
 
 判「配置标注有没有做成」只看这一节，别再人肉 grep：

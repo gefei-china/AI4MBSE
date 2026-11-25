@@ -32,6 +32,14 @@
     ./.venv/Scripts/python.exe -X utf8 tools/verify/verify_intent_catalog.py
 """
 from __future__ import annotations
+import os as _svos
+import sys as _svsys
+_svroot = _svos.path.dirname(_svos.path.abspath(__file__))
+while _svroot and not _svos.path.isdir(_svos.path.join(_svroot, 'tools')):
+    _svroot = _svos.path.dirname(_svroot)
+if _svroot and _svroot not in _svsys.path:
+    _svsys.path.insert(0, _svroot)
+from tools.stream_source import read_stream_source  # noqa: E402
 
 import os
 import re
@@ -49,6 +57,21 @@ _results = []
 CORE_INTENTS = ("design", "review", "impact", "chat", "knowledge_qa",
                 "report_generation", "requirement_analysis", "requirement_quality")
 
+#: 显式豁免：意图**已由流水线内联实现**，不再需要同名 active Agent。
+#
+#  为什么需要这张表（2026-11-25 实测）：`requirement_quality` 的 Agent 在库里是
+#  `status='disabled'`，而流水线在 `stream.py` 里对 `intent == "requirement_quality"`
+#  有内联分支（直接调 services.requirement_quality.build_quality_report），
+#  也就是说这条路**不需要** Agent 也能执行 —— C1 却按"必须有 active Agent"判红。
+#
+#  ⚠️ 豁免不能只是"放行"：每条都必须通过 C1b 的**证据判据**
+#  （源码里真有该意图的内联分支），否则就是死豁免、该删。
+#  这样既不放水，也不把"能力已下沉到流水线"这种正常演进判成缺陷。
+INLINE_IMPLEMENTED = {
+    "requirement_quality": "流水线内联：stream.py 的 `intent == \"requirement_quality\"` "
+                           "分支直接调 services.requirement_quality.build_quality_report",
+}
+
 REPO = os.path.join(_ROOT, "repositories", "agent_repo.py")
 MODELS = os.path.join(_ROOT, "models", "studio.py")
 
@@ -58,6 +81,13 @@ def _rec(name, ok, detail="", kind=FAIL):
     print("  [%s] %s%s" % (_results[-1][0], name, ("  ← " + detail) if detail else ""))
     return bool(ok)
 
+
+def _read_stream_source_for_evidence():
+    """读 stream.py 源码（走统一视图：拆分后仍能拿到全文，见拆分规避契约）。"""
+    try:
+        return read_stream_source()
+    except Exception:
+        return ""
 
 def _read(p):
     with open(p, encoding="utf-8") as f:
@@ -130,6 +160,19 @@ def t_data():
     for it in CORE_INTENTS:
         row = c.execute("SELECT id,intent_keywords FROM agents WHERE name=? AND status='active'",
                         (it,)).fetchone()
+        if it in INLINE_IMPLEMENTED:
+            # C1b：豁免必须有**源码证据**，否则就是死豁免（该删而不是该放行）
+            src_stream = _read_stream_source_for_evidence()
+            has_branch = ('intent == "%s"' % it) in src_stream or \
+                         ("intent == '%s'" % it) in src_stream
+            ok &= _rec("C1b %-22s 豁免有证据（流水线真有内联分支）" % it, has_branch,
+                       "INLINE_IMPLEMENTED 里登记了 %s，但源码找不到 `intent == \"%s\"` 分支 "
+                       "⇒ 死豁免，应删除登记" % (it, it))
+            if row:
+                # 库里有 active Agent 时也不报错（双轨并存），只提示
+                print("    · 注：库里同时存在同名 active Agent（%s），与内联分支双轨并存"
+                      % it)
+            continue
         ok &= _rec("C1 %-22s 有同名 active Agent" % it, bool(row),
                    "缺失 ⇒ 路由判得出、编排找不到执行主体")
         if row:

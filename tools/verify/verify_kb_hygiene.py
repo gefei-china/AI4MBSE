@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# CI-OPTIONAL: [local] tier=local（见 tools/gates_manifest.json）：知识库卫生门禁：守「去重机制不失效」这件事本身。实证因果链：documents.content_sha256 14/14 全空 ⇒ check_duplicate 的 same_content 失效 ⇒ duplicate_groups 看不见重复 ⇒ _dedupe_documents.py 盘点报 0 组 ⇒ 重复文档躺了 7 天 ⇒ 检索时同一段话占两个槽位（per_doc_max 按 document_id 算配额）。既有 ve
 """知识库卫生常驻门禁 —— 守「去重机制不失效」这件事本身。
 
 ## 为什么需要它（本轮实证的完整因果链）

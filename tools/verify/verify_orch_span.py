@@ -66,6 +66,7 @@ import sys
 import tempfile
 import threading
 import time
+from _schema_ddl import ddl_for  # noqa: E402
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, ROOT)
@@ -136,9 +137,50 @@ def t_static():
                and "conversation | turn | tool | rag | llm" in schema)
     ok &= _rec("S1c 三个索引齐备（conv_run/time + P0-b kind_time）",
                schema.count("idx_ors_") >= 3 and "idx_ors_kind_time" in schema)
-    ok &= _rec("S1d 新表无需补列迁移（CREATE TABLE IF NOT EXISTS 覆盖老库）",
-               "orch_run_spans" not in
-               _read(os.path.join(ROOT, "database", "migrations", "columns.py")))
+    # ⚠️ 2026-11-25 改判据语义（原判据与事实冲突）：
+    #   原文是「`orch_run_spans` 不出现在 columns.py」——即"表定义必须自包含、
+    #   不接受补列迁移"。但 `trace_id` 是 2026-11-18 的 B1 可观测后加的列，
+    #   那时表已存在于生产库，**必须**靠迁移补，所以 columns.py 里必然有它 ⇒ 恒红。
+    #   真正该守的是「**新库自包含**」：后加列也必须写进 CREATE TABLE（老库仍靠迁移补）。
+    #   判据从"迁移里不许有"改成"建表语句里必须有"，比原来更强（原来允许建表漏列）。
+    ok &= _rec("S1d 新表自包含（后加列如 trace_id 也写进 CREATE TABLE，老库靠迁移补齐）",
+               "trace_id" in schema)
+
+    # S1e（2026-11-25）：门禁夹具不得**手抄**这张表的 DDL。
+    #   实测教训：verify_orch_span / verify_replan_p1 各自手抄了一份建表语句，
+    #   产品侧加 trace_id 后夹具没跟上 ⇒ 带 trace_id 的 INSERT 崩 no column named trace_id。
+    #   这次漂移的后果是门禁崩（还算幸运）；反向漂移（夹具多列、产品少列）会门禁全绿
+    #   而产品运行时崩 —— 手抄 fixture 与产品 DDL 之间没有任何一致性机制。
+    #   现统一走 tools/verify/_schema_ddl.py 的 ddl_for()，本判据防回潮。
+    #   ⚠️ 判据必须走 AST 只认「execute(<SQL 字面量>)」：首版用文本 `in` 匹配，
+    #      把上面 S1a 那句「'CREATE TABLE ...' in schema」的**比较**也当成了手抄 ⇒ 误红。
+    _handcopied = []
+    for _dp, _dns, _fns in os.walk(os.path.join(ROOT, "tools")):
+        _dns[:] = [d for d in _dns if d != "__pycache__"]
+        for _f in _fns:
+            if not _f.endswith(".py") or _f == "_schema_ddl.py":
+                continue
+            _p = os.path.join(_dp, _f)
+            try:
+                _txt = open(_p, encoding="utf-8", errors="replace").read()
+                _tree = _ast.parse(_txt)
+            except (OSError, SyntaxError):
+                continue
+            for _n in _ast.walk(_tree):
+                if not isinstance(_n, _ast.Call):
+                    continue
+                _fn = _n.func
+                _nm = _fn.attr if isinstance(_fn, _ast.Attribute) else (
+                    _fn.id if isinstance(_fn, _ast.Name) else "")
+                if _nm not in ("execute", "executescript"):
+                    continue
+                for _a in _n.args:
+                    if isinstance(_a, _ast.Constant) and isinstance(_a.value, str) \
+                            and "CREATE TABLE IF NOT EXISTS orch_run_spans" in _a.value:
+                        _handcopied.append("%s:%d" % (
+                            os.path.relpath(_p, ROOT).replace("\\", "/"), _n.lineno))
+    ok &= _rec("S1e 门禁夹具不得手抄该表 DDL（统一走 _schema_ddl.ddl_for）",
+               not _handcopied, str(_handcopied[:4]))
 
     span = _read(SPAN_SRC)
     ok &= _rec("S2a SpanCollector 三件套（open/close/flush）",
@@ -278,13 +320,10 @@ def _temp_db():
         os.remove(p)
     conn = sqlite3.connect(p)
     conn.row_factory = sqlite3.Row  # 与生产 database.get_db() 同口径（下标访问）
-    conn.execute("""CREATE TABLE IF NOT EXISTS orch_run_spans (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        conversation_id INTEGER DEFAULT 0, run_id INTEGER DEFAULT 0,
-        kind TEXT DEFAULT '', name TEXT DEFAULT '', parent_id INTEGER DEFAULT 0,
-        status TEXT DEFAULT 'running', started_at TEXT DEFAULT CURRENT_TIMESTAMP,
-        ended_at TEXT, latency_ms INTEGER DEFAULT 0, meta_json TEXT DEFAULT '{}',
-        created_at TEXT DEFAULT CURRENT_TIMESTAMP)""")
+    # 夹具 DDL 与产品 DDL 同源（见 tools/verify/_schema_ddl.py）：
+    #   手抄必然漂移 —— 实测产品侧给这张表加了 trace_id 而夹具没跟上，
+    #   带 trace_id 的 INSERT 直接崩 no column named trace_id。
+    conn.execute(ddl_for("orch_run_spans"))
     conn.commit()
     return p, conn
 

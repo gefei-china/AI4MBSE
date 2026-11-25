@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# CI-OPTIONAL: [local] tier=local（见 tools/gates_manifest.json）：2026-11-24 A2：OWL 与 Turtle 两路径保住复杂公理 + imports 不拉取 + 导出导入往返。内存夹具，验证导出函数依赖真库 schema
 """A2 验证：OWL 与 Turtle 两条导入路径都要保住复杂公理，且 imports 不拉取。
 
     .venv/Scripts/python.exe tools/verify/verify_ontology_owl_roundtrip.py

@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# CI-OPTIONAL: [local] tier=local（见 tools/gates_manifest.json）：2026-11-20 补登记：历史漏入清单，当前按 local 手工跑；是否晋 pr 需先确认无外部依赖并同步 ci.yml（G6a）
 """正文「单一事实源」门禁（2026-11-19）—— 治「同一成品讲 N 遍」。
 
 ## 为什么需要它（用户原话：「这个问题之前反馈过多次一直未能彻底解决」）

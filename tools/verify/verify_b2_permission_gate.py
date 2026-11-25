@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# CI-OPTIONAL: [local] tier=local（见 tools/gates_manifest.json）：B2 权限门门禁（2026-11-18）：S1-S3 SPARQL 五端点挂 require_permission(kb_ontology view/edit)，匿名 401 与 enforce_login 无关；S4 五个早退内建工具在统一出口补授权门+回退开关；S5 SPARQL 白名单仍生效；S6 web_fetch 私网/环回/元数据拒绝+域名白名单（纯函数）；M1-M2 变异自证。只读源码、零 LLM、19/19。
 """B2 权限门门禁（2026-11-18）：SPARQL 五端点 + 五内建工具授权门。只读、零 LLM。
 
 判据：

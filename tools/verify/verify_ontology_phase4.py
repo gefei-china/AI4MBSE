@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# CI-OPTIONAL: [local] tier=local（见 tools/gates_manifest.json）：2026-11-24 第四期：词典映射候选/确认拒绝路径 + OWL 复杂公理 + MBSE CQ 种子。内存夹具为主但确认不写真库；CI 可考虑接线，暂列 local 与其余四期同批管理
 """第四期「建得准」验证：词典映射 / OWL 复杂公理 / MBSE CQ 种子。
 
     .venv/Scripts/python.exe tools/verify/verify_ontology_phase4.py

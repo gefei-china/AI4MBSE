@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# CI-OPTIONAL: [local] tier=local（见 tools/gates_manifest.json）：2026-11-21 补登记（元门禁 G5a/G5b 一直在报「未分类」的存量欠账，非本轮改动引入）。脚本自带声明「CI-OPTIONAL」，故按 local 登记而不擅改其 CI 地位。实测零依赖、1.4s、21/21 全绿，后续可晋 pr。
 """门禁：评测可信度按类型判据（TRUST_VERDICT_BY_KIND_V1）—— CI-OPTIONAL。
 
 纯函数 + 真接口 + 变异自证。防止"用 RAG 负对照判据冤枉 golden_e2e /

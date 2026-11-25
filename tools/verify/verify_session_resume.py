@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# CI-OPTIONAL: [nightly] tier=nightly（见 tools/gates_manifest.json）：2026-11-24 A4 补登记：刷新断连续跑三条硬约束 + 前端接线静态断言（纯离线）。历史存量脚本此前漏登记，守卫 G5a/G5b 点名
 """验证「刷新断连续跑」（第二档）的三条硬约束 + 接线完整性。
 
 纯离线：不启服务、不连真库（DetachedRegistry 用假 task，前端用静态源码断言）。

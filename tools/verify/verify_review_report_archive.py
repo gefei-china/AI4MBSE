@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# CI-OPTIONAL: [local] tier=local（见 tools/gates_manifest.json）：编排评审评分/建议沉淀为 report 产物门禁（G08 根因闭合，2026-11-18）。根因：live G08 conv 999999203 的 t2「打分评估+优化建议」done、reflection.score=90、advice 非空，但 _archive_artifacts 的 is_report 只看 intent/sections/report ⇒ report 产物 0 ⇒ artifact_kind_present(
 """编排评审评分/建议沉淀为 report 产物门禁（2026-11-18，G08 根因闭合）。
 
 真机证据：G08 live 回放 conv 999999203 的 t2「打分评估+优化建议」done、

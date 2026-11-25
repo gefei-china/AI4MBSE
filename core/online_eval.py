@@ -745,7 +745,8 @@ def _promote_intent(conn, r: dict, out: dict, failures: list) -> None:
                         % (qid, type(e).__name__, str(e)[:160]))
 
 
-def _promote_retrieval(conn, r: dict, out: dict, failures: list) -> None:
+def _promote_retrieval(conn, r: dict, out: dict, failures: list,
+                       qrels_path: str | None = None) -> None:
     """retrieval → qrels.jsonl append（human_confirmed=true, queue_id 溯源）。
 
     幂等：append 前全文读一遍查 queue_id（qrels 无主键，只能文件级查重）。
@@ -758,10 +759,17 @@ def _promote_retrieval(conn, r: dict, out: dict, failures: list) -> None:
     if not query:
         failures.append("promote retrieval qid=%d: query 回查为空，跳过" % qid)
         return
+    # ⚠️ 2026-11-25：qrels 输出路径可注入（默认仍是仓库里的 tools/eval/qrels.jsonl）。
+    #   为什么必须可注入：门禁跑 promote 会**直接改写仓库文件**
+    #   ① 每次跑都产生脏工作区（提交前必须手动 git checkout --）；
+    #   ② 更糟的是**结果依赖该文件的历史内容**（幂等查重按 queue_id 全文扫）
+    #      ⇒ 同一份代码第一次跑红、第二次跑绿，取决于上次留下了什么。
+    #   门禁传临时路径即可彻底消除这两点，产品调用行为不变。
+    path = qrels_path or _QRELS_PATH
     try:
         existed = False
-        if os.path.exists(_QRELS_PATH):
-            with open(_QRELS_PATH, encoding="utf-8") as f:
+        if os.path.exists(path):
+            with open(path, encoding="utf-8") as f:
                 for line in f:
                     if '"queue_id": %d' % qid in line or \
                             '"queue_id":%d' % qid in line:
@@ -776,7 +784,7 @@ def _promote_retrieval(conn, r: dict, out: dict, failures: list) -> None:
                "queue_id": qid, "query_src": src or "none",
                "conversation_id": int(r.get("conversation_id") or 0),
                "note": "生产回流人工确认；相关集待人工补（标注卡未指定 chunk）"}
-        with open(_QRELS_PATH, "a", encoding="utf-8") as f:
+        with open(path, "a", encoding="utf-8") as f:
             f.write(json.dumps(rec, ensure_ascii=False) + "\n")
         out["qrels"] += 1
     except Exception as e:                                      # noqa: BLE001
@@ -810,7 +818,8 @@ def _promote_generation(conn, r: dict, out: dict, failures: list) -> None:
                         % (qid, type(e).__name__, str(e)[:160]))
 
 
-def promote_confirmed(conn, *, apply: bool = False) -> dict:
+def promote_confirmed(conn, *, apply: bool = False,
+                      qrels_path: str | None = None) -> dict:
     """转正适配器：labeled_confirmed 样本按 sample_type 三分流进 dataset。
 
     dry-run 默认（apply=False 只返预判不写库）；apply=True 是**唯一真写**。
@@ -841,7 +850,7 @@ def promote_confirmed(conn, *, apply: bool = False) -> dict:
         if st == "intent":
             _promote_intent(conn, r, out, out["failures"])
         elif st == "retrieval":
-            _promote_retrieval(conn, r, out, out["failures"])
+            _promote_retrieval(conn, r, out, out["failures"], qrels_path)
         elif st == "generation":
             _promote_generation(conn, r, out, out["failures"])
         else:

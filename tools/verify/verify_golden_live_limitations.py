@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# CI-OPTIONAL: [local] tier=local（见 tools/gates_manifest.json）：live 报告不得套 offline 限制说明（id=34 曾误写『offline_replay 不调用 LLM』）；纯函数 6 项 + 真库 2 项，实测 0.4s。B 组读生产 eval_reports ⇒ local
 """live 报告不得套用 offline 限制说明门禁（2026-11-17）。
 
 真机事故：36 次真实 LLM 调用跑出的合格 live 基线（eval_reports.id=34），

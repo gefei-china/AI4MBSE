@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# CI-OPTIONAL: [nightly] tier=nightly（见 tools/gates_manifest.json）：2026-11-24 A4 补登记：SSE 消费者断开时 detach_ctx 保活行为真跑验证（异步生成器 + 假事件源，不依赖服务/真库）。历史存量脚本此前漏登记，守卫 G5a/G5b 点名；列 nightly 因含异步线程，比 pr 慢
 """端到端行为验证：SSE 消费者中途断开（模拟刷新）时，detach_ctx 是否保活生成。
 
 这不是静态源码断言，而是**真跑生成器**：

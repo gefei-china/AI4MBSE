@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# CI-OPTIONAL: [local] tier=local（见 tools/gates_manifest.json）：2026-11-24：本体驱动动作机制验证 —— 绑定表有数据时 pre/post 条件真生效（空参数 failed / 非空 verified / 回读实体不存在 failed），并证明生产库未被污染。需真库副本（含 ontology_types/tools/entities），CI 干净库无该数据
 """本体驱动动作的机制验证（2026-11-24）。
 
 结论要回答的问题：本体能否「执行/约束动作」？
