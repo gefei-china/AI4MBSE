@@ -929,7 +929,7 @@ def _archive_artifacts(conn, conversation_id: int, message_id: int,
                 is_report = True
         if is_report:
             try:
-                from report_generator import report_generator as _rg
+                from services.report_generator import report_generator as _rg
                 rtype = cd.get("report_type") or _rg.detect_report_type(str(content)[:80])
                 # P1-9（2026-10-01）：写作侧不给 title 时**从内容取名**，而不是落固定兜底名。
                 # 兜底名的根因不是"忘了写"，而是报告路径的 cd 里本来就没有 title 字段

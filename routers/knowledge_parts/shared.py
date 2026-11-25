@@ -13,7 +13,7 @@ from core.deps import db_session, current_user, require_permission, require_any_
 from core import typevocab
 from core import ontology_rules
 from core import ontology_tlo
-from knowledge_engine import QueryRouter  # P1: 双引擎路由统计
+from services.knowledge_engine import QueryRouter  # P1: 双引擎路由统计
 from repositories.knowledge_repo import KnowledgeRepo
 from repositories.commit_repo import CommitRepo
 from core.audit import audit, audit_user
@@ -111,8 +111,8 @@ def _entity_dup_warning(conn, name: str, threshold: float = 0.62) -> list:
     """按归一化名精确 + Levenshtein 模糊双通道查已有实体（排除 deprecated）。"""
     if not name or not str(name).strip():
         return []
-    from text_normalize import normalize_name
-    from entity_resolver import _fuzzy_ratio
+    from core.domain.text_normalize import normalize_name
+    from services.entity_resolver import _fuzzy_ratio
     nm = normalize_name(str(name).strip())
     # P0-1 修正：消歧须跨分支查（同 id 多分支行按 name 去重）——personal 草稿也可能与待建实体重名
     rows = conn.execute(
@@ -183,7 +183,7 @@ def _fallback_topics(conn, days: int = 30, top: int = 20) -> list:
     避免出现第二份实现（C5 修复点：滤除系统提示词与通用词噪声）。
     保留函数名是因为它曾是各分片共用 helper，删除会波及未知引用。
     """
-    import metrics_core
+    from services import metrics_core as metrics_core
     return metrics_core.fallback_topics(conn, days=days, top=top)
 
 
@@ -320,7 +320,7 @@ def _ont_scope(conn):
     2026-09-23 决策 D2（消费读最新快照）：_ontology_check 缺省即用消费口径，并把
     「这份报告到底读的是快照还是编辑态」显式回报 —— 避免"体检与真实消费不一致"再次静默。
     """
-    from ontology_semantics import active_rows
+    from core.domain.ontology_semantics import active_rows
     rows = active_rows(conn)
     try:
         v = conn.execute(
@@ -794,16 +794,37 @@ def _ontology_check(conn, rows=None, instances=False, scope=None) -> dict:
         print(f"[ontology_check] 实例扫描失败，本次跳过 dangling_instance："
               f"{type(_e).__name__}: {_e}", flush=True)
     # ── O1-2(b) 存量实例：约束违例（较慢，按需打开）────────────────────────────
+    # 2026-11-24：真实扫描计数（产品版「体检覆盖了多少条真实数据」的兑现点）。
+    # `instances_checked` 历史语义是 bool（是否打开逐实例校验），不能改其类型 ——
+    # ontology_health_logs.instances_checked 列按 1/0 落库，改类型会污染趋势线。
+    # 故新增 instances_scanned = 本次实际纳入检查的实体 + 关系 + approved 三元组条数。
+    instances_scanned = 0
     if instances:
         try:
             from services.ontology_migration import check_instances
             for x in check_instances(conn, scope=scope):
                 issues.append(_issue(x["code"], x["name"], x["message"], **x.get("extra", {})))
+            # 同一口径的覆盖面自证：数出来的量必须 > 0，否则「0 违例」可能是「0 检查」。
         except Exception as _e:
             degraded.append(f"instance_constraint_violation 跳过（逐实例校验失败）："
                             f"{type(_e).__name__}: {_e}")
             print(f"[ontology_check] 逐实例校验失败，本次跳过 instance_constraint_violation："
                   f"{type(_e).__name__}: {_e}", flush=True)
+        # 计数独立容错：triples 等表在夹具库可能不存在 —— 缺表按 0 计，
+        # 不记 degraded（否则「逐实例校验本身成功、只是计数表缺失」会被误报为降级）。
+        if instances_scanned == 0:
+            try:
+                instances_scanned = int(conn.execute(
+                    "SELECT (SELECT COUNT(*) FROM entities WHERE status!='deprecated') + "
+                    "(SELECT COUNT(*) FROM relations WHERE status!='deprecated') + "
+                    "(SELECT COUNT(*) FROM triples WHERE status='approved')").fetchone()[0])
+            except Exception:
+                try:
+                    instances_scanned = int(conn.execute(
+                        "SELECT (SELECT COUNT(*) FROM entities WHERE status!='deprecated') + "
+                        "(SELECT COUNT(*) FROM relations WHERE status!='deprecated')").fetchone()[0])
+                except Exception:
+                    instances_scanned = 0
     seen_names = {}
     for t in rows:
         key = (t["type_kind"], t["name"])
@@ -832,6 +853,8 @@ def _ontology_check(conn, rows=None, instances=False, scope=None) -> dict:
             "severity_order": dict(ontology_rules.SEVERITY_ORDER),
             "rule_count": len(ontology_rules.RULES),
             "instances_checked": bool(instances),
+            # 2026-11-24：真实覆盖面计数（不是 bool）。0 表示未做实例级检查。
+            "instances_scanned": instances_scanned,
             # 降级留痕：为空才说明这次体检"该查的都查了"
             "degraded": degraded,
             "ts": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
@@ -917,7 +940,7 @@ def _active_ont_rows(conn):
     回退路径长期生效，把分裂掩盖住了）。现有两处只保留一份实现：
     `_ont_scope` / `_ontology_check` / `OntologyValidator(rows=None)` 与消费端点全部经此。
     """
-    from ontology_semantics import active_rows
+    from core.domain.ontology_semantics import active_rows
     return active_rows(conn)
 
 
@@ -968,7 +991,7 @@ def _filter_ont_rows_for_type(rows, type_id: int):
 
 def triples_stats(conn=Depends(db_session), user=Depends(current_user)):
     """三元组生命周期统计。"""
-    from triple_store import stats
+    from services.triple_store import stats
     return stats(conn)
 
 

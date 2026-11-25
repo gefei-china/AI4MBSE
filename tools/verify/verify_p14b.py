@@ -66,7 +66,7 @@ print("=" * 78)
 # ══ A 静态断言 ══════════════════════════════════════════════════════════════
 print("\n── A 静态断言 ──")
 cfg_src = read("core/config.py")
-ke_src = read("knowledge_engine.py")
+ke_src = read("services/knowledge_engine.py")
 ctx_src = read("agent/pipeline_parts/context.py")
 hist_src = read("agent/pipeline_parts/history.py")
 
@@ -289,10 +289,10 @@ print("\n── C 变异自证（把改动还原 → 断言必须 FAIL）──"
 #   B6/B7/B8 的断言名会随"向量路是否可用"分支而变化（降级时只验 bm25 侧），
 #   写全名会让变异自证在降级环境下**恒判未抓到**（本次实测踩到）。
 MUT = [
-    ("还原向量路 recall_k 回硬编码", "knowledge_engine.py",
+    ("还原向量路 recall_k 回硬编码", "services/knowledge_engine.py",
      "top_k=_recall_k, only_ids=allowed_ids", "top_k=top_k * 2, only_ids=allowed_ids",
      ["A9 knowledge_engine 检索调用点已无 top_k*2 硬编码", "B6 recall_k=7"]),
-    ("还原 BM25 路 recall_k 回硬编码", "knowledge_engine.py",
+    ("还原 BM25 路 recall_k 回硬编码", "services/knowledge_engine.py",
      "bm25.search(query, top_k=_recall_k)", "bm25.search(query, top_k=top_k * 2)",
      ["A9 knowledge_engine 检索调用点已无 top_k*2 硬编码", "B6 recall_k=7"]),
     ("还原 inject_k 回硬编码 [:3]", "agent/pipeline_parts/context.py",

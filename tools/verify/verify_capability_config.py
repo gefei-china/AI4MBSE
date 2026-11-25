@@ -17,8 +17,8 @@ POST /api/studio/mcp-servers/163/test → HTTP 401 invalid_token   ← 立刻用
 | `MCPIn` 模型 | **无 headers 字段** | `models/studio.py` 实测 |
 | 探测 (`studio_parts/mcp.py::test`) | headers **硬编码** `{Content-Type}` | 实测 401 |
 | **工具执行** (`pipeline_parts/tools.py`) | headers **硬编码** | 即使探测修好，调用仍 401 |
-| 健康探测 (`mcp_health.py`) | headers **硬编码** | 同上 |
-| `mcp_client.py::_post` | headers **硬编码** | 同上 |
+| 健康探测 (`services/mcp_health.py`) | headers **硬编码** | 同上 |
+| `adapters/mcp_client.py::_post` | headers **硬编码** | 同上 |
 | **前端表单** (`30-agents.js`) | **已经收集了 `#tool-headers-list` 的 headers，MCP 分支的 body 里却没有它** | 代码实测 |
 
 ⇒ 前端最后一处是"**收集了却丢掉**"，最隐蔽：用户以为填了。
@@ -52,8 +52,8 @@ F_SCHEMA = os.path.join(_ROOT, "database", "schema.py")
 F_COLS = os.path.join(_ROOT, "database", "migrations", "columns.py")
 F_STUDIO_MCP = os.path.join(_ROOT, "routers", "studio_parts", "mcp.py")
 F_TOOLS = os.path.join(_ROOT, "agent", "pipeline_parts", "tools.py")
-F_HEALTH = os.path.join(_ROOT, "mcp_health.py")
-F_CLIENT = os.path.join(_ROOT, "mcp_client.py")
+F_HEALTH = os.path.join(_ROOT, "services/mcp_health.py")
+F_CLIENT = os.path.join(_ROOT, "adapters/mcp_client.py")
 F_JS_AGENTS = os.path.join(_ROOT, "static", "js", "mods", "30-agents.js")
 F_JS_SAMPLES = os.path.join(_ROOT, "static", "js", "mods", "42-intent-samples.js")
 

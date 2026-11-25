@@ -80,8 +80,16 @@ class PromptMixin:
             from database import get_db
             conn = get_db()
             try:
-                from ontology_semantics import OntologyValidator
-                return OntologyValidator(conn).schema_text()
+                from core.domain.ontology_semantics import OntologyValidator
+                text = OntologyValidator(conn).schema_text()
+                # 2026-11-24 第二期：告诉模型「对象级上下文可按需查询」。
+                # 本函数仍只注入 schema + 能力提示（保持块可缓存）；
+                # 具体对象数据由 ContextMixin._render_ontology_context 在检索命中时
+                # 注入 retrieval 块（A1，2026-11-24），避免在此处提前暴露/膨胀 prompt。
+                text += ("\n\n【运行期本体查询能力】当用户问到具体对象（需求/部件/接口编号或名称）时，"
+                         "应先通过实体链接取得该对象的属性、关系与类型约束，再组织回答；"
+                         "不得仅凭名称相似度推测对象间关系。查不到对象时明确说明，不要编造。")
+                return text
             finally:
                 conn.close()
         except Exception:
@@ -95,7 +103,7 @@ class PromptMixin:
         prompt 时在 schema 之后追加，确保 AI 看到"本体给不了什么"的边界。
         """
         try:
-            from ontology_semantics import boundary_text
+            from core.domain.ontology_semantics import boundary_text
             return boundary_text()
         except Exception:
             return ""

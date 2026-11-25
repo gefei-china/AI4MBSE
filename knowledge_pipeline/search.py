@@ -84,7 +84,7 @@ def _search_chunks_bigram(conn, query: str, top_k: int = 5, branches: list | Non
                           doc_names: list | None = None, exclude_ai: bool = False,
                           include_deprecated: bool = False) -> list:
     """bigram 实时相似度兜底：查询侧与内容侧同构（字符 bigram TF），不依赖存储向量维度。"""
-    from knowledge_engine import VectorEngine
+    from services.knowledge_engine import VectorEngine
     sql, params = _branch_clause(branches)
     dsql, dparams = _doc_clause(doc_names)
     asql, aparams = _ai_clause(exclude_ai)
@@ -149,7 +149,7 @@ def vector_search_embed(conn, query: str, top_k: int = 5, branches: list | None 
                                          include_deprecated)
 
         # P2-1 矩阵化加速：numpy 批量余弦（无 numpy 自动降级逐行）
-        from vector_index import ChunkVectorIndex
+        from adapters.vector_index import ChunkVectorIndex
         allowed_ids = {r["id"] for r in rows}
         mat = ChunkVectorIndex.search(conn, q, version, top_k, only_ids=allowed_ids)
         if mat is not None:
@@ -242,7 +242,7 @@ def retry_document(conn, doc_id: int, metadata: dict | None = None) -> dict:
     try:
         conn.execute("DELETE FROM document_chunks WHERE document_id=?", (doc_id,))
         try:
-            from vector_index import ChunkVectorIndex
+            from adapters.vector_index import ChunkVectorIndex
             ChunkVectorIndex.invalidate()
         except Exception as e:
             logger.warning("ChunkVectorIndex 失效失败（不阻断）: %s", e)
@@ -342,7 +342,7 @@ def reindex_document(conn, doc_id: int) -> dict:
         else:
             hyde_vecs = [[] for _ in hyde_texts]
         for c, vec, hvec in zip(chunks, vectors, hyde_vecs):
-            from vector_index import normalize_vector
+            from adapters.vector_index import normalize_vector
             conn.execute(
                 "UPDATE document_chunks SET embedding=?, embed_version=?, hyde_embedding=? WHERE id=?",
                 (json.dumps(normalize_vector(vec), ensure_ascii=False), embed_version,
@@ -350,7 +350,7 @@ def reindex_document(conn, doc_id: int) -> dict:
         conn.commit()
         # 数据变更：向量索引失效
         try:
-            from vector_index import ChunkVectorIndex
+            from adapters.vector_index import ChunkVectorIndex
             ChunkVectorIndex.invalidate()
         except Exception as e:
             logger.warning("ChunkVectorIndex 失效失败（不阻断）: %s", e)

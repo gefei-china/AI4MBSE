@@ -1906,6 +1906,9 @@ ENV_MAP = {
     "MBSE_FUSEKI_EXACT_FRESHNESS": ("graph_db", "fuseki_exact_freshness"),
     "MBSE_FUSEKI_PRESERVE_MANUAL": ("graph_db", "fuseki_preserve_manual"),
     "MBSE_FUSEKI_REPLAY_QUEUE": ("graph_db", "fuseki_replay_queue"),
+    # 2026-11-24 第三期「连得通」：图库总开关的部署级覆盖。
+    # 默认仍 False（DEFAULT_CONFIG 不变），只有显式设 MBSE_GRAPH_DB_ENABLED=1 才开启。
+    "MBSE_GRAPH_DB_ENABLED": ("graph_db", "enabled"),
 }
 
 # 布尔型配置项（ENV 值为 "1"/"true"/"yes" 视为 True）
@@ -1918,6 +1921,7 @@ _BOOL_KEYS = {
     ("graph_db", "fuseki_exact_freshness"), # P0-0 第九批③：部署级开关，环境变量 "1" ⇒ True
     ("graph_db", "fuseki_preserve_manual"), # P0-0 第九批④：部署级开关，环境变量 "1" ⇒ True
     ("graph_db", "fuseki_replay_queue"),    # P0-0 第十批：部署级开关，环境变量 "1" ⇒ True
+    ("graph_db", "enabled"),                # 2026-11-24：图库总开关，部署级布尔覆盖
     ("graph_db", "fuseki_persistent"),
 }
 

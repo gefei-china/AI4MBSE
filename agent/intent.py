@@ -5,11 +5,11 @@ import json
 import time
 import uuid
 from database import get_db, db_conn
-from knowledge_engine import VectorEngine, QueryRouter  # P1: 双引擎底座
+from services.knowledge_engine import VectorEngine, QueryRouter  # P1: 双引擎底座
 from llm import llm_client
 from core.config import STATIC_DIR
-from file_tools import exec_file_tool, FILE_TOOL_NAMES as _FILE_TOOL_NAMES  # 基础通用文件操作工具
-from report_tools import exec_report_tool, REPORT_TOOL_NAMES as _REPORT_TOOL_NAMES  # 基础通用报告导出工具
+from services.tools.file_tools import exec_file_tool, FILE_TOOL_NAMES as _FILE_TOOL_NAMES  # 基础通用文件操作工具
+from services.tools.report_tools import exec_report_tool, REPORT_TOOL_NAMES as _REPORT_TOOL_NAMES  # 基础通用报告导出工具
 
 
 class IntentRouter:
@@ -103,7 +103,7 @@ class IntentRouter:
         if conn is None:
             return False
         try:
-            from glossary import GlossaryMatcher
+            from core.domain.glossary import GlossaryMatcher
             return bool(GlossaryMatcher(conn).resolve(t).get("hits"))
         except Exception:
             return False
@@ -606,7 +606,7 @@ class IntentRouter:
         #  索引已经定稿（含示例 utterance）才预热，且必须传**同序文本**（cache key = md5(join(texts))）。
         #  放在这里是因为它是索引变更的**唯一入口**（每个请求都会走），带指纹守卫不会重复起线程。
         try:
-            from semantic import SemanticSearch as _SS
+            from services.semantic import SemanticSearch as _SS
             _SS().prewarm(self._semantic_index)
         except Exception:
             pass
@@ -1076,7 +1076,7 @@ class IntentRouter:
         # P0-1：Glossary 术语归一化——命中即强制路由（如「v2代码规范」→ knowledge_qa + sysml_norm 域）
         if conn is not None:
             try:
-                from glossary import GlossaryMatcher
+                from core.domain.glossary import GlossaryMatcher
                 res = GlossaryMatcher(conn).resolve(text)
                 # 无论是否强制 intent，命中术语都记录（供调用方检索时 domain 过滤）
                 if res.get("hits"):
@@ -1816,7 +1816,7 @@ class IntentRouter:
         self._last_sem_ranking = []
         if not self._semantic_index:
             return ""
-        from semantic import SemanticSearch
+        from services.semantic import SemanticSearch
         from core import config as _cfg
         _ss = SemanticSearch()
         # P0-1（2026-09-30）：top_k 2→8 —— **只为多取几条做意图级聚合**（见下）；

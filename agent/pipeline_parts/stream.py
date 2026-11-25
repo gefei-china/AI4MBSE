@@ -566,7 +566,7 @@ class StreamMixin:
           不受影响；这也是插桩全部写成 `if _spans` 守卫的原因）。
         """
         from llm import llm_client
-        from task_queue import TaskQueue
+        from services.task_queue import TaskQueue
         # ★ 2026-11-10（可中断）：中断探针的两个纯函数。
         #   刻意只导入**函数**而不是模块别名：`models.py` 那条 G0 静态哨兵会把
         #   `try: import X as _y / except: _y = None` 判成"模块别名被遮蔽"
@@ -975,7 +975,7 @@ class StreamMixin:
                                 render_violations as _render_pg,
                                 validate_pipeline_plan as _validate_pg,
                             )
-                            from task_queue import resolve_agent_name as _resolve_pg
+                            from services.task_queue import resolve_agent_name as _resolve_pg
                             _pgcfg = _load_pg(conn)
                             _pg = _validate_pg(
                                 plan,
@@ -4984,7 +4984,7 @@ class StreamMixin:
         #   以免覆盖父编排已设的 run_id（见 _stream_orchestrated_flow:831 给 sub._tool_run_ctx 赋值）。
         if conversation_id:
             try:
-                from task_queue import TaskQueue
+                from services.task_queue import TaskQueue
                 from database import db_conn as _dbc
                 with _dbc() as _c:
                     self._tool_run_ctx = int(TaskQueue.new_run_id(_c) or 0)
@@ -5475,7 +5475,7 @@ class StreamMixin:
             report_type = None
             if intent == "report_generation":
                 try:
-                    from report_generator import report_generator as _rg
+                    from services.report_generator import report_generator as _rg
                     report_type = _rg.detect_report_type(user_input)
                 except Exception:
                     report_type = None
@@ -5815,7 +5815,7 @@ class StreamMixin:
             quality_report = None
             if intent == "requirement_quality":
                 try:
-                    from requirement_quality import build_quality_report
+                    from services.requirement_quality import build_quality_report
                     quality_report = build_quality_report(user_input)
                     if quality_report and quality_report.get("issues"):
                         _q_lines = [f"[{it['severity'].upper()}] {it['problem']}｜证据：{it['evidence'][:60]}｜建议：{it['suggestion'][:80]}"
@@ -5919,7 +5919,7 @@ class StreamMixin:
             report_prompt = ""
             if intent == "report_generation":
                 try:
-                    from report_generator import report_generator as _rg
+                    from services.report_generator import report_generator as _rg
                     if report_type in ("impact", "review"):
                         _mat = self._build_report_material(report_type, retrieval)
                         if _mat:
@@ -6270,7 +6270,7 @@ class StreamMixin:
                         and not att_blocks and not _clarify_req
                         and not dry_run and not resume_run_id and not resume_of_user_msg_id):
                     try:
-                        from semantic_cache import SemanticCache
+                        from adapters.semantic_cache import SemanticCache
                         from database import get_db
                         _cc = get_db()
                         try:
@@ -7521,7 +7521,7 @@ class StreamMixin:
                     try:
                         from core import config as _cfg_scw
                         if _cfg_scw.as_bool("semantic_cache", "enabled", False):
-                            from semantic_cache import SemanticCache
+                            from adapters.semantic_cache import SemanticCache
                             from database import get_db
                             _ccw = get_db()
                             try:
@@ -8087,7 +8087,7 @@ class StreamMixin:
             report = None
             if intent == "report_generation":
                 try:
-                    from report_generator import report_generator as _rg
+                    from services.report_generator import report_generator as _rg
                     report = _rg.structure(user_input[:80], llm_content, report_type=report_type)
                 except Exception:
                     report = None
@@ -8105,7 +8105,7 @@ class StreamMixin:
             _req_pp = None
             if not dry_run and conversation_id and (llm_content or "").strip():
                 try:
-                    from requirement_postprocess import process_for_run as _req_proc
+                    from services.requirement_postprocess import process_for_run as _req_proc
                     _req_pp = _req_proc(
                         conn, llm_content,
                         run_id=int(getattr(self, "_tool_run_ctx", 0) or 0),

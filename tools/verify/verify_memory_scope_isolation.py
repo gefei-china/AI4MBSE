@@ -195,7 +195,7 @@ try:
         """G4 统一断言：只在失败时输出提示（PASS 时输出"未找到锚点"会误导读者）。"""
         check(name, cond, "" if cond else (hint or "锚点已漂移，需同步更新门禁"))
 
-    _reflow = _src_of("knowledge_reflow.py")
+    _reflow = _src_of("services/knowledge_reflow.py")
     _src_present("G4/知识回流：无项目归属时落 agent 共享层，不再落空槽",
                  'else ("agent", str(agent_id or "reflow")[:120])' in _reflow)
 

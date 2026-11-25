@@ -108,12 +108,12 @@ ROWS = [
 
 
 def _load_variant(mutate=None):
-    with open(os.path.join(ROOT, "glossary.py"), encoding="utf-8") as f:
+    with open(os.path.join(ROOT, "core/domain/glossary.py"), encoding="utf-8") as f:
         src = f.read()
     if mutate:
         src = mutate(src)
     ns = {"__name__": "glossary_mut"}
-    exec(compile(src, "glossary.py", "exec"), ns)
+    exec(compile(src, "core/domain/glossary.py", "exec"), ns)
     return ns, src
 
 

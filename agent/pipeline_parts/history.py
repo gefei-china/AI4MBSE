@@ -928,7 +928,7 @@ class HistoryMixin:
         # 用当前输入与各组代表向量相似度匹配（真 embedding 优先，dense 阈值独立量纲；
         # bigram 降级：≥0.12 取最佳组 → 切回旧话题时命中旧组；否则视为新话题取最后一组兜底）
         from collections import Counter
-        from knowledge_engine import VectorEngine
+        from services.knowledge_engine import VectorEngine
         _ve = VectorEngine()
         cur_group = groups[-1]
         if cur_input:
@@ -1147,7 +1147,7 @@ class HistoryMixin:
         """
         from collections import Counter
         from core import config as _cfg
-        from knowledge_engine import VectorEngine
+        from services.knowledge_engine import VectorEngine
         threshold = float(_cfg.get("context", "topic_sim_threshold", 0.15))
         label_chars = int(_cfg.get("context", "topic_label_chars", 14))
         rows = conn.execute(
@@ -1356,7 +1356,7 @@ class HistoryMixin:
         if backend == "dense":
             scored = [(s, m) for (m, _), s in zip(cands, scores) if s >= dense_th]
         else:
-            from knowledge_engine import VectorEngine
+            from services.knowledge_engine import VectorEngine
             ve = VectorEngine()
             qv = ve._vector(query or "")
             if not qv:

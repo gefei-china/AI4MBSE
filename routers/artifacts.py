@@ -135,7 +135,7 @@ def download_artifact(artifact_id: int, conn=Depends(db_session)):
 
     # 2) 报告产物 → 复用报告导出链路（sections → md/docx/pdf）
     if a.get("kind") == "report" and a.get("meta", {}).get("sections"):
-        from report_generator import report_generator as _rg
+        from services.report_generator import report_generator as _rg
         _am = a.get("meta", {})
         report = {
             "title": a.get("title") or "报告",

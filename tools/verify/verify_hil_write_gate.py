@@ -368,7 +368,7 @@ for _args, _desc in (
     check("[J1] _batch_target(%s) 非空" % _desc, bool(_t), repr(_t))
 
 # [J2] X1：queue_confirmation 必须把**完整 args** 存进 batch_items（源码断言）
-_hs_src = open(os.path.join(REPO, "hil_service.py"), encoding="utf-8").read()
+_hs_src = open(os.path.join(REPO, "services/hil_service.py"), encoding="utf-8").read()
 check("[J2] batch_items 条目含完整 args（首条新建路径）",
       '"args": payload or {}' in _hs_src)
 check("[J2] batch_items 条目含完整 args（批次合并路径）",

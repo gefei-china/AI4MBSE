@@ -24,7 +24,7 @@ def _builtin_handler_index() -> dict:
         pass
     # sys_query_* —— 真实入口 agent/pipeline_parts/tools.py:554 按前缀路由，不经 ToolExecutor
     try:
-        from sysadmin_tools import TOOLS as _SYS_TOOLS
+        from services.tools.sysadmin_tools import TOOLS as _SYS_TOOLS
         for _n, _d in (_SYS_TOOLS or {}).items():
             _fn = _d.get("fn")
             _fnname = getattr(_fn, "__name__", "") if _fn else ""
@@ -394,7 +394,7 @@ def test_tool(tid: int, body: dict = None, conn=Depends(db_session),
     · `destructive` 档位**默认拒绝试跑**，除非显式传 `{"confirm_destructive": true}`
       —— 一个删除类接口不该被"点一下测试"意外触发
     """
-    from http_tool_executor import exec_http_tool
+    from adapters.http_tool_executor import exec_http_tool
 
     repo = StudioRepo(conn)
     t = repo.get_tool(tid)

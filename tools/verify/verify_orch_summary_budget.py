@@ -5,7 +5,7 @@
     汇总环节把每个子任务交付物硬编码截到 **500 字符**（`workflows/planner.py::_summarize_plan`），
     而实际交付物 1,260 / 4,000 / 4,000 字符 → 丢弃率 **60.3% / 87.5% / 87.5%**；
     质量评审据此**如实**报「t2 架构方案权衡在『给出三个方案』处中断，三个方案具体内容
-    及方案选择结论均缺失」——评审没错，是管线在丢内容。叠加 `task_queue.py` 的 `result[:4000]`
+    及方案选择结论均缺失」——评审没错，是管线在丢内容。叠加 `services/task_queue.py` 的 `result[:4000]`
     落库截断，同一个交付物在链路上被切两次。
 
 本脚本锁定的三条不变式：
@@ -496,14 +496,14 @@ def main():
     #    否则"把坑写在文档里"反而会让自检变红（实测误报 1 条）。
     try:
         psrc = open(os.path.join(repo, "workflows", "planner.py"), encoding="utf-8", errors="replace").read()
-        qsrc = open(os.path.join(repo, "task_queue.py"), encoding="utf-8", errors="replace").read()
+        qsrc = open(os.path.join(repo, "services/task_queue.py"), encoding="utf-8", errors="replace").read()
         ssrc = open(os.path.join(repo, "agent", "pipeline_parts", "stream.py"),
                     encoding="utf-8", errors="replace").read()
         rsrc = open(os.path.join(repo, "workflows", "refine.py"),
                     encoding="utf-8", errors="replace").read()
         _checks = [
             (psrc, r"it\.get\('result'\) or ''\)\[:500\]", "planner.py 仍存在 `[:500]`"),
-            (qsrc, r"result\[:4000\]", "task_queue.py 仍存在 `result[:4000]`"),
+            (qsrc, r"result\[:4000\]", "services/task_queue.py 仍存在 `result[:4000]`"),
             (ssrc, r"it\.get\('result'\) or ''\)\[:400\]", "stream.py 降级路仍存在 `[:400]`"),
             (rsrc, r"it\.get\('result'\) or ''\)\[:400\]", "refine.py 仍存在交付物 `[:400]`"),
             (rsrc, r"items_txt\[:2000\]", "refine.py 仍存在 `items_txt[:2000]`"),

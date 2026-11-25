@@ -32,7 +32,7 @@ import shutil
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 STREAM = os.path.join(ROOT, "agent", "pipeline_parts", "stream.py")
-TQUEUE = os.path.join(ROOT, "task_queue.py")
+TQUEUE = os.path.join(ROOT, "services/task_queue.py")
 FCLS = os.path.join(ROOT, "services", "failure_class.py")
 SCHEMA = os.path.join(ROOT, "database", "schema.py")
 MIGR = os.path.join(ROOT, "database", "migrations", "columns.py")

@@ -100,7 +100,7 @@ class SkillMixin:
         """
         if not skills or not user_input:
             return []
-        from semantic import SemanticSearch
+        from services.semantic import SemanticSearch
         idx = [{"name": s["name"], "text": " ".join(filter(None, [
             s.get("name", ""), s.get("description", ""),
             *[str(t) for t in (s.get("triggers") or [])]]))} for s in skills]
@@ -120,7 +120,7 @@ class SkillMixin:
         """语义预筛：返回 top-k 有重叠的技能列表（score>0），供 LLM 兜底只做重排序而非全池挑选。"""
         if not skills or not user_input:
             return []
-        from semantic import SemanticSearch
+        from services.semantic import SemanticSearch
         idx = [{"name": s["name"], "text": " ".join(filter(None, [
             s.get("name", ""), s.get("description", ""),
             *[str(t) for t in (s.get("triggers") or [])]]))} for s in skills]

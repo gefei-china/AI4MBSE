@@ -36,7 +36,7 @@ SIGNAL_SRC = os.path.join(ROOT, "services", "replan_signal.py")
 STREAM_SRC = os.path.join(ROOT, "agent", "pipeline_parts", "stream.py")
 CONFIG_SRC = os.path.join(ROOT, "core", "config.py")
 SCHEMA_SRC = os.path.join(ROOT, "database", "schema.py")
-TASKQ_SRC = os.path.join(ROOT, "task_queue.py")
+TASKQ_SRC = os.path.join(ROOT, "services/task_queue.py")
 CI_YML = os.path.join(ROOT, ".github", "workflows", "ci.yml")
 
 PASS, FAIL, VACUOUS = "PASS", "FAIL", "VACUOUS"

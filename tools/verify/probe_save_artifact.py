@@ -173,7 +173,7 @@ conn.close()
 # ── M1. 变异自证：幂等判据失效 ⇒ 重复登记 ────────────────
 section("M1. 变异自证（幂等判据必须能红）")
 
-_at_path = ROOT / "artifact_tools.py"
+_at_path = ROOT / "services/tools/artifact_tools.py"
 _AT_ORIG = _at_path.read_text(encoding="utf-8")
 try:
     _old = "if repo.exists(int(conversation_id), 0, kind, title):"

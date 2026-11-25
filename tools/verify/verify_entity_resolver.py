@@ -3,7 +3,7 @@
 """实体归一消歧链路的常驻自检（2026-10-11 首次建立）。
 
 **为什么建这个脚本**：本工程的 `tools/verify/` 有 200+ 个自检脚本，但**没有任何一个覆盖
-`entity_resolver.py` 主干**（消歧检测 / 合并 / 别名写入）。最接近的两个在
+`services/entity_resolver.py` 主干**（消歧检测 / 合并 / 别名写入）。最接近的两个在
 `tests/manual_verify/`，且 `AGENTS.md:411` 记录着它们的存量失败（24/26）。
 结果就是一条**主干长期假绿**的链路，直到 2026-10-11 才被实机取证实锤：
 
@@ -192,7 +192,7 @@ def section1():
     from text_normalize import _canopy_key
 
     # ★ 一律读磁盘源码（变异自证的前提，见 _disk_src 注释）
-    src = _func_src("entity_resolver.py", "detect_and_save_candidates")
+    src = _func_src("services/entity_resolver.py", "detect_and_save_candidates")
 
     # E1 SELECT 必须含 branch 列 —— 这是整条链路的缺陷源头
     m = re_sel = [l for l in src.splitlines() if "SELECT id, name, entity_type" in l]
@@ -244,7 +244,7 @@ def section1():
           'a["branch"] != b["branch"]' in src)
 
     # E8 run_rule_preprocess 的分组键（含 branch，作为同文件口径一致的对照）
-    src2 = _func_src("entity_resolver.py", "run_rule_preprocess")
+    src2 = _func_src("services/entity_resolver.py", "run_rule_preprocess")
     g2 = [l for l in src2.splitlines() if "by_norm.setdefault" in l]
     check("E8 run_rule_preprocess 分组键含 branch（两函数口径一致）",
           bool(g2) and "branch" in g2[0])
@@ -255,7 +255,7 @@ def section2(tmp):
     print("\n[2] 计数诚实性（防 P0-2 回退）")
     import entity_resolver as ER  # noqa: F401  (确保可导入=模块存在)
 
-    src = _func_src("entity_resolver.py", "detect_and_save_candidates")
+    src = _func_src("services/entity_resolver.py", "detect_and_save_candidates")
 
     # E9 **每一处** `auto_merged += 1` 都必须在 res.get("ok") 的紧邻守卫内。
     #    ⚠️ 必须逐处检查（不能只看第一处）：函数里有强规则与桶内两处累加，
@@ -433,7 +433,7 @@ def section5():
     print("\n[5] 阈值配置化（防裸字面量回退）")
     import entity_resolver as ER  # noqa: F401  (确保可导入=模块存在)
 
-    src = _func_src("entity_resolver.py", "detect_and_save_candidates")
+    src = _func_src("services/entity_resolver.py", "detect_and_save_candidates")
     # E24 决策树不得出现裸 0.92 / 0.62
     hard = [l.strip() for l in src.splitlines()
             if ("score >= 0.92" in l or "score >= 0.62" in l)]
@@ -463,7 +463,7 @@ def section6(tmp):
     print("\n[6] 术语库接线（防 P0-3 回退）")
     import entity_resolver as ER  # noqa: F401  (确保可导入=模块存在)
 
-    src = _func_src("entity_resolver.py", "_normalize_mentions")
+    src = _func_src("services/entity_resolver.py", "_normalize_mentions")
     # E29/E30 必须查现役两表（收紧到 SQL 实参行，勿用全源码包含——
     # 全源码里若留有注释提及表名，即使 SQL 已回退也会 PASS）
     #
@@ -475,7 +475,7 @@ def section6(tmp):
     #   函数体内不再有 `FROM ` 字面量 ⇒ 原取材范围会误判红。
     #   **断言意图不变**：仍要证明"读的是现役两表、不是已废弃的旧表 glossary"。
     sql_lines = [l for l in src.splitlines() if "FROM " in l]
-    mod_src = _read(os.path.join(BASE, "entity_resolver.py")).decode("utf-8", "replace")
+    mod_src = _read(os.path.join(BASE, "services/entity_resolver.py")).decode("utf-8", "replace")
     sql_lines += [l for l in mod_src.splitlines()
                   if "FROM " in l and ("glossary_terms" in l or "glossary_concepts" in l)]
     sql_blob = " ".join(sql_lines)
@@ -743,35 +743,35 @@ MUTATIONS = [
     ("M8", '"FROM glossary_terms t JOIN glossary_concepts c ON c.concept_id = t.concept_id "',
      '"FROM glossary g LEFT JOIN glossary_terms t ON 1=0 LEFT JOIN glossary_concepts c ON 1=0 "',
      "E32", "section6"),
-    # ── P4 类变异（第 6 元组 = 目标文件名，缺省为 entity_resolver.py）──
+    # ── P4 类变异（第 6 元组 = 目标文件名，缺省为 services/entity_resolver.py）──
     # M9：还原 `_bigrams` 的拉丁字符 bigram（去掉补字符循环）⇒ 拉丁名 fuzzy 回到恒 0
     ("M9",
      "    for tok in en:\n        if len(tok) > 2 and not _ZH_CHAR.search(tok):\n"
      "            for i in range(len(tok) - 1):\n                bigrams.add(tok[i:i + 2])\n",
      "    for tok in []:\n        if len(tok) > 2 and not _ZH_CHAR.search(tok):\n"
      "            for i in range(len(tok) - 1):\n                bigrams.add(tok[i:i + 2])\n",
-     "E41", "section7b", "text_normalize.py"),
+     "E41", "section7b", "core/domain/text_normalize.py"),
     # M10：去掉「短名非前缀 ⇒ related」⇒ EV热管理⊃热管理 会被升级成 dup_suspect
     ("M10",
      "    if not long_.startswith(short):\n        return \"related\"          # P4：中缀/后缀包含 = 复合术语\n",
      "    if False:\n        return \"related\"\n",
-     "E45", "section7b", "vector2graph.py"),
+     "E45", "section7b", "services/vector2graph.py"),
     # M11：去掉质量闸的长度差约束 ⇒ fuzzy 修复后包含关系会被判官放行（错误自动合并）
     ("M11",
      "    return abs(len(str(a)) - len(str(b))) <= 2\n",
      "    return True\n",
-     "E48", "section7b", "staging_fuse.py"),
+     "E48", "section7b", "services/staging_fuse.py"),
     # M12：把「不含中文」守卫去掉 ⇒ 中文 token 也被拆字符，中文 fuzzy 回归
     #      （2026-11-08：守卫由「是纯拉丁」改为「不含中文」，锚点随之更新；
     #       变异出来的正是 fcaeba2 之后、本轮修复之前那段代码）
     ("M12", "        if len(tok) > 2 and not _ZH_CHAR.search(tok):",
      "        if len(tok) > 2:",
-     "E43", "section7b", "text_normalize.py"),
+     "E43", "section7b", "core/domain/text_normalize.py"),
     # M13：让同语言词条也进跨语言索引 ⇒ 层级关系被当成同一实体的别名（P4 判定被破坏）
     ("M13",
      '        return bool(_ZH_CH.search(canon)) != bool(_ZH_CH.search(alias))\n',
      '        return True\n',
-     "E51", "section7c", "entity_resolver.py"),
+     "E51", "section7c", "services/entity_resolver.py"),
     # M14：不再把跨语言别名灌进消歧索引 ⇒ 英文候选名彻底命不中中文实体（P5 能力消失）
     ("M14",
      "            for _alt in cross_ling.get(_own, ()) or ():\n"
@@ -780,7 +780,7 @@ MUTATIONS = [
      "            for _alt in []:\n"
      "                if normalize_name(str(_alt).strip()) != _own:\n"
      "                    _index_one(_alt, r[\"id\"])\n",
-     "E52", "section7c", "vector2graph.py"),
+     "E52", "section7c", "services/vector2graph.py"),
     # M15：`_commit` 不再置 use_in_matching ⇒ 导入词条对消歧重新"隐形的成功"（P6 第1项回退）
     ("M15", 'VALUES (?,?,?,?,?,?,?,?)",\n                     (cid, label, _lang(label), "preferred", "preferred", "import", 7, 1))',
      'VALUES (?,?,?,?,?,?,?,?)",\n                     (cid, label, _lang(label), "preferred", "preferred", "import", 7, None))',
@@ -824,18 +824,18 @@ def V_FAIL_PARSED(out: str) -> list:
 
 def section8():
     print("\n[8] 变异自证：把修复各自还原 → 对应断言必须 FAIL")
-    # ⚠️ targets 必须覆盖**所有被变异文件**（P4 起不再只有 entity_resolver.py），
+    # ⚠️ targets 必须覆盖**所有被变异文件**（P4 起不再只有 services/entity_resolver.py），
     #    否则 finally 还原时漏还原 ⇒ 变异残留到工作区（会造成"改到一半"的幽灵状态）。
     targets = [os.path.join(BASE, f) for f in
-               ("entity_resolver.py", "text_normalize.py", "vector2graph.py",
-                "staging_fuse.py", "routers/glossary_io.py")]
+               ("services/entity_resolver.py", "core/domain/text_normalize.py", "services/vector2graph.py",
+                "services/staging_fuse.py", "routers/glossary_io.py")]
     global _ORIG
     _ORIG = {p: _read(p) for p in targets}
     try:
         for entry in MUTATIONS:
             tag, anchor, repl, kills, sec = entry[:5]
-            # 第 6 元组 = 目标文件名（P4 起支持跨文件变异），缺省 entity_resolver.py
-            fname = entry[5] if len(entry) > 5 else "entity_resolver.py"
+            # 第 6 元组 = 目标文件名（P4 起支持跨文件变异），缺省 services/entity_resolver.py
+            fname = entry[5] if len(entry) > 5 else "services/entity_resolver.py"
             path = os.path.join(BASE, fname)
             raw = _read(path)
             # 换行符归一（仓库混用 CRLF/LF）

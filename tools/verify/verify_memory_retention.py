@@ -190,7 +190,7 @@ for label, path, mut, run in (
      lambda ns: (lambda c: (lambda r: r["ok"] and
          ns["restore"](c, "tool_result_offloads", 1).get("content") == "完整工具结果 A")(
          ns["archive_apply"](c, ns["sweep"](c, older_than_days=90), confirm=True)))(fixture())),
-    ("M3 恒用硬 prompt ⇒ R4 翻红", "memory_service.py", _m3,
+    ("M3 恒用硬 prompt ⇒ R4 翻红", "services/memory_service.py", _m3,
      lambda ns: "一律 worth=false" not in ns["MemoryService"]._deposit_prompt()),
     ("M4 未实测项填 0 ⇒ R5 翻红", "core/memory_dream.py", _m4,
      lambda ns: ns["compare_packages"](p1, p2)["memory_hit_rate"] is None),

@@ -12,7 +12,7 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from core import config
 from core.deps import current_user
-from core.audit import audit
+from core.audit import audit, audit_user  # C1：current_user 可为 None，统一走 audit_user
 
 router = APIRouter(tags=["图数据库"])
 
@@ -39,10 +39,18 @@ def graph_db_status(user: dict = Depends(current_user)):
     writer = _writer()
     try:
         st = writer.stats() if enabled else {}
-        return {"ok": True, "enabled": enabled,
-                "backend": config.get("graph_db", "backend", "pyoxigraph"),
-                "endpoint": config.get("graph_db", "endpoint", ""),
-                "stats": st}
+        # 2026-11-24 C1：writer 实测类型（而非配置声明）与降级原因都要暴露 ——
+        # enabled=true 但 writer=Mock 时，仅看 enabled 会误判「已通电」。
+        out = {"ok": True, "enabled": enabled,
+               "backend": config.get("graph_db", "backend", "pyoxigraph"),
+               "writer_backend": st.get("backend") if enabled else "",
+               "effective_writer": type(writer).__name__ if enabled else "",
+               "endpoint": config.get("graph_db", "endpoint", ""),
+               "stats": st}
+        degraded = getattr(writer, "_degraded_reason", "")
+        if degraded:
+            out["degraded_reason"] = degraded
+        return out
     finally:
         writer.close()
 
@@ -73,7 +81,7 @@ def graph_db_query(body: dict, user: dict = Depends(current_user)):
     writer = _writer()
     try:
         rows = writer.query_sparql(q, limit=limit)
-        audit(user.get("username", ""), "graph_db_query",
+        audit(audit_user(user), "graph_db_query",
               f"SPARQL {q[:120]} → {len(rows)} 行")
         return {"ok": True, "rows": rows, "count": len(rows)}
     finally:
@@ -86,12 +94,12 @@ def graph_db_sync(user: dict = Depends(current_user)):
     if not config.as_bool("graph_db", "enabled"):
         raise HTTPException(400, "图数据库未启用（graph_db.enabled=false）")
     from database import get_db
-    from graph_db import sync_pending_triples
+    from adapters.graph_db import sync_pending_triples
     conn = get_db()
     writer = _writer()
     try:
         res = sync_pending_triples(conn, writer)
-        audit(user.get("username", ""), "graph_db_sync", f"synced={res['synced']}")
+        audit(audit_user(user), "graph_db_sync", f"synced={res['synced']}")
         return {"ok": True, **res, "stats": writer.stats()}
     finally:
         writer.close()
@@ -103,11 +111,11 @@ def graph_db_nlquery(body: dict, user: dict = Depends(current_user)):
     """自然语言图问答（NL → SPARQL 自动翻译，只读）。"""
     if not config.as_bool("graph_db", "enabled"):
         raise HTTPException(400, "图数据库未启用（graph_db.enabled=false）")
-    from graph_db_tools import _nlquery
+    from services.tools.graph_db_tools import _nlquery
     res = _nlquery(body or {})
     if not res.get("ok"):
         raise HTTPException(422, res.get("error") or "图问答失败")
-    audit(user.get("username", ""), "graph_db_nlquery",
+    audit(audit_user(user), "graph_db_nlquery",
           f"{str((body or {}).get('query') or '')[:80]} → {res.get('count', 0)} 行")
     return res
 
@@ -125,7 +133,7 @@ def graph_db_export(user: dict = Depends(current_user)):
     writer = _writer()
     try:
         n = writer.export_nq(path)
-        audit(user.get("username", ""), "graph_db_export", f"{n} 条四元组 → {path}")
+        audit(audit_user(user), "graph_db_export", f"{n} 条四元组 → {path}")
         return {"ok": True, "path": path, "quads": n}
     finally:
         writer.close()

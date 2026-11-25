@@ -89,7 +89,7 @@ class MemoryMixin:
           开关：`context_audit.memory_single_source`（默认 True）；置 False 退回旧行为。
         """
         try:
-            from memory_backend import get_memory_backend
+            from services.memory_backend import get_memory_backend
             from database import get_db
             conn = get_db()
             try:
@@ -565,7 +565,7 @@ class MemoryMixin:
                 pass
             if getattr(self, "_mem_deposit_count", 0) >= 2:
                 return
-            from memory_backend import get_memory_backend
+            from services.memory_backend import get_memory_backend
             from database import get_db
             ctx = getattr(self, "_mem_ctx", None) or {}
             pid = self._resolve_mem_project_id(int(ctx.get("conversation_id") or 0)) if ctx else ""

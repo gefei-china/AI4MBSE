@@ -310,7 +310,7 @@ def main():
     ev_src = _read("core/alert_evaluator.py")
     _rec("F2 alert_evaluator 有 online_eval_metrics 供数",
          "from core.online_eval import online_eval_metrics" in ev_src)
-    seed_src = _read("seed_registry.py")
+    seed_src = _read("services/seed_registry.py")
     _rec("F3 R12-R14 三条规则在 seed_registry._ALERT_RULES",
          seed_src.count("eval_backlog_pending") >= 1
          and seed_src.count("eval_promoted_7d") >= 1

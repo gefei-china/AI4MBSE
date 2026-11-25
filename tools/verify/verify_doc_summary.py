@@ -3,7 +3,7 @@
 """P0-2 门禁：文档级摘要是否正确接入检索与注入。
 
 背景（2026-11-01）：
-    `documents.summary` 的 LLM 摘要早就在生成，但 `rag.py` / `knowledge_engine.py`
+    `documents.summary` 的 LLM 摘要早就在生成，但 `rag.py` / `services/knowledge_engine.py`
     **完全不读它** —— 能力空转。实测 14 篇里只有 3 篇有值（21%），
     补齐后 14/14。本门禁守住四条语义：
 

@@ -325,7 +325,7 @@ def group_c():
     ck("C2b file_list 同样给候选", r3["ok"] is False and "可改用" in r3["result"])
     ck("C2c 隐藏文件不优先列出", ".git、" not in r2["result"])
 
-    src = open(os.path.join(ROOT, "file_tools.py"), encoding="utf-8").read()
+    src = open(os.path.join(ROOT, "services/tools/file_tools.py"), encoding="utf-8").read()
     ck("C3 三个入口都走 _miss", src.count("_miss(") >= 4, src.count("_miss("))
     orig = ft._path_suggest_on
     try:

@@ -357,7 +357,7 @@ def _seed_builtin_tools(conn) -> None:
         )
     # 基础通用文件操作工具（file_*：系统文件读写/增删，定义见 file_tools.py，与 agent/workflow 双链路共用）
     try:
-        from file_tools import FILE_TOOL_DEFS
+        from services.tools.file_tools import FILE_TOOL_DEFS
         for d in FILE_TOOL_DEFS:
             conn.execute(
                 "INSERT OR IGNORE INTO tools (name, source, description, status, input_schema, version, side_effect, risk_level, builtin) "
@@ -371,7 +371,7 @@ def _seed_builtin_tools(conn) -> None:
         print(f"[init_db] ⚠️ 文件工具注册失败（忽略）: {e}")
     # 基础通用报告导出工具（report_export：内容→md/docx/pdf，定义见 report_tools.py，双链路共用）
     try:
-        from report_tools import REPORT_TOOL_DEFS
+        from services.tools.report_tools import REPORT_TOOL_DEFS
         for d in REPORT_TOOL_DEFS:
             conn.execute(
                 "INSERT OR IGNORE INTO tools (name, source, description, status, input_schema, version, side_effect, risk_level, builtin) "
@@ -386,7 +386,7 @@ def _seed_builtin_tools(conn) -> None:
     # save_artifact（2026-10-17 米爸能力配置：AI 显式归档产物到产物库——
     # file_write 只写沙箱磁盘进不了产物库；定义见 artifact_tools.py）
     try:
-        from artifact_tools import input_schema as _sa_schema
+        from services.tools.artifact_tools import input_schema as _sa_schema
         conn.execute(
             "INSERT OR IGNORE INTO tools (name, source, description, status, input_schema, version, side_effect, risk_level, builtin) "
             "VALUES ('save_artifact','builtin',"
@@ -399,7 +399,7 @@ def _seed_builtin_tools(conn) -> None:
         print(f"[init_db] ⚠️ 产物工具注册失败（忽略）: {e}")
     # web_search / web_fetch（2026-10-17 米爸需求：联网获取最新消息；定义见 web_tools.py）
     try:
-        from web_tools import WEB_TOOL_DEFS as _WEB_DEFS
+        from adapters.web_tools import WEB_TOOL_DEFS as _WEB_DEFS
         for d in _WEB_DEFS:
             conn.execute(
                 "INSERT OR IGNORE INTO tools (name, source, description, status, input_schema, version, side_effect, risk_level, builtin) "
@@ -421,7 +421,7 @@ def _backfill_domains(conn):
     仅回填从未打标（domain_confidence=0）的文档；高置信直接写库，低置信进 review 队列。
     幂等：domain_confidence>0 视为已处理，不会重复回填/重复进队列。
     """
-    from glossary import infer_domain, log_domain_review
+    from core.domain.glossary import infer_domain, log_domain_review
     rows = conn.execute(
         "SELECT id, filename FROM documents "
         "WHERE (domain='unknown' OR domain='') AND (domain_confidence=0 OR domain_confidence IS NULL)"

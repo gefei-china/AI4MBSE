@@ -22,7 +22,7 @@ class KnowledgeService(BaseService):
 
         doc_id 指定时限定在该文档的 chunks 内抽取（上传后自动抽取 → chunk↔entity 溯源指向本文档）。
         """
-        from vector2graph import extract_candidates
+        from services.vector2graph import extract_candidates
         result = extract_candidates(self.conn, query, chunk_ids or None,
                                     top_k, doc_id=doc_id)
         from core.audit import audit
@@ -38,7 +38,7 @@ class KnowledgeService(BaseService):
         P0-C 消歧前移：确认时对与已有实体重复的节点候选按 dup_action 处理
         （skip 跳过 / align 对齐合并已有实体 / create 强制新建）。
         """
-        from vector2graph import confirm_candidates
+        from services.vector2graph import confirm_candidates
         result = confirm_candidates(self.conn, batch_id, selected_ids or None,
                                     operator=actor, dup_action=dup_action, triple_only=triple_only)
         # P0 发布门禁：仅 AI 建模批次（sysml_version_id>0）在确认后生成发布合并请求
@@ -101,13 +101,13 @@ class KnowledgeService(BaseService):
 
     def v2g_batches(self) -> list:
         """抽取批次聚合（治理中心批次卡：batch 维度统计 + 来源文档 + 时间）。"""
-        from vector2graph import batch_stats
+        from services.vector2graph import batch_stats
         return batch_stats(self.conn)
 
     def v2g_update(self, candidate_id: int, name: str, entity_type: str, properties: str,
                    actor: str = "system") -> dict:
         """编辑单条候选（改名称/类型/属性，重新校验与消歧打标，仍为 pending）。"""
-        from vector2graph import update_candidate
+        from services.vector2graph import update_candidate
         result = update_candidate(self.conn, candidate_id, name, entity_type, properties)
         if result.get("ok"):
             from core.audit import audit
@@ -140,7 +140,7 @@ class KnowledgeService(BaseService):
         自动路径已在 confirm_candidates 内置（幂等，log 去重）；
         本方法供治理中心显式触发/重跑，返回完整统计。
         """
-        from staging_fuse import fuse_batch, quality_gate
+        from services.staging_fuse import fuse_batch, quality_gate
         result = fuse_batch(self.conn, batch_id=batch_id, selected_ids=selected_ids,
                             operator=actor)
         qg = None
@@ -159,7 +159,7 @@ class KnowledgeService(BaseService):
 
     def v2g_fuse_status(self, batch_id: str | None = None, limit: int = 50) -> dict:
         """融合闸运行状态（汇总 + 最近审计明细）。"""
-        from staging_fuse import fuse_status
+        from services.staging_fuse import fuse_status
         return fuse_status(self.conn, batch_id=batch_id, limit=limit)
 
     # ═══════════════ 全链路优化：V2 候选提交审核 + 三元组 ═══════════════
@@ -184,7 +184,7 @@ class KnowledgeService(BaseService):
         # 写前融合闸（透明执行：聚焦批内去重 + 冲突消解）
         fuse = {"auto_merged": 0, "review_queue": 0}
         try:
-            from staging_fuse import fuse_batch
+            from services.staging_fuse import fuse_batch
             r = fuse_batch(self.conn, batch_id=batch_id or None,
                            selected_ids=selected_ids or None, operator=actor)
             fuse = {"auto_merged": r.get("auto_merged", 0), "review_queue": r.get("review_queue", 0)}
@@ -211,12 +211,12 @@ class KnowledgeService(BaseService):
         return []
 
     def triple_review_queue(self, status: str = "pending", limit: int = 200) -> dict:
-        from triple_store import review_queue, stats
+        from services.triple_store import review_queue, stats
         return {"items": review_queue(self.conn, status=status, limit=limit),
                 "stats": stats(self.conn)}
 
     def triple_review(self, triple_id: str, decision: str, note: str = "", actor: str = "system") -> dict:
-        from triple_store import review_triple
+        from services.triple_store import review_triple
         r = review_triple(self.conn, triple_id, decision, note, actor)
         if r["ok"]:
             from core.audit import audit
@@ -225,7 +225,7 @@ class KnowledgeService(BaseService):
 
     def triple_commit_graph(self, actor: str = "system") -> dict:
         """三元组唯一图写入源：把已通过(approved)且未落图(graph_stored=0)的三元组反写为 entities/relations。"""
-        from triple_commit import commit_approved_triples
+        from services.triple_commit import commit_approved_triples
         r = commit_approved_triples(self.conn, operator=actor)
         if r.get("entities") or r.get("relations"):
             from core.audit import audit
@@ -234,7 +234,7 @@ class KnowledgeService(BaseService):
         return r
 
     def triple_batch_review(self, triple_ids: list, decision: str, note: str = "", actor: str = "system") -> dict:
-        from triple_store import batch_review
+        from services.triple_store import batch_review
         r = batch_review(self.conn, triple_ids, decision, note, actor)
         if r["reviewed"]:
             from core.audit import audit
@@ -296,7 +296,7 @@ class KnowledgeService(BaseService):
     def v2g_fuse_config(self, enabled=None, auto_threshold=None, review_threshold=None,
                         quality_gate=None, weights=None, actor: str = "system") -> dict:
         """读写融合闸配置（阈值/权重入 settings 表，修 C7 硬编码）。"""
-        from staging_fuse import set_fuse_config
+        from services.staging_fuse import set_fuse_config
         return set_fuse_config(self.conn, enabled=enabled, auto_threshold=auto_threshold,
                                review_threshold=review_threshold, quality_gate=quality_gate,
                                weights=weights, operator=actor)
@@ -310,7 +310,7 @@ class KnowledgeService(BaseService):
         跨批次/全图消歧与冲突检测。三引擎均已 Blocking 化（精确键/canopy 分桶），
         万级实体安全。返回各引擎统计。
         """
-        from entity_resolver import run_rule_preprocess, conflict_detect
+        from services.entity_resolver import run_rule_preprocess, conflict_detect
         from core.audit import audit
         rule = run_rule_preprocess(self.conn, threshold=0.62)
         conflict = conflict_detect(self.conn)
@@ -386,8 +386,8 @@ class KnowledgeService(BaseService):
         import json as _json
         import time as _time
         import uuid as _uuid
-        from sysml_importer import sysml_to_candidates
-        from vector2graph import confirm_candidates
+        from services.sysml_importer import sysml_to_candidates
+        from services.vector2graph import confirm_candidates
         from core.audit import audit
         t0 = _time.time()
         proj = self.conn.execute("SELECT id, name FROM projects WHERE id=?",
@@ -459,7 +459,7 @@ class KnowledgeService(BaseService):
                 [actor] + vids)
             stats["triples_approved"] = cur.rowcount
             self.conn.commit()
-        from triple_commit import commit_approved_triples
+        from services.triple_commit import commit_approved_triples
         wr = commit_approved_triples(self.conn, operator=actor)
         stats["entities_written"] = wr.get("entities") or 0
         stats["relations_written"] = wr.get("relations") or 0
@@ -502,8 +502,8 @@ class KnowledgeService(BaseService):
         import time as _time
         import uuid as _uuid
         from datetime import datetime as _dt, timedelta as _timedelta
-        from sysml_importer import sysml_to_candidates
-        from vector2graph import confirm_candidates
+        from services.sysml_importer import sysml_to_candidates
+        from services.vector2graph import confirm_candidates
         from core.audit import audit
         t0 = _time.time()
         # ★ 2026-11-19：`t0_str` 原先**从未定义**（下方 SQL 直接引用）⇒ NameError。
@@ -545,7 +545,7 @@ class KnowledgeService(BaseService):
                 "WHERE status='pending' AND created_at >= ?", [actor, t0_str])
             stats["triples_approved"] = cur.rowcount
             self.conn.commit()
-            from triple_commit import commit_approved_triples
+            from services.triple_commit import commit_approved_triples
             wr = commit_approved_triples(self.conn, operator=actor)
             stats["entities_written"] = wr.get("entities") or 0
             stats["relations_written"] = wr.get("relations") or 0
@@ -594,7 +594,7 @@ class KnowledgeService(BaseService):
         import json as _json
         from core.audit import audit
         try:
-            from zhiyuan_client import ZhiyuanClient, _load_config
+            from adapters.zhiyuan_client import ZhiyuanClient, _load_config
         except Exception as e:
             return {"error": f"智源客户端不可用: {e}"}
         cfg = _load_config()
@@ -674,7 +674,7 @@ class KnowledgeService(BaseService):
                              + _json.dumps(gen, ensure_ascii=False)[:200] + "）"}
         # 3) 解析 → 内容形态
         # 2026-09-20：`sysml_importer.parse_text`（手写扫描器）已删除，唯一实现 = OMG 官方解析器。
-        from sysml_ast import parse_strict
+        from core.domain.sysml_ast import parse_strict
         try:
             parsed = parse_strict(text)
         except RuntimeError as e:

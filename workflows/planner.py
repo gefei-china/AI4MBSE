@@ -874,7 +874,7 @@ class FlowPlannerMixin:
         team_prompt（C2）：团队模式注入的拆解规则与成员名册，追加在计划 prompt 末尾。
         """
         from llm import llm_client
-        from task_queue import TaskQueue
+        from services.task_queue import TaskQueue
         from agent import AgentPipeline
         import time as _t
         t0 = _t.time()
@@ -1117,7 +1117,7 @@ class FlowPlannerMixin:
         _plan_guard = None
         _pg_blocked = False
         try:
-            from task_queue import resolve_agent_name as _resolve_agent
+            from services.task_queue import resolve_agent_name as _resolve_agent
             _pgcfg = load_pipeline_config(conn)
             _plan_guard = validate_pipeline_plan(
                 plan,

@@ -173,7 +173,7 @@ def main():
        all(k not in (ROOT / f).read_text(encoding="utf-8")
            for f, k in [("core/alert_evaluator.py", "copy_context"),
                         ("core/job_queue.py", "copy_context"),
-                        ("mcp_health.py", "copy_context")]))
+                        ("services/mcp_health.py", "copy_context")]))
 
     # ── C 变异自证 ──
     src = src_audit

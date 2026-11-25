@@ -95,7 +95,7 @@ def main() -> int:
         "MCP 健康巡检启动失败" in mp)
 
     section("C1b · 巡检循环必须 commit（第二根因）")
-    mh = (ROOT / "mcp_health.py").read_text(encoding="utf-8", errors="ignore")
+    mh = (ROOT / "services/mcp_health.py").read_text(encoding="utf-8", errors="ignore")
     _loop_src = mh[mh.find("def _loop"): mh.find("t = threading.Thread")]
     chk("_loop 在 close 前显式 commit",
         "conn.commit()" in _loop_src,
@@ -178,7 +178,7 @@ def main() -> int:
         "为空 ⇒ 检查该 MCP 的 enabled 与 status（需 enabled=1 且 online）")
 
     section("C6 · 巡检失败不再静默（有日志出口）")
-    mh = (ROOT / "mcp_health.py").read_text(encoding="utf-8", errors="ignore")
+    mh = (ROOT / "services/mcp_health.py").read_text(encoding="utf-8", errors="ignore")
     chk("_loop 不再裸 except: pass", "except Exception:\n                pass" not in mh)
     chk("失败有 print 出口（[mcp-health] 前缀）", "[mcp-health]" in mh)
 

@@ -180,7 +180,7 @@ def main():
         check("D2 该输出是合法 Turtle", False, "%s: %s" % (type(e).__name__, str(e)[:150]))
 
     # 变异：让 PN_LOCAL 守卫恒真（即恢复"永远拼 :local"的旧行为）
-    _src_p = os.path.join(_ROOT, "ontology_owl.py")
+    _src_p = os.path.join(_ROOT, "core/domain/ontology_owl.py")
     _raw = open(_src_p, "rb").read()
     _text = _raw.decode("utf-8")
     _anchor = 'if re.match(r"^[A-Za-z0-9_\\-.%]+$", local):'

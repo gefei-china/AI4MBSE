@@ -224,7 +224,7 @@ def ontology_add_type(body: OntologyTypeIn, conn=Depends(db_session),
             if _inv not in _rel_names:
                 return JSONResponse({"error": f"inverse_of 指向不存在的关系类型: {_inv}"}, 400)
     # P0-1：IRI 主轴——空则按策略自动生成；显式指定则校验唯一
-    from ontology_semantics import make_iri
+    from core.domain.ontology_semantics import make_iri
     iri = (body.iri or "").strip()
     if not iri:
         iri = make_iri(conn, body.name)
@@ -331,7 +331,7 @@ def ontology_update_type(tid: int, body: OntologyTypeIn, conn=Depends(db_session
         if (_mn is not None and _mn != "" and _mx is not None and _mx != "" and int(_mn) > int(_mx)):
             return JSONResponse({"error": f"{_ck} 的 min 不能大于 max（min={_mn} max={_mx}）"}, 400)
     # P0-1：IRI 处理——显式指定校验唯一；空则自动生成（改名联动：自动生成的 IRI 跟随 name，用户自定义 IRI 保留）
-    from ontology_semantics import make_iri, slugify, get_ontology_meta
+    from core.domain.ontology_semantics import make_iri, slugify, get_ontology_meta
     old_iri = before["iri"] or ""
     new_iri = (body.iri or "").strip()
     if new_iri:
@@ -490,7 +490,7 @@ def ontology_get_type(tid: int, conn=Depends(db_session)):
 @router.get("/api/knowledge/ontology/meta")
 def ontology_get_meta(conn=Depends(db_session)):
     """P0-1：本体元信息（命名空间 / IRI 策略 / 默认前缀），前端 IRI 生成与设置面板消费。"""
-    from ontology_semantics import get_ontology_meta
+    from core.domain.ontology_semantics import get_ontology_meta
     return get_ontology_meta(conn)
 
 
@@ -498,7 +498,7 @@ def ontology_get_meta(conn=Depends(db_session)):
 def ontology_update_meta(body: dict = None, conn=Depends(db_session),
                          user=Depends(require_any_permission(WRITE_PERMS))):
     """P0-1：更新本体元信息（命名空间 / IRI 生成策略），影响后续新建实体 IRI。"""
-    from ontology_semantics import get_ontology_meta, DEFAULT_NAMESPACE
+    from core.domain.ontology_semantics import get_ontology_meta, DEFAULT_NAMESPACE
     body = body or {}
     ns = str(body.get("namespace") or "").strip()
     strategy = str(body.get("iri_strategy") or "hash-name").strip()
@@ -740,3 +740,23 @@ def ontology_actions_by_tool(conn=Depends(db_session)):
         by_tool.setdefault(r["tool_name"], []).append(
             {"id": r["type_id"], "name": r["type_name"]})
     return {"by_tool": by_tool}
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# 2026-11-24 第二期「用得上」：Ontology Query Service（运行期统一上下文）
+# ══════════════════════════════════════════════════════════════════════════
+@router.post("/api/knowledge/ontology/context")
+def ontology_context(body: dict, conn=Depends(db_session), user=Depends(current_user)):
+    """按对象身份返回属性 + 关系 + 类型约束 + 邻域（Agent 与前端统一入口）。
+
+    与原 `/ontology/graph` 的区别：那是 schema 层的类型关系全景；
+    本端点是**实例层**业务上下文，供 Agent 回答「这个需求关联了哪些部件」。
+    找不到对象返回 found=False（HTTP 200），调用方须回落、不得编造。
+    """
+    b = body or {}
+    obj_id = str(b.get("id") or "").strip()
+    if not obj_id:
+        return JSONResponse({"error": "id 必填"}, 400)
+    branch = str(b.get("branch") or "").strip()
+    from services.ontology_query import get_context
+    return get_context(conn, obj_id, branch=branch, depth=int(b.get("depth") or 1))

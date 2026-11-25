@@ -84,7 +84,7 @@ def merge_entity(entity_id: str, body: dict, conn=Depends(db_session),
     # 删除源实体全部版本行
     conn.execute("DELETE FROM entities WHERE id=?", (entity_id,))
     try:
-        from entity_resolver import write_entity_alias as _wea
+        from services.entity_resolver import write_entity_alias as _wea
         if _src_row and _tgt_row and (_src_row["name"] or "").strip() != (_tgt_row["name"] or "").strip():
             _wea(conn, target_id, _src_row["name"],
                  branch=_src_row["branch"] or branch,
@@ -145,7 +145,7 @@ def graph_view_modules(branch: Optional[str] = None, status: Optional[str] = Non
 
     计数基于指定状态视图的实体（与前端当前状态筛选一致，数据量变化即实时反映）。
     """
-    from subgraph_views import module_groups, doc_groups
+    from core.domain.subgraph_views import module_groups, doc_groups
     b = branch or "dev"
     repo = KnowledgeRepo(conn)
     ents = repo.graph_entities(b, None, status or "all")
@@ -263,7 +263,7 @@ def graph_search(q: str, conn=Depends(db_session)):
         return {"nodes": [], "edges": []}
     ids = set()
     try:
-        from fts_search import fts_query
+        from adapters.fts_search import fts_query
         fr = fts_query(conn, q, kinds=["entities"], limit=100)
         ids = {r["ref_id"] for r in fr["results"] if r.get("entity")
                and r["entity"]["status"] != "deprecated"}

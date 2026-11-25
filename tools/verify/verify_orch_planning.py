@@ -4,7 +4,7 @@
 **背景（对标取证）**：实测 `agent_tasks.expected_output` **222 行里只有 1 行有值（0.5%）**，
 而**整条消费链都在**：
   · DDL 有列（`schema.py:883`）
-  · `task_queue.py::create_plan` 会落库（`:36,42`）
+  · `services/task_queue.py::create_plan` 会落库（`:36,42`）
   · `workflows/planner.py::build_subtask_context` 会把它作为「期望产出」注入子任务 prompt（`:32-34`）
   · `orch_checkpoint.py:278` / `orchestration.py:489` 也会读
 ⇒ **唯一缺的是"让 LLM 产出它"** —— 而主路径 `stream.py` 的 `plan_prompt`
@@ -33,7 +33,7 @@ import sqlite3
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 STREAM = os.path.join(ROOT, "agent", "pipeline_parts", "stream.py")
 PLANNER = os.path.join(ROOT, "workflows", "planner.py")
-TQUEUE = os.path.join(ROOT, "task_queue.py")
+TQUEUE = os.path.join(ROOT, "services/task_queue.py")
 PROD_DB = (os.environ.get("MBSE_DB_PATH") or os.path.join(ROOT, "mbse.db"))
 
 _ok = 0

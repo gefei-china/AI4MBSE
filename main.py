@@ -61,6 +61,7 @@ from routers import (
     capabilities_router,      # 2026-10-27 P0-2 能力账本（统一注册处 + 声明/调用 2×2 + 任务级追溯）
     events_router,            # 2026-11-01 事件驱动（入站事件 → 准入 → 工单；默认 observe 只记录不执行）
     alternatives_router,      # 2026-11-03 多方案设计（FR-MG-6：比较 + 多维度打分端点）
+    health_degrade_router,    # 2026-11-25 P0 降级台账（静默兜底可见化：看板 + 巡检，只读）
 )
 
 @asynccontextmanager
@@ -136,6 +137,36 @@ async def lifespan(app: FastAPI):
     except Exception as _e_rp:
         print("[startup] ⚠️ Fuseki 失败重放异常（主服务继续）：%s: %s"
               % (type(_e_rp).__name__, str(_e_rp)[:160]), flush=True)
+    # ★ 2026-11-24 第三期「连得通」：已审核未入图三元组增量同步。
+    #   `graph_db.enabled` 默认 False ⇒ 这里瞬时返回 disabled，零副作用。
+    #   打开后消费 triples(status='approved', graph_stored=0) → Pyoxigraph 镜像并置位；
+    #   与 Fuseki autosync 是两条独立通道（前者管已审三元组，后者管 SPARQL 投影）。
+    try:
+        from core import config as _cfg_gd
+        if _cfg_gd.as_bool("graph_db", "enabled"):
+            from database import get_db as _gdb_gd
+            from adapters.graph_db import get_writer as _get_writter_gd, sync_pending_triples as _sync_gd
+            _conn_gd = _gdb_gd()
+            try:
+                _writer_gd = _get_writter_gd(True, _cfg_gd.get("graph_db", "backend", "pyoxigraph"),
+                                             _cfg_gd.get("graph_db", "path", ""),
+                                             _cfg_gd.get("graph_db", "use_memory", False))
+                _sync_r = _sync_gd(_conn_gd, _writer_gd)
+                print("[startup] 图库增量同步：写入 %s / 剩余 %s / 失败 %s"
+                      % (_sync_r.get("synced", 0), _sync_r.get("pending_left", 0),
+                         _sync_r.get("errors", 0)), flush=True)
+                try:
+                    _writer_gd.close()
+                except Exception:
+                    pass
+            finally:
+                _conn_gd.close()
+        else:
+            print("[startup] 图库总开关关闭：查询走 MockWriter（恒空）；"
+                  "如需开启设 MBSE_GRAPH_DB_ENABLED=1", flush=True)
+    except Exception as _e_gd:
+        print("[startup] ⚠️ 图库增量同步异常（主服务继续）：%s: %s"
+              % (type(_e_gd).__name__, str(_e_gd)[:160]), flush=True)
     # ★★ 2026-11-18：**强杀恢复** —— 把上次进程异常终止时留下的流式检查点固化成消息。
     #   必须紧跟 init_db()（表刚建好），且在所有后台守护线程启动之前。
     #   正常收口的流已在 finally 里删除检查点 ⇒ 这里扫到的只可能是强杀残留。
@@ -170,7 +201,7 @@ async def lifespan(app: FastAPI):
         pass  # 清理失败不得影响启动（TTL 下次启动再清）
     # P1-4（2026-08-31）：统一种子注册入口（内置工具/系统管理/HTTP 集成/技能包/智源旧注册 幂等编排）
     try:
-        from seed_registry import seed_all as _seed_all
+        from services.seed_registry import seed_all as _seed_all
         from database import db_conn as _db_conn
         with _db_conn() as _c:
             _seed_all(_c)
@@ -178,7 +209,7 @@ async def lifespan(app: FastAPI):
         pass
     # P1-5（2026-09-06）：FTS5 全文索引初始化（虚表+触发器幂等；空索引自动重建）
     try:
-        from fts_search import ensure_fts
+        from adapters.fts_search import ensure_fts
         ensure_fts(get_db())
     except Exception:
         pass
@@ -196,7 +227,7 @@ async def lifespan(app: FastAPI):
 
         def _warm_bm25():
             try:
-                from knowledge_engine import _bm25_cache_get
+                from services.knowledge_engine import _bm25_cache_get
                 from database import get_db as _gdb_w
                 _bm25_cache_get(_gdb_w(), None, None, None, False)
                 print("[startup] BM25 索引预热完成（首次检索不再等 35s）", flush=True)
@@ -341,7 +372,7 @@ async def lifespan(app: FastAPI):
 
     # MCP-D1：后台健康巡检线程（每 5 分钟对 sse/http 服务器做 initialize 握手探测）
     try:
-        from mcp_health import start_health_loop
+        from services.mcp_health import start_health_loop
         from repositories.studio_repo import StudioRepo as _StudioRepo
         # ★ 2026-10-16（米爸报「MCP 为啥不可用」· 已定位）：factory 必须给 **repo 对象**，
         #   不是裸连接。改前写 `lambda: get_db()` —— get_db() 返回 sqlite3.Connection，
@@ -570,6 +601,7 @@ for _router in (
     capabilities_router,      # 2026-10-27 P0-2 能力账本（all read-only）
     events_router,            # 2026-11-01 事件驱动（入站事件 → 准入 → 工单；默认 observe 只记录不执行）
     alternatives_router,      # 2026-11-03 多方案设计（FR-MG-6：比较 + 多维度打分端点）
+    health_degrade_router,    # 2026-11-25 P0 降级台账（静默兜底可见化：看板 + 巡检，只读）
 ):
     app.include_router(_router)
 

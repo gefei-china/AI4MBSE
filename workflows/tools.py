@@ -5,21 +5,21 @@ import time
 import uuid
 from datetime import datetime
 from typing import Any, Optional
-from file_tools import exec_file_tool, FILE_TOOL_NAMES as _FILE_TOOL_NAMES  # 基础通用文件操作工具
-from report_tools import exec_report_tool, REPORT_TOOL_NAMES as _REPORT_TOOL_NAMES  # 基础通用报告导出工具
+from services.tools.file_tools import exec_file_tool, FILE_TOOL_NAMES as _FILE_TOOL_NAMES  # 基础通用文件操作工具
+from services.tools.report_tools import exec_report_tool, REPORT_TOOL_NAMES as _REPORT_TOOL_NAMES  # 基础通用报告导出工具
 # ★ 2026-11-06（P0）：代码沙箱执行 + 文档文本提取（两个"有实现但此前没接线"的原子能力）
-from code_tools import exec_code_tool, CODE_TOOL_NAMES as _CODE_TOOL_NAMES
-from doc_tools import exec_doc_tool, DOC_TOOL_NAMES as _DOC_TOOL_NAMES
+from services.tools.code_tools import exec_code_tool, CODE_TOOL_NAMES as _CODE_TOOL_NAMES
+from services.tools.doc_tools import exec_doc_tool, DOC_TOOL_NAMES as _DOC_TOOL_NAMES
 # ★ 2026-11-07（P1）：技能自带脚本的执行通道（受信脚本，独立子进程 + 包内路径限定）
-from skill_tools import exec_skill_tool, SKILL_TOOL_NAMES as _SKILL_TOOL_NAMES
+from services.tools.skill_tools import exec_skill_tool, SKILL_TOOL_NAMES as _SKILL_TOOL_NAMES
 # ★ 2026-11-07（P2）：元能力 + 自注册能力执行（双链路必须同序同语义）
-from meta_tools import (exec_capability_tool, META_QUERY_NAMES as _META_QUERY_NAMES,
+from services.tools.meta_tools import (exec_capability_tool, META_QUERY_NAMES as _META_QUERY_NAMES,
                         META_APPLY_NAMES as _META_APPLY_NAMES)
-from capability_runtime import is_capability as _is_capability, exec_capability as _exec_capability
+from services.capability_runtime import is_capability as _is_capability, exec_capability as _exec_capability
 # ★ 2026-11-07（P0-1）：需求条目化 / 需求条目入库
 #   与 `agent/pipeline_parts/tools.py` 的对应分支**必须同序同语义** ——
 #   两套分发各自存在，漏一边的后果是"直接调能跑、模型侧说没执行器"（历史踩过 3 次）。
-from requirement_itemize_tools import REQ_TOOL_NAMES as _REQ_TOOL_NAMES, exec_tool as exec_req_tool
+from services.tools.requirement_itemize_tools import REQ_TOOL_NAMES as _REQ_TOOL_NAMES, exec_tool as exec_req_tool
 
 
 class ToolRegistry:
@@ -233,7 +233,7 @@ class ToolExecutor:
                     "SELECT source, kind, retry_policy, fallback_to FROM tools WHERE name=?",
                     (name,)).fetchone()
                 if row:
-                    from tool_resilience import parse_policy
+                    from core.tool_resilience import parse_policy
                     meta = {
                         "source": row["source"] or "",
                         "kind": row["kind"] or "",
@@ -262,7 +262,7 @@ class ToolExecutor:
         meta = self._tool_meta(name)
         external = (meta["source"] == "mcp") or (meta["kind"] == "http")
         if external and meta["retry_policy"].get("max_retries", 0) > 0:
-            from tool_resilience import retry_exec
+            from core.tool_resilience import retry_exec
             r, retried, _did = retry_exec(
                 lambda: self._safe_execute(name, arguments or {}, branch), meta["retry_policy"])
             if retried:
@@ -340,7 +340,7 @@ class ToolExecutor:
                 finally:
                     conn.close()
                 if zrow:
-                    from http_tool_executor import exec_http_tool
+                    from adapters.http_tool_executor import exec_http_tool
                     r = exec_http_tool(name, arguments)
                     return {"ok": r.get("ok", True), "result": r.get("result", "{}")[:2000]}
             except Exception as e:
@@ -355,7 +355,7 @@ class ToolExecutor:
                 finally:
                     conn.close()
                 if row:
-                    from mcp_client import MCPClient
+                    from adapters.mcp_client import MCPClient
                     client = MCPClient(row["endpoint"], row["transport"] or "sse")
                     r = client.call_tool(name, arguments)
                     return {"ok": r.get("ok", True), "result": json.dumps(r, ensure_ascii=False)[:2000]}

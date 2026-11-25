@@ -38,7 +38,7 @@ import tempfile
 import shutil
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-TQUEUE = os.path.join(ROOT, "task_queue.py")
+TQUEUE = os.path.join(ROOT, "services/task_queue.py")
 SCHEMA = os.path.join(ROOT, "database", "schema.py")
 MIGR = os.path.join(ROOT, "database", "migrations", "columns.py")
 PROD_DB = (os.environ.get("MBSE_DB_PATH") or os.path.join(ROOT, "mbse.db"))

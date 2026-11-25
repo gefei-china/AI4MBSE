@@ -10,7 +10,7 @@
 | 项 | 数字 |
 |---|---|
 | `routers/` 里 `conn.execute("SELECT…")` | **425 处**（不是原估的 1034 —— 那个数把 `db_session` 等一并计入了） |
-| 最集中的文件 | `glossary.py` 80 处 |
+| 最集中的文件 | `core/domain/glossary.py` 80 处 |
 | Top 8 文件合计 |约 270 处（占63%） |
 | 按表分布 | 极散：`ontology_types` 41 / `glossary_concepts` 29 / `entities` 29 / … / 142 处无 FROM |
 

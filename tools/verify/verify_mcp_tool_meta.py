@@ -231,7 +231,7 @@ finally:
     _sec["mcp_min_keep"] = _old_keep
 
 # ── [10] 发现侧落库带上 tool_meta ──
-_src_health = open(os.path.join(_ROOT, "mcp_health.py"), encoding="utf-8").read()
+_src_health = open(os.path.join(_ROOT, "services/mcp_health.py"), encoding="utf-8").read()
 check("[10] discover_server 落库带 tool_meta（源码级）",
       "tool_meta=_save_tool_meta(tools)" in _src_health,
       "否则重新发现仍只存名字 ⇒ description/schema 继续丢")

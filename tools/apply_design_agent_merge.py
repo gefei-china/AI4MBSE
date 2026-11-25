@@ -30,7 +30,7 @@
 | core/capability_clusters.py | design 族 members 含旧名 | 移除，覆盖率门禁会校验 |
 | data/bootstrap/pipeline_assets.json | agents 表 2 行 | 用 --apply 重新导出快照 |
 
-⚠️ `register_skills.py` / `seed_all` 不会重建 Agent（只有 skills/tools），
+⚠️ `services/tools/register_skills.py` / `seed_all` 不会重建 Agent（只有 skills/tools），
    但 **bootstrap_assets 会用快照 UPSERT 复活删掉的行** ⇒ 必须重新导出快照。
 
 备份：docs/backup_20261107/mbse_before_merge_1342.db

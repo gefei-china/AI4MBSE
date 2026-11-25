@@ -74,7 +74,7 @@ def load_mutations():
 
 # ── 其它"原地改写产品文件"的探针（模块级改写，非 verify_* 门禁）──────────
 EXTRA_SIGNATURES = [
-    ("artifact_tools.py", "if False:",
+    ("services/tools/artifact_tools.py", "if False:",
      "probe_save_artifact.py 把 _at_path 改成 if False:"),
     ("agent/auto_continue.py", "if (False",
      "probe_auto_continue.py 把 _s_path 的门禁改成 if (False"),
@@ -137,7 +137,10 @@ def main() -> int:
 
     # ── A3：通用扫描 —— 同一文件里**相同的长注释块**出现多次 ⇒ 自注入残留 ──
     _scan_dirs = ("agent", "routers", "core", "services", "workflows", "database",
-                  "repositories", "llm", "knowledge_pipeline", "tools")
+                  "repositories", "llm", "knowledge_pipeline", "tools",
+                  # P1 分层归位新增（2026-11-25）：搬迁后的 adapters/ 若漏扫，
+                  # 自注入的注释块残留在这 10 个模块里就永远不会被 A3 发现。
+                  "adapters")
     _dups = []
     for _d in _scan_dirs:
         _dd = os.path.join(ROOT, _d)
@@ -197,7 +200,7 @@ def main() -> int:
                 for p in ("agent/pipeline_parts/tools.py", "routers/sysml_versions.py",
                           "routers/reports.py", "repositories/artifact_repo.py",
                           "database/migrations/columns.py", "agent/auto_continue.py",
-                          "artifact_tools.py"):
+                          "services/tools/artifact_tools.py"):
                     if os.path.basename(p).replace(".py", "").replace("/", "_") in fn:
                         cand = os.path.join(ROOT, p)
                         break

@@ -46,7 +46,7 @@ def read(rel):
 
 
 SOURCES = {
-    "tq": read("task_queue.py"),
+    "tq": read("services/task_queue.py"),
     "oi": read("agent/orch_interrupt.py"),
     "ro": read("routers/orchestration.py"),
     "oc": read("agent/orch_checkpoint.py"),

@@ -6,7 +6,7 @@
      删除后行为必然不变。若两份实现不同，脚本报错退出，交由人工判断（可能是有意覆盖的旧实现）。
 
 用法：
-  python tools/verify/dedupe_first_def.py --file ontology_reasoning.py --name cardinality_check
+  python tools/verify/dedupe_first_def.py --file core/domain/ontology_reasoning.py --name cardinality_check
   加 --apply 才写盘；默认 dry-run。
 """
 import argparse

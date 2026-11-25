@@ -324,7 +324,7 @@ def c_group():
     _alive_before = rp._conn_alive(_c3)
     _c3.close()
     _alive_after = rp._conn_alive(_c3)
-    _src_pp = open(os.path.join(_ROOT, "requirement_postprocess.py"),
+    _src_pp = open(os.path.join(_ROOT, "services/requirement_postprocess.py"),
                    encoding="utf-8").read().replace("\r\n", "\n")
     check("C4b ★连接探活能识别「已关闭」并在 process 里触发自愈（不伪装成落库失败）",
           _alive_before is True and _alive_after is False

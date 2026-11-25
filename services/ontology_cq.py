@@ -77,6 +77,23 @@ SEEDS = [
      "SELECT COUNT(*) AS n FROM relations "
      "WHERE relation_type IN ('SATISFIES','TRACE','VERIFIED_BY')",
      "nonempty"),
+    # ── 2026-11-24 第四期：MBSE 域能力问题（对齐文章 Competency Questions）──
+    # 口径：查真源（SQLite），问法换成系统工程——需求被哪些功能/部件满足、
+    # 部件是否被验证、追踪链是否双向可达。全部为「有没有」问题（empty/nonempty）。
+    ("系统需求是否有对应的满足关系（需求不被孤立）",
+     "SELECT DISTINCT e.id, e.name FROM entities e WHERE e.entity_type LIKE '%需求%' "
+     "AND NOT EXISTS(SELECT 1 FROM relations r WHERE r.relation_type='SATISFIES' "
+     "AND r.target_id=e.id)", "empty"),
+    ("被满足的需求是否都有验证关系（满足-验证闭环）",
+     "SELECT DISTINCT r.target_id FROM relations r WHERE r.relation_type='SATISFIES' "
+     "AND NOT EXISTS(SELECT 1 FROM relations v WHERE v.relation_type='VERIFIED_BY' "
+     "AND v.source_id=r.target_id)", "empty"),
+    ("需求与部件之间的追踪链是否已建立（SATISFIES 有数据）",
+     "SELECT COUNT(*) AS n FROM relations WHERE relation_type='SATISFIES'", "nonempty"),
+    ("验证关系的两端是否都可解析到实体（验证链无悬空）",
+     "SELECT r.id FROM relations r WHERE r.relation_type='VERIFIED_BY' AND ("
+     "NOT EXISTS(SELECT 1 FROM entities e WHERE e.id=r.source_id) OR "
+     "NOT EXISTS(SELECT 1 FROM entities e WHERE e.id=r.target_id))", "empty"),
     # ── P1-2（2026-11-21）SPARQL 档种子（kind='sparql'，走 Fuseki）──
     # 图库是 SQLite 的投影；这两条回答「投影是否建起来了、追踪链是否投过去了」
     # 与上面 sql 档不重复（口径不同：sql 档查真源，sparql 档查消费面）。
@@ -272,8 +289,12 @@ def run_cqs(conn, source: str = "", record: bool = True, qid: int | None = None)
             sp_fresh = {"status": "unknown", "reason": "新鲜度判据异常"}
     out = []
     for r in rows:
+        # 2026-11-24：结果带 source —— 区分「种子 CQ」（结构性，应全绿）
+        # 与「手工登记 CQ」（业务完整性，fail 属正常留痕）。消费方据此分别判定，
+        # 避免业务缺口把结构性门禁染红（同族教训：指标口径必须可区分，否则必混算）。
         item = {"id": r["id"], "question": r["question"], "expected": r["expected"],
-                "kind": r["kind"], "status": "skip", "row_count": 0, "message": ""}
+                "kind": r["kind"], "source": (r["source"] if "source" in r.keys() else ""),
+                "status": "skip", "row_count": 0, "message": ""}
         kind = (r["kind"] or "sql").strip()
         if kind == "sql":
             ok, err = validate_query(r["query"])

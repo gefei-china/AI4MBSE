@@ -1,6 +1,6 @@
 {
  "version": 1,
- "generated_at": "2026-11-18 08:46:36",
+ "generated_at": "2026-11-25 14:55:58",
  "doc": "门禁清单唯一真源。由 tools/gate_runner.py 执行、tools/verify/verify_gate_manifest.py 守卫。分层依据：工具 2026-11-04 的双环境实测（真库 + 干净库）。",
  "budget": {
   "broken": 37,
@@ -2962,6 +2962,138 @@
    "tier": "pr",
    "timeout": 120,
    "reason": "2026-11-23 本体定位选项 A：标准映射（profile_source/profile_ref）覆盖与合法性。守 P1 entity/relation 全部有映射（新增类型漏填即红）/ P2 元类名必须在已知 SysML v2 词表内（防拼错：拼错比不填更糟，导出件看着有实际对不上）/ P3 ISO 15288 条款号在 §6.4.1–§6.4.14 内 / P4 真链路：to_turtle 的 rdfs:seeAlso 条数 ≥ 已映射类型数（防库里填了、导出不带）+ P4a 处理 to_turtle 返回元组。M1 清空一条 / M2 元类拼错 / M3 条款越界 三组内存变异必须判红，零写库。库为空（CI 常态）时 SKIP 明示。"
+  },
+  {
+   "script": "verify_ontology_deep_validate.py",
+   "tier": "local",
+   "timeout": 120,
+   "reason": "2026-11-24 第一期：实例级体检 deep 开关 + 真实扫描计数 + SHACL 发现落库开关。需生产真库（instances_scanned 金标 462）与 ingest_gate；CI 干净库无该数据"
+  },
+  {
+   "script": "verify_ontology_runtime_context.py",
+   "tier": "local",
+   "timeout": 180,
+   "reason": "2026-11-24 第二期：Ontology Query Service 真库实体/关系/邻域/深度上限 + Agent 命中带上下文与变异回落。需生产真库与 agent.rag；CI 无该数据"
+  },
+  {
+   "script": "verify_ontology_graph_enabled.py",
+   "tier": "local",
+   "timeout": 120,
+   "reason": "2026-11-24 第三期：图库总开关部署级覆盖 + 启动钩子 + 推断裁决过滤的源码断言。需真库核实入图水位且不能写真库；CI 无该环境"
+  },
+  {
+   "script": "verify_ontology_phase4.py",
+   "tier": "local",
+   "timeout": 120,
+   "reason": "2026-11-24 第四期：词典映射候选/确认拒绝路径 + OWL 复杂公理 + MBSE CQ 种子。内存夹具为主但确认不写真库；CI 可考虑接线，暂列 local 与其余四期同批管理"
+  },
+  {
+   "script": "verify_ontology_prompt_injection.py",
+   "tier": "local",
+   "timeout": 180,
+   "reason": "2026-11-24 A1：本体上下文必须真的进入模型可见文本（不是只挂在行上）。需生产真库经 _entity_link → _build_context 端到端；CI 无该数据"
+  },
+  {
+   "script": "verify_ontology_owl_roundtrip.py",
+   "tier": "local",
+   "timeout": 120,
+   "reason": "2026-11-24 A2：OWL 与 Turtle 两路径保住复杂公理 + imports 不拉取 + 导出导入往返。内存夹具，验证导出函数依赖真库 schema"
+  },
+  {
+   "script": "verify_ont_runtime_browser.js",
+   "tier": "local",
+   "timeout": 300,
+   "reason": "2026-11-24 第一期：真实浏览器验收运行期语义看板渲染与 462 扫描数。需本机 Chrome/Edge + 8000 真服务 + 真库，CI 无此组合"
+  },
+  {
+   "script": "verify_ont_runtime_a3_browser.js",
+   "tier": "local",
+   "timeout": 300,
+   "reason": "2026-11-24 A3：真实浏览器验收对象查询/CQ 965 条显示/术语候选/推理裁决四动作。需本机 Chrome/Edge + 8000 真服务 + 真库，CI 无此组合"
+  },
+  {
+   "script": "verify_detach_behavior.py",
+   "tier": "nightly",
+   "timeout": 120,
+   "reason": "2026-11-24 A4 补登记：SSE 消费者断开时 detach_ctx 保活行为真跑验证（异步生成器 + 假事件源，不依赖服务/真库）。历史存量脚本此前漏登记，守卫 G5a/G5b 点名；列 nightly 因含异步线程，比 pr 慢"
+  },
+  {
+   "script": "verify_session_resume.py",
+   "tier": "nightly",
+   "timeout": 120,
+   "reason": "2026-11-24 A4 补登记：刷新断连续跑三条硬约束 + 前端接线静态断言（纯离线）。历史存量脚本此前漏登记，守卫 G5a/G5b 点名"
+  },
+  {
+   "script": "verify_ontology_attr_constraints.py",
+   "tier": "local",
+   "timeout": 120,
+   "reason": "2026-11-24 A5：属性 min/max/pattern 约束被两处校验器真实消费 + 真库维度口径纠正（unit/quantity_kind 已有，缺 min/max/pattern/default）。内存夹具 + 真库只读统计；CI 干净库无该维度数据"
+  },
+  {
+   "script": "verify_ontology_type_coverage.py",
+   "tier": "local",
+   "timeout": 120,
+   "reason": "2026-11-24 A6：SysML 元素类型覆盖率双口径统计。14 类现行口径需真库；22 类权威清单源文档未提供时显式 MISSING_AUTHORITY 不编造。需真库实体分布"
+  },
+  {
+   "script": "verify_shacl_findings_write.py",
+   "tier": "local",
+   "timeout": 180,
+   "reason": "2026-11-24 C2：证明 shacl_findings 落库链路真能写（此前只有源码断言）。用 SQLite backup 复制真库到临时文件构造违规，不污染真库；CI 无生产真库"
+  },
+  {
+   "script": "verify_graph_db_degraded.py",
+   "tier": "local",
+   "timeout": 120,
+   "reason": "2026-11-24 C1：图库开启时绝不静默 Mock；RocksDB 并发冲突降级 Fuseki 并暴露原因，status 端点显示 effective_writer/degraded_reason。需真库与 Fuseki"
+  },
+  {
+   "script": "verify_cohort_failed_and_owl_unsupported.py",
+   "tier": "nightly",
+   "timeout": 90,
+   "reason": "2026-11-24 D1/D5：推理批次有失败项时不得置 approved（防假批准），Turtle 未支持 OWL 构造须明确告警不静默丢。内存夹具，无外部依赖"
+  },
+  {
+   "script": "verify_cohort_rejected_cleanup.py",
+   "tier": "local",
+   "timeout": 120,
+   "reason": "2026-11-24 B3：假批准批次作废后状态锁定（cohort rejected / 107 明细 rejected / 无 inferred 残留），并与清理前备份逐行比对证明实体关系未误伤。需生产真库与 backups/ 下备份文件，CI 无此数据"
+  },
+  {
+   "script": "verify_ontology_action_binding.py",
+   "tier": "local",
+   "timeout": 120,
+   "reason": "2026-11-24：本体驱动动作机制验证 —— 绑定表有数据时 pre/post 条件真生效（空参数 failed / 非空 verified / 回读实体不存在 failed），并证明生产库未被污染。需真库副本（含 ontology_types/tools/entities），CI 干净库无该数据"
+  },
+  {
+   "script": "verify_degrade_ledger.py",
+   "tier": "pr",
+   "timeout": 60,
+   "reason": "2026-11-25 P0：降级台账契约 —— 三级分级/非法 level 不静默过滤/绝不抛（含 __str__ 崩坏）/请求级采集器增量 drain/合并后重新交付；纯内存零依赖，含 M 系列变异自证"
+  },
+  {
+   "script": "verify_silent_except_ledger.py",
+   "tier": "pr",
+   "timeout": 120,
+   "reason": "2026-11-25 P0：静默兜底不许变多 —— AST 扫描产品代码目录，双口径（strict 仅 pass / wide 含 return 默认值）+ 仅 except Exception 维，与基线比对只卡劣化；含临时目录 E2E 与 M1-M5 判据自证"
+  },
+  {
+   "script": "verify_degrade_sse_wire.py",
+   "tier": "pr",
+   "timeout": 60,
+   "reason": "2026-11-25 P0：降级事件真的接到会话流上 —— collector 必须早于 SSE 包装器创建（跨线程 copy_context 可见性）/drain 必须早于终态帧转发（否则收口后发的帧被丢弃）/finally 必须 reset（防泄漏到下一轮）/degrade 不得计入 sent_any；并用真实采集器+模拟事件源真跑转发，含 3 组变异自证"
+  },
+  {
+   "script": "verify_degrade_panel_browser.js",
+   "tier": "local",
+   "timeout": 180,
+   "reason": "2026-11-25 P0：真实浏览器验收「降级在执行过程中可见」—— procAddDegrade 渲染 critical(红,不收起)/degraded(橙,×N)/cosmetic(不建卡)，收口条汇总可见；监控页 dg-panel 渲染三档并出图。需本机 Chrome/Edge + 运行中 8000 服务"
+  },
+  {
+   "script": "verify_layer_ownership.py",
+   "tier": "pr",
+   "timeout": 240,
+   "reason": "2026-11-25 P1：75 个顶层模块归位后的分层约束 —— 根目录只许 sys.modules 垫片（有业务语句即红）/ 旧新路径必须同一模块对象 / 归位模块层间依赖方向零越界（8 条存量豁免带 reason）/ 全仓越界只卡增量（基线 87）/ 产品代码旧路径 import=0 / __file__ 不许当仓库根 / 归属层必须在 4 处扫描器白名单里登记（F1，防目录悄悄掉出统计）；含 6 组合成变异，另做过 4 组真实树变异（根目录新增业务模块、域层反向依赖、产品代码旧路径回潮、adapters 白名单覆盖）均被抓且还原哈希一致"
   }
  ]
 }

@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """B1-3 门禁：`running` 态真正写入（claim() 此前零调用点）。
 
-**背景（对标取证）**：`task_queue.py:138` 的 `claim()` 能写 `status='running'`，
+**背景（对标取证）**：`services/task_queue.py:138` 的 `claim()` 能写 `status='running'`，
 但**全仓零调用点**（grep `TaskQueue.claim` 无命中）⇒ 实测
 `agent_tasks.status` 库内 `running` **0 行**（222 行只有 done 168 / failed 54）。
 
@@ -41,7 +41,7 @@ import shutil
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 STREAM = os.path.join(ROOT, "agent", "pipeline_parts", "stream.py")
-TQUEUE = os.path.join(ROOT, "task_queue.py")
+TQUEUE = os.path.join(ROOT, "services/task_queue.py")
 CKPT = os.path.join(ROOT, "agent", "orch_checkpoint.py")
 
 _ok = 0

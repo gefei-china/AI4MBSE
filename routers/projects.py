@@ -372,7 +372,7 @@ def list_zhiyuan_projects():
     解析失败不报 5xx —— 返回 ok=false + error + raw（截断原文），前端据此降级为手填 vc。
     """
     import json as _json
-    from zhiyuan_client import ZhiyuanClient, _load_config
+    from adapters.zhiyuan_client import ZhiyuanClient, _load_config
     cfg = _load_config()
     if not isinstance(cfg, dict) or not (cfg.get("base_url") or "").strip():
         return {"ok": False, "error": "智源连接未配置（zhiyuan.base_url 缺失）", "projects": []}

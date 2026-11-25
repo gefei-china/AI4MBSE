@@ -22,6 +22,42 @@ class ContextMixin:
     #   它们只服务"匹配已保存的画布流程"，而画布已明确舍弃、前端 0 处消费
     #   （`matched_flows` 字段前端从未读取）。调用方保留**字段形状**（恒返回 []），
     #   以免既有 API 消费者因缺键而报错。
+    @staticmethod
+    def _render_ontology_context(oc: dict, limit: int = 900) -> str:
+        """把 get_context() 的结构化结果渲染成模型可读文本（2026-11-24 A1）。
+
+        纪律：只陈述查到的对象/关系/约束，不推断；类型未注册显式标注
+        （防模型把未注册类型当合法语义）；硬上限限长，防大邻域打爆 prompt。
+        """
+        obj = oc.get("object") or {}
+        lines = [f"【本体上下文 · 对象 {obj.get('name','')}（{obj.get('entity_type','')}）】"]
+        attrs = oc.get("attributes") or {}
+        if attrs:
+            lines.append("属性：" + json.dumps(attrs, ensure_ascii=False))
+        rels = oc.get("relations") or []
+        if rels:
+            seg = "；".join(
+                f"{r.get('direction','')} {r.get('relation_type','')}→{r.get('other_name','')}"
+                f"[{r.get('other_type','') or '未标类型'}{'，本体未注册' if not r.get('other_registered') else ''}]"
+                for r in rels[:8])
+            lines.append(f"关系（{len(rels)} 条，列前 8）：" + seg)
+        tc = oc.get("type_constraints") or {}
+        if tc.get("registered"):
+            cons = tc.get("constraints") or {}
+            if cons:
+                lines.append("类型约束：" + json.dumps(cons, ensure_ascii=False))
+            if tc.get("parent"):
+                lines.append("父类：" + str(tc["parent"]))
+        else:
+            lines.append(f"⚠ 类型「{tc.get('name','')}」未在本体注册 —— 不得据此推断其语义")
+        tris = oc.get("triples") or []
+        if tris:
+            seg = "；".join(f"{t.get('subject','')} {t.get('predicate','')} {t.get('object','')}" for t in tris[:5])
+            lines.append(f"已确认事实（{len(tris)} 条，列前 5）：" + seg)
+        lines.append("以上为本体查询所得事实；未列出不代表不存在，不得编造未给出的关系。")
+        out = "\n".join(lines)
+        return out if len(out) <= limit else out[:limit - 20] + "\n…（已截断）"
+
     def _build_context(self, retrieval, query=None):
         parts = []
         # P1：知识库检索后 LLM 重排（context.rerank 开关，粗筛→细排；失败返回原顺序）
@@ -43,6 +79,15 @@ class ContextMixin:
             cat = e.get("knowledge_category") or ""
             tag = f"[图谱·{cat}]" if cat else "[图谱]"
             parts.append(f"{tag} {e['name']}({e['entity_type']}): {json.dumps(props, ensure_ascii=False)}")
+            # 2026-11-24 A1：把 Ontology Query Service 的对象级上下文真正送进 prompt。
+            # 此前 _entity_link 挂在 _ontology_context 上却全仓无读取 —— 「取到但没用上」。
+            # 一处改动同时覆盖流式(stream.py)与非流式(execute.py)两条路径。
+            _oc = e.get("_ontology_context")
+            if _oc and _oc.get("found"):
+                try:
+                    parts.append(self._render_ontology_context(_oc))
+                except Exception:
+                    pass  # 渲染失败不拖垮主检索链（本体上下文是增强，不是必需）
         for r in retrieval["relations"][:5]:
             parts.append(f"[关系] {r.get('source_name','')} --{r['relation_type']}--> {r.get('target_name','')}")
         # P0-3 知识分类消费：设计方法知识=规范约束源（AI 必须遵守）/ 设计资产=增量设计源（参考复用）

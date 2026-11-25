@@ -204,8 +204,8 @@ def test_mcp_server(sid: int, conn=Depends(db_session), user=Depends(current_use
     t0 = time.time()
     # ★ B5-4：与 `mcp_health._norm_transport` 同一张映射表 ——
     #   前端下拉存的是 `streamable_http`，此处若直接拿去比对白名单就会落空。
-    from mcp_health import _norm_transport
-    from mcp_client import _parse_jsonrpc_body   # ★ B5-4：与真实调用共用同一解析器
+    from services.mcp_health import _norm_transport
+    from adapters.mcp_client import _parse_jsonrpc_body   # ★ B5-4：与真实调用共用同一解析器
     transport = _norm_transport(srv.get("transport"))
     # ★ B5-2：带上该服务器配置的认证头（此前**硬编码只有 Content-Type**
     #   ⇒ 需要 Bearer 的 MCP 必然 401 ⇒ 实测"新增成功但用不了"）。
@@ -235,7 +235,7 @@ def test_mcp_server(sid: int, conn=Depends(db_session), user=Depends(current_use
             # ★ 2026-10-16：回环端点不过代理——环境里带 HTTP_PROXY 时
             # （企业代理/沙箱代理），内置 MCP 会被代理路径误判 offline。
             # 与 mcp_client._post 同一判定，避免"巡检通了、界面测试挂了"两套结果。
-            from mcp_client import is_loopback_endpoint as _is_loopback
+            from adapters.mcp_client import is_loopback_endpoint as _is_loopback
             with httpx.Client(timeout=8, trust_env=not _is_loopback(url)) as client:
                 r = client.post(url, json=payload, headers=_hdr)
                 if r.status_code != 200:
@@ -278,7 +278,7 @@ def discover_mcp_server(sid: int, conn=Depends(db_session), user=Depends(current
 
     返回协议版本/能力声明/工具/资源/提示模板清单，供前端展示与后续调用。
     """
-    from mcp_health import discover_server
+    from services.mcp_health import discover_server
     repo = StudioRepo(conn)
     srv = repo.get_mcp_server(sid)
     if not srv:
@@ -294,7 +294,7 @@ def discover_mcp_server(sid: int, conn=Depends(db_session), user=Depends(current
 
 @router.post("/api/studio/mcp-servers/check-all")
 def check_all_mcp_servers(conn=Depends(db_session), user=Depends(current_user)):
-    from mcp_health import check_all
+    from services.mcp_health import check_all
     repo = StudioRepo(conn)
     results = check_all(repo)
     audit(audit_user(user), "mcp_check_all", f"批量巡检: {results['online']}/{results['checked']} 在线", conn=conn)
@@ -303,7 +303,7 @@ def check_all_mcp_servers(conn=Depends(db_session), user=Depends(current_user)):
 
 @router.get("/api/studio/mcp-servers/{sid}/read-resource")
 def read_mcp_resource(sid: int, uri: str, conn=Depends(db_session)):
-    from mcp_client import MCPClient
+    from adapters.mcp_client import MCPClient
     repo = StudioRepo(conn)
     srv = repo.get_mcp_server(sid)
     if not srv:
@@ -318,7 +318,7 @@ def read_mcp_resource(sid: int, uri: str, conn=Depends(db_session)):
 @router.get("/api/studio/mcp-servers/{sid}/get-prompt")
 def get_mcp_prompt(sid: int, name: str, conn=Depends(db_session)):
     """提示模板原语（prompts/get）。"""
-    from mcp_client import MCPClient
+    from adapters.mcp_client import MCPClient
     repo = StudioRepo(conn)
     srv = repo.get_mcp_server(sid)
     if not srv:

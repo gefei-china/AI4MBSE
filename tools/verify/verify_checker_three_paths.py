@@ -123,7 +123,7 @@ def main() -> int:
     print("=" * 78)
     if ok:
         print("\n[变异自证] 破坏词法符号表（清空），判据应变红")
-        src_path = os.path.join(_ROOT, "sysml_v2_check.py")
+        src_path = os.path.join(_ROOT, "core/domain/sysml_v2_check.py")
         with open(src_path, encoding="utf-8") as f:
             src = f.read()
         # ⚠️ 定义形态是 `_LEX_DEFAULT = r"..."`（**无括号**）⇒ 首版正则

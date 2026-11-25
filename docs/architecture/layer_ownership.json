@@ -1,0 +1,666 @@
+{
+ "generated_at": "2026-11-25 14:43:57",
+ "note": "P1 分层归位单一真源。改归属只改本文件；根目录同名文件是 sys.modules 垫片。",
+ "policy": {
+  "layers": {
+   "core/domain": {
+    "may_import": [
+     "core"
+    ]
+   },
+   "core": {
+    "may_import": []
+   },
+   "adapters": {
+    "may_import": [
+     "core"
+    ]
+   },
+   "services": {
+    "may_import": [
+     "core",
+     "adapters",
+     "services"
+    ]
+   },
+   "services/tools": {
+    "may_import": [
+     "core",
+     "adapters",
+     "services"
+    ]
+   }
+  },
+  "root_allow": [
+   "main.py",
+   "conftest.py"
+  ],
+  "product_dirs": [
+   "agent",
+   "core",
+   "services",
+   "adapters",
+   "routers",
+   "repositories",
+   "workflows",
+   "llm",
+   "knowledge_pipeline",
+   "database",
+   "models"
+  ],
+  "direction_baseline": 87,
+  "direction_baseline_note": "全仓（core+services+adapters+core.domain）层间越界总数基线，2026-11-25 实测。只卡增量：新增越界即红；要降低必须真改代码后下调此值。"
+ },
+ "modules": {
+  "alternatives_tools": {
+   "layer": "services/tools",
+   "path": "services/tools/alternatives_tools.py",
+   "legacy_path": "alternatives_tools.py",
+   "shim": true,
+   "cli": false,
+   "bytes": 7203
+  },
+  "artifact_tools": {
+   "layer": "services/tools",
+   "path": "services/tools/artifact_tools.py",
+   "legacy_path": "artifact_tools.py",
+   "shim": true,
+   "cli": false,
+   "bytes": 5592
+  },
+  "capability_runtime": {
+   "layer": "services",
+   "path": "services/capability_runtime.py",
+   "legacy_path": "capability_runtime.py",
+   "shim": true,
+   "cli": false,
+   "bytes": 9941
+  },
+  "code_tools": {
+   "layer": "services/tools",
+   "path": "services/tools/code_tools.py",
+   "legacy_path": "code_tools.py",
+   "shim": true,
+   "cli": false,
+   "bytes": 6426
+  },
+  "coverage_tools": {
+   "layer": "services/tools",
+   "path": "services/tools/coverage_tools.py",
+   "legacy_path": "coverage_tools.py",
+   "shim": true,
+   "cli": false,
+   "bytes": 28852
+  },
+  "doc_tools": {
+   "layer": "services/tools",
+   "path": "services/tools/doc_tools.py",
+   "legacy_path": "doc_tools.py",
+   "shim": true,
+   "cli": false,
+   "bytes": 11043
+  },
+  "entity_resolver": {
+   "layer": "services",
+   "path": "services/entity_resolver.py",
+   "legacy_path": "entity_resolver.py",
+   "shim": true,
+   "cli": false,
+   "bytes": 74149
+  },
+  "file_tools": {
+   "layer": "services/tools",
+   "path": "services/tools/file_tools.py",
+   "legacy_path": "file_tools.py",
+   "shim": true,
+   "cli": false,
+   "bytes": 23229
+  },
+  "fts_search": {
+   "layer": "adapters",
+   "path": "adapters/fts_search.py",
+   "legacy_path": "fts_search.py",
+   "shim": true,
+   "cli": false,
+   "bytes": 7709
+  },
+  "glossary": {
+   "layer": "core/domain",
+   "path": "core/domain/glossary.py",
+   "legacy_path": "glossary.py",
+   "shim": true,
+   "cli": false,
+   "bytes": 26406
+  },
+  "governance": {
+   "layer": "services",
+   "path": "services/governance.py",
+   "legacy_path": "governance.py",
+   "shim": true,
+   "cli": false,
+   "bytes": 14814
+  },
+  "graph_db": {
+   "layer": "adapters",
+   "path": "adapters/graph_db.py",
+   "legacy_path": "graph_db.py",
+   "shim": true,
+   "cli": false,
+   "bytes": 58347
+  },
+  "graph_db_tools": {
+   "layer": "services/tools",
+   "path": "services/tools/graph_db_tools.py",
+   "legacy_path": "graph_db_tools.py",
+   "shim": true,
+   "cli": false,
+   "bytes": 9458
+  },
+  "hil_service": {
+   "layer": "services",
+   "path": "services/hil_service.py",
+   "legacy_path": "hil_service.py",
+   "shim": true,
+   "cli": false,
+   "bytes": 44234
+  },
+  "http_tool_executor": {
+   "layer": "adapters",
+   "path": "adapters/http_tool_executor.py",
+   "legacy_path": "http_tool_executor.py",
+   "shim": true,
+   "cli": false,
+   "bytes": 10822
+  },
+  "ingest_gate": {
+   "layer": "core/domain",
+   "path": "core/domain/ingest_gate.py",
+   "legacy_path": "ingest_gate.py",
+   "shim": true,
+   "cli": false,
+   "bytes": 14335
+  },
+  "knowledge_engine": {
+   "layer": "services",
+   "path": "services/knowledge_engine.py",
+   "legacy_path": "knowledge_engine.py",
+   "shim": true,
+   "cli": false,
+   "bytes": 33784
+  },
+  "knowledge_reflow": {
+   "layer": "services",
+   "path": "services/knowledge_reflow.py",
+   "legacy_path": "knowledge_reflow.py",
+   "shim": true,
+   "cli": false,
+   "bytes": 16883
+  },
+  "mcp_client": {
+   "layer": "adapters",
+   "path": "adapters/mcp_client.py",
+   "legacy_path": "mcp_client.py",
+   "shim": true,
+   "cli": false,
+   "bytes": 14834
+  },
+  "mcp_health": {
+   "layer": "services",
+   "path": "services/mcp_health.py",
+   "legacy_path": "mcp_health.py",
+   "shim": true,
+   "cli": false,
+   "bytes": 22718
+  },
+  "memory_backend": {
+   "layer": "services",
+   "path": "services/memory_backend.py",
+   "legacy_path": "memory_backend.py",
+   "shim": true,
+   "cli": false,
+   "bytes": 1456
+  },
+  "memory_service": {
+   "layer": "services",
+   "path": "services/memory_service.py",
+   "legacy_path": "memory_service.py",
+   "shim": true,
+   "cli": false,
+   "bytes": 69533
+  },
+  "meta_tools": {
+   "layer": "services/tools",
+   "path": "services/tools/meta_tools.py",
+   "legacy_path": "meta_tools.py",
+   "shim": true,
+   "cli": false,
+   "bytes": 9033
+  },
+  "methodology_profile_tools": {
+   "layer": "services/tools",
+   "path": "services/tools/methodology_profile_tools.py",
+   "legacy_path": "methodology_profile_tools.py",
+   "shim": true,
+   "cli": true,
+   "bytes": 18478
+  },
+  "metrics_core": {
+   "layer": "services",
+   "path": "services/metrics_core.py",
+   "legacy_path": "metrics_core.py",
+   "shim": true,
+   "cli": false,
+   "bytes": 48307
+  },
+  "model_quality": {
+   "layer": "core/domain",
+   "path": "core/domain/model_quality.py",
+   "legacy_path": "model_quality.py",
+   "shim": true,
+   "cli": false,
+   "bytes": 6858
+  },
+  "norm_apply": {
+   "layer": "services",
+   "path": "services/norm_apply.py",
+   "legacy_path": "norm_apply.py",
+   "shim": true,
+   "cli": false,
+   "bytes": 27407
+  },
+  "ontology_blueprint": {
+   "layer": "core/domain",
+   "path": "core/domain/ontology_blueprint.py",
+   "legacy_path": "ontology_blueprint.py",
+   "shim": true,
+   "cli": false,
+   "bytes": 13838
+  },
+  "ontology_owl": {
+   "layer": "core/domain",
+   "path": "core/domain/ontology_owl.py",
+   "legacy_path": "ontology_owl.py",
+   "shim": true,
+   "cli": false,
+   "bytes": 73893
+  },
+  "ontology_reasoning": {
+   "layer": "core/domain",
+   "path": "core/domain/ontology_reasoning.py",
+   "legacy_path": "ontology_reasoning.py",
+   "shim": true,
+   "cli": false,
+   "bytes": 25103
+  },
+  "ontology_semantics": {
+   "layer": "core/domain",
+   "path": "core/domain/ontology_semantics.py",
+   "legacy_path": "ontology_semantics.py",
+   "shim": true,
+   "cli": false,
+   "bytes": 50372
+  },
+  "register_alternatives_tools": {
+   "layer": "services/tools",
+   "path": "services/tools/register_alternatives_tools.py",
+   "legacy_path": "register_alternatives_tools.py",
+   "shim": true,
+   "cli": true,
+   "bytes": 29382
+  },
+  "register_graph_db_tools": {
+   "layer": "services/tools",
+   "path": "services/tools/register_graph_db_tools.py",
+   "legacy_path": "register_graph_db_tools.py",
+   "shim": true,
+   "cli": true,
+   "bytes": 5899
+  },
+  "register_http_tools": {
+   "layer": "services/tools",
+   "path": "services/tools/register_http_tools.py",
+   "legacy_path": "register_http_tools.py",
+   "shim": true,
+   "cli": true,
+   "bytes": 13519
+  },
+  "register_skills": {
+   "layer": "services/tools",
+   "path": "services/tools/register_skills.py",
+   "legacy_path": "register_skills.py",
+   "shim": true,
+   "cli": true,
+   "bytes": 37852
+  },
+  "register_sysml_check_tools": {
+   "layer": "services/tools",
+   "path": "services/tools/register_sysml_check_tools.py",
+   "legacy_path": "register_sysml_check_tools.py",
+   "shim": true,
+   "cli": true,
+   "bytes": 15814
+  },
+  "register_zhiyuan_tools": {
+   "layer": "services/tools",
+   "path": "services/tools/register_zhiyuan_tools.py",
+   "legacy_path": "register_zhiyuan_tools.py",
+   "shim": true,
+   "cli": true,
+   "bytes": 3692
+  },
+  "report_generator": {
+   "layer": "services",
+   "path": "services/report_generator.py",
+   "legacy_path": "report_generator.py",
+   "shim": true,
+   "cli": false,
+   "bytes": 32783
+  },
+  "report_tools": {
+   "layer": "services/tools",
+   "path": "services/tools/report_tools.py",
+   "legacy_path": "report_tools.py",
+   "shim": true,
+   "cli": false,
+   "bytes": 4564
+  },
+  "requirement_itemize_tools": {
+   "layer": "services/tools",
+   "path": "services/tools/requirement_itemize_tools.py",
+   "legacy_path": "requirement_itemize_tools.py",
+   "shim": true,
+   "cli": true,
+   "bytes": 35113
+  },
+  "requirement_postprocess": {
+   "layer": "services",
+   "path": "services/requirement_postprocess.py",
+   "legacy_path": "requirement_postprocess.py",
+   "shim": true,
+   "cli": false,
+   "bytes": 14837
+  },
+  "requirement_quality": {
+   "layer": "services",
+   "path": "services/requirement_quality.py",
+   "legacy_path": "requirement_quality.py",
+   "shim": true,
+   "cli": false,
+   "bytes": 6409
+  },
+  "sandbox": {
+   "layer": "adapters",
+   "path": "adapters/sandbox.py",
+   "legacy_path": "sandbox.py",
+   "shim": true,
+   "cli": false,
+   "bytes": 8443
+  },
+  "seed_glossary_capability": {
+   "layer": "services",
+   "path": "services/seed_glossary_capability.py",
+   "legacy_path": "seed_glossary_capability.py",
+   "shim": true,
+   "cli": false,
+   "bytes": 2600
+  },
+  "seed_registry": {
+   "layer": "services",
+   "path": "services/seed_registry.py",
+   "legacy_path": "seed_registry.py",
+   "shim": true,
+   "cli": true,
+   "bytes": 11159
+  },
+  "semantic": {
+   "layer": "services",
+   "path": "services/semantic.py",
+   "legacy_path": "semantic.py",
+   "shim": true,
+   "cli": false,
+   "bytes": 15520
+  },
+  "semantic_cache": {
+   "layer": "adapters",
+   "path": "adapters/semantic_cache.py",
+   "legacy_path": "semantic_cache.py",
+   "shim": true,
+   "cli": false,
+   "bytes": 3472
+  },
+  "skill_deposit": {
+   "layer": "services",
+   "path": "services/skill_deposit.py",
+   "legacy_path": "skill_deposit.py",
+   "shim": true,
+   "cli": false,
+   "bytes": 4119
+  },
+  "skill_improve": {
+   "layer": "services",
+   "path": "services/skill_improve.py",
+   "legacy_path": "skill_improve.py",
+   "shim": true,
+   "cli": false,
+   "bytes": 20195
+  },
+  "skill_tools": {
+   "layer": "services/tools",
+   "path": "services/tools/skill_tools.py",
+   "legacy_path": "skill_tools.py",
+   "shim": true,
+   "cli": true,
+   "bytes": 16924
+  },
+  "staging_fuse": {
+   "layer": "services",
+   "path": "services/staging_fuse.py",
+   "legacy_path": "staging_fuse.py",
+   "shim": true,
+   "cli": false,
+   "bytes": 21551
+  },
+  "subgraph_views": {
+   "layer": "core/domain",
+   "path": "core/domain/subgraph_views.py",
+   "legacy_path": "subgraph_views.py",
+   "shim": true,
+   "cli": false,
+   "bytes": 3252
+  },
+  "sysadmin_tools": {
+   "layer": "services/tools",
+   "path": "services/tools/sysadmin_tools.py",
+   "legacy_path": "sysadmin_tools.py",
+   "shim": true,
+   "cli": false,
+   "bytes": 9460
+  },
+  "sysml_ast": {
+   "layer": "core/domain",
+   "path": "core/domain/sysml_ast.py",
+   "legacy_path": "sysml_ast.py",
+   "shim": true,
+   "cli": false,
+   "bytes": 14851
+  },
+  "sysml_ast_tools": {
+   "layer": "services/tools",
+   "path": "services/tools/sysml_ast_tools.py",
+   "legacy_path": "sysml_ast_tools.py",
+   "shim": true,
+   "cli": true,
+   "bytes": 8854
+  },
+  "sysml_autofix_tools": {
+   "layer": "services/tools",
+   "path": "services/tools/sysml_autofix_tools.py",
+   "legacy_path": "sysml_autofix_tools.py",
+   "shim": true,
+   "cli": true,
+   "bytes": 17486
+  },
+  "sysml_check_tools": {
+   "layer": "services/tools",
+   "path": "services/tools/sysml_check_tools.py",
+   "legacy_path": "sysml_check_tools.py",
+   "shim": true,
+   "cli": false,
+   "bytes": 15974
+  },
+  "sysml_import_graph_tools": {
+   "layer": "services/tools",
+   "path": "services/tools/sysml_import_graph_tools.py",
+   "legacy_path": "sysml_import_graph_tools.py",
+   "shim": true,
+   "cli": true,
+   "bytes": 11478
+  },
+  "sysml_importer": {
+   "layer": "services",
+   "path": "services/sysml_importer.py",
+   "legacy_path": "sysml_importer.py",
+   "shim": true,
+   "cli": false,
+   "bytes": 74453
+  },
+  "sysml_lint_tools": {
+   "layer": "services/tools",
+   "path": "services/tools/sysml_lint_tools.py",
+   "legacy_path": "sysml_lint_tools.py",
+   "shim": true,
+   "cli": true,
+   "bytes": 16558
+  },
+  "sysml_profile": {
+   "layer": "core/domain",
+   "path": "core/domain/sysml_profile.py",
+   "legacy_path": "sysml_profile.py",
+   "shim": true,
+   "cli": false,
+   "bytes": 32326
+  },
+  "sysml_project_check_tools": {
+   "layer": "services/tools",
+   "path": "services/tools/sysml_project_check_tools.py",
+   "legacy_path": "sysml_project_check_tools.py",
+   "shim": true,
+   "cli": true,
+   "bytes": 8733
+  },
+  "sysml_stdlib_tools": {
+   "layer": "services/tools",
+   "path": "services/tools/sysml_stdlib_tools.py",
+   "legacy_path": "sysml_stdlib_tools.py",
+   "shim": true,
+   "cli": true,
+   "bytes": 16538
+  },
+  "sysml_v2_check": {
+   "layer": "core/domain",
+   "path": "core/domain/sysml_v2_check.py",
+   "legacy_path": "sysml_v2_check.py",
+   "shim": true,
+   "cli": true,
+   "bytes": 35375
+  },
+  "task_queue": {
+   "layer": "services",
+   "path": "services/task_queue.py",
+   "legacy_path": "task_queue.py",
+   "shim": true,
+   "cli": false,
+   "bytes": 37605
+  },
+  "text_normalize": {
+   "layer": "core/domain",
+   "path": "core/domain/text_normalize.py",
+   "legacy_path": "text_normalize.py",
+   "shim": true,
+   "cli": false,
+   "bytes": 18767
+  },
+  "tool_resilience": {
+   "layer": "core",
+   "path": "core/tool_resilience.py",
+   "legacy_path": "tool_resilience.py",
+   "shim": true,
+   "cli": false,
+   "bytes": 3206
+  },
+  "transcript_fts": {
+   "layer": "adapters",
+   "path": "adapters/transcript_fts.py",
+   "legacy_path": "transcript_fts.py",
+   "shim": true,
+   "cli": false,
+   "bytes": 10570
+  },
+  "triple_commit": {
+   "layer": "services",
+   "path": "services/triple_commit.py",
+   "legacy_path": "triple_commit.py",
+   "shim": true,
+   "cli": false,
+   "bytes": 13017
+  },
+  "triple_store": {
+   "layer": "services",
+   "path": "services/triple_store.py",
+   "legacy_path": "triple_store.py",
+   "shim": true,
+   "cli": false,
+   "bytes": 12987
+  },
+  "vector2graph": {
+   "layer": "services",
+   "path": "services/vector2graph.py",
+   "legacy_path": "vector2graph.py",
+   "shim": true,
+   "cli": false,
+   "bytes": 77793
+  },
+  "vector_index": {
+   "layer": "adapters",
+   "path": "adapters/vector_index.py",
+   "legacy_path": "vector_index.py",
+   "shim": true,
+   "cli": false,
+   "bytes": 15699
+  },
+  "view_generator": {
+   "layer": "services",
+   "path": "services/view_generator.py",
+   "legacy_path": "view_generator.py",
+   "shim": true,
+   "cli": false,
+   "bytes": 35384
+  },
+  "web_tools": {
+   "layer": "adapters",
+   "path": "adapters/web_tools.py",
+   "legacy_path": "web_tools.py",
+   "shim": true,
+   "cli": false,
+   "bytes": 17457
+  },
+  "zhiyuan_client": {
+   "layer": "adapters",
+   "path": "adapters/zhiyuan_client.py",
+   "legacy_path": "zhiyuan_client.py",
+   "shim": true,
+   "cli": false,
+   "bytes": 13827
+  }
+ },
+ "exemptions": {
+  "core/domain/ontology_blueprint.py::llm": "存量债：生成本体蓝图时直接调 llm 出草案（领域层直连 LLM，违反 domain⊂core）。不改行为，只登记；收敛方向=把 LLM 调用上提到 services 层。",
+  "core/domain/ontology_semantics.py::repositories": "存量债：语义校验在函数内懒加载 repositories.knowledge_repo 读实体（避免循环导入）。属P1前的既有写法，未改行为。",
+  "adapters/semantic_cache.py::knowledge_pipeline": "复用 knowledge_pipeline 的 embedding 实现：缓存键必须与检索侧**同一模型同一维度**，另建一份会导致缓存永不命中（能力上必须依赖，不是图省事）。",
+  "services/hil_service.py::agent": "HIL 需要驱动 AgentPipeline 执行待确认动作（函数内懒加载，避免 import 环）。",
+  "services/knowledge_reflow.py::agent": "知识回流需调用 AgentPipeline（函数内懒加载，避免 import 环）。",
+  "services/mcp_health.py::agent": "复用 agent.mcp_tool_meta 的效果级别判定（唯一真源，另抄一份必漂移）。",
+  "services/memory_service.py::agent": "复用 agent.memory_recall 的噪声闸门（唯一实现，另抄一份必漂移）。",
+  "services/requirement_quality.py::agent": "需求质量检查需调用 AgentPipeline（函数内懒加载，避免 import 环）。"
+ }
+}

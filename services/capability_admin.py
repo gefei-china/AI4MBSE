@@ -312,7 +312,7 @@ def propose(kind: str, action: str, spec: dict, agent_id: str = "",
                "proposer_agent": str(agent_id or "")}
     act = "%s%s_%s" % (META_ACTION_PREFIX, kind, action)
     try:
-        from hil_service import HILService
+        from services.hil_service import HILService
         from database import get_db
         conn = get_db()
         try:
@@ -530,7 +530,7 @@ def _create_capability(spec: dict, user=None) -> dict:
 
     # ⑦ 让执行器认识它（注册进 code_tools 风格的动态执行表）
     try:
-        from capability_runtime import invalidate_cache
+        from services.capability_runtime import invalidate_cache
         invalidate_cache()
     except Exception:
         pass

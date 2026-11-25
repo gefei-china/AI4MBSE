@@ -85,7 +85,7 @@ def main():
     check("S5b 原 403 拒绝分支保留", "不允许的 SPARQL 更新操作" in sp)
 
     print("\nS6 web_fetch 网络边界")
-    wt = io.open(os.path.join(REPO, "web_tools.py"), encoding="utf-8").read()
+    wt = io.open(os.path.join(REPO, "adapters/web_tools.py"), encoding="utf-8").read()
     sys.path.insert(0, REPO)
     from web_tools import is_allowed_url
     check("S6a 私网/环回/元数据地址全拒",

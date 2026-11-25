@@ -14,7 +14,7 @@
 """
 from routers.knowledge_parts.shared import *  # noqa: F401,F403
 
-import metrics_core
+from services import metrics_core as metrics_core
 
 
 @router.get("/api/knowledge/fts")
@@ -24,7 +24,7 @@ def knowledge_fts(q: str, kinds: str = "", limit: int = 50,
 
     kinds 可选逗号分隔子集（如 'entities,relations'）；mode=fts|like（兜底标记）。
     """
-    from fts_search import fts_query
+    from adapters.fts_search import fts_query
     kind_list = [k.strip() for k in kinds.split(",") if k.strip()] or None
     return fts_query(conn, q, kinds=kind_list, limit=max(1, min(limit, 200)))
 

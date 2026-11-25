@@ -200,7 +200,7 @@ def r_group():
         #   `reap_stuck_runs` 的注释里就写着 "原实现加了 EXISTS(...)"，
         #   用字符串 find 判会**命中注释** ⇒ 误报"源码仍带该条件"。
         #   ⇒ 用 AST 取函数体内所有 `str` 常量，只在其中判 EXISTS。
-        tq = ast.parse(open(os.path.join(_ROOT, "task_queue.py"), encoding="utf-8").read())
+        tq = ast.parse(open(os.path.join(_ROOT, "services/task_queue.py"), encoding="utf-8").read())
         fn = next((n for n in ast.walk(tq)
                    if isinstance(n, ast.FunctionDef) and n.name == "reap_stuck_runs"), None)
         sqls = [s.value for s in ast.walk(fn)

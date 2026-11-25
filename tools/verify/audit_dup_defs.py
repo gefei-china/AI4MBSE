@@ -1,6 +1,6 @@
 """同类重复定义审计 v2（2026-09-18 S7）：用 AST 按**作用域路径**找真正的重复定义。
 
-v1 用「缩进 + 名字」判定，把不同类里的同名方法（如 `graph_db.py` 的 Mock/Writer/Reader 各有
+v1 用「缩进 + 名字」判定，把不同类里的同名方法（如 `adapters/graph_db.py` 的 Mock/Writer/Reader 各有
 `write_triples`）误报为重复 —— 21 条里绝大多数是假阳性。v2 改用 ast：记录每个 def/class 的
 **限定名路径**（`Class.method` / `outer.inner`），同一路径出现两次才是真正的"后者覆盖前者"。
 

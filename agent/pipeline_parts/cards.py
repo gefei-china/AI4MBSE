@@ -462,7 +462,7 @@ class CardMixin:
             from core import config as _cfg
             if not _cfg.get("sysml", "check_enabled", True):
                 return None
-            import sysml_v2_check as _svc
+            from core.domain import sysml_v2_check as _svc
             r = _svc.check_code(
                 code, timeout=int(_cfg.get("sysml", "check_timeout", 90) or 90))
             try:
@@ -557,7 +557,7 @@ class CardMixin:
         # ★ P2：生成后校验（挂诊断；失败/不可用一律降级，不影响下面的视图投影）
         _chk = self._check_generated_sysml(code)
         try:
-            from view_generator import generate_views_from_sysml, INTENT_VIEWS
+            from services.view_generator import generate_views_from_sysml, INTENT_VIEWS
             # 1) 用户显式指定视图类型 → 优先于一切
             user_views = self._extract_view_types(user_input) if user_input else None
             if user_views:
@@ -586,7 +586,7 @@ class CardMixin:
             views = generate_views_from_sysml(code, view_types=view_types, intent=intent)
             # P1b-1：模型质量三件套（约束/追溯/一致性）
             try:
-                from model_quality import attach_quality_to_views
+                from core.domain.model_quality import attach_quality_to_views
                 views = attach_quality_to_views(views, code)
             except Exception:
                 pass
@@ -893,7 +893,7 @@ class CardMixin:
         try:
             from core import config
             if config.as_bool("graph_db", "enabled"):
-                from graph_db import get_writer, fetch_impact_network
+                from adapters.graph_db import get_writer, fetch_impact_network
                 _w = get_writer(True, config.get("graph_db", "backend", "pyoxigraph"),
                                 config.get("graph_db", "path", ""),
                                 config.get("graph_db", "use_memory", False))

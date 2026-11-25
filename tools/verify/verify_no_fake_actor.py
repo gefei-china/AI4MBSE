@@ -57,8 +57,11 @@ FAKE_NAMES = ("王工", "李工", "赵管", "陈专")
 #: 受检生产目录（相对 _ROOT）
 SCAN_DIRS = (
     "routers", "services", "agent", "core", "knowledge_pipeline",
-    "repositories", "database", "knowledge_engine.py", "ontology_semantics.py",
-    "norm_apply.py", "vector2graph.py", "knowledge_reflow.py", "ontology_blueprint.py",
+    "repositories", "database", "services/knowledge_engine.py", "core/domain/ontology_semantics.py",
+    "services/norm_apply.py", "services/vector2graph.py", "services/knowledge_reflow.py", "core/domain/ontology_blueprint.py",
+    # P1 分层归位新增（2026-11-25）：graph_db / web_tools / zhiyuan_client 等对外适配层
+    # 也会拼造"王工/李工"这类假人物串，不扫就是留一片无人过问的区域。
+    "adapters",
 )
 
 #: 明确豁免的文件/路径（测试脚本、验证脚本、文档、一次性工具）

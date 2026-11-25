@@ -325,7 +325,7 @@ def group_d():
     check("D14", "sysml_v2_autofix 豁免写前确认（闭环不再卡人工点击）",
           "if str(name) in _REPAIR_WRITE_EXEMPT:" in _t, "未见豁免")
     # D15：证据自证 —— 该工具实现里确实没有任何持久化语句（豁免才成立）
-    _af = open(os.path.join(_ROOT, "sysml_autofix_tools.py"), encoding="utf-8").read()
+    _af = open(os.path.join(_ROOT, "services/tools/sysml_autofix_tools.py"), encoding="utf-8").read()
     check("D15", "autofix 实现无 INSERT/UPDATE/commit（豁免的前提成立）",
           all(k not in _af for k in ("INSERT", "UPDATE ", "commit(")), "")
     # D16：续跑提示必须带"结项提醒"（做了不标 ⇒ 账实不符，闸永远判未完成）

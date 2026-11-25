@@ -7,7 +7,7 @@
 实测暴露两个问题，本文件分别锁定：
 
 A. **判据参数不可运维**（真缺陷）
-   `skill_improve.py` 用 `_cfg.get("skill", ...)` 读参数，但该组此前
+   `services/skill_improve.py` 用 `_cfg.get("skill", ...)` 读参数，但该组此前
    **既不在 DEFAULT_CONFIG、也不在 CONFIG_SCHEMA** ⇒
      · 设置页 UI 不渲染（`schema()` 只遍历 CONFIG_SCHEMA）
      · `save_override()` 白名单校验直接抛「未知配置项」

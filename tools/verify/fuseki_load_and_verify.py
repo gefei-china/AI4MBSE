@@ -1,7 +1,7 @@
 """Fuseki 真实数据灌入 + 端到端查询验证（2026-10-10）。
 
 ## 为什么不自己拼 N-Quads
-`graph_db.PyoxigraphWriter._quad()` 的契约（graph_db.py:178）是**三态 o_type**：
+`graph_db.PyoxigraphWriter._quad()` 的契约（adapters/graph_db.py:178）是**三态 o_type**：
   · `entity` → 客体是**实体 IRI**
   · `class`  → 客体是**本体类 IRI**（`class_uri`）——★ 必须是类 IRI，
               否则 **OWL 公理与推理机看不见类型**（生产注释原话）

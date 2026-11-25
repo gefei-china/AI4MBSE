@@ -268,13 +268,25 @@ function procRender(){
   if(_procS.timeline.length){
     const runN = _procS.timeline.filter(x=>x.status==='run').length;
     const failN = _procS.timeline.filter(x=>x.status==='failed').length;
+    /* ★ P0（2026-11-25）：降级汇总进收口条。
+       why 不只靠卡片：卡片会随环节收起，而"这轮到底干净不干净"是用户扫一眼就要的结论。
+       口径与后端一致 —— critical 单独计数（红色），其余降级合并（橙色），
+       cosmetic 只给数字且不抢眼（它是纯观测失败，见 procAddDegrade 的分级说明）。 */
+    const degCards = _procS.timeline.filter(x=>x.type==='degrade');
+    const degCrit = degCards.filter(x=>x.degLevel==='critical').length;
+    const degSoft = degCards.length - degCrit;
+    const degC = Number(_procS.degCosmetic || 0);
+    let degTxt = '';
+    if(degCrit) degTxt += ` · <span style="color:#c92a2a;font-weight:600;">⚠ ${degCrit} 处结果不可信</span>`;
+    if(degSoft) degTxt += ` · <span style="color:#b23c00;">${degSoft} 处降级</span>`;
+    if(degC && !degCrit && !degSoft) degTxt += ` · <span style="color:var(--mut);">${degC} 项轻微</span>`;
     const running = !_procS.endTime && runN >= 0 && !_procS.done;   // 流式未结束
     const tokenTxt = _procS.tokens ? ` · ⚡ ${_procS.tokens}` : '';
     if(running){
-      h += `<div class="proc-summary" onclick="procSummaryToggle()"><span class="proc-spin"></span>执行中… ${_procS.timeline.length} 个环节 · <span class="proc-sum-elapsed">${_procS.elapsedText||_procElapsedText()}</span>${failN?` · ${failN} 失败`:''}${_procDetailBtn()}<span class="chev">▾</span></div>`;
+      h += `<div class="proc-summary" onclick="procSummaryToggle()"><span class="proc-spin"></span>执行中… ${_procS.timeline.length} 个环节 · <span class="proc-sum-elapsed">${_procS.elapsedText||_procElapsedText()}</span>${failN?` · ${failN} 失败`:''}${degTxt}${_procDetailBtn()}<span class="chev">▾</span></div>`;
       ensureElapsedTimer();
     } else {
-      h += `<div class="proc-summary ${_procS.summaryCollapsed?'collapsed':''}" onclick="procSummaryToggle()">✓ 已完成 · ${_procS.timeline.length} 环节 · 耗时 ${_procS.elapsedText||_procElapsedText()}${tokenTxt}${failN?` · ${failN} 失败`:''}${_procDetailBtn()}<span class="chev">▾</span></div>`;
+      h += `<div class="proc-summary ${_procS.summaryCollapsed?'collapsed':''}" onclick="procSummaryToggle()">✓ 已完成 · ${_procS.timeline.length} 环节 · 耗时 ${_procS.elapsedText||_procElapsedText()}${tokenTxt}${failN?` · ${failN} 失败`:''}${degTxt}${_procDetailBtn()}<span class="chev">▾</span></div>`;
     }
   }
   const hideBody = _procS.done && _procS.summaryCollapsed;
@@ -302,13 +314,15 @@ function procRender(){
       const dp = s.depth|0;
       const parentId = s.parent ? ` data-parent="${esc(s.parent)}"` : '';
       const lvlCls = dp>0 ? ` proc-lv${Math.min(dp,2)}` : '';
+      // ★ P0（2026-11-25）：降级卡按级别加类名，供 CSS 区分 critical（红）/ degraded（橙）
+      const degCls = s.degLevel ? ` deg-${s.degLevel}` : '';
       const guide = dp>0 ? `<span class="proc-guide" aria-hidden="true"></span>` : '';
       // ★ 2026-11-20：归属徽章（Agent / 技能 / MCP）直接写在标题旁 —— 缩进只说"挂在哪"，
       //   说不出"是谁"，用户要的是看得见的名字。
       const badges = _procBadge('agent', s.agent)
         + _procBadge('skill', s.skill || s.skillGuide)
         + _procBadge('mcp', s.mcp);
-      h += `<div class="proc-block ${s.type}${run?' running':''}${s.collapsed?' collapsed':''}${lvlCls}" data-depth="${dp}"${parentId} data-pid="${esc(s.id)}">
+      h += `<div class="proc-block ${s.type}${degCls}${run?' running':''}${s.collapsed?' collapsed':''}${lvlCls}" data-depth="${dp}"${parentId} data-pid="${esc(s.id)}">
         <div class="proc-head" onclick="toggleProc(this)" title="点击${s.collapsed?'展开':'收起'}详情">${guide}<span>${s.icon}</span><span class="proc-title">${esc(s.title)}${sub}${subHtml}</span>${badges}${elapsed}<span class="st ${statusCls}" style="margin-left:auto;">${spin}${esc(s.statusText)}</span><span class="chev">▾</span></div>
         ${s.detail?`<div class="proc-body">${s.detail}</div>`:''}
       </div>`;
@@ -352,6 +366,78 @@ function procAddSystemNotice(text){
   const id = 'notice_' + t.slice(0, 24);
   procUpsert(id, {type:'notice', icon:'ℹ️', title:'系统提示', status:'done',
     statusText:'提示', sub: t, detail: t});
+}
+
+/* ★★ P0（2026-11-25）降级/静默兜底可见化 —— 执行过程卡片
+ *
+ * 为什么必须出现在**执行过程中**，而不是只写日志
+ * ------------------------------------------------
+ * 架构评估实测全仓 1361 处静默 `except`（69%）。用户反复报的那类现象
+ * （"结果怪怪的""图库开着却查不到""为什么这次答得不一样"）大多来自这些兜底：
+ * 系统退到了一个**能跑通但结果不同**的路径上，界面却一切正常。
+ * 只把降级写进日志 = 只有开发者事后能查，用户当场无从判断"这份结果能不能采信"。
+ *
+ * 放在哪 / 为什么不弹窗
+ * --------------------
+ * 与 V2.4 的执行过程时间线同位置（`procUpsert`），因为它的语义就是"这一环怎么了"。
+ * 不弹窗：降级是**常态**（可选增强失败很常见），弹窗会把注意力成本变成常数。
+ * 卡片默认展开一次即可看见，收口后随其它环节一起收起。
+ *
+ * 分级在界面上的差异（与后端 core/degrade.py 三级一一对应）
+ * --------------------------------------------------------
+ *   critical → 红色徽章「结果不可信」，卡不收起（必须让人看到）
+ *   degraded → 黄色徽章「功能降级」，正常随流收起
+ *   cosmetic → **不建卡**，只在收口条累计一个数字（纯观测失败不配占一行）
+ * 半途改了 `_procS` 的字段：`degCritical` / `degCosmetic` 供收口条汇总。
+ */
+function procAddDegrade(ev){
+  const where = String(ev.where || 'unknown').slice(0, 120);
+  const raw = String(ev.level || '').toLowerCase();
+  const lv = (raw === 'critical' || raw === 'cosmetic') ? raw : 'degraded';
+  const cnt = Math.max(1, Number(ev.count || 1));
+  const impact = String(ev.impact || '').trim();
+  const err = String(ev.error || '').trim();
+
+  // cosmetic：不建卡，只计数（纯观测失败：写 trace/埋点失败等）
+  if(lv === 'cosmetic'){
+    _procS.degCosmetic = (_procS.degCosmetic || 0) + cnt;
+    if(typeof procRender === 'function') procRender();
+    return;
+  }
+
+  const icon = lv === 'critical' ? '🔴' : '🟠';
+  const lvTxt = lv === 'critical' ? '结果不可信' : '功能降级';
+  // 标题优先用「人话影响」，没有才退到 where —— 不编造（后端没给就如实显示标识）
+  const title = impact || ('兜底生效：' + where);
+  // 与后端 Collector 同口径：按 where 合并 ⇒ 同一个降级点重复发生时更新同一张卡
+  const id = 'degrade_' + where;
+  const body = '<div style="font-size:12.5px;line-height:1.75;">'
+    + '<div><b>级别</b>：' + esc(lvTxt) + '（' + esc(lv) + '）</div>'
+    + '<div><b>位置</b>：<code style="font-size:12px;">' + esc(where) + '</code></div>'
+    + (err ? '<div><b>错误</b>：' + esc(err) + '</div>' : '')
+    + (impact ? '<div><b>影响</b>：' + esc(impact) + '</div>' : '')
+    + '<div style="color:var(--mut);margin-top:4px;">'
+    + '这条来自系统内部的兜底路径（不是你的操作问题）。'
+    + (lv === 'critical'
+        ? '本轮结果**不可直接采信**，建议按上面的原因处理后重试。'
+        : '结果仍可用，但比正常路径缺少了一部分能力。')
+    + '</div></div>';
+
+  procUpsert(id, {
+    type: 'degrade', icon: icon, title: title,
+    degLevel: lv,
+    status: lv === 'critical' ? 'failed' : 'stopped',
+    statusText: (cnt > 1 ? ('×' + cnt) : '') + lvTxt,
+    // 折叠态也看得见「是什么级别 + 发生了几次」，不必展开才知道
+    sub: cnt > 1 ? ('发生 ' + cnt + ' 次') : '',
+    detail: body,
+    // critical 不允许自动收起（procUpsert 在 status!=='run' 时会自动 collapsed=true，
+    // 这里用 _userExpanded 顶住 —— 与「用户手动展开被记住」同一机制）
+    ...(lv === 'critical' ? {_userExpanded: true} : {}),
+  });
+  if(lv === 'critical'){
+    _procS.degCritical = (_procS.degCritical || 0) + 1;
+  }
 }
 // ★ 2026-10-27：意图理解明细（展开体）。**白名单构造** —— 所有动态文本逐个 esc()，
 //   因为 procUpsert 的 detail 是直接 innerHTML 的（与 subHtml 同一纪律）。
@@ -1800,6 +1886,13 @@ function handleSSE(raw) {
       const _st = ev.last_stage ? ('：' + ev.last_stage) : '';
       _cs.textContent = '仍在执行' + _st + '（已等待 ' + Math.round(ev.elapsed_s || 0) + ' 秒）';
     }
+  } else if(evType === 'degrade') {
+    /* ★★ P0（2026-11-25）：**内部降级/静默兜底**事件（与上面的 `degraded` 不同）。
+       `degraded` 专指"模型不可用、正文由本地兜底生成"（P1-3，2026-10-03）；
+       本事件是 P0 的通用通道：任何被 `except` 吞掉的失败、任何退到备用路径的环节，
+       都会在执行过程中以一张卡的形式出现（级别 + 位置 + 错误 + 人话影响）。
+       老服务端不发此事件 ⇒ 分支不命中，行为与从前完全一致。 */
+    procAddDegrade(ev);
   } else if(evType === 'degraded') {
     /* P1-3（2026-10-03 降级显式化）：模型降级必须在 UI 上可见。
        背景（实测）：DeepSeek 402 余额不足 / 无 api_key / 调用异常三条路径都会**静默回落 Mock**——

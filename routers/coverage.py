@@ -8,7 +8,7 @@ scope 默认解析在 exec_tool._resolve_scope 内完成——显式参数 > set
 from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 
-from coverage_tools import exec_tool, COVERAGE_TOOL_NAMES
+from services.tools.coverage_tools import exec_tool, COVERAGE_TOOL_NAMES
 
 router = APIRouter(tags=["覆盖性分析"])
 

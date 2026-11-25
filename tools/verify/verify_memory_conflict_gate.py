@@ -89,7 +89,7 @@ ck(_merged != 0, "A2b ★非 0 证明 consolidate 未被 except 静默吞异常�
 ck(MemoryService.detect_conflicts(c2) == [],
    "A3 consolidate 的合并对象**不被**误判为冲突（两引擎职责不重叠）")
 # deposit 仍是 ADD-only（不 UPDATE 旧记忆）
-_ms = open(os.path.join(ROOT, "memory_service.py"), encoding="utf-8").read()
+_ms = open(os.path.join(ROOT, "services/memory_service.py"), encoding="utf-8").read()
 _dit = _ms[_ms.find("def deposit("):_ms.find("def record_access(")]
 ck("UPDATE agent_memory" not in _dit,
    "A4 deposit() 内无 UPDATE agent_memory（仍是 ADD-only，未被改成覆盖写）")
@@ -151,7 +151,7 @@ print("\n== C2. 生产接线（防「代码在、没接线」——2026-10-07 �
 # ⚠️ 这组断言是**接线回归守卫**：`detect_conflicts` / `mark_superseded` 一度
 # **零生产调用者**（写了但只在门禁里被调）——本仓反复出现的「能力在、没人用」。
 # ⇒ 断言的是"maintain() 这个唯一的维护入口会调它"，而不是"函数存在"。
-_msrc2 = open(os.path.join(ROOT, "memory_service.py"), encoding="utf-8").read()
+_msrc2 = open(os.path.join(ROOT, "services/memory_service.py"), encoding="utf-8").read()
 _mt = _msrc2[_msrc2.find("def maintain("):_msrc2.find("def run_maintenance(")]
 ck("detect_conflicts" in _mt, "C2a maintain() 内调用 detect_conflicts（不是只在门禁里被调）")
 ck("mark_superseded" in _mt, "C2b maintain() 内调用 mark_superseded")
@@ -290,7 +290,7 @@ _mut_db.close()
 ck(_n_bad == 1, "M5 变异自证：单边脏行（有 by 无 at）被 D3 判据抓到（证明判据非空转）")
 
 print("\n== F. 变异自证（证明门禁会判红） ==")
-_msrc = open(os.path.join(ROOT, "memory_service.py"), encoding="utf-8").read()
+_msrc = open(os.path.join(ROOT, "services/memory_service.py"), encoding="utf-8").read()
 _rsrc = open(os.path.join(ROOT, "repositories", "memory_admin_repo.py"), encoding="utf-8").read()
 
 

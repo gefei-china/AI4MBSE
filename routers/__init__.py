@@ -49,6 +49,7 @@ from .diagnostics import router as diagnostics_router  # 2026-10-26 P0-8 上下�
 from .capabilities import router as capabilities_router  # 2026-10-27 P0-2 能力账本（统一注册处 + 声明/调用 2×2 + 追溯）
 from .events import router as events_router  # 2026-11-01 事件驱动（入站事件 + 观察记录 + 授权快照）
 from .alternatives import router as alternatives_router  # 2026-11-03 多方案设计（FR-MG-6 生成/比较/多维度打分）
+from .health_degrade import router as health_degrade_router  # 2026-11-25 P0 降级台账（让静默兜底可见，只读）
 
 __all__ = [
     "dashboard_router",
@@ -93,4 +94,5 @@ __all__ = [
     "capabilities_router",      # 2026-10-27 P0-2 能力账本（注册处 + 声明/调用 + 追溯）
     "events_router",            # 2026-11-01 事件驱动（入站事件 + 观察记录 + 授权快照）
     "alternatives_router",      # 2026-11-03 多方案设计（FR-MG-6 生成/比较/多维度打分）
+    "health_degrade_router",    # 2026-11-25 P0 降级台账（静默兜底可见化，只读）
 ]

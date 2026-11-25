@@ -91,7 +91,7 @@ def _load_mcp_server(conn, name: str = "zhiyuan-dev-mcp") -> dict | None:
 
 def _client(server: dict):
     """构造 MCP 客户端（复用 mcp_client，不另造协议层）。"""
-    from mcp_client import MCPClient
+    from adapters.mcp_client import MCPClient
     return MCPClient(server["endpoint"], transport=server.get("transport") or "sse",
                      headers=server.get("headers") or {})
 

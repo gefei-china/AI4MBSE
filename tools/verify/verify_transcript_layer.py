@@ -30,13 +30,13 @@ def check(name, cond, detail=""):
 
 
 def load_fts(mutate=None):
-    path = os.path.join(ROOT, "transcript_fts.py")
+    path = os.path.join(ROOT, "adapters/transcript_fts.py")
     with open(path, encoding="utf-8") as f:
         src = f.read()
     if mutate:
         src = mutate(src)
     ns = {"__name__": "transcript_fts_mut"}
-    exec(compile(src, "transcript_fts.py", "exec"), ns)
+    exec(compile(src, "adapters/transcript_fts.py", "exec"), ns)
     return ns
 
 
@@ -202,7 +202,7 @@ for label, mut, flag in (
     except Exception as e:  # noqa: BLE001
         check(label, False, "%s: %s" % (type(e).__name__, e))
 
-# M3 单独跑：`_pick` 在 migrations/memory.py，不是 transcript_fts.py，
+# M3 单独跑：`_pick` 在 migrations/memory.py，不是 adapters/transcript_fts.py，
 # 必须把变异后的迁移模块整个 exec 一遍再建视图，才测得到列映射。
 try:
     _mig_path = os.path.join(ROOT, "database", "migrations", "memory.py")

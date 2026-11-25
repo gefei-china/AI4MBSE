@@ -299,7 +299,7 @@ _pc = TaskQueue.pending_count(_conn, 1)
 check("5.1 pending_count 只数 planned（done/failed/cancelled/canceled 全排除）",
       _pc == 1, _pc)
 check("5.2 源码同时排除两种拼写（防跨版本再分裂）",
-      "'canceled','cancelled'" in read_src("task_queue.py").replace(" ", ""),
+      "'canceled','cancelled'" in read_src("services/task_queue.py").replace(" ", ""),
       "")
 
 # 5.3 推迟非必需任务：早停要"来得及"取消它
@@ -388,7 +388,7 @@ else:
     check("M3 变异「0 被 or 吞成默认值」被抓住", False, "锚点未命中")
 
 # M4：pending_count 去掉 'cancelled' ⇒ 5.1 应翻
-_m4 = mutate("task_queue.py",
+_m4 = mutate("services/task_queue.py",
              "\"AND status NOT IN ('done','failed','canceled','cancelled')\"",
              "\"AND status NOT IN ('done','failed','canceled')\"")
 if _m4:

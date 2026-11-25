@@ -271,8 +271,8 @@ BUILTIN_DESC = {
 }
 
 #: 需求工具名集合与执行器（双链路必须同序同语义）
-from requirement_itemize_tools import REQ_TOOL_NAMES as _REQ_TOOL_NAMES  # noqa: E402
-from requirement_itemize_tools import exec_tool as exec_req_tool  # noqa: E402
+from services.tools.requirement_itemize_tools import REQ_TOOL_NAMES as _REQ_TOOL_NAMES  # noqa: E402
+from services.tools.requirement_itemize_tools import exec_tool as exec_req_tool  # noqa: E402
 
 
 
@@ -752,7 +752,7 @@ class ToolMixin:
         # 否则 Agent 未显式声明 file_* 时 LLM 永远拿不到文件操作能力（skill 触发即视为授权）
         _sk_wl = getattr(self, "_skill_allowed_tools", None)
         if _sk_wl:
-            from file_tools import FILE_TOOL_DEFS
+            from services.tools.file_tools import FILE_TOOL_DEFS
             for _d in FILE_TOOL_DEFS:
                 if _d["name"] in _sk_wl and not any(c[0] == _d["name"] for c in candidates):
                     candidates.append((_d["name"], _d["description"], "builtin", ""))
@@ -795,7 +795,7 @@ class ToolMixin:
         #   比"按语义猜"可靠得多。判据从严：名字须作为**独立 token** 出现在原话里
         #   （前后不能紧贴字母数字），避免 `calc` 命中 `calculate` 这类误触发。
         try:
-            from capability_runtime import list_capabilities as _lcaps
+            from services.capability_runtime import list_capabilities as _lcaps
             _u = str(user_input or "").lower()
             if _u:
                 for _cn in _lcaps():
@@ -1006,7 +1006,7 @@ class ToolMixin:
             core_keep = core_keep | _bound_mcp_names
         if len(candidates) >= jit_threshold and user_input:
             try:
-                from semantic import SemanticSearch
+                from services.semantic import SemanticSearch
                 from core import config as _cfg
                 idx = [{"name": c[0], "text": f"{c[0]} {c[1]}"} for c in candidates]
                 # P1a-1：对齐 Semantic Tool Selection——top_k + threshold + 空回退
@@ -1460,7 +1460,7 @@ class ToolMixin:
         · MCP 动词族（`mcp_effect_level`；`auto` 派生 + MCP 时回到家族灰度档）
         """
         try:
-            from hil_service import classify_action as _ca
+            from services.hil_service import classify_action as _ca
             _meta = self._tool_se_meta(name)
             _ca_kw = {}
             if _meta.get("se_source") == "manual":
@@ -1470,7 +1470,7 @@ class ToolMixin:
             return _ca(name, self._tool_side_effect(name), **_ca_kw)
         except TypeError:
             try:
-                from hil_service import classify_action as _ca2
+                from services.hil_service import classify_action as _ca2
                 return _ca2(name, self._tool_side_effect(name))       # 老签名兜底
             except Exception:
                 return {"kind": "read", "match_key": "", "source": "fallback"}
@@ -1692,7 +1692,7 @@ class ToolMixin:
             _requester = ""
         _conf = None
         try:
-            from hil_service import HILService as _HS
+            from services.hil_service import HILService as _HS
             from database import db_conn as _dbc
             with _dbc() as _c:
                 _conf = _HS.queue_confirmation(
@@ -2202,7 +2202,7 @@ class ToolMixin:
                                   "result": f"被自动化钩子拦截：{_hk2.get('message') or name}"
                                             f"（钩子：{_hk2.get('name') or '-'}）"}
                     else:
-                        from hil_service import HILService as _HIL2
+                        from services.hil_service import HILService as _HIL2
                         from database import db_conn as _dbc2
                         _conf2 = None
                         with _dbc2() as _c2:
@@ -2266,7 +2266,7 @@ class ToolMixin:
                     self._log_tool_call(name, tool_type, arguments, result, intent_ctx, agent_ctx, conv_ctx, t0)
                     return result
                 if _act == "require_confirm":
-                    from hil_service import HILService
+                    from services.hil_service import HILService
                     from database import db_conn
                     _conf = None
                     with db_conn() as conn:
@@ -2460,8 +2460,8 @@ class ToolMixin:
             except Exception:
                 row = None
             if row:
-                from mcp_client import MCPClient
-                from tool_resilience import retry_exec
+                from adapters.mcp_client import MCPClient
+                from core.tool_resilience import retry_exec
                 tool_type = "mcp"
                 # ★ B5-2：带上该 MCP 配置的认证头（此前硬编码 ⇒ Bearer 类必 401）
                 # ⚠️ 本模块的 json **不是全局导入**（第 899 行是函数内 `import json as _json`），
@@ -2497,8 +2497,8 @@ class ToolMixin:
             except Exception:
                 _zrow = None
             if _zrow:
-                from http_tool_executor import exec_http_tool
-                from tool_resilience import retry_exec
+                from adapters.http_tool_executor import exec_http_tool
+                from core.tool_resilience import retry_exec
                 tool_type = "http"
                 # ★ 2026-10-28（conv 9740 实证）：**覆盖导入的目标一致性闸**。
                 #   ⚠️ 已上移为**统一网关**（`_import_target_gate`），位于 MCP/HTTP
@@ -2526,7 +2526,7 @@ class ToolMixin:
             except Exception:
                 _zhiyuan = False
             if _zhiyuan:
-                from zhiyuan_client import exec_tool as _exec_zhiyuan
+                from adapters.zhiyuan_client import exec_tool as _exec_zhiyuan
                 tool_type = "zhiyuan"
                 result = _exec_zhiyuan(name, arguments or {})
                 self._log_tool_call(name, tool_type, arguments, result, intent_ctx, agent_ctx, conv_ctx, t0)
@@ -2539,7 +2539,7 @@ class ToolMixin:
             # ★ 2026-10-17（米爸需求）：web_search/web_fetch——联网获取最新消息。
             #   read-only 免确认；时效性问题（最新/今天/新闻）AI 应主动调用。
             if name in _WEB_TOOL_NAMES:
-                import web_tools as _wt
+                from adapters import web_tools as _wt
                 result = _wt.exec_tool(name, arguments or {})
                 self._log_tool_call(name, tool_type, arguments, result, intent_ctx, agent_ctx, conv_ctx, t0)
                 return result
@@ -2549,7 +2549,7 @@ class ToolMixin:
             #   ⇒ 本工具是模型主动通道：技能 48「文件操作」声明、agent 绑定技能后经
             #   白名单注入，写意图闸按技能契约放行。
             if name == "save_artifact":
-                import artifact_tools as _at2
+                from services.tools import artifact_tools as _at2
                 result = _at2.exec_tool(name, arguments or {}, conversation_id=conv_ctx)
                 self._log_tool_call(name, tool_type, arguments, result, intent_ctx, agent_ctx, conv_ctx, t0)
                 return result
@@ -2619,13 +2619,13 @@ class ToolMixin:
                 pass
             # 系统管理域只读查询工具（2026-08-31 P0-4：对话式系统管理——用户/角色/权限/审计/监控/会话，只读安全）
             if name.startswith("sys_query_"):
-                from sysadmin_tools import exec_tool as _exec_sysadmin
+                from services.tools.sysadmin_tools import exec_tool as _exec_sysadmin
                 result = _exec_sysadmin(name, arguments or {})
                 self._log_tool_call(name, tool_type, arguments, result, intent_ctx, agent_ctx, conv_ctx, t0)
                 return result
             # 图数据库只读查询工具（2026-09-01 P2：图查询消费侧——SPARQL 只读，图谱优先问答）
             if name.startswith("graph_db_"):
-                from graph_db_tools import exec_tool as _exec_graph_db
+                from services.tools.graph_db_tools import exec_tool as _exec_graph_db
                 result = _exec_graph_db(name, arguments or {})
                 self._log_tool_call(name, tool_type, arguments, result, intent_ctx, agent_ctx, conv_ctx, t0)
                 return result
@@ -2633,7 +2633,7 @@ class ToolMixin:
             # 数字可复现可审计，解读与补全建议由 Agent 层完成。注意按名集合路由：
             # 五个工具名只有 coverage_matrix 带 coverage_ 前缀，前缀匹配会漏掉其余四个）
             if name in ("coverage_matrix", "trace_chain_check", "scene_coverage", "gap_summary", "modeling_coverage"):
-                from coverage_tools import exec_tool as _exec_coverage
+                from services.tools.coverage_tools import exec_tool as _exec_coverage
                 result = _exec_coverage(name, arguments or {})
                 self._log_tool_call(name, tool_type, arguments, result, intent_ctx, agent_ctx, conv_ctx, t0)
                 return result
@@ -2646,7 +2646,7 @@ class ToolMixin:
             #    本仓 2026-10-08 实测踩过同类坑）。
             if name == "alternatives_score":
                 try:
-                    import alternatives_tools as _alt
+                    from services.tools import alternatives_tools as _alt
                     result = _alt.exec_tool(name, arguments or {})
                 except Exception as exc:    # noqa: BLE001
                     result = {"ok": False,
@@ -2661,7 +2661,7 @@ class ToolMixin:
             # 已有绑定），故需独立分流分支。放在 sysml_v2_ 分支之前以免被误吞。
             if name == "sysml_ast_extract":
                 try:
-                    import sysml_ast_tools as _at
+                    from services.tools import sysml_ast_tools as _at
                     result = _at.exec_tool(name, arguments or {})
                 except Exception as exc:    # noqa: BLE001
                     result = {"ok": False,
@@ -2673,7 +2673,7 @@ class ToolMixin:
                 return result
             if name == "methodology_profile_load":
                 try:
-                    import methodology_profile_tools as _mp
+                    from services.tools import methodology_profile_tools as _mp
                     result = _mp.exec_tool(name, arguments or {})
                 except Exception as exc:    # noqa: BLE001
                     result = {"ok": False,
@@ -2687,7 +2687,7 @@ class ToolMixin:
             #    永远路由不到」（静默失效，2026-10-08 实测发现）。
             if name == "sysml_import_graph":
                 try:
-                    import sysml_import_graph_tools as _ig
+                    from services.tools import sysml_import_graph_tools as _ig
                     result = _ig.exec_tool(name, arguments or {})
                 except Exception as exc:    # noqa: BLE001
                     result = {"ok": False,
@@ -2700,7 +2700,7 @@ class ToolMixin:
                 try:
                     # ⚠️ 2026-10-21：别名 `_st` 与上方 stats 字典局部变量重名，
                     #   踩 e2e G0 文件级危险名集合（跨/同函数重名均报）⇒ 改唯一名。
-                    import sysml_stdlib_tools as _sysml_meta
+                    from services.tools import sysml_stdlib_tools as _sysml_meta
                     result = _sysml_meta.exec_tool(name, arguments or {})
                 except Exception as exc:    # noqa: BLE001
                     result = {"ok": False,
@@ -2715,7 +2715,7 @@ class ToolMixin:
             # 轮次上限复用本模块已有的 ReAct `max_tool_rounds`（= 3），故**零新循环**。
             # 进程内直通 checker.jar，不走 HTTP（避免自环死锁，同 mbse_pull_ingest 的理由）。
             if name.startswith("sysml_v2_"):
-                from sysml_check_tools import exec_tool as _exec_sysml_check
+                from services.tools.sysml_check_tools import exec_tool as _exec_sysml_check
                 result = _exec_sysml_check(name, arguments or {})
                 # 2026-09-20：缓存「最近一次校验过的代码」。LLM 学会「先校验再交付」后，代码会
                 # 出现在**工具参数**里而回答正文只剩结论（复盘缺陷④）——交付通道（视图投影 /
@@ -2934,7 +2934,7 @@ class ToolMixin:
         """D2：读取工具重试策略（tools.retry_policy），实例级缓存。"""
         if name in self._retry_policy_cache:
             return self._retry_policy_cache[name]
-        from tool_resilience import parse_policy
+        from core.tool_resilience import parse_policy
         policy = dict(parse_policy("{}"))
         try:
             from database import get_db

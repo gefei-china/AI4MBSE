@@ -108,9 +108,9 @@ def reasoning_run(body: dict, conn=Depends(db_session), user=Depends(current_use
     branch = ((body or {}).get("branch") or "").strip()
     scan_triples = None
     if branch:
-        from ontology_reasoning import _load_all_triples as _lat
+        from core.domain.ontology_reasoning import _load_all_triples as _lat
         scan_triples = _lat(conn, branch)
-    from ontology_reasoning import (
+    from core.domain.ontology_reasoning import (
         classify_instances, transitive_closure, symmetric_inference,
         reflexive_check, consistency_check, load_owl_axioms, _load_type_hierarchy, _ent_short)
 
@@ -157,7 +157,7 @@ def reasoning_run(body: dict, conn=Depends(db_session), user=Depends(current_use
         # 取值枚举/唯一性/关系基数(min-max)/互斥 由 SHACL 形状（OntologyValidator.shacl_export
         # 从本体生成，与入库门禁同一套形状定义，避免两套校验逻辑漂移）+ pyshacl 引擎补齐。
         # 依赖 pyshacl/rdflib（.venv 已装）；shacl_gate_mode=off 或依赖缺失时优雅跳过。
-        from ingest_gate import check_triples
+        from core.domain.ingest_gate import check_triples
         _shacl = check_triples(conn, record=False)
         if not _shacl.get("skipped"):
             viol = _shacl.get("violations") or []
@@ -266,7 +266,45 @@ def reasoning_materialize(body: dict, conn=Depends(db_session), user=Depends(cur
         raise HTTPException(400, "inferred 不能为空")
     if len(items) > 5000:
         raise HTTPException(400, "单次物化上限 5000 条")
-    from triple_store import triple_id
+    # 2026-11-24 第三期：默认只物化「已人工裁决接受」的推断事实。
+    # 推断属候选事实（文章：不让模型自己决定什么算事实），全量路径须显式关掉开关。
+    # 匹配口径：inferred_facts(subject, predicate, object, is_accepted=1)，
+    # URI 形态与 id 形态都比对（推理输出是 ex: 前缀 URI，事实表存裸 id）。
+    only_accepted = (body or {}).get("only_accepted", True)
+    filtered_out = 0
+    if only_accepted:
+        try:
+            from core import ns as _ns
+            accepted = set()
+            for f in conn.execute(
+                    "SELECT subject, predicate, object FROM inferred_facts WHERE is_accepted=1").fetchall():
+                accepted.add((str(f["subject"]), str(f["predicate"]).upper(), str(f["object"])))
+            kept = []
+            for t in items:
+                s = str(t.get("s") or "")
+                p = str(t.get("p") or "")
+                o = str(t.get("o") or "")
+                _, sid = _ns.parse_ent_uri(s)
+                _, oid = _ns.parse_ent_uri(o)
+                keys = {
+                    (s, p.upper(), o),
+                    (sid or s, p.upper(), oid or o),
+                    (sid or s, p.upper(), o.replace("ex:", "")),
+                }
+                if keys & accepted:
+                    kept.append(t)
+                else:
+                    filtered_out += 1
+            items = kept
+        except Exception as _e:
+            # 过滤失败时**不静默放行全量**：直接拒绝，避免把未裁决事实写进去。
+            raise HTTPException(400, f"only_accepted 过滤失败（未写入任何推断）："
+                                     f"{type(_e).__name__}: {_e}")
+        if not items:
+            return {"ok": True, "written": 0, "skipped": 0, "cohort_id": 0,
+                    "queued": 0, "filtered_out": filtered_out,
+                    "message": "本轮推断无已裁决接受项，未写入"}
+    from services.triple_store import triple_id
     who = (user or {}).get("display_name") or (user or {}).get("username") or "system"
     written, skipped = 0, 0
     records = []
@@ -340,7 +378,8 @@ def reasoning_materialize(body: dict, conn=Depends(db_session), user=Depends(cur
     audit((user or {}).get("username", ""), "reasoning_materialize",
           f"written={written} skipped={skipped} cohort={cohort_id}")
     return {"ok": True, "written": written, "skipped": skipped,
-            "cohort_id": cohort_id, "queued": 1 if records else 0}
+            "cohort_id": cohort_id, "queued": 1 if records else 0,
+            "filtered_out": filtered_out, "only_accepted": bool(only_accepted)}
 
 
 def _cohort_rec(item_kind, sid, sname, p_store, o_key, oval, otype, kind, via):
@@ -592,7 +631,7 @@ def _sync_triples_status(conn, item_ids: list, status: str) -> None:
     materialize 时 triple_id = triple_id(s_name, "inferred:{p}", o_value)；
     approve → 'merged'（不再出现在待审列表），reject → 'rejected'。
     """
-    from triple_store import triple_id
+    from services.triple_store import triple_id
     for iid in item_ids:
         row = conn.execute(
             "SELECT item_kind, s, p, o, inferred_json FROM reasoning_cohort_items WHERE id=?",
@@ -643,6 +682,26 @@ def reasoning_cohort_approve(cohort_id: int, body: dict = None,
     stat = {"entity_count": len(created_entities), "relation_count": len(created_relations),
             "entities": created_entities, "relations": created_relations,
             "failed": failed}
+    # 2026-11-24 D1：**有失败项时不得置 approved**。
+    # 历史实测（cohort=1）：107 条因 id 形态不匹配全部写入失败，
+    # 但批次头仍被置 approved，导致「假批准」——后续 approve 因幂等
+    # 直接返回"已批准"，永远不会重试，stat 里记的 52 个实体库内一个都没有。
+    # 本函数第 601 行的注释早已写明「不能让批次 approved 掩盖并入失败」，
+    # 此处补齐实现：失败即保持 pending（可重试），失败明细进 stat。
+    if failed:
+        stat["failed_at"] = "verification_failed"
+        conn.execute("UPDATE reasoning_cohorts SET stat=? WHERE id=?",
+                     (json.dumps(stat, ensure_ascii=False), cohort_id))
+        conn.commit()
+        return {"ok": False, "idempotent": False, "branch": branch,
+                "partial": True,
+                "entity_count": len(created_entities),
+                "relation_count": len(created_relations),
+                "failed_count": len(failed),
+                "failed": failed[:20],
+                "message": (f"并入部分失败：成功 {len(created_entities)} 实体 / "
+                            f"{len(created_relations)} 关系，失败 {len(failed)} 项；"
+                            f"批次保持 pending 可重试（幂等：已成功的不会重复创建）")}
     conn.execute(
         "UPDATE reasoning_cohorts SET status='approved', stat=?, decided_by=?, decided_at=CURRENT_TIMESTAMP "
         "WHERE id=?",

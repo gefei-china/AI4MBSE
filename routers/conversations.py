@@ -1366,6 +1366,24 @@ async def chat_stream(conv_id: int, body: ChatIn, conn=Depends(db_session),
         try:
             # P0-1：用**异步**包装器 —— 消费侧不占 anyio 线程池线程（见端点 docstring 的更正说明）
             from core.sse import iter_with_heartbeat_async
+            # ══ P0 降级可见（2026-11-25）—— 让"静默兜底"在本轮执行过程中就看得见 ══
+            # 架构评估实测：全仓 1361 处静默 `except`（69%），后果是失败模式对用户与
+            # 开发者**同时不可见**（"结果怪怪的"但界面一切正常）。
+            #
+            # 为什么在这里建采集器：`iter_with_heartbeat_async` 的 worker 线程用
+            # `copy_context()` 继承调用方上下文（该机制 2026-11-03 为 trace_id 修过），
+            # ⇒ 只要在**调用它之前** set，`execute_stream` 内部任意深度的
+            # `degrade.note()` 都会 append 到同一个 Collector 上 ——
+            # 一处接入、全流生效，不必把 collector 传进 623 KB 的 stream.py。
+            #
+            # ⚠️ 边界：事件源自己新起的裸线程（未 copy_context）里的 note 只进全局聚合
+            #   （看板可见），不进本轮的执行过程 —— 不假装覆盖全部。
+            _dg_col = None
+            try:
+                from core import degrade as _deg
+                _dg_col = _deg.collect()
+            except Exception:
+                _dg_col = None
             _frames = iter_with_heartbeat_async(
                 _pipe.execute_stream(body.message, conv_id, work_branch,
                                      body.provider_id, body.attachments or [],
@@ -1413,6 +1431,18 @@ async def chat_stream(conv_id: int, body: ChatIn, conn=Depends(db_session),
                 } if (_det_enabled and _fr_run_id) else None,
             )
             async for raw in _frames:
+                # ★★ P0（2026-11-25）：**转发 raw 之前**先把本轮新产生的降级事件交付出去。
+                #   顺序是刻意的：done/error 一转发，前端就 `finishStream` 收口，
+                #   之后再来的降级帧会被丢弃 ⇒ 那正好是"最后一步降级看不见"的盲区。
+                #   先交付、再转发，保证终态帧到达时降级已经全部到手。
+                #   任何异常都不得影响转发（降级可见性不能成为新的失败源）。
+                if _dg_col is not None:
+                    try:
+                        from core.sse import to_sse_frame as _to_frame
+                        for _dg in _dg_col.drain():
+                            yield _to_frame({"type": "degrade", **_dg})
+                    except Exception:
+                        pass
                 # P1-32（2026-10-10）：终态哨兵 —— 记录是否发过 done/error。
                 # 实测事故（会话 9336 msg 3895/3896）：pipeline 内部吞掉 LLM 异常后
                 # 生成器**正常 return**（不抛异常）⇒ 这里 except 抓不到、done 也没有
@@ -1428,7 +1458,11 @@ async def chat_stream(conv_id: int, body: ChatIn, conn=Depends(db_session),
                         _last_event = raw[7:raw.index("\n", 7)].strip()[:32]
                     except Exception:
                         _last_event = ""
-                    if _last_event not in ("done", "error", "heartbeat", "retry", "connected"):
+                    # ★ 2026-11-25：`degrade` 与心跳同档 —— 它是**旁路通知**，
+                    #   不是"已经给用户输出过正文"。若计入 `_sent_any`，
+                    #   失败归因会把"一个字没出"误判成"说到一半断"。
+                    if _last_event not in ("done", "error", "heartbeat", "retry",
+                                           "connected", "degrade"):
                         _sent_any = True
                 # ★ 2026-10-29：逐帧攒正文（收口兜底固化用；见 _acc_text 处的注释）
                 #   放在事件录制**之前**且不受 `stream_event_log` 开关影响 ——
@@ -1538,6 +1572,25 @@ async def chat_stream(conv_id: int, body: ChatIn, conn=Depends(db_session),
             _fail_reason = "exception:%s" % type(_e).__name__
             yield f"event: error\ndata: {_json.dumps({'message': str(_e)[:200]}, ensure_ascii=False)}\n\n"
         finally:
+            # ── P0 降级可见（2026-11-25）：收尾清采集器 ────────────────────
+            # 为什么在 finally 第一件事：collector 是 contextvar，不清会**泄漏到
+            # 复用该 context 的下一轮**（Uvicorn 复用协程 task 时确实会），
+            # 结果下一轮的执行过程中出现上一轮的降级卡 —— 比"看不见"更糟（张冠李戴）。
+            # 剩余 pending 只进日志：此时已收到 done/error 或已断连，
+            # **GeneratorExit 期间禁止 yield**，发不出去；但它们已在全局聚合里
+            # （看板可见），不构成"静默"。
+            try:
+                if _dg_col is not None:
+                    _dg_left = _dg_col.drain()
+                    if _dg_left:
+                        print("[degrade] conv=%s 收口时仍有 %d 条未交付降级：%s"
+                              % (conv_id, len(_dg_left),
+                                 ", ".join("%s×%s" % (x.get("where"), x.get("count"))
+                                           for x in _dg_left[:8])), flush=True)
+                    from core import degrade as _deg_r
+                    _deg_r.reset_current()
+            except Exception:
+                pass
             # ── P0-b：会话 span 收口 + 落库（必须早于 _client_gone 早退）──
             # 客户端断开时本轮 span 同样有归因价值（"用户等到哪一步走的"）；
             # 且 GeneratorExit 期间禁止 yield，但**不禁止** DB 写（无 yield）。
@@ -2256,7 +2309,7 @@ def message_feedback(msg_id: int, body: dict, conn=Depends(db_session),
     # FR-KG-12 补 G13：修正类评审反馈（含修订意见）自动回流为 v2g 候选（失败不阻断反馈主流程）
     if fb_type in ("modify", "wrong", "corrected") and context.strip():
         try:
-            from knowledge_reflow import reflow_from_review
+            from services.knowledge_reflow import reflow_from_review
             rf = reflow_from_review(conn, msg_id, context, fb_type=fb_type)
             if rf.get("candidates", 0) > 0:
                 audit(actor, "reflow_review",
@@ -2401,7 +2454,7 @@ def conversation_reflow(conv_id: int, body: dict = None, conn=Depends(db_session
     conv = ConversationRepo(conn).get_conversation(conv_id)
     if not conv:
         return JSONResponse({"error": "会话不存在"}, 404)
-    from knowledge_reflow import reflow_from_conversation
+    from services.knowledge_reflow import reflow_from_conversation
     result = reflow_from_conversation(conn, conv_id, int(body.get("limit_messages", 20) or 20))
     if result.get("error"):
         return JSONResponse({"error": result["error"]}, 400)
@@ -2499,7 +2552,7 @@ def _load_norm_report(conn, conv_id: int, msg_id: int):
        · POST /normalize-report → 登记（P2-10 AI 建议流）
        · GET  /normalize-summary → **不登记**（只读统计，会被卡片渲染反复调用）
     """
-    from sysml_importer import build_normalize_report
+    from services.sysml_importer import build_normalize_report
     import json as _json
 
     # 1) 优先 sysml_versions（更纯，含 V2 源码）
@@ -2620,7 +2673,7 @@ def normalize_apply(conv_id: int, msg_id: int, body: dict = None,
            write_glossary: bool（默认 false，仅本次生效，不污染全局词典）,
            use_ai: bool（默认 true，提交后由 AI 续写 V2 代码；不可用时自动回退确定性替换）}
     """
-    from norm_apply import apply_normalization
+    from services.norm_apply import apply_normalization
     b = body or {}
     decisions = b.get("decisions") or {}
     if not isinstance(decisions, dict) or not decisions:

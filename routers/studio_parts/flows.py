@@ -59,7 +59,7 @@ def list_hil_confirmations(status: str = "pending", limit: int = 50,
     """P0-6（2026-10-06）：此前**无任何权限门** —— 任何登录用户都能列出全部待批写操作
     （含 payload 里的完整参数）。确认单是写操作的唯一闸门，能看=能批，必须成对管控。
     """
-    from hil_service import HILService
+    from services.hil_service import HILService
     if status == "pending":
         return HILService.pending(conn, limit=min(limit, 200))
     rows = StudioRepo(conn).rows(
@@ -90,7 +90,7 @@ def decide_hil_confirmation(cid: int, body: dict | None = None, conn=Depends(db_
        现改为：**优先取已认证用户身份**（display_name → username），
        body 里的 decided_by 仅在**匿名兼容期**兜底。
     """
-    from hil_service import HILService
+    from services.hil_service import HILService
     from core import config_promotion as _promo
     body = body or {}
     # P0-6②：审计归属以**已认证身份**为准，不采信 body 自报。
@@ -158,7 +158,7 @@ def decide_hil_confirmation(cid: int, body: dict | None = None, conn=Depends(db_
                 trow = conn.execute("SELECT kind FROM tools WHERE name=? AND status='active'", (action,)).fetchone()
                 if trow and trow["kind"] == "http":
                     _hil_is_http = True
-                    from http_tool_executor import exec_http_tool
+                    from adapters.http_tool_executor import exec_http_tool
                     _er = exec_http_tool(action, payload if isinstance(payload, dict) else {})
                     r["executed"] = True
                     r["exec_result"] = {"ok": _er.get("ok"), "result": str(_er.get("result", ""))[:2000]}
@@ -168,7 +168,7 @@ def decide_hil_confirmation(cid: int, body: dict | None = None, conn=Depends(db_
                     #   确认单 payload 就是工具参数（title/content/kind/lang），
                     #   会话上下文取确认单归属会话。此前本地工具批准后死在队列
                     #   （"非 HTTP 集成类型不支持自动执行"），冒烟实测（确认单 #20）。
-                    import artifact_tools as _at_hil
+                    from services.tools import artifact_tools as _at_hil
                     _er = _at_hil.exec_tool(action, payload if isinstance(payload, dict) else {},
                                             conversation_id=int(row.get("conversation_id") or 0))
                     r["executed"] = True
@@ -198,7 +198,7 @@ def decide_hil_confirmation(cid: int, body: dict | None = None, conn=Depends(db_
                     #   现在统一走 `AgentPipeline._exec_tool_call` —— 与模型调用工具**同一份代码**
                     #   ⇒ MCP / HTTP / local 三类天然全覆盖，权限闸/Hook/寻址链全部复用。
                     try:
-                        from hil_service import execute_confirmation as _exec_conf
+                        from services.hil_service import execute_confirmation as _exec_conf
                         _er = _exec_conf(conn, row, user=user)
                         r["executed"] = bool(_er.get("executed"))
                         r["exec_result"] = _er
@@ -286,7 +286,7 @@ def decide_hil_confirmation(cid: int, body: dict | None = None, conn=Depends(db_
                 _orig_input = ""
                 print("[hil] ⚠️ 取原请求失败（回灌文案将缺上下文）: %s: %s"
                       % (type(_oe).__name__, str(_oe)[:150]))
-        from hil_service import build_resume_text as _brt
+        from services.hil_service import build_resume_text as _brt
         if r.get("status") == "approved":
             r["resume_text"] = _brt(_act_final, r.get("exec_result") or {}, True,
                                     original_input=_orig_input)
@@ -301,7 +301,7 @@ def decide_hil_confirmation(cid: int, body: dict | None = None, conn=Depends(db_
 
 @router.get("/api/studio/planner/{rid}/tasks")
 def planner_tasks(rid: int, conn=Depends(db_session)):
-    from task_queue import TaskQueue
+    from services.task_queue import TaskQueue
     tasks = TaskQueue.tasks(conn, rid)
     for t in tasks:
         try:
@@ -322,7 +322,7 @@ def planner_tasks(rid: int, conn=Depends(db_session)):
 @router.post("/api/studio/planner/tasks/{tid}/retry")
 def planner_task_retry(tid: int, conn=Depends(db_session), user=Depends(current_user)):
     """P2 人工重试：blocked/failed 任务 → ready 重新执行。"""
-    from task_queue import TaskQueue
+    from services.task_queue import TaskQueue
     TaskQueue.retry(conn, tid)
     audit(audit_user(user), "task_retry", f"人工重试任务#{tid}", conn=conn)
     return {"ok": True}
@@ -331,7 +331,7 @@ def planner_task_retry(tid: int, conn=Depends(db_session), user=Depends(current_
 @router.post("/api/studio/planner/tasks/{tid}/resolve")
 def planner_task_resolve(tid: int, body: dict = None, conn=Depends(db_session), user=Depends(current_user)):
     """P2 人工确认完成：blocked 任务 → done，并解锁下游依赖。"""
-    from task_queue import TaskQueue
+    from services.task_queue import TaskQueue
     TaskQueue.resolve(conn, tid, (body or {}).get("note", ""))
     audit(audit_user(user), "task_resolve", f"人工确认任务#{tid}完成", conn=conn)
     return {"ok": True}

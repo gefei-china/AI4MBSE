@@ -136,7 +136,7 @@ rec("G4 死函数 capToggleManage 已删", "function capToggleManage" not in cap
 #         4958 字（v1.3），而 `updated_at` 仍是编辑时刻（那条 UPDATE 不 SET updated_at）
 #         ⇒ 连"被改过"都看不出来。根因：main.py:80 每次启动 seed_all → register_skills.main()。
 #   修法：默认不覆盖 content/version，只补元数据；`--force-content` 才覆盖。
-_rk = read("register_skills.py")
+_rk = read("services/tools/register_skills.py")
 rec("J1 存在 _FORCE_CONTENT 开关且默认关",
     "_FORCE_CONTENT = \"--force-content\" in sys.argv" in _rk)
 rec("J2 默认分支不写 content/version",

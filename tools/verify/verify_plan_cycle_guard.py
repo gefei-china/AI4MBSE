@@ -33,7 +33,7 @@ import tempfile
 import shutil
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-TQUEUE = os.path.join(ROOT, "task_queue.py")
+TQUEUE = os.path.join(ROOT, "services/task_queue.py")
 STREAM = os.path.join(ROOT, "agent", "pipeline_parts", "stream.py")
 
 _ok = 0

@@ -485,7 +485,7 @@ def handler_skill_improve(payload: dict, job: dict) -> dict:
     try:
         with LeaseKeeper(int(job["id"]), lease_s=600):
             _report(job, 1, "扫描技能失败样本…")
-            from skill_improve import SkillImprover
+            from services.skill_improve import SkillImprover
             cands = SkillImprover.candidates(conn)
             _report(job, 40, "候选 %d 个，开始 LLM 修订…" % len(cands))
             res = SkillImprover.run_all(conn, limit=limit)

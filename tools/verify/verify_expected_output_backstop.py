@@ -57,7 +57,7 @@ FAILS: list = []
 N = 0
 
 PLANNER = os.path.join(REPO, "workflows", "planner.py")
-TASKQUEUE = os.path.join(REPO, "task_queue.py")
+TASKQUEUE = os.path.join(REPO, "services/task_queue.py")
 
 FAIL_RATE_EMPTY = 11.1      # 11 月 expected_output 空的任务失败率（%）
 FAIL_RATE_FULL = 2.1        # 非空的任务失败率（%）

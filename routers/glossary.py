@@ -73,7 +73,7 @@ def glossary_delete_deprecated(gid: int):
 @router.post("/api/glossary/resolve")
 def glossary_resolve(body: dict, conn=Depends(db_session)):
     """调试端点：输入任意文本，返回归一化结果 + 强制意图/域 + 命中术语。"""
-    from glossary import GlossaryMatcher
+    from core.domain.glossary import GlossaryMatcher
     text = (body.get("text") or "").strip()
     if not text:
         return JSONResponse({"error": "text 必填"}, 400)
@@ -539,7 +539,7 @@ def entity_aliases_list(entity_id: str = None, limit: int = 200, conn=Depends(db
 
     2026-10-11 新增：此前该表**无任何读取端点也无 UI**，属"只写不读"的暗表。
     """
-    from entity_resolver import entity_aliases_for  # type: ignore
+    from services.entity_resolver import entity_aliases_for  # type: ignore
     return {"aliases": entity_aliases_for(conn, entity_id=entity_id, limit=limit)}
 
 
@@ -550,7 +550,7 @@ def entity_aliases_add(body: dict, conn=Depends(db_session), user=Depends(curren
     2026-10-11 新增：对应标杆 IBM WKC「词表可编辑 + 改完立刻生效」——
     用户补一个别名，下一轮 `_normalize_mentions` 即可用它归一（经词库侧生效）。
     """
-    from entity_resolver import write_entity_alias
+    from services.entity_resolver import write_entity_alias
     eid = str(body.get("entity_id") or "").strip()
     alias = str(body.get("alias_name") or "").strip()
     branch = str(body.get("branch") or "").strip()
@@ -927,3 +927,21 @@ def concept_delete(cid: str, conn=Depends(db_session), user=Depends(current_user
     conn.commit()
     audit(actor, "concept_delete", f"删除概念: {row['pref_label']} [{cid}]", conn=conn)
     return {"ok": True, "deleted_terms": True}
+
+
+
+# ══ 2026-11-24 第四期「建得准」：术语概念 → 本体类型 映射候选 ══
+@router.get("/api/glossary/map-candidates")
+def glossary_map_candidates(limit: int = 5, conn=Depends(db_session)):
+    """为未映射概念生成候选（不写库）。人工确认后再调 apply-mapping。"""
+    from services import glossary_mapper
+    return glossary_mapper.candidates(conn, limit=max(1, min(int(limit or 5), 20)))
+
+
+@router.post("/api/glossary/apply-mapping")
+def glossary_apply_mapping(body: dict, conn=Depends(db_session), user=Depends(current_user)):
+    """人工确认后批量写入 maps_to_class（只写该字段，留痕到 note）。"""
+    from services import glossary_mapper
+    pairs = (body or {}).get("pairs") or []
+    who = audit_user(user)
+    return glossary_mapper.apply_mapping(conn, pairs, operator=who)

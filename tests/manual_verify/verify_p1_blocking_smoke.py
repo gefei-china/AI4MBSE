@@ -180,10 +180,10 @@ check("E2 detected > 0（前 200 对属性互异）",
 
 # ═══════════════════════════ 场景 F：导入链单向 ═══════════════════════════
 print("\n== F. NO_CYCLE_OK：导入链单向 ==")
-src_dir = _BASE  # mbse_system 根目录（text_normalize.py 所在）
-tn = open(os.path.join(src_dir, "text_normalize.py"), encoding="utf-8").read()
-er = open(os.path.join(src_dir, "entity_resolver.py"), encoding="utf-8").read()
-v2g = open(os.path.join(src_dir, "vector2graph.py"), encoding="utf-8").read()
+src_dir = _BASE  # mbse_system 根目录（core/domain/text_normalize.py 所在）
+tn = open(os.path.join(src_dir, "core/domain/text_normalize.py"), encoding="utf-8").read()
+er = open(os.path.join(src_dir, "services/entity_resolver.py"), encoding="utf-8").read()
+v2g = open(os.path.join(src_dir, "services/vector2graph.py"), encoding="utf-8").read()
 check("F1 text_normalize 不依赖 entity_resolver/vector2graph",
       not re.search(r"(?:from|import)\s+(entity_resolver|vector2graph)", tn))
 check("F2 entity_resolver 不再反向导入 vector2graph",

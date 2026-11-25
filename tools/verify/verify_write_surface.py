@@ -9,7 +9,7 @@
 `entities` / `relations` 的直接 SQL 写散布在 **15 个生产文件 / 32 个函数 / 80 处**：
 
     repositories/branch_repo.py     23 处（分支合并、发布、回滚）
-    entity_resolver.py              12 处（实体/关系去重合并）
+    services/entity_resolver.py              12 处（实体/关系去重合并）
     repositories/knowledge_repo.py   9 处
     routers/knowledge_parts/graph_query.py   6 处
     services/ontology_migration.py   6 处
@@ -87,19 +87,19 @@ REGISTRY = {
     ("repositories/branch_repo.py", "sync_from_branch"): "bulk",
     ("repositories/branch_repo.py", "update_branch"): "bulk",
     ("repositories/commit_repo.py", "revert_commit"): "bulk",
-    ("entity_resolver.py", "conflict_adjudicate"): "bulk",
-    ("entity_resolver.py", "merge_entities"): "bulk",
-    ("entity_resolver.py", "merge_relation"): "bulk",
-    ("entity_resolver.py", "rollback_merge"): "bulk",
+    ("services/entity_resolver.py", "conflict_adjudicate"): "bulk",
+    ("services/entity_resolver.py", "merge_entities"): "bulk",
+    ("services/entity_resolver.py", "merge_relation"): "bulk",
+    ("services/entity_resolver.py", "rollback_merge"): "bulk",
     ("routers/knowledge_parts/graph_query.py", "merge_entity"): "bulk",
     ("routers/knowledge_parts/ontology.py", "ontology_update_type"): "bulk",
     ("services/ontology_migration.py", "apply"): "bulk",
-    ("sysml_importer.py", "import_sysml"): "bulk",
-    ("triple_commit.py", "commit_approved_triples"): "bulk",
-    ("vector2graph.py", "_survivorship_apply"): "bulk",
-    ("vector2graph.py", "confirm_candidates"): "bulk",
+    ("services/sysml_importer.py", "import_sysml"): "bulk",
+    ("services/triple_commit.py", "commit_approved_triples"): "bulk",
+    ("services/vector2graph.py", "_survivorship_apply"): "bulk",
+    ("services/vector2graph.py", "confirm_candidates"): "bulk",
 
-    ("ontology_semantics.py", "create_node"): "metadata",
+    ("core/domain/ontology_semantics.py", "create_node"): "metadata",
     ("repositories/project_repo.py", "detach_project_references"): "metadata",
     ("routers/knowledge_parts/graph.py", "graph_update_node"): "metadata",
 

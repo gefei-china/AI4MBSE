@@ -166,7 +166,7 @@ def request_promotion(conn, proposal_id: int, *, user: str = "") -> dict:
     """
     from core import config_proposal as _cp
     from core import sandbox as _sandbox
-    from hil_service import HILService
+    from services.hil_service import HILService
     from repositories.proposal_repo import ProposalRepo
     row = ProposalRepo(conn).get_proposal(int(proposal_id))
     if not row:
@@ -209,7 +209,7 @@ def request_rollback(conn, history_id: int, *, user: str = "", note: str = "") -
     同样入 HIL 队列（回滚也是配置变更，不开自动后门）。
     被回滚行 applied=False（幂等未应用行）也允许——旧值仍是要回到的状态。
     """
-    from hil_service import HILService
+    from services.hil_service import HILService
     row = None
     try:
         row = conn.execute("SELECT * FROM config_history WHERE id=?",

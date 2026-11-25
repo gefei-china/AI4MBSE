@@ -182,7 +182,10 @@ check("P4b 判据自证：docstring 里的路径不算依赖（不误报）",
 #   ③ 只扫 pr 层时它们永远无人过问（实测残留 21 处，横跨 tools/ 与 tests/）。
 # P5 与 P1 的区别：P1 只查"pr 层参与取值的字符串"，P5 查**全仓任何 py 的任何字符串**。
 APP_DIRS = ("tools", "tests", "agent", "core", "routers", "services",
-            "database", "llm", "repositories", "knowledge_pipeline")
+            "database", "llm", "repositories", "knowledge_pipeline",
+            # P1 分层归位新增的适配层（2026-11-25）。漏登记 ⇒ P5/P6 的绝对路径扫描
+            # 对 adapters/ 全程空转，而门禁仍报 PASS。
+            "adapters", "workflows")
 HOME_ABS_ANCHORED = re.compile(
     r"^[A-Za-z]:[\\/]+Users[\\/](?!<)|^/home/(?!<)[a-z0-9_]+/|^/Users/(?!<)[^/]+/", re.I)
 # P6 的模式串必须定义在 scan_repo_abs **之前**（P5/P6 共用同一趟目录遍历）。

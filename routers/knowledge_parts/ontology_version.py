@@ -64,7 +64,8 @@ def _gate_run(conn, cq_record: bool = True):
 
 @router.get("/api/knowledge/ontology/validate")
 def ontology_validate(instances: int = 0, scope: Optional[str] = None,
-                      record: int = 1, cq: int = 1, dl: int = 0, conn=Depends(db_session)):
+                      record: int = 1, cq: int = 1, dl: int = 0, deep: int = 0,
+                      conn=Depends(db_session)):
     """方案 D（2026-08-29）：本体一致性校验接口化。
 
     返回结构化问题清单（2026-09-23 晚起 12 条规则）：循环继承 / 悬空 parent / 孤立类 /
@@ -97,10 +98,13 @@ def ontology_validate(instances: int = 0, scope: Optional[str] = None,
       ⇒ 落库必须是**显式选择**：默认开（UI 与 Agent 的真实体检都记），
       探针/冒烟类调用方用 `record=0` 显式关掉（验证脚本的端点冒烟已改）。
     """
-    rep = _ontology_check(conn, instances=True, scope=scope) if instances \
+    # 2026-11-24：`deep=1` 是产品版「看得见」的显式入口 —— 语义等价于 instances=1，
+    # 两者取或。保留 instances 参数以兼容既有调用方，不破坏原契约。
+    _do_instances = bool(instances or deep)
+    rep = _ontology_check(conn, instances=True, scope=scope) if _do_instances \
         else _ontology_check(conn)
     if record:
-        _record_health_log(conn, rep, note="validate" + ("+instances" if instances else ""))
+        _record_health_log(conn, rep, note="validate" + ("+instances" if _do_instances else ""))
     # P1-4：附带 CQ 结果（不混入四档计数；执行器异常降级留痕不拖垮体检结论）
     if cq:
         try:
@@ -703,7 +707,7 @@ def ontology_version_release(body: dict = None, conn=Depends(db_session),
 @router.get("/api/knowledge/ontology/graph")
 def ontology_graph(conn=Depends(db_session)):
     """KB-P4：本体图谱视图（类型层：EntityType 节点 + RelationType 约束边）。消费侧读已发布快照。"""
-    from ontology_semantics import OntologyValidator
+    from core.domain.ontology_semantics import OntologyValidator
     return OntologyValidator(conn, rows=_active_ont_rows(conn)).to_graph()
 
 
@@ -769,7 +773,7 @@ def ontology_migrations_apply(plan_id: int, conn=Depends(db_session),
 @router.get("/api/knowledge/ontology/schema")
 def ontology_schema(conn=Depends(db_session)):
     """KB-P4：本体 Schema 文本（供 Agent 语义层注入 system prompt）。消费侧读已发布快照。"""
-    from ontology_semantics import OntologyValidator
+    from core.domain.ontology_semantics import OntologyValidator
     return {"schema": OntologyValidator(conn, rows=_active_ont_rows(conn)).schema_text()}
 
 
@@ -779,7 +783,7 @@ def ontology_shacl(type_id: Optional[int] = None, conn=Depends(db_session)):
 
     2026-09-02 四轮调整：type_id 可选——节点级视图只输出所选类型及其直接语境的形状。
     """
-    from ontology_semantics import OntologyValidator
+    from core.domain.ontology_semantics import OntologyValidator
     from fastapi.responses import Response
     rows = _active_ont_rows(conn)
     if type_id:
@@ -827,7 +831,7 @@ def ontology_export(fmt: str = "owl", type_id: Optional[int] = None, conn=Depend
 
     2026-09-02 四轮调整：type_id 可选——节点级 OWL 视图只导出所选类型及其直接语境。
     """
-    from ontology_owl import to_owl, to_turtle, to_jsonld
+    from core.domain.ontology_owl import to_owl, to_turtle, to_jsonld
     from fastapi.responses import Response
     rows = _active_ont_rows(conn)   # 2026-09-02 消费侧以已发布快照为准
     if type_id:
@@ -858,7 +862,7 @@ def ontology_import(body: dict, conn=Depends(db_session), user=Depends(current_u
     body.fmt: owl (默认) | ttl
     body.owl / body.content / body.ttl: 导入文本
     """
-    from ontology_owl import from_owl, from_turtle
+    from core.domain.ontology_owl import from_owl, from_turtle
     fmt = (body.get("fmt") or "owl").lower()
     raw = body.get("content") or body.get("owl") or body.get("ttl") or ""
     if not raw:

@@ -15,11 +15,11 @@ from .pipeline import AgentPipeline
 
 # 兼容原单体模块级名称（外部脚本/测试可能按 agent.xxx 访问）
 from database import get_db, db_conn  # noqa: E402
-from knowledge_engine import VectorEngine, QueryRouter  # noqa: E402
+from services.knowledge_engine import VectorEngine, QueryRouter  # noqa: E402
 from llm import llm_client  # noqa: E402
 from core.config import STATIC_DIR  # noqa: E402
-from file_tools import exec_file_tool, FILE_TOOL_NAMES as _FILE_TOOL_NAMES  # noqa: E402
-from report_tools import exec_report_tool, REPORT_TOOL_NAMES as _REPORT_TOOL_NAMES  # noqa: E402
+from services.tools.file_tools import exec_file_tool, FILE_TOOL_NAMES as _FILE_TOOL_NAMES  # noqa: E402
+from services.tools.report_tools import exec_report_tool, REPORT_TOOL_NAMES as _REPORT_TOOL_NAMES  # noqa: E402
 
 # Global instance
 # ── 2026-10-09（P1-31，多用户并发）────────────────────────────────────────────

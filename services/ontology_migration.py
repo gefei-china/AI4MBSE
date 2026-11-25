@@ -161,7 +161,11 @@ def validate_attribute_instances(conn, attr_name: str, props: dict, cons: dict,
     xsd = cons.get("xsd_type") or (props or {}).get("type") or ""
     allowed = _norm_list(cons.get("allowed_values")) if isinstance(cons.get("allowed_values"), list) else []
     dom_classes = _norm_list(cons.get("domain_classes"))
-    if not xsd and not allowed:
+    # 2026-11-24 A5：数值上下界 / 正则 / 默认值也是约束 —— 没有它们时
+    # 校验器会直接 return [] 造成「0 违例 = 假绿」（与覆盖面纪律同源）。
+    lo, hi = cons.get("min"), cons.get("max")
+    pattern = cons.get("pattern")
+    if not xsd and not allowed and lo is None and hi is None and not pattern:
         return []
     fil, params = "", []
     if dom_classes:
@@ -185,6 +189,29 @@ def validate_attribute_instances(conn, attr_name: str, props: dict, cons: dict,
             out.append({"kind": "xsd", "entity_id": r["id"], "entity_name": r["name"],
                         "entity_type": r["entity_type"], "value": v,
                         "detail": f"取值「{v}」不满足类型 {xsd}"})
+        # A5：数值边界（仅对可比较的 int/float 生效；字符串比较无意义，跳过）
+        if lo is not None or hi is not None:
+            try:
+                num = float(v)
+                bad = (lo is not None and num < float(lo)) or (hi is not None and num > float(hi))
+                if bad:
+                    out.append({"kind": "range", "entity_id": r["id"], "entity_name": r["name"],
+                                "entity_type": r["entity_type"], "value": v,
+                                "detail": f"取值「{v}」超出范围 [{lo}, {hi}]"})
+            except (TypeError, ValueError):
+                pass
+        # A5：正则约束（pattern 为已编译期校验的字符串，异常记违例不静默）
+        if pattern:
+            try:
+                import re as _re
+                if not _re.search(str(pattern), str(v)):
+                    out.append({"kind": "pattern", "entity_id": r["id"], "entity_name": r["name"],
+                                "entity_type": r["entity_type"], "value": v,
+                                "detail": f"取值「{v}」不匹配模式 {pattern}"})
+            except Exception as _e:
+                out.append({"kind": "pattern_invalid", "entity_id": r["id"],
+                            "entity_name": r["name"], "entity_type": r["entity_type"],
+                            "value": v, "detail": f"pattern 非法：{_e}"})
     return out[:limit_per_kind] if limit_per_kind else out
 
 

@@ -137,7 +137,7 @@ def main():
     # 说明：第一版变异只掐断判据 1，结果 C1 未抓到 —— 因为判据 2（max_age_days=90 默认值）
     # 是**冗余防线**，照样吃掉 100 天未访问的行。按项目纪律：有冗余防线时，
     # 变异必须还原"真正的坏行为"本身（旧版死代码 = 一条都删不掉），而不是摘一道防线。
-    target = os.path.join(_ROOT, "memory_service.py")
+    target = os.path.join(_ROOT, "services/memory_service.py")
     bak = target + ".mutbak"
     shutil.copy2(target, bak)
     src = open(target, encoding="utf-8").read()
@@ -165,7 +165,7 @@ def main():
             import importlib
             import memory_service as _ms
             importlib.reload(_ms)
-            print("  [restored] memory_service.py 已还原")
+            print("  [restored] services/memory_service.py 已还原")
 
     print("\n== C2. 变异测试（补）：摘掉判据 1，验证判据 2 的唯一能力 ==")
     # 防"冗余防线掩盖缺陷":造一条**不满足判据2**（有使用证据）但久未访问的行，
@@ -194,7 +194,7 @@ def main():
             import importlib
             import memory_service as _ms
             importlib.reload(_ms)
-            print("  [restored] memory_service.py 已还原")
+            print("  [restored] services/memory_service.py 已还原")
 
     print("\n== C'. 还原后基线复跑 ==")
     dbp3, conn3 = _mkdb()

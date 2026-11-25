@@ -212,7 +212,7 @@ class MetaRepo(BaseRepo):
         self.execute("DELETE FROM documents WHERE id=?", (doc_id,))
         # 向量索引缓存必须失效，否则内存里还留着被删 chunk 的向量（进程内实测）
         try:
-            from vector_index import ChunkVectorIndex
+            from adapters.vector_index import ChunkVectorIndex
             ChunkVectorIndex.invalidate()
         except Exception as e:
             print(f"[meta_repo] 删除文档 #{doc_id} 后失效向量缓存失败（不阻断）: {e}",

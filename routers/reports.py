@@ -11,7 +11,7 @@ from urllib.parse import quote
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import Response, JSONResponse
 
-from report_generator import report_generator
+from services.report_generator import report_generator
 from models import ReportExportIn, ReportSaveIn
 from core.deps import db_session, current_user
 from core.audit import audit, audit_user

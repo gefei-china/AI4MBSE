@@ -8,7 +8,7 @@
 
 ## 幂等口径
 按 `name` 找**内置行**（builtin=1、source!='ai_improve'）：有则 UPDATE，无则 INSERT。
-不碰 AI 草稿 / 用户自建的同名技能（与 `register_skills.py` 同一纪律）。
+不碰 AI 草稿 / 用户自建的同名技能（与 `services/tools/register_skills.py` 同一纪律）。
 
 ## 用法
     ./.venv/Scripts/python.exe -X utf8 tools/register_zhiyuan_mcp_skill.py

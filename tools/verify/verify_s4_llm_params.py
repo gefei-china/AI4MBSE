@@ -10,7 +10,7 @@
   A) llm/__init__.py 旧代码把 model/temperature/max_tokens 既当**具名参数**传、又用 **kwargs 透传 →
      调用方一旦带这三个参数就抛 `TypeError: got multiple values for keyword argument`，
      被 except 吞掉后**静默回落 Mock**。现网正在这样调用的有两处：
-       norm_apply.py:281（temperature/max_tokens）、workflows/engine.py:569（model）。
+       services/norm_apply.py:281（temperature/max_tokens）、workflows/engine.py:569（model）。
   B) llm/providers/openai_compat.py 旧优先级是「DB 配置 > 调用方显式传参」→ 传了也不生效。
 
 跑法：.venv\\Scripts\\python.exe -X utf8 tools\\verify\\verify_s4_llm_params.py
@@ -115,7 +115,7 @@ finally:
 
 print("\n[C] 调用点：汇总环节已带输出上限；既有两处参数重复调用点已被修复覆盖")
 SRC = {p: (ROOT / p).read_text(encoding="utf-8") for p in (
-    "workflows/planner.py", "workflows/refine.py", "norm_apply.py", "workflows/engine.py",
+    "workflows/planner.py", "workflows/refine.py", "services/norm_apply.py", "workflows/engine.py",
     "llm/__init__.py", "llm/providers/openai_compat.py")}
 # 2026-09-20：汇总 / 修订两个环节的输出上限都由硬编码 3000 改为**配置驱动**
 # （`delegation.summary_max_tokens` / `refine.max_tokens`，默认均 8000）。
@@ -173,8 +173,8 @@ check("broker 不再「具名 + **kwargs」重复传参",
       "_impl_kw.pop(\"max_tokens\", None)" in SRC["llm/__init__.py"] and "**_impl_kw)" in SRC["llm/__init__.py"])
 check("openai_compat 优先级已改为显式参数优先",
       "max_tokens if max_tokens is not None else cfg.get" in SRC["llm/providers/openai_compat.py"])
-check("norm_apply.py:281 的 temperature/max_tokens 现在能真正生效（既有调用点）",
-      "max_tokens=8192" in SRC["norm_apply.py"])
+check("services/norm_apply.py:281 的 temperature/max_tokens 现在能真正生效（既有调用点）",
+      "max_tokens=8192" in SRC["services/norm_apply.py"])
 check("workflows/engine.py:569 的 model 现在能真正生效（既有调用点）",
       "model=model" in SRC["workflows/engine.py"])
 

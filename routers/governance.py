@@ -14,20 +14,20 @@ router = APIRouter(tags=["知识治理"])
 @router.get("/api/governance/metrics")
 def metrics(run_shacl: bool = False, conn=Depends(db_session)):
     """知识治理健康度指标（7 项 + 扩展）。run_shacl=true 现场跑一次 SHACL（约 1s）。"""
-    from governance import compute_metrics
+    from services.governance import compute_metrics
     return compute_metrics(conn, run_shacl=run_shacl)
 
 
 @router.get("/api/governance/gate-mode")
 def get_gate_mode(conn=Depends(db_session)):
-    from ingest_gate import gate_mode
+    from core.domain.ingest_gate import gate_mode
     return {"mode": gate_mode(conn),
             "hint": "off=不校验 | warn=记录不阻断（默认，先观察2周） | enforce=违规阻断入库"}
 
 
 @router.put("/api/governance/gate-mode")
 def put_gate_mode(body: dict, conn=Depends(db_session)):
-    from ingest_gate import set_gate_mode
+    from core.domain.ingest_gate import set_gate_mode
     mode = (body.get("mode") or "").strip()
     if not set_gate_mode(conn, mode):
         return JSONResponse({"error": "mode 须为 off | warn | enforce"}, 400)
@@ -35,10 +35,15 @@ def put_gate_mode(body: dict, conn=Depends(db_session)):
 
 
 @router.post("/api/governance/shacl-check")
-def shacl_check(conn=Depends(db_session)):
-    """现场全量 SHACL 校验，返回违规清单（不入库 findings）。"""
-    from ingest_gate import check_triples
-    res = check_triples(conn, record=False)
+def shacl_check(record: int = 1, conn=Depends(db_session)):
+    """现场全量 SHACL 校验，返回违规清单。
+
+    2026-11-24：默认 record=1 —— 发现落库，供治理看板/趋势消费；
+    验证脚本的冒烟调用须显式传 record=0，避免机器噪声冲掉真实发现历史
+    （同一纪律见 ontology/validate 的 record 参数）。
+    """
+    from core.domain.ingest_gate import check_triples
+    res = check_triples(conn, record=bool(record))
     # 按违规类型聚合（同一 message 前缀的分布），方便定位系统性问题
     dist = {}
     for v in res.get("violations", []):
@@ -61,7 +66,7 @@ def shacl_findings(limit: int = 50, conn=Depends(db_session)):
 @router.post("/api/governance/ontology/release")
 def ontology_release(body: dict, conn=Depends(db_session), user=Depends(current_user)):
     """本体发布：SemVer 版本冻结 OWL+SHACL。有 SHACL Violation 时拦截。"""
-    from governance import release_snapshot
+    from services.governance import release_snapshot
     res = release_snapshot(
         conn, version=(body.get("version") or "").strip(),
         note=body.get("note") or "",
@@ -75,13 +80,13 @@ def ontology_release(body: dict, conn=Depends(db_session), user=Depends(current_
 @router.get("/api/governance/ontology/snapshots")
 def ontology_snapshots(project_id: Optional[str] = None, branch: Optional[str] = None,
                        limit: int = 20, conn=Depends(db_session)):
-    from governance import list_snapshots
+    from services.governance import list_snapshots
     return {"items": list_snapshots(conn, project_id or "", branch or "", limit)}
 
 
 @router.get("/api/governance/ontology/snapshots/{sid}")
 def ontology_snapshot_detail(sid: int, conn=Depends(db_session)):
-    from governance import get_snapshot
+    from services.governance import get_snapshot
     row = get_snapshot(conn, sid)
     if not row:
         return JSONResponse({"error": "快照不存在"}, 404)
@@ -90,5 +95,5 @@ def ontology_snapshot_detail(sid: int, conn=Depends(db_session)):
 
 @router.get("/api/governance/mirror-state")
 def mirror_state(branch: str = "dev", conn=Depends(db_session)):
-    from governance import mirror_state as _ms
+    from services.governance import mirror_state as _ms
     return _ms(conn, branch)

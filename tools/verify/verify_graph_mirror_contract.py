@@ -4,12 +4,12 @@
 米爸问"如果后面 SQLite 换了，要重新调整吗"—— 这个问题背后是**定位**问题：
 若有人把图库（Fuseki/Neo4j）当成**权威源**，则：
 ① 治理能力当场消失（图库没有双时态/审核流/版本对齐/画布坐标 —— 实测这四项
-   被 `knowledge_repo.py:100` / `ontology_semantics.py:689` / 15 个文件的
+   被 `knowledge_repo.py:100` / `core/domain/ontology_semantics.py:689` / 15 个文件的
    `sysml_version_id` / 前端画布依赖着，**且有活门禁在守**）；
 ② 换权威源时改动面从「4 条 SQL」爆炸到「全部写入路径」。
 
 ⇒ 本门禁把三条定位事实固化成断言：
-  A. `graph_db.py` **不直接依赖存储**（`sqlite3` / `db_conn` / `get_db` 引用 = 0）
+  A. `adapters/graph_db.py` **不直接依赖存储**（`sqlite3` / `db_conn` / `get_db` 引用 = 0）
   B. 图库只经 `get_writer(backend=…)` 切换（**换后端不改业务代码**）
   C. 权威源耦合面**有界**（SQLite SQL ≤ 6 处），且**只在物化/读实体两个函数里**
   D. ★ **红线声明**：`graph_stored` 不是"权威源已确认"标记
@@ -38,8 +38,8 @@ _ROOT = os.path.dirname(os.path.dirname(_HERE))
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
-GRAPH_DB = os.path.join(_ROOT, "graph_db.py")
-TRIple_STORE = os.path.join(_ROOT, "triple_store.py")
+GRAPH_DB = os.path.join(_ROOT, "adapters/graph_db.py")
+TRIple_STORE = os.path.join(_ROOT, "services/triple_store.py")
 CARDS = os.path.join(_ROOT, "agent", "pipeline_parts", "cards.py")
 
 #: 允许出现 SQLite SQL 的函数（权威源耦合面就在这里，超出即说明架构被侵蚀）
@@ -142,7 +142,7 @@ def main() -> int:
         ok = ok and passed
 
     print("\n⑥ 两个调用点都带 enabled 开关 + 失败降级")
-    for label, path in (("triple_store.py", TRIple_STORE), ("cards.py", CARDS)):
+    for label, path in (("services/triple_store.py", TRIple_STORE), ("cards.py", CARDS)):
         with open(path, encoding="utf-8") as f:
             s = f.read()
         for name, passed in [
@@ -188,8 +188,8 @@ def main() -> int:
         with open(GRAPH_DB, "w", encoding="utf-8") as f:
             f.write(src)
     with open(GRAPH_DB, encoding="utf-8") as f:
-        assert f.read() == src, "回滚失败！graph_db.py 未逐字还原"
-    print("[OK  ] 回滚校验：graph_db.py 已逐字还原")
+        assert f.read() == src, "回滚失败！adapters/graph_db.py 未逐字还原"
+    print("[OK  ] 回滚校验：adapters/graph_db.py 已逐字还原")
 
     print("=" * 74)
     print(f"最终结论：{'全部通过' if ok else '未通过'}")

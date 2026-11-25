@@ -3,7 +3,7 @@
 
 验证四件事：
 [A] core/config.py：DEFAULT_CONFIG["rag"] 默认值 + CONFIG_SCHEMA["rag"] 键类型齐全；
-[B] 源码级断言：agent/rag.py / knowledge_engine.py / 35-ctxconfig.js 的消费点真的读 config
+[B] 源码级断言：agent/rag.py / services/knowledge_engine.py / 35-ctxconfig.js 的消费点真的读 config
     （带命中数断言，防"字符串恰好出现但没接线"）；
 [C] 行为验证：进程内 monkeypatch core.config._CONFIG → GraphRAG 阈值 / _graph_confidence 权重
     随配置变化（不落配置文件，零副作用）；
@@ -69,7 +69,7 @@ check("A2 CONFIG_SCHEMA.rag 键+类型", not type_bad, f"缺失/类型错: {type
 
 # ── [B] 源码级消费点（锚定字符串 + 命中数） ─────────────────────
 rag_py = read("agent/rag.py")
-ke_py = read("knowledge_engine.py")
+ke_py = read("services/knowledge_engine.py")
 rr_py = read("services/rag_rerank.py")
 js = read("static/js/mods/35-ctxconfig.py".replace(".py", ".js"))
 
@@ -152,9 +152,9 @@ except Exception as e:  # noqa: BLE001
 # ── [M] 变异自证：模拟"消费点漏改回硬编码"→ [B] 必须能抓住 ──────
 MUT = [
     ("M1 路由阈值漏改", "agent/rag.py", 'float(_cfg.get("rag", "route_threshold", 0.75))', "0.75"),
-    ("M2 HyDE 门控漏改", "knowledge_engine.py", "if _hyde_on and hyde_cand:", "if hyde_cand:"),
-    ("M3 RRF 常数漏改", "knowledge_engine.py", "k=_rrf_k,", "k=60,"),
-    ("M4 置信等级漏改", "knowledge_engine.py", "_ref >= _conf_high", "_ref >= 0.70"),
+    ("M2 HyDE 门控漏改", "services/knowledge_engine.py", "if _hyde_on and hyde_cand:", "if hyde_cand:"),
+    ("M3 RRF 常数漏改", "services/knowledge_engine.py", "k=_rrf_k,", "k=60,"),
+    ("M4 置信等级漏改", "services/knowledge_engine.py", "_ref >= _conf_high", "_ref >= 0.70"),
 ]
 backup = {p: (REPO / p).read_bytes() for _, p, _, _ in MUT}
 try:
@@ -167,7 +167,7 @@ try:
     for tag, _, _, _ in MUT:
         # 变异后重读源码重跑对应断言
         r2 = read("agent/rag.py")
-        k2 = read("knowledge_engine.py")
+        k2 = read("services/knowledge_engine.py")
         if "路由阈值" in tag:
             check("M1 caught", '_cfg.get("rag", "route_threshold"' not in r2)
         elif "HyDE 门控" in tag:

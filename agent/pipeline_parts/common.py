@@ -16,30 +16,30 @@ from dataclasses import dataclass
 logger = logging.getLogger("mbse.agent.pipeline")
 
 from database import get_db, db_conn
-from knowledge_engine import VectorEngine, QueryRouter
+from services.knowledge_engine import VectorEngine, QueryRouter
 from llm import llm_client
 from core.config import STATIC_DIR
-from file_tools import exec_file_tool, FILE_TOOL_NAMES as _FILE_TOOL_NAMES
-from web_tools import WEB_TOOL_NAMES as _WEB_TOOL_NAMES   # 联网搜索/网页抓取（2026-10-17）
-from report_tools import exec_report_tool, REPORT_TOOL_NAMES as _REPORT_TOOL_NAMES
+from services.tools.file_tools import exec_file_tool, FILE_TOOL_NAMES as _FILE_TOOL_NAMES
+from adapters.web_tools import WEB_TOOL_NAMES as _WEB_TOOL_NAMES   # 联网搜索/网页抓取（2026-10-17）
+from services.tools.report_tools import exec_report_tool, REPORT_TOOL_NAMES as _REPORT_TOOL_NAMES
 # ★ 2026-11-06（P0）：沙箱代码执行 + 文档文本提取。
 #   ⚠️ 必须加在**本文件**（`from .common import *` 的再导出源），不是 pipeline_parts/tools.py。
 #      本轮先误加到 tools.py，`_CODE_TOOL_NAMES` 在该模块里并不存在 ⇒ 真实会话报
 #      `name '_CODE_TOOL_NAMES' is not defined`（而直接调 ToolExecutor 却成功 ——
 #      因为那是 workflows 那套分发，与 Agent 侧是两条独立实现）。
-from code_tools import exec_code_tool, CODE_TOOL_NAMES as _CODE_TOOL_NAMES
-from doc_tools import exec_doc_tool, DOC_TOOL_NAMES as _DOC_TOOL_NAMES
+from services.tools.code_tools import exec_code_tool, CODE_TOOL_NAMES as _CODE_TOOL_NAMES
+from services.tools.doc_tools import exec_doc_tool, DOC_TOOL_NAMES as _DOC_TOOL_NAMES
 # ★ 2026-11-07（P1）：技能自带脚本的真实执行通道。
 #   此前 `skills.py:355` 只注入一行「⚙ 脚本（需要时执行）：scripts/main.py」，
 #   没有任何执行入口 ⇒ 7 个技能的脚本是死文件。见 skill_tools.py 头部说明。
 #   ⚠️ 同样必须加在本文件（再导出源），且名字必须进 __all__。
-from skill_tools import exec_skill_tool, SKILL_TOOL_NAMES as _SKILL_TOOL_NAMES
+from services.tools.skill_tools import exec_skill_tool, SKILL_TOOL_NAMES as _SKILL_TOOL_NAMES
 # ★ 2026-11-07（P2）：元能力 —— 让模型通过会话管理自己的能力资产
 #   （agent / skill / tool / capability 的增删改、绑定、启停）。
 #   写动作全部入人工确认队列，模型只能提不能批。
-from meta_tools import (exec_capability_tool, META_QUERY_NAMES as _META_QUERY_NAMES,
+from services.tools.meta_tools import (exec_capability_tool, META_QUERY_NAMES as _META_QUERY_NAMES,
                         META_APPLY_NAMES as _META_APPLY_NAMES)
-from capability_runtime import is_capability as _is_capability, exec_capability as _exec_capability
+from services.capability_runtime import is_capability as _is_capability, exec_capability as _exec_capability
 from agent.definition import AgentDefinition
 from agent.registry import AgentRegistry
 from agent.intent import IntentRouter

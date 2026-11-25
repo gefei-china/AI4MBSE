@@ -2,7 +2,7 @@
 """P2/P3 回归：生成端本地校验门禁（`sysml_v2_check` + cards.py 接入 + 版本留痕）是否真的成立。
 
 被验对象（集成指南 §2.2 三个接入点里的 ②③，即 §3 的 P1/P2/P3）：
-    · `sysml_v2_check.py`          —— P1 本地校验模块（项目级合并 + 语法/语义双路计数）
+    · `core/domain/sysml_v2_check.py`          —— P1 本地校验模块（项目级合并 + 语法/语义双路计数）
     · `cards.py::_gen_sysml_views` —— P2 生成后校验 → views["check"]（5 个调用点的唯一收敛处）
     · `agent/utils.py::_archive_sysml_version` —— P3 摘要写进 element_summary["check"]
 

@@ -26,7 +26,7 @@
     （6.4.2 利益相关方需求、6.4.3 系统需求、6.4.4 架构定义、6.4.5 设计定义、
       6.4.9 验证、6.4.11 确认）。
   · 字段写法：`profile_source = "SysML v2"`；`profile_ref = "<MetaClass> | ISO/IEC/IEEE 15288:2015 §6.4.x"`。
-    OWL 导出时两者拼成 `rdfs:seeAlso`（`ontology_owl.py:449`），所以填了就能在导出件里看到。
+    OWL 导出时两者拼成 `rdfs:seeAlso`（`core/domain/ontology_owl.py:449`），所以填了就能在导出件里看到。
 
 用法：
     python tools/migrate_profile_mapping.py            # 预演（不改库）

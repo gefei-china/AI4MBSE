@@ -545,7 +545,7 @@ def ingest_document(conn, filename: str, file_type: str, content: bytes,
         _stage("embed", "done")
 
         # P0-2 域打标：按文件名/内容自动分类（高置信直接写库，低置信进 review 队列）
-        from glossary import infer_domain, log_domain_review
+        from core.domain.glossary import infer_domain, log_domain_review
         domain, domain_conf = infer_domain(filename=filename, content=text0, return_score=True)
         if domain_conf < 0.9:
             log_domain_review(conn, doc_id, filename, domain, domain_conf, "入库自动分类置信度不足")
@@ -621,7 +621,7 @@ def ingest_document(conn, filename: str, file_type: str, content: bytes,
 
         # 5) 落库 chunks（含 section / bm25_text / domain / hyde，阶段：insert）
         # P2-1 落库前向量归一化为单位向量（幂等，检索矩阵加载时免重复 sqrt）
-        from vector_index import normalize_vector
+        from adapters.vector_index import normalize_vector
         for i, (sc, vec) in enumerate(zip(structured, vectors)):
             conn.execute(
                 "INSERT INTO document_chunks (document_id, chunk_index, content, embedding, embed_version, source_doc, section, bm25_text, branch, domain, hyde_questions, hyde_embedding) "
@@ -659,7 +659,7 @@ def ingest_document(conn, filename: str, file_type: str, content: bytes,
         #   `_gen_llm_summary` 内部已try/except 保证失败返回 ''）。
         conn.commit()
         try:
-            from vector_index import ChunkVectorIndex
+            from adapters.vector_index import ChunkVectorIndex
             ChunkVectorIndex.invalidate()   # 放锁后再标脏，避免与检索重建抢写锁
         except Exception as e:
             logger.warning("向量索引失效标记失败（不阻断）: %s", e)
@@ -795,7 +795,7 @@ def auto_extract_stage(conn, doc_id: int, query: str) -> dict:
                          (_j.dumps(cur_d, ensure_ascii=False), doc_id))
             conn.commit()
             return {"enabled": False, "reason": "文件管理实体抽取开关未开启"}
-        from vector2graph import extract_candidates
+        from services.vector2graph import extract_candidates
         ext = extract_candidates(conn, (query or "")[:80], doc_id=doc_id, top_k=5)
         cur_d["extraction"] = "done"
         cur_d["extract_candidates"] = len(ext.get("candidates") or [])

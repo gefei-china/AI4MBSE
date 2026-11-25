@@ -1,10 +1,10 @@
 """灌「计划语义校验（Plan Guard）」的配置规则到 `generate_rules`。
 
-只灌**定义**，不含任何判断逻辑（与 `register_alternatives_tools.py` 同一纪律）。
+只灌**定义**，不含任何判断逻辑（与 `services/tools/register_alternatives_tools.py` 同一纪律）。
 
 ## 为什么放 `generate_rules` 而不是代码常量
 
-仓库既有范式（`register_sysml_check_tools.py` 文件头）：
+仓库既有范式（`services/tools/register_sysml_check_tools.py` 文件头）：
 
 > 「策略写在 pipeline 里意味着每次调整都要改代码 + 重启；写在 DB 里则**改文本即生效**」
 

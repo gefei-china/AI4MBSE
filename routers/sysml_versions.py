@@ -88,7 +88,7 @@ def sysml_import_candidates(version_id: int, body: dict = None,
 
     body 可选：{content, source: "text|json", model_name}；缺省用版本快照 content（sysml_views JSON）。
     """
-    from sysml_importer import sysml_to_candidates
+    from services.sysml_importer import sysml_to_candidates
     body = body or {}
     row = conn.execute("SELECT * FROM sysml_versions WHERE id=?", (version_id,)).fetchone()
     if not row:
@@ -202,7 +202,7 @@ def push_zhiyuan(version_id: int, body: dict = None,
     2026-09-24 建模工具适配层：工程绑定 tool=magicdraw 等非智源工具时拒绝写回（TOOL_NOT_READY）——
     绑定了什么工具就走什么工具的连接器，MagicDraw 通道（文件导入/SysML v2 API/Cameo 插件）接入前明确报错。
     """
-    from norm_apply import push_version_to_zhiyuan
+    from services.norm_apply import push_version_to_zhiyuan
     b = body or {}
     actor = (user or {}).get("display_name") or (user or {}).get("username") or "未登录"
     prior = conn.execute("SELECT zhiyuan_imported_id FROM sysml_versions WHERE id=?",
@@ -305,7 +305,7 @@ def version_closure(version_id: int, conn=Depends(db_session)):
     cfg_ok, cfg_why = True, ""
     if not zid:
         try:
-            from zhiyuan_client import _load_config
+            from adapters.zhiyuan_client import _load_config
             _cfg = _load_config()
             if not str(_cfg.get("base_url") or "").strip():
                 cfg_ok, cfg_why = False, "智源 base_url 未配置（ZHIYUAN_BASE_URL）"

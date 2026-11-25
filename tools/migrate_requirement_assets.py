@@ -6,7 +6,7 @@
 
 | 事实 | 证据 |
 |---|---|
-| `requirement_itemize_tools.py` 有完整实现（切句/分类/gaps/需求视图骨架） | 模块 300+ 行，`__main__` 自带 demo |
+| `services/tools/requirement_itemize_tools.py` 有完整实现（切句/分类/gaps/需求视图骨架） | 模块 300+ 行，`__main__` 自带 demo |
 | **没有任何分发点 import 它** | `grep -rn "requirement_itemize_tools"` 只命中迁移脚本与文档 |
 | tools 表有一行、agent 635 有绑定、技能正文教模型调用 | 46 次真实调用 → **全部**返回「未知工具」 |
 

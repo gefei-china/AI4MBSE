@@ -382,7 +382,7 @@ class ExecuteMixin:
         report_type = None
         if intent == "report_generation":
             try:
-                from report_generator import report_generator as _rg
+                from services.report_generator import report_generator as _rg
                 report_type = _rg.detect_report_type(user_input)
             except Exception:
                 report_type = None
@@ -450,7 +450,7 @@ class ExecuteMixin:
         quality_report = None
         if intent == "requirement_quality":
             try:
-                from requirement_quality import build_quality_report
+                from services.requirement_quality import build_quality_report
                 quality_report = build_quality_report(user_input)
                 if quality_report and quality_report.get("issues"):
                     _q_lines = [f"[{it['severity'].upper()}] {it['problem']}｜证据：{it['evidence'][:60]}｜建议：{it['suggestion'][:80]}"
@@ -464,7 +464,7 @@ class ExecuteMixin:
         report_prompt = ""
         if intent == "report_generation":
             try:
-                from report_generator import report_generator as _rg
+                from services.report_generator import report_generator as _rg
                 if report_type in ("impact", "review"):
                     _mat = self._build_report_material(report_type, retrieval)
                     if _mat:
@@ -625,7 +625,7 @@ class ExecuteMixin:
             try:
                 from core import config as _cfg
                 if _cfg.as_bool("semantic_cache", "enabled", False):
-                    from semantic_cache import SemanticCache
+                    from adapters.semantic_cache import SemanticCache
                     from database import get_db
                     _cc = get_db()
                     try:
@@ -1023,7 +1023,7 @@ class ExecuteMixin:
                     try:
                         from core import config as _cfg
                         if _cfg.as_bool("semantic_cache", "enabled", False):
-                            from semantic_cache import SemanticCache
+                            from adapters.semantic_cache import SemanticCache
                             from database import get_db
                             _cc = get_db()
                             try:
@@ -1334,7 +1334,7 @@ class ExecuteMixin:
         report = None
         if intent == "report_generation":
             try:
-                from report_generator import report_generator as _rg
+                from services.report_generator import report_generator as _rg
                 report = _rg.structure(user_input[:80], llm_content, report_type=report_type)
             except Exception:
                 report = None

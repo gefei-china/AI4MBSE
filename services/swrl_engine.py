@@ -589,7 +589,7 @@ def run_dl_check(conn) -> dict:
 
     t0 = _time.perf_counter()
     try:
-        from ontology_owl import to_owl
+        from core.domain.ontology_owl import to_owl
         xml, _warns = to_owl(conn)
     except Exception as e:
         return {"ran": False, "elapsed_ms": int((_time.perf_counter() - t0) * 1000),

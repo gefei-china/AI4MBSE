@@ -41,7 +41,7 @@ import re
 
 # ── 复用既有瞬态词表（不重造第二份）────────────────────────────────────────
 try:
-    from tool_resilience import RETRYABLE_KEYWORDS, is_retryable_error
+    from core.tool_resilience import RETRYABLE_KEYWORDS, is_retryable_error
 except Exception:      # pragma: no cover - tool_resilience 不可用时的兜底
     RETRYABLE_KEYWORDS = (
         "timeout", "timed out", "connection", "network", "getaddrinfo",

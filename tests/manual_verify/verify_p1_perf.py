@@ -86,7 +86,7 @@ def func_body(src: str, name: str) -> str:
 
 # ═══════════════════════════ P1 源码级：Blocking 单次全表扫描 ═══════════════════════════
 print("\n== P1 源码级：_disambiguate_many 单次全表扫描 ==")
-_src_v2g = open(os.path.join(_BASE, "vector2graph.py"), encoding="utf-8").read()
+_src_v2g = open(os.path.join(_BASE, "services/vector2graph.py"), encoding="utf-8").read()
 _body = func_body(_src_v2g, "_disambiguate_many")
 check("P1a 函数体 SELECT 恰 1 次（单次全表扫描，无逐名查询）",
       len(re.findall(r"SELECT", _body)) == 1,
@@ -168,7 +168,7 @@ check("P4b entity_merges 落库 >= 100", merges >= 100, f"merges={merges}")
 
 # ═══════════════════════════ P5 源码级：hybrid_search 优化 ═══════════════════════════
 print("\n== P5 源码级：分页 / 列裁剪 / HyDE 候选集 ==")
-_src_ke = open(os.path.join(_BASE, "knowledge_engine.py"), encoding="utf-8").read()
+_src_ke = open(os.path.join(_BASE, "services/knowledge_engine.py"), encoding="utf-8").read()
 _body_cache = func_body(_src_ke, "_bm25_cache_get")
 check("P5a 分页流式构建（LIMIT ? OFFSET ? + _BM25_PAGE）",
       len(re.findall(r"LIMIT \? OFFSET \?", _body_cache)) >= 1

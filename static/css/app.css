@@ -406,6 +406,17 @@ body.nr-full-lock{overflow:hidden;}
 .proc-block.thinking .proc-body::-webkit-scrollbar-thumb:hover{background:#bda95f;}
 
 .proc-block.agent{background:#f4f8ff;border-color:#d6e4ff;}
+/* ★★ P0（2026-11-25）降级/静默兜底卡片（见 11-pipeline.js 的 procAddDegrade）
+ *
+ * 为什么用橙/红两档而不是统一红色：降级是**常态**（可选增强失败很常见），
+ * 一律红会让"真正的严重问题"淹没在红色里 —— 与后端三级分级的理由完全一致。
+ * 底色刻意不刺眼（浅橙渐变而不是饱和橙块）：它要"可见"，不要"抢眼到干扰阅读正文"。
+ */
+.proc-block.degrade{background:linear-gradient(135deg,#fffaf3 0%,#fff6ea 100%);border-color:#f5cf9a;}
+.proc-block.degrade .proc-head{color:#a1541a;}
+.proc-block.degrade.deg-critical{background:linear-gradient(135deg,#fff6f5 0%,#ffefed 100%);border-color:#f3a79c;}
+.proc-block.degrade.deg-critical .proc-head{color:#a5281c;}
+.proc-block.degrade .proc-body code{background:rgba(0,0,0,.05);padding:1px 5px;border-radius:4px;}
 .proc-block.tool{background:#f8fafc;}
 .proc-block.tool.success{background:linear-gradient(135deg,#f0fdf4 0%,#ecfdf5 100%);border-color:#86efac;}
 .proc-block.tool.error{background:linear-gradient(135deg,#fef2f2 0%,#fef1f0 100%);border-color:#fca5a5;}

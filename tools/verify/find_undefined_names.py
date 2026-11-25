@@ -40,8 +40,10 @@ import sys
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 DEFAULT_TARGETS = [
-    "agent", "core", "services", "workflows", "routers", "database",
-    "final_content.py", "file_tools.py", "task_queue.py", "hil_service.py",
+    # 2026-11-25 P1 分层归位后：原列在根目录的 4 个文件已迁入 services/ 与 services/tools/，
+    # 而 "services" 目录本身递归覆盖它们 ⇒ 只列目录即可（列文件名反而会因不存在而**静默漏扫**）。
+    # 另补 adapters（新增的对外适配层）；原 "final_content.py" 早已不存在（零覆盖却不报错）。
+    "agent", "core", "services", "adapters", "workflows", "routers", "database",
 ]
 
 SKIP_DIR = {".venv", "__pycache__", "node_modules", ".git", "tmp", "backups", "logs"}

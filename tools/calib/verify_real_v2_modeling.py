@@ -29,17 +29,17 @@ import time
 
 # ⚠️ 定位仓库根**不要 dirname 数层数**（本会话已因此栽过两次：
 #   tools/verify 与 tools/calib 都是两层深，我按"一层"改回去直接指向 tools/）。
-# 改为**向上找标志文件**（memory_service.py 在仓库根）。
+# 改为**向上找标志文件**（services/memory_service.py 在仓库根）。
 def _find_root():
     _d = os.path.dirname(os.path.abspath(__file__))
     for _ in range(6):
-        if os.path.isfile(os.path.join(_d, "memory_service.py")):
+        if os.path.isfile(os.path.join(_d, "services/memory_service.py")):
             return _d
         _p = os.path.dirname(_d)
         if _p == _d:
             break
         _d = _p
-    raise SystemExit("找不到仓库根（未找到 memory_service.py）")
+    raise SystemExit("找不到仓库根（未找到 services/memory_service.py）")
 
 
 ROOT = _find_root()
@@ -151,7 +151,7 @@ def main():
 
     # ─────────────────────────────────────────────────────────────
     section("2. 真实校验器：用 checker.jar 校验这段 SysML v2")
-    # 走项目里**现成的**校验器模块（仓库根 sysml_v2_check.py，checker.jar 通道）——
+    # 走项目里**现成的**校验器模块（仓库根 core/domain/sysml_v2_check.py，checker.jar 通道）——
     # 不自己拼 java 命令行，那会与门禁 / 生产走两套口径。
     try:
         import sysml_v2_check as CK

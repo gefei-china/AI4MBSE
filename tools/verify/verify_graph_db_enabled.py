@@ -104,7 +104,7 @@ def data_checks() -> list:
         (f"无待物化积压（实测 {pending} 条，应为 0；非 0 请跑 "
          f"fix_triple_type_class.py 或 sync_pending_triples）", pending == 0),
         (f"type 三元组 {typed_all} 条已入图（object_type 保持 literal 是正确的："
-         f"那是三元组客体语义；★写进图库时按 class 处理，见 graph_db.py:809）",
+         f"那是三元组客体语义；★写进图库时按 class 处理，见 adapters/graph_db.py:809）",
          typed_all > 0),
     ]
 

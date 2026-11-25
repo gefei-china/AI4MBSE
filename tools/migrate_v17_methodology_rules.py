@@ -3,7 +3,7 @@
 ## 背景（2026-10-09 实测）
 
 `methodology_rules` 表**早已建好但0 行**（`migrate_v9_four_tools.py` 建的），
-`methodology_profile_tools.py:_load_rule_layer` 会读它并如实报告"该profile 无规则行"。
+`services/tools/methodology_profile_tools.py:_load_rule_layer` 会读它并如实报告"该profile 无规则行"。
 ⇒ 规则层是**设计中但从未落地**的载体。
 
 而`sysml_v2_lint` 是**唯一真正执行判定**的门禁工具，但它当前只覆盖

@@ -192,7 +192,7 @@ def ops_metrics(conn=Depends(db_session)):
     # ── 真实组件探活 ──
     # 2026-09-26 口径统一：探活逻辑迁到 metrics_core.service_health（知识看板「性能与运维」簇
     # 也要用同一结果），本端点只做委派，避免两份探活实现漂移。返回字段保持不变。
-    from metrics_core import service_health
+    from services.metrics_core import service_health
     topology = service_health(conn)["components"]
 
     # ── 真实备份记录：备份为手动导出式（GET /api/meta/backup），无定时目录可扫 ──
@@ -362,7 +362,7 @@ def document_extract(doc_id: int, conn=Depends(db_session)):
         "SELECT key, value FROM settings").fetchall()}
     if (_sw.get("file_auto_extract_enabled") or "0") != "1":
         return JSONResponse({"error": "文件管理实体与关系抽取未开启，请先在「抽取设置」中开启后再补抽"}, 400)
-    from vector2graph import extract_candidates
+    from services.vector2graph import extract_candidates
     row = conn.execute("SELECT filename, parse_status FROM documents WHERE id=?", (doc_id,)).fetchone()
     if not row:
         return JSONResponse({"error": "not found"}, 404)

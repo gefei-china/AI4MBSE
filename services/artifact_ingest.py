@@ -45,7 +45,7 @@ def serialize_artifact(conn, a: dict) -> tuple:
     if kind == "report":
         meta = a.get("meta") or {}
         if meta.get("sections"):
-            from report_generator import report_generator as _rg
+            from services.report_generator import report_generator as _rg
             report = {
                 "title": a.get("title") or "报告",
                 "sections": meta["sections"],
@@ -103,7 +103,7 @@ def find_similar(conn, content: bytes) -> dict:
     相同内容 ≈ 1.0，近重复才可能越过阈值。"""
     try:
         from collections import Counter
-        from knowledge_engine import VectorEngine
+        from services.knowledge_engine import VectorEngine
         ve = VectorEngine()
         text = content.decode("utf-8", errors="ignore")
         qv = ve._vector(text[:2000])

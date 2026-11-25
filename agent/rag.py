@@ -5,11 +5,11 @@ import json
 import time
 import uuid
 from database import get_db, db_conn
-from knowledge_engine import VectorEngine, QueryRouter  # P1: 双引擎底座
+from services.knowledge_engine import VectorEngine, QueryRouter  # P1: 双引擎底座
 from llm import llm_client
 from core.config import STATIC_DIR
-from file_tools import exec_file_tool, FILE_TOOL_NAMES as _FILE_TOOL_NAMES  # 基础通用文件操作工具
-from report_tools import exec_report_tool, REPORT_TOOL_NAMES as _REPORT_TOOL_NAMES  # 基础通用报告导出工具
+from services.tools.file_tools import exec_file_tool, FILE_TOOL_NAMES as _FILE_TOOL_NAMES  # 基础通用文件操作工具
+from services.tools.report_tools import exec_report_tool, REPORT_TOOL_NAMES as _REPORT_TOOL_NAMES  # 基础通用报告导出工具
 
 
 def _cfg_get(group, key, default=None):
@@ -227,7 +227,7 @@ class GraphRAG:
         _glossary_res = {}
         if conn is not None:
             try:
-                from glossary import GlossaryMatcher, trace_query
+                from core.domain.glossary import GlossaryMatcher, trace_query
                 _glossary_res = GlossaryMatcher(conn).resolve(query)
                 query = _glossary_res["normalized"] or query  # 归一化后检索（v2→SysML_V2）
             except Exception:
@@ -312,7 +312,7 @@ class GraphRAG:
                         and not self._domain_usable(conn, force_domain, scope_docs, _inc_dep)):
                     _domain_skipped = force_domain
                     force_domain = None
-                from knowledge_engine import hybrid_search as _hybrid
+                from services.knowledge_engine import hybrid_search as _hybrid
                 # S4：top_k 配置化（P1-4，默认 4），与消费侧 context_text 的 chunk_hits[:3] 对齐
                 # （此前实取 8 条、仅消费 3 条，多算的 5 条白白走向量检索与 RRF 融合）
                 _hy = _hybrid(conn, query, top_k=_rag_top_k, branches=None,
@@ -635,7 +635,7 @@ class GraphRAG:
 
         try:
             if conn is not None:
-                from glossary import trace_query as _tq
+                from core.domain.glossary import trace_query as _tq
                 _hit_src = (graph_results if route in ("graph", "mixed")
                             else (chunk_hits or vector_results)) or []
                 # ── 分数取值（2026-11-08 修）─────────────────────────────────
@@ -890,8 +890,15 @@ class GraphRAG:
         try:
             gmap = {r["name"]: r["group_name"] for r in conn.execute(
                 "SELECT name, group_name FROM knowledge_categories").fetchall()}
-        except Exception:
-            pass
+        except Exception as _e_cat:
+            # ★ P0（2026-11-25）：读不到知识类别 ⇒ 「设计方法知识」与「设计资产」
+            #   无法区分 ⇒ 注入 prompt 时该受约束的规范被当成可复用素材（或反之）。
+            #   结果仍然生成得出来，但**约束强度被悄悄放松** —— 必须让用户看到。
+            #   （不套 try/except：note() 自保证不抛，再包一层就又是一个静默点）
+            from core.degrade import note as _dg_note
+            _dg_note("rag.knowledge_categories", _e_cat, level="degraded",
+                     impact="知识类别读取失败：设计方法知识/设计资产未能区分，"
+                            "本轮提示词注入的约束强度可能不足")
         method, assets, other = [], [], []
         for e in entities:
             cat = e.get("knowledge_category") or ""
@@ -1054,7 +1061,7 @@ class GraphRAG:
         except Exception:
             pass
         try:
-            from knowledge_engine import hybrid_search as _hybrid
+            from services.knowledge_engine import hybrid_search as _hybrid
             _hy = _hybrid(conn, query, top_k=top_k, branches=None,
                           domain=None,                # ← 唯一被撤销的约束
                           glossary_boost=boost,
@@ -1109,7 +1116,7 @@ class GraphRAG:
             cands = retry_candidates(query)
             if not cands:
                 return []
-            from knowledge_engine import hybrid_search as _hybrid
+            from services.knowledge_engine import hybrid_search as _hybrid
             for cand in cands:
                 try:
                     _hy = _hybrid(conn, cand, top_k=top_k, branches=None,
@@ -1410,6 +1417,29 @@ class GraphRAG:
         （实测 105K 字符分词仅 0.057s / 71 token，无需截断）。超长时打可见日志，
         不静默吞掉——静默兜底会把「我写错了」变成「查不到但没报错」。
         """
+        # 2026-11-24 第二期：Ontology Query Service 优先（对象身份明确时）。
+        # 只在「查询是 ID 形态或短名称」时走 —— 整句自然语言/整份粘贴模型代码
+        # 不该被当作对象 ID（实测有 94K 字符的粘贴代码，见下方 LIKE 截断说明）。
+        _oid = (query or "").strip()
+        if _oid and len(_oid) <= 64 and "\n" not in _oid:
+            try:
+                from services.ontology_query import get_context
+                _ctx = get_context(conn, _oid, branch=(branches[0] if branches else ""), depth=1)
+                if _ctx.get("found"):
+                    _obj = _ctx["object"]
+                    # 保留原返回结构（实体行），把统一上下文挂在 _ontology_context 上，
+                    # 下游可读可不读 —— 不改变既有契约，失败时原样回落。
+                    _row = dict(conn.execute(
+                        "SELECT * FROM entities WHERE id=? AND status!='deprecated' LIMIT 1",
+                        (_obj["id"],)).fetchone() or {})
+                    if not _row:
+                        _row = {"id": _obj["id"], "name": _obj["name"],
+                                "entity_type": _obj["entity_type"], "status": _obj["status"]}
+                    _row["_ontology_context"] = _ctx
+                    return [_row]
+            except Exception:
+                pass  # 查询服务异常 → 原样回落 SQLite（保全现状）
+
         _LIKE_MAX = 200
         _like_q = query if len(query) <= _LIKE_MAX else query[:_LIKE_MAX]
         if len(query) > _LIKE_MAX:
@@ -1422,7 +1452,7 @@ class GraphRAG:
         try:
             from core import config
             if config.as_bool("graph_db", "enabled"):
-                from graph_db import get_writer, query_entities_by_name
+                from adapters.graph_db import get_writer, query_entities_by_name
                 _w = get_writer(True, config.get("graph_db", "backend", "pyoxigraph"),
                                 config.get("graph_db", "path", ""),
                                 config.get("graph_db", "use_memory", False))
@@ -1598,7 +1628,7 @@ class GraphRAG:
         seen = {h["content"] for h in lexical}
         semantic = []
         try:
-            from semantic import SemanticSearch
+            from services.semantic import SemanticSearch
             for score, p in SemanticSearch().rank(query, paras, top_k=top_k * 3, threshold=0):
                 seg = p[:300]
                 if seg in seen:

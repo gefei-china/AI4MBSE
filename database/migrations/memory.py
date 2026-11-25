@@ -129,7 +129,7 @@ def _migrate_memory_layer(conn) -> dict:
 
     # ── 3. transcript_fts（P0-2）──────────────────────────────────────────
     try:
-        from transcript_fts import ensure_transcript_fts
+        from adapters.transcript_fts import ensure_transcript_fts
         out["fts"] = ensure_transcript_fts(conn)
     except Exception as exc:
         # 不静默：记进返回，让启动日志/门禁看得见；FTS 失败不影响主库可用。

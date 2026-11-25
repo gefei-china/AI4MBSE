@@ -329,7 +329,7 @@ check("H5c 读回计划改用本轮批次号（非 conversation_id）",
 _p_src = open("workflows/planner.py", encoding="utf-8").read()
 check("H5d 非流式路径同样分配独立批次号并回传",
       "TaskQueue.new_run_id(conn)" in _p_src and '"run_id": run_id' in _p_src)
-_t_src = open("task_queue.py", encoding="utf-8").read()
+_t_src = open("services/task_queue.py", encoding="utf-8").read()
 check("H5e create_plan 落 conversation_id + prune_runs 存在",
       "conversation_id: int = 0" in _t_src and "def prune_runs" in _t_src and "def new_run_id" in _t_src)
 _g_src = open("core/config.py", encoding="utf-8").read()

@@ -171,7 +171,7 @@ del sys.modules["llm"]
 _log("")
 _log("== [2] top_k 对齐（默认值 + 全部调用点）==")
 
-_ke_src = read("knowledge_engine.py")
+_ke_src = read("services/knowledge_engine.py")
 _rag_src = read(os.path.join("agent", "rag.py"))
 
 chk("2.1 knowledge_engine.hybrid_search 默认 top_k == 4",
@@ -435,9 +435,9 @@ chk("3.8b 其余 kwargs（_intent 等）仍原样透传，未被 pop 误伤",
     "_intent" in (_model_seen.get("kwargs_keys") or []),
     "kwargs_keys=" + str(_model_seen.get("kwargs_keys")))
 
-_norm_src = read("norm_apply.py")
+_norm_src = read("services/norm_apply.py")
 _wf_src = read(os.path.join("workflows", "engine.py"))
-chk("3.9 既有调用点仍传采样参数：norm_apply.py（temperature/max_tokens）——现已真正生效",
+chk("3.9 既有调用点仍传采样参数：services/norm_apply.py（temperature/max_tokens）——现已真正生效",
     ('max_tokens=8192' in _norm_src) and ('temperature=0.1' in _norm_src))
 # ★ 2026-11-05：3.10 原断言检查 `workflows/engine.py::_exec_llm` 的 model= 透传。
 #   画布 DAG 引擎已移除（engine.py 只剩编排入口壳），LLM 节点执行器不存在了。

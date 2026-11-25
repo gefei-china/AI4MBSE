@@ -26,7 +26,7 @@ def list_entities(status: Optional[str] = None, branch: Optional[str] = None,
 def _temporal_list_entities(conn, status, branch, search, project_id,
                             as_of, range_start, range_end):
     """P0-④ 时态感知的实体列表（内部函数）"""
-    from ontology_semantics import temporal_query_filter
+    from core.domain.ontology_semantics import temporal_query_filter
     extra_where, extra_params = temporal_query_filter(as_of, range_start, range_end)
     repo = KnowledgeRepo(conn)
     if not extra_where:

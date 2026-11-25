@@ -207,7 +207,7 @@ def _src(rel):
         return f.read()
 
 
-_s_norm = _src("norm_apply.py")
+_s_norm = _src("services/norm_apply.py")
 _s_utils = _src("agent/utils.py")
 _s_mat = _src("services/artifact_materializer.py")
 _s_repo = _src("repositories/artifact_repo.py")

@@ -134,7 +134,7 @@ def batch_queue_confirmations(conn, run_id, agent_id="", conversation_id=0) -> i
 
     入队成功后把 write_request 标记已处理（materialized=1），防重复入队。
     """
-    from hil_service import HILService
+    from services.hil_service import HILService
     queued = 0
     for r in list_write_requests(conn, run_id):
         if r.get("materialized"):

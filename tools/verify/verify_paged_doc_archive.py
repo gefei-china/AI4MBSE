@@ -106,7 +106,7 @@ ok("未到 eof ⇒ 不归档", _r1 is None)
 
 print("\n=== ④ 截断必须可观测（不再静默丢数据）===")
 src_mcp = open(os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(
-    os.path.abspath(__file__)))), "mcp_client.py"), encoding="utf-8").read()
+    os.path.abspath(__file__)))), "adapters/mcp_client.py"), encoding="utf-8").read()
 ok("call_tool 回传 truncated 标志", '"truncated": _cut' in src_mcp)
 ok("call_tool 回传 full_len（真实长度）", '"full_len": _full' in src_mcp)
 from core import config as _cfg

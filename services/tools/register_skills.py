@@ -1,0 +1,625 @@
+"""基础通用技能注册脚本（幂等，可重复执行）。
+
+注册两个「基础通用」已发布技能：
+1. 文件操作（file_ops）    —— 系统文件读写/增删的基础通用技能（配合 file_* 内置工具）
+2. 行业调研（industry_research）—— 调研行业通用方案：行业方案调研分析报告生成方法论
+
+技能包结构（对齐 Dify/Claude Code 技能包规范，落到 static/skill_packages/）：
+- skill.md（frontmatter + 指令正文）
+- scripts/main.py（示例脚本，渐进披露供按需执行）
+- references/*.md（参考文档，渐进披露供按需读取）
+
+用法： python register_skills.py
+"""
+import json
+import os
+import sys
+import uuid
+
+from core.config import DB_PATH, STATIC_DIR
+from database import get_db
+
+SKILL_PACKAGES = [
+    {
+        "name": "文件操作",
+        "description": "系统文件读写/增删基础通用能力：列目录、读文本、写/追加文件、建目录、删除（destructive 需人工确认），配合 file_* 内置工具使用",
+        "skill_type": "package",
+        "category": "基础通用",
+        "author": "平台内置",
+        "version": "v1.0",
+        "triggers": ["文件", "读写文件", "创建文件", "保存文件", "追加内容", "删除文件", "目录", "文件操作", "素材文件", "file_",
+                     # ★ 2026-10-17（米爸能力配置）：「把代码存入产物文档」话术命中
+                     "存入产物", "写入产物", "产物文档", "保存代码", "存代码"],
+        "allowed_tools": ["file_list", "file_read", "file_write", "file_append", "file_mkdir", "file_delete",
+                          # ★ 2026-10-17：AI 显式归档产物（file_write 只写沙箱磁盘，进不了产物库）
+                          "save_artifact"],
+        "references": [{"title": "文件操作安全规范", "path": "references/文件操作安全规范.md"}],
+        "scripts": ["scripts/main.py"],
+        "skill_md": """---
+name: 文件操作
+description: 系统文件读写/增删基础能力（file_* 工具使用规范）
+triggers: [文件, 读写文件, 创建文件, 保存文件, 追加, 删除文件, 目录, 文件操作]
+category: 基础通用
+author: 平台内置
+version: v1.0
+---
+# 文件操作技能
+
+你负责系统文件的读写与增删（基础通用能力）。遵循以下规范：
+
+## 工具映射
+- 列目录 / 确认路径 → **file_list**（先 list 再操作，避免路径臆测）
+- 读内容 → **file_read**（文本 UTF-8；超长自动截断，必要时分段读取）
+- 新建 / 覆盖 → **file_write**（自动创建父目录）
+- 追加 → **file_append**（文件不存在则创建）
+- 建目录 → **file_mkdir**
+- 删除 → **file_delete**（destructive 高风险，需人工确认；目录非空需显式 recursive=true）
+- ★ 保存产物 → **save_artifact**（2026-10-17 新增：把代码/文档全文登记进**产物库**；
+  用户说「存入产物/写入产物文档」时用它，参数 title/content/kind(code|document|sysml|report)/lang。
+  ⚠️ file_write 只写服务器磁盘文件、进不了产物库——产物归档一律用 save_artifact；
+  保存成功后告知用户到产物面板查看，不要谎称已保存而不调用工具）
+
+## 安全规范
+- 写前先 file_list / file_read 确认目标是否存在、是否会被覆盖
+- 平台运行时关键文件（*.db 数据库、配置文件、main.py 等）受保护，拒绝写入/删除——遇到请如实向用户说明
+- 路径用绝对路径；中文路径保持 UTF-8
+- 删除目录前必须确认其内容；非空目录需显式 recursive=true 并经人工确认
+- 单次读取上限约 20 万字符，超长文件分段读取或提示用户
+""",
+        "script_py": '''"""文件操作技能示例脚本（渐进披露参考，实际执行建议直接使用平台 file_* 工具）。"""
+import os
+
+
+def run(path: str, content: str = "", mode: str = "write") -> str:
+    """通用读写封装示例：mode ∈ write | append | read。
+    - 写前检查目标是否覆盖已有文件（安全习惯）
+    - 平台关键文件（*.db / 配置文件 / main.py）拒绝写入
+    """
+    if not path:
+        return "path 不能为空"
+    ap = os.path.abspath(path)
+    if ap.lower().endswith((".db", ".db-wal", ".db-shm", ".sqlite", ".sqlite3")) or \\
+       os.path.basename(ap) in ("main.py", "config.py"):
+        return f"拒绝写入关键文件: {ap}"
+    if mode == "read":
+        with open(ap, "r", encoding="utf-8", errors="replace") as f:
+            return f.read()[:200_000]
+    if mode not in ("write", "append"):
+        return f"未知 mode: {mode}"
+    if mode == "write" and os.path.exists(ap):
+        return f"目标已存在，为避免误覆盖请改用 file_write 工具并确认：{ap}"
+    os.makedirs(os.path.dirname(ap) or ".", exist_ok=True)
+    flag = "w" if mode == "write" else "a"
+    with open(ap, flag, encoding="utf-8") as f:
+        f.write(content)
+    return f"已{mode} {len(content)} 字符 → {ap}"
+''',
+        "reference_md": """# 文件操作安全规范
+
+## 目标
+为 Agent 与工作流提供系统文件读写/增删能力的同时，防止误操作破坏平台自身。
+
+## 工具副作用与门控
+| 工具 | 副作用 | 门控 |
+|---|---|---|
+| file_list / file_read | read | 任意路径直接执行 |
+| file_write / file_append / file_mkdir | write | 写意图注入 + L2 HIL 人工确认 |
+| file_delete | destructive | 必须人工确认（TR-P2b） |
+
+## 保护清单（拒绝覆盖/删除）
+- 平台数据库：*.db / *.db-wal / *.db-shm / *.sqlite
+- 系统配置：core/config.py、~/.workbuddy/mbse_config.json
+- 入口脚本：main.py
+- 含上述文件的目录禁止递归删除
+
+## 使用原则
+1. 读先于写：操作前先 list/read 确认路径
+2. 覆盖需确认：file_write 覆盖已有文件前先告知用户
+3. 删除需确认：file_delete 一律经人工确认
+4. 超长文件分段读取（单次上限 20 万字符）
+""",
+    },
+    {
+        "name": "行业调研",
+        "description": "调研行业通用方案：行业方案调研分析报告生成方法论（对齐《AI Agent 平台搭建行业方案调研分析报告》），产出概览对比/模块深度/行业实践/选型建议的结构化报告",
+        "skill_type": "package",
+        "category": "行业通用",
+        "author": "平台内置",
+        "version": "v1.0",
+        "triggers": ["行业调研", "调研报告", "行业方案", "方案对比", "竞品分析", "市场格局", "选型建议", "对标分析", "调研分析", "方案调研"],
+        "allowed_tools": ["graph_retrieve", "file_list", "file_read", "file_write", "file_append", "file_mkdir"],
+        "references": [{"title": "行业调研报告撰写指南", "path": "references/行业调研报告撰写指南.md"}],
+        "scripts": ["scripts/main.py"],
+        "skill_md": """---
+name: 行业调研
+description: 行业方案调研分析报告生成（对齐《AI Agent 平台搭建行业方案调研分析报告》方法论）
+triggers: [行业调研, 调研报告, 行业方案, 方案对比, 竞品分析, 市场格局, 选型建议, 对标分析, 调研分析, 方案调研]
+category: 行业通用
+author: 平台内置
+version: v1.1
+---
+# 行业调研技能
+
+你是行业调研分析师。产出《行业方案调研分析报告》时遵循以下方法论：
+
+## 报告标准结构（八段）
+1. **题注**：标题 + 调研日期 + 覆盖方案数 + 引用来源数
+2. **一、行业方案概览与对比**：市场格局总览（三足鼎立 + 多元生态，配 ASCII 图）+ 核心功能对比矩阵（markdown 表格：开源/可视化编排/RAG支持/多Agent协作/工作流引擎/模型支持/非技术友好/生产就绪/学习曲线）+ 性能基准参考
+3. **模块深度解析**（每模块一节，六模块：Tools / MCP / Skills / Agent / 工作流 / 多Agent）：
+   - Tools：工具注册与 Function Calling 机制 / 工具执行与错误处理 / 安全控制体系
+   - MCP：协议架构与三层模型 / 与 Tools 的关系 / 应用场景与商业价值
+   - Skills：技能定义与文件结构 / 渐进式披露与动态加载 / Skills vs Tools vs MCP
+   - Agent：Observe-Think-Act 循环机制 / 四层记忆架构 / 规划与推理模式
+   - 工作流：DAG 与状态机引擎 / 节点类型与执行流程 / 可视化设计器
+   - 多Agent：通信模式 / 协调机制
+4. **行业实践对比**
+5. **选型建议与趋势展望**
+6. **附：参考来源**（编号 [n] 列表）
+
+## 质量要求
+- 每个模块给出「行业共识 → 量化数据 → 对本平台差距 → 落地映射」四段式
+- 量化数据标注来源编号 [n]；表格一律 markdown 表格
+- 报告产出：先用 file_write 写出到用户指定路径；未指定时使用默认路径 ./行业方案调研分析报告.md；写出成功后向用户汇报核心要点（≤200 字）；若 file_write 失败，必须在回复中直接输出完整报告正文或可交付骨架并说明落盘失败，不得无输出。
+
+## 工具使用
+- file_read：读取用户提供的素材/输入文件
+- graph_retrieve：检索知识库既有资料
+- file_write / file_append：落盘报告
+
+## 执行流程（强制，防止无输出）
+1. **触发即响应**：识别为行业调研任务后，立即输出简短受理信息：调研主题、将采用的八段结构、当前已有输入与缺失项、下一步动作；不得只进行内部思考、等待或空响应。
+2. **输入缺失并行处理**：若用户未提供调研对象或范围，默认以“AI Agent 平台搭建行业方案”为基准主题，先产出报告骨架、概览对比矩阵与待补充清单，同时用一句话请用户补充范围；不得因等待补充信息而不输出。用户明确指定其他行业时再切换。
+3. **路径缺失处理**：若用户未指定落盘路径，默认写入 ./行业方案调研分析报告.md，并在汇报中说明路径；若目录不可写，改用当前可用路径或在回复中直接交付正文，并说明落盘失败。
+4. **工具失败降级**：file_read / graph_retrieve 无结果或调用失败时，基于可核验的通用行业知识继续完成可交付版本，明确标注“来源不足/待核实”，不得虚构来源编号；不得无输出。
+5. **分段交付**：任务范围过大时，先交付题注、市场格局总览、核心功能对比矩阵和六模块骨架，再迭代模块深度；不得只回复“稍等”或仅给提纲。
+6. **完成回执**：每次响应至少包含进度、结果或下一步之一；完成时回执须包含落盘路径（或正文交付说明）、报告结构、核心结论（≤200 字）与待补充项。未成功落盘不得声称已生成文件。""",
+
+        "script_py": '''"""行业调研报告生成器（示例脚本，渐进披露参考）。
+
+用法：run(主题, 覆盖方案数=9, 引用来源数=15, 输出路径, fmt="md")
+产出标准八段结构的行业方案调研分析报告；fmt ∈ md|docx|pdf（docx/pdf 复用平台通用报告服务）。
+"""
+import os
+import sys
+from datetime import date
+
+from core.paths import repo_root as _repo_root  # 2026-11-25 P1：仓库根单点解析
+_HERE = _repo_root()
+if _HERE not in sys.path:
+    sys.path.insert(0, _HERE)
+
+
+def _sections():
+    return [
+        {"heading": "目录", "body": "行业方案概览与对比 / 市场格局总览 / 核心功能对比矩阵 / 性能基准参考\\n模块深度解析（Tools / MCP / Skills / Agent / 工作流 / 多Agent）\\n行业实践对比 / 选型建议与趋势展望"},
+        {"heading": "一、行业方案概览与对比", "body": "## 1.1 市场格局总览\\n（三足鼎立 + 多元生态：大模型厂商 / 开源框架 / 全栈平台）\\n\\n## 1.2 核心功能对比矩阵\\n| 维度 | 方案A | 方案B | 方案C |\\n|---|---|---|---|\\n| 开源 | | | |\\n| 可视化编排 | | | |\\n| RAG 支持 | | | |\\n| 多Agent协作 | | | |\\n| 工作流引擎 | | | |\\n| 模型支持 | | | |\\n| 非技术友好 | | | |\\n| 生产就绪 | | | |\\n\\n## 1.3 性能基准参考\\n（基于真实基准测试的成功率/延迟数据）"},
+        {"heading": "二、模块深度解析", "body": "## 2.1 Tools 模块\\n- 工具注册与 Function Calling 机制\\n- 工具执行与错误处理\\n- 安全控制体系\\n\\n## 2.2 MCP 协议\\n- 协议架构与三层模型\\n- 与 Tools 的关系\\n- 应用场景与商业价值\\n\\n## 2.3 Skills 模块\\n- 技能定义与文件结构\\n- 渐进式披露与动态加载\\n- Skills vs Tools vs MCP\\n\\n## 2.4 Agent 模块\\n- Observe-Think-Act 循环机制\\n- 四层记忆架构\\n- 规划与推理模式\\n\\n## 2.5 工作流模块\\n- DAG 与状态机引擎\\n- 节点类型与执行流程\\n- 可视化设计器\\n\\n## 2.6 多Agent编排\\n- 通信模式\\n- 协调机制"},
+        {"heading": "三、行业实践对比", "body": "| 场景 | 主流做法 | 推荐方案 | 理由 |\\n|---|---|---|---|"},
+        {"heading": "四、选型建议与趋势展望", "body": "- 建议：分层可插拔架构（Tools/MCP 底座 → Skills 增强 → Agent/Workflow 编排）\\n- 趋势：MCP 成为工具集成行业标准"},
+        {"heading": "附：参考来源", "body": "[1] "},
+    ]
+
+
+def run(topic: str, 覆盖方案数: int = 9, 引用来源数: int = 15,
+        输出路径: str = "", fmt: str = "md") -> str:
+    """生成行业调研报告文档。输出路径必填，fmt ∈ md|docx|pdf。"""
+    topic = topic or "AI Agent 平台搭建"
+    if not 输出路径:
+        return "请提供输出路径（配合 file_* 工具落盘到用户指定目录）"
+    from report_generator import report_generator
+    head = f"行业方案调研分析报告\\n\\n> 调研日期：{date.today().isoformat()}　覆盖方案：{覆盖方案数} 个　引用来源：{引用来源数}+ 篇"
+    sections = [{"heading": "题注", "body": head}] + _sections()
+    report = {"title": topic, "sections": sections, "summary": "", "report_type": "analysis"}
+    fmt = str(fmt or "md").lower().lstrip(".")
+    if fmt not in ("md", "docx", "pdf"):
+        return f"不支持的格式: {fmt}（仅支持 md/docx/pdf）"
+    path = report_generator.export(report, fmt, 输出路径)
+    return f"行业调研报告已生成 {fmt.upper()}（{len(sections)} 节）→ {path}"
+''',
+        "reference_md": """# 行业调研报告撰写指南
+
+## 一、报告定位
+《行业方案调研分析报告》：面向技术选型的行业级调研，覆盖方案概览、模块深度、行业实践与选型建议，为平台建设提供决策依据。
+
+## 二、标准结构（八段）
+1. 题注（标题/日期/覆盖方案数/引用来源数）
+2. 一、行业方案概览与对比
+   - 1.1 市场格局总览（阵营划分 + ASCII 结构图）
+   - 1.2 核心功能对比矩阵（markdown 表格，≥8 维度）
+   - 1.3 性能基准参考（成功率/延迟量化数据）
+3. 模块深度解析（每模块一节，六模块全覆盖）
+   - Tools：注册与 Function Calling / 执行与错误处理 / 安全控制
+   - MCP：协议架构三层模型 / 与 Tools 关系 / 场景与价值
+   - Skills：定义与文件结构 / 渐进式披露 / 与 Tools/MCP 对比
+   - Agent：Observe-Think-Act / 四层记忆 / 规划推理
+   - 工作流：DAG 与状态机 / 节点与执行 / 可视化设计器
+   - 多Agent：通信模式 / 协调机制
+4. 行业实践对比（场景 × 做法 × 推荐 × 理由）
+5. 选型建议与趋势展望
+6. 附：参考来源（编号引用 [n]）
+
+## 三、质量要求
+- 四段式模块分析：行业共识 → 量化数据（标注 [n]）→ 对本平台差距 → 落地映射
+- 表格一律 markdown；结构图用 ASCII
+- 结论必须有数据支撑，不写空话
+
+## 四、产出方式
+- 读素材：file_read（用户输入文件）
+- 查资料：graph_retrieve（知识库）
+- 写报告：file_write / file_append（用户指定路径）
+- 汇报：完成后向用户简述核心要点（≤200 字）
+""",
+    },
+    {
+        "name": "报告生成",
+        "description": "内容 → 对应格式文档（Markdown/Word/PDF）：结构化报告生成（类型体系/自定义大纲）+ 多格式导出 + file_* 工具落盘，报告可再编辑/正式交付",
+        "skill_type": "package",
+        "category": "基础通用",
+        "author": "平台内置",
+        "version": "v1.0",
+        "triggers": ["报告", "生成报告", "导出报告", "报告下载", "Word文档", "PDF文档", "汇报材料", "文档导出", "生成文档", "格式文档", "正式文档", "报告导出"],
+        "allowed_tools": ["graph_retrieve", "file_list", "file_read", "file_write", "file_append", "file_mkdir"],
+        "references": [{"title": "报告格式规范", "path": "references/报告格式规范.md"}],
+        "scripts": ["scripts/main.py"],
+        "skill_md": """---
+name: 报告生成
+description: 内容 → 对应格式文档（Markdown/Word/PDF）：结构化报告生成 + 多格式导出 + file_* 工具落盘
+triggers: [报告, 生成报告, 导出报告, 报告下载, Word文档, PDF文档, 汇报材料, 文档导出, 生成文档, 格式文档]
+category: 基础通用
+author: 平台内置
+version: v1.0
+---
+# 报告生成技能
+
+你负责把分析结果生成**结构化报告**并导出为**对应格式的正式文档**（Markdown / Word / PDF）。
+
+## 流程
+1. **定结构**：识别报告类型（模型分析 / 变更影响 / 预评审）或按用户指定大纲组织章节
+2. **填内容**：每节聚焦生成——涉及数据用 markdown 表格，能用图表表达的比较数据保留表格
+3. **导出文档**：
+   - 用户要 Word → 生成 .docx（可再编辑、样式规范）
+   - 用户要 PDF → 生成 .pdf（正式交付）
+   - 默认/预览 → .md（前端渲染）
+4. **落盘**：用 file_write/file_append 先把报告正文写成 .md；再用导出脚本把同一内容导出为 .docx/.pdf 到用户指定路径（scripts/main.py）
+
+## 质量要求
+- 报告必须包含：概述 → 现状/详细分析 → 结论 → 建议
+- 数据必须有来源；结论不写空话
+- 导出文件路径用绝对路径，中文文件名保留 UTF-8
+
+## 工具使用
+- file_read / graph_retrieve：收集素材
+- file_write / file_append：写 .md 正文
+- scripts/main.py：内容 → docx/pdf 导出（run(title, sections|markdown, fmt, 输出路径)）
+""",
+        "script_py": '''"""报告生成技能脚本：内容 → 对应格式文档（md/docx/pdf）。
+
+复用平台通用报告服务 report_generator（同一数据契约 Report = {title, sections:[{heading, body, table?}], summary}）。
+用法：
+- run(title, markdown="整篇文本", fmt="md", 输出路径="...")  —— markdown 自动按 ## 分节
+- run(title, sections=[{"heading","body"}], fmt="docx", 输出路径="...") —— 直接给结构化分节
+"""
+import os
+import re
+import sys
+
+from core.paths import repo_root as _repo_root  # 2026-11-25 P1：仓库根单点解析
+_HERE = _repo_root()
+if _HERE not in sys.path:
+    sys.path.insert(0, _HERE)
+
+
+def _sections_from_markdown(markdown):
+    sections, cur = [], None
+    for line in (markdown or "").splitlines():
+        if line.startswith("## "):
+            if cur:
+                sections.append(cur)
+            cur = {"heading": line[3:].strip(), "body": []}
+        elif cur is not None:
+            cur["body"].append(line)
+    if cur:
+        sections.append(cur)
+    for s in sections:
+        s["body"] = "\\n".join(s["body"]).strip()
+    return sections or [{"heading": "正文", "body": (markdown or "").strip()}]
+
+
+def run(title="报告", sections=None, markdown="", fmt="md", 输出路径=""):
+    """生成指定格式的报告文档（md/docx/pdf）。输出路径必填。"""
+    if not 输出路径:
+        return "请提供输出路径（配合 file_* 工具落盘到用户指定目录）"
+    if not sections:
+        sections = _sections_from_markdown(markdown)
+    from report_generator import report_generator
+    report = {"title": title or "报告", "sections": sections or [],
+              "summary": "", "report_type": "analysis"}
+    fmt = str(fmt or "md").lower().lstrip(".")
+    if fmt not in ("md", "docx", "pdf"):
+        return f"不支持的格式: {fmt}（仅支持 md/docx/pdf）"
+    path = report_generator.export(report, fmt, 输出路径)
+    return f"已生成 {fmt.upper()} 报告（{len(sections)} 节）→ {path}"
+''',
+        "reference_md": """# 报告格式规范
+
+## 支持格式
+- Markdown（.md）：默认/预览/存档
+- Word（.docx）：可再编辑、交付给用户
+- PDF：正式对外交付
+
+## 报告结构（统一数据契约）
+Report = {title, sections:[{heading, body, table?}], summary, report_type}
+- body 支持轻量 markdown：**粗体**、表格（| a | b |）、列表（- / 1.）、### 子标题
+- report_type：analysis（模型分析）/ impact（变更影响）/ review（预评审）
+
+## 分节模板
+- 概述 → 现状分析 → 详细分析 → 结论 → 建议
+- 或按用户指定大纲（如「按 背景/方案/结论 组织」）动态覆盖
+
+## 导出规则
+- 中文文件名保留 UTF-8；绝对路径落盘
+- 数据表格尽量保留（docx/pdf 会渲染为正式表格，表头加底色）
+- docx：标题/分节/列表/表格标准样式；pdf：A4 页面 + 系统中文字体
+""",
+    },
+    # ══════════════════════════════════════════════════════════════════
+    # ★ 2026-11-07（P2）：能力资产管理技能
+    #   为什么需要"技能"而不只是"工具"：
+    #   真机实测（会话 990509）用户说「用 capability_query 查一下有哪些 skill」，
+    #   意图被判成 knowledge_qa ⇒ 那个 Agent 没绑 capability_*，模型转而调
+    #   sys_query_monitor/audit，最后**反问用户**。⇒ 光有工具不够，
+    #   还要一个**触发范围覆盖各种说法**、并能把工具带进候选的技能。
+    #   （技能命中 ⇒ allowed_tools 补入候选，这条链路本轮已用 skill_script_run 验证过。）
+    # ══════════════════════════════════════════════════════════════════
+    {
+        "name": "能力资产管理",
+        "description": "在会话里管理平台能力资产：查有哪些 Agent/技能/工具、看某能力绑给了谁、"
+                       "新增 Agent/技能/工具/AI自注册能力、改配置、绑解绑、启停、删除。"
+                       "所有写动作都提交人工确认，用户点批准后才生效",
+        "skill_type": "package",
+        "category": "平台集成",
+        "author": "平台内置",
+        "version": "v1.0",
+        "triggers": ["能力管理", "加个能力", "加一个能力", "新增能力", "注册能力", "自注册",
+                     "新增工具", "加个工具", "建个工具", "注册工具", "加一个工具",
+                     "新增技能", "建个技能", "加个技能", "创建技能",
+                     "新建agent", "新建 agent", "新增agent", "新建智能体", "加个agent",
+                     "绑定工具", "绑定技能", "解绑工具", "解绑技能", "绑给",
+                     "停用工具", "停用技能", "禁用工具", "启用工具", "删除agent", "删除工具",
+                     "有哪些工具", "哪些技能", "有哪些技能", "能力清单", "能力资产",
+                     "capability_query", "capability_apply"],
+        "allowed_tools": ["capability_query", "capability_apply"],
+        "references": [],
+        "scripts": [],
+        "skill_md": """---
+name: 能力资产管理
+description: 在会话里管理平台能力资产（Agent/技能/工具/AI自注册能力）的查询、新增、修改、绑定、启停、删除
+triggers: [能力管理, 加个能力, 注册能力, 新增工具, 新增技能, 绑定工具, 有哪些工具, capability_query]
+category: 平台集成
+author: 平台内置
+version: v1.0
+---
+# 能力资产管理技能
+
+你可以在**会话里**直接管理平台的能力资产，不需要让用户去别的页面点按钮。
+
+## 两个工具，一条铁律
+
+| 工具 | 用途 | 确认 |
+|---|---|---|
+| `capability_query` | 查询：`kind`（agent/skill/tool/capability）+ `action`（list/get/diff） | 只读，不确认 |
+| `capability_apply` | 变更：`action`（create/update/bind/unbind/enable/disable/delete） | **必进人工确认** |
+
+**铁律：你只能"提"，不能"批"。** `capability_apply` 只会写一张确认单，
+用户在会话里点「批准」才真正变更。所以：
+- 不要说「已帮你加好了」——要到看到执行回执才能说完成
+- 不要重复提交同一张单（确认单已存在时系统会提示"不要重复发起"）
+- 被拒绝就如实说明，**不要换个名字再提一次**
+
+## 标准动作配方
+
+**① 先看现状（几乎所有变更都该先查）**
+```
+capability_query kind=skill action=list keyword=智源
+capability_query kind=tool action=diff target=<工具名>      ← 看它绑给了谁、谁还没绑
+```
+
+**② 加一个"能算 XX"的能力（自注册代码能力）**
+```
+capability_apply kind=capability action=create
+spec={
+  name: "bmi_calc",                       # 只能是字母数字_-.
+  description: "按身高体重算 BMI",         # 必填，模型靠它判断何时调用
+  script: "def run(**kw):\\n    h=float(kw.get('height_cm') or 0)/100\\n    ...\\n    return {'bmi': ...}",
+  input_schema: {"type":"object","properties":{"height_cm":{"type":"number"},...},"required":[...]},
+  agents: ["智源对接agent"]                # 可选，注册后立即绑上
+}
+```
+脚本要求：**必须定义 `run(**kwargs)`**，返回值会被序列化回去；
+写文件请用 `os.environ["MBSE_WORKSPACE"]` 拼路径（沙箱根，其他绝对路径会被静态审查拒绝）；
+禁止 `subprocess` / `os.system` / `eval` / `socket` / 越界绝对路径写 —— 审查不通过会被拒。
+
+**③ 接入一个 HTTP 接口（不用写代码）**
+```
+capability_apply kind=tool action=create
+spec={name, description, url, method, headers, body:{...}, query:{...}, input_schema}
+```
+占位符写法：`{args:参数名}`；整串为单个占位符时保留原生类型（如 `{args:page,int}`）；
+可选参数写 `{args:x,str,optional}`。副作用按 Method 自动定档（GET→只读 / POST·PUT·PATCH→写 / DELETE→破坏性）。
+
+**④ 加技能 / Agent**
+```
+capability_apply kind=skill action=create spec={name, description, content, triggers, agents}
+capability_apply kind=agent action=create spec={name, display_name, description, agent_role:sub, system_prompt, tools:[], skills:[]}
+```
+
+**⑤ 改配置（字段白名单，改不了 builtin/source）**
+```
+capability_apply kind=skill action=update target=<名字> spec={fields:{description:"新描述"}}
+```
+改 `side_effect` 会被标成 manual（此后自动派生不再覆盖）。
+
+**⑥ 绑 / 解绑**
+```
+capability_apply kind=tool     action=bind   target=<工具名> spec={agents:["A","B"]}
+capability_apply kind=agent    action=bind   target=<Agent名> spec={tools:["x"], skills:["y"]}   ← 反向
+capability_apply kind=tool     action=unbind target=<工具名> spec={agents:["A"]}
+```
+
+**⑦ 启停 / 删除**
+```
+capability_apply kind=tool action=disable target=<名字>     # 停用 ≠ 删除；内置只能停用
+capability_apply kind=agent action=delete target=<名字>
+```
+删除会一并清理绑定；内置资产（builtin=1）**不能删**，只能停用。
+
+## 输出铁律
+1. 变更前先 `capability_query` 确认现状（名字是否已存在、绑给了谁）
+2. `target` 用**真实存在的名字**，不要编造
+3. 提交后明确告诉用户「已提交确认单 #N，请在上面点批准」，并复述将要发生什么
+4. 拿到执行回执后才说完成；失败要**原样转述**失败原因（不要再试一次同样参数）
+5. 用户问"有哪些能力"时，用 `capability_query` 的真实结果回答，**不要凭印象列**
+""",
+    },
+]
+
+
+def _write_package(pkg: dict) -> str:
+    """落盘技能包文件到 static/skill_packages/<uuid>/，返回目录路径。
+
+    ★ 2026-11-07：`script_py` 改为**可选**。
+      原实现无条件 `f.write(pkg["script_py"])` ⇒ KeyError。而 `scripts` 字段本身
+      允许为空（一个只讲方法、不带脚本的技能完全合法）⇒ 这是"字段可选但代码必填"
+      的不一致。更糟的是它抛在 `main()` 的 for 循环里 ⇒ **一个包写失败，
+      后面所有包都不注册**（本轮实测：新技能让 3 个内置包的后续处理全部中断，
+      还只留一个 Traceback，看起来像"技能注册功能坏了"）。
+    """
+    pkg_dir = os.path.join(STATIC_DIR, "skill_packages", uuid.uuid4().hex[:12])
+    os.makedirs(os.path.join(pkg_dir, "scripts"), exist_ok=True)
+    os.makedirs(os.path.join(pkg_dir, "references"), exist_ok=True)
+    with open(os.path.join(pkg_dir, "skill.md"), "w", encoding="utf-8") as f:
+        f.write(pkg["skill_md"])
+    _sp = pkg.get("script_py")
+    if _sp:
+        with open(os.path.join(pkg_dir, "scripts", "main.py"), "w", encoding="utf-8") as f:
+            f.write(_sp)
+    for ref in pkg.get("references") or []:
+        rel = ref.get("path", "")
+        if not rel or "\\n" in rel:
+            continue
+        fname = os.path.basename(rel)
+        with open(os.path.join(pkg_dir, "references", fname), "w", encoding="utf-8") as f:
+            f.write(pkg.get("reference_md", ""))
+    return pkg_dir
+
+
+#: ★ 2026-11-06：是否允许启动时用内置包正文**覆盖** DB 中已有的技能正文。
+#: 默认 False —— 见 UPDATE 分支处的事故说明（用户编辑会被重启抹掉）。
+_FORCE_CONTENT = "--force-content" in sys.argv
+
+
+def main() -> None:
+    conn = get_db()
+    try:
+        # 工具注册表同步：file_* 内置文件工具（幂等，见 database._seed_builtin_tools）
+        try:
+            from database import _seed_builtin_tools
+            _seed_builtin_tools(conn)
+        except Exception as e:
+            print(f"[skills] ⚠️ 内置工具同步失败（忽略）: {e}")
+        for pkg in SKILL_PACKAGES:
+            name = pkg["name"]
+            # ★★ 2026-10-29 修复「重启即自动发布」（实测事故，危害极大）：
+            #   原实现 `SELECT id,status FROM skills WHERE name=?` + `UPDATE ... WHERE name=?`
+            #   ⇒ **命中该名字下所有行**，包括 `source='ai_improve'` 的 AI 修订草稿，然后：
+            #     ① `status='published'` —— AI 草稿被**自动发布**，彻底绕过人工审核闸门；
+            #     ② `source='manual'`  —— **溯源被篡改**，事后无法分辨哪条是 AI 改的；
+            #     ③ `content=?`（内置包正文）—— AI 修订内容被**覆盖丢失**。
+            #   实测：SkillImprover 写入 `行业调研` 的 draft_revision(v2) 在一次服务重启后
+            #   变成了 published/manual/v1.0，正文被换回内置原文。
+            #   ⇒ 这等于「SkillImprover 的人工审核闸门形同虚设」，与 core/config_proposal
+            #     反复强调的"只提议不自动应用"直接冲突。
+            #   修法：**只同步内置行**（builtin=1 且 source!='ai_improve'），
+            #        并显式排除 ai_improve / draft_revision —— 双保险，防未来新增来源漏网。
+            #   参考 Voyager（arXiv:2305.16291）：技能库「只增不改」，
+            #     "learning a new skill cannot overwrite an old one"
+            #     —— 种子数据更不该覆盖学习产出的技能。
+            row = conn.execute(
+                "SELECT id, status FROM skills WHERE name=? "
+                "AND COALESCE(builtin,0)=1 AND COALESCE(source,'')!='ai_improve' "
+                "AND COALESCE(status,'')!='draft_revision' "
+                "ORDER BY id LIMIT 1", (name,)).fetchone()
+            pkg_dir = _write_package(pkg)
+            refs = json.dumps(pkg.get("references") or [], ensure_ascii=False)
+            scripts = json.dumps(pkg.get("scripts") or [], ensure_ascii=False)
+            triggers = json.dumps(pkg.get("triggers") or [], ensure_ascii=False)
+            allowed_tools = json.dumps(pkg.get("allowed_tools") or [], ensure_ascii=False)
+            if row:
+                # ★★ 2026-11-06 修复：**启动时覆盖人工编辑的技能正文**（实测事故）。
+                #
+                #   现象：在界面上把「智源平台管理」的正文合并成 5744 字（v1.4），
+                #   服务重启后变回内置原文 4958 字（v1.3）；而 `updated_at` 仍是编辑时刻
+                #   —— 因为下面这条 UPDATE **不 SET updated_at**，所以连"被改过"都看不出来。
+                #   证据链：`main.py:80` 每次启动都调 `seed_all` → `register_skills.main()`，
+                #   而此处的 `WHERE` 只排除了 ai_improve/draft_revision，**没有排除人工编辑**。
+                #
+                #   语义判断：内置技能包是**种子**，不是"每次启动的权威源"。
+                #   一旦用户改过正文，DB 就是权威 —— 与既有 `register_skills` 注释里
+                #   引用的 Voyager 原则一致（"learning a new skill cannot overwrite an old one"）。
+                #   ⇒ 默认**不覆盖 content/version**，只补齐"配置类"字段
+                #     （triggers/category/allowed_tools/references/scripts/package_path），
+                #     因为这些是随包升级应当跟进的元数据。
+                #   需要强制下发新正文时：`register_skills.py --force-content`（显式意图）。
+                _keep_content = not _FORCE_CONTENT
+                if _keep_content:
+                    # ★★ 2026-11-07：**triggers 也必须保留**（上一轮只保留了 content/version，漏了它）。
+                    #
+                    #   实测事故：本轮把「报告生成」的触发词里的泛词「报告」删掉、换成
+                    #   「报告排版导出」，跑完自检 ERR 归零；**重启服务后它又回来了** ——
+                    #   因为本行的 `triggers=?` 仍用内置包定义覆盖。
+                    #
+                    #   为什么 triggers 与 content 同等对待：
+                    #     · 它直接决定**技能命中率**（子串/合取匹配，先于语义层）；
+                    #     · 界面「技能编辑」可改它（`routers/studio_parts/skills.py`）；
+                    #     · 一个用户能在 UI 里改、又被重启抹掉的字段，就是同一个 bug 的两种表现
+                    #       （与 2026-11-06 的正文覆盖事故同族）。
+                    #   ⇒ 内置包只在**建行时**给初始 triggers；已存在的行由 DB 为准。
+                    #   需要下发新版触发词时：`register_skills.py --force-content`（显式意图）。
+                    conn.execute(
+                        "UPDATE skills SET description=?, skill_type=?, category=?, "
+                        "allowed_tools=?, `references`=?, scripts=?, package_path=?, builtin=1, scope='public' "
+                        "WHERE id=?",
+                        (pkg["description"], pkg["skill_type"], pkg["category"],
+                         allowed_tools, refs, scripts, pkg_dir, row["id"]))
+                    print(f"[skills] 已更新元数据（保留人工正文与触发词）: {name} (id={row['id']})")
+                else:
+                    conn.execute(
+                        "UPDATE skills SET description=?, skill_type=?, triggers=?, category=?, content=?, "
+                        "version=?, status='published', source='manual', allowed_tools=?, `references`=?, scripts=?, "
+                        "package_path=?, builtin=1, scope='public' WHERE id=?",
+                        (pkg["description"], pkg["skill_type"], triggers, pkg["category"], pkg["skill_md"],
+                         pkg["version"], allowed_tools, refs, scripts, pkg_dir, row["id"]))
+                    print(f"[skills] 已更新（--force-content 覆盖正文）: {name} (id={row['id']})")
+            else:
+                # 无内置行 ⇒ 检查是否只有 AI 草稿/同名用户技能：若有则**跳过，
+                # 不新建**（避免与草稿搅在一起）——只在完全没有任何同名行时创建。
+                _any = conn.execute(
+                    "SELECT id FROM skills WHERE name=? LIMIT 1", (name,)).fetchone()
+                if _any:
+                    print(f"[skills] 跳过 {name}：已存在非内置同名行（不覆盖 AI 草稿/用户技能）")
+                else:
+                    conn.execute(
+                        "INSERT INTO skills (name, description, skill_type, triggers, category, content, "
+                        "frontmatter, package_path, status, version, source, allowed_tools, `references`, scripts, builtin, scope) "
+                        "VALUES (?,?,?,?,?,?,?,?,'published','v1.0','manual',?,?,?,1,'public')",
+                        (name, pkg["description"], pkg["skill_type"], triggers, pkg["category"], pkg["skill_md"],
+                         pkg["skill_md"], pkg_dir, allowed_tools, refs, scripts))
+                    print(f"[skills] 已创建: {name}")
+            conn.commit()
+    finally:
+        conn.close()
+    print(f"[skills] 完成：{len(SKILL_PACKAGES)} 个基础通用技能")
+
+
+if __name__ == "__main__":
+    main()

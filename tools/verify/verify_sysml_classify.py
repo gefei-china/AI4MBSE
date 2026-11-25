@@ -8,7 +8,7 @@
 
 ### 根因：一行被改空的默认正则（提交说明里完全没提）
 
-`sysml_v2_check.py` 的 `_LEX_DEFAULT` 在 `cf33d3e`
+`core/domain/sysml_v2_check.py` 的 `_LEX_DEFAULT` 在 `cf33d3e`
 （2026-11-09~10 那条 391 门禁的大提交）里被改成 `r""`：
 
 ```diff
@@ -229,7 +229,7 @@ def _summary():
         print("  - " + n)
     if _FAIL:
         print("\n⚠️ 分类失效的典型原因：正则被改空（空正则匹配一切）")
-        print("   检查 sysml_v2_check.py 的 _LEX_DEFAULT / _SYN_DEFAULT / _join_pattern")
+        print("   检查 core/domain/sysml_v2_check.py 的 _LEX_DEFAULT / _SYN_DEFAULT / _join_pattern")
     print("=" * 78)
     return 1 if _FAIL else 0
 

@@ -51,7 +51,7 @@ print("=" * 78)
 # ══ A 静态断言 ══════════════════════════════════════════════════════════════
 print("\n── A 静态断言 ──")
 search_src = read("knowledge_pipeline/search.py")
-ke_src = read("knowledge_engine.py")
+ke_src = read("services/knowledge_engine.py")
 rag_src = read("agent/rag.py")
 brepo_src = read("repositories/branch_repo.py")
 mig_src = read("database/migrations/documents.py")
@@ -612,7 +612,7 @@ MUT = [
     return "", []""",
      ["A1 `_lifecycle_clause` 已定义且默认排除 deprecated",
       "B4 V2 已废弃文档在三路检索中 0 召回（bigram/向量/混合/入口）"]),
-    ("还原 BM25 指纹为 (COUNT,MAX(id))", "knowledge_engine.py",
+    ("还原 BM25 指纹为 (COUNT,MAX(id))", "services/knowledge_engine.py",
      """        "SELECT COUNT(*), COALESCE(MAX(id),0), "
         "COALESCE(SUM(CASE WHEN lifecycle_status IS NULL "
         "OR lifecycle_status NOT IN ('deprecated') THEN 0 ELSE 1 END),0) "

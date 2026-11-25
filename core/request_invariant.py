@@ -35,7 +35,7 @@ import time
 from collections import deque
 from dataclasses import dataclass
 
-from core import guards
+from core.request_invariant import guards
 from core.capability_seams import DEFAULT as CAPABILITIES, TriggerPolicy
 
 _LOG = logging.getLogger("mbse.request_invariant")

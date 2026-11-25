@@ -29,8 +29,8 @@ import datetime
 
 from routers.knowledge_parts.shared import *  # noqa: F401,F403
 
-import metrics_core
-from metrics_core import _status
+from services import metrics_core as metrics_core
+from services.metrics_core import _status
 
 # 作用域图例（前端把它渲染成指标卡上的 scope 角标 tooltip）
 SCOPE_LEGEND = {

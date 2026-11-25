@@ -33,7 +33,7 @@ import json
 import re
 from datetime import datetime
 
-from memory_service import MemoryService
+from services.memory_service import MemoryService
 
 SCHEMA = 1
 MAX_INDEX_LINES = 200
@@ -92,7 +92,7 @@ def _evidence_for(conn, claim: str, limit: int = 5) -> list:
     ② **选取按首次出现位置**：按"长度降序"会挑出笔记后半段的无意义 3-gram
        （"代表月/即代表"），证据里一个都没有 ⇒ 取证恒为空。
     """
-    from transcript_fts import search_transcripts
+    from adapters.transcript_fts import search_transcripts
     low = (claim or "").lower()
     cand = [k for k in _keywords(claim) if 2 <= len(k) <= 8]
     ordered, seen_pos = [], set()

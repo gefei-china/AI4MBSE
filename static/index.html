@@ -750,6 +750,7 @@
             <button class="btn sm ghost" onclick="openOntVersionHistory()" title="查看本体版本链（每次 Schema 变更自动递增，可发布稳定基线）" data-page-node-id="5gbQJmwX17QZ7oEgpY452d">🕘 版本历史</button>
             <button class="btn sm ghost" onclick="openOntSWRL()" title="SWRL 规则管理：规则推理（传递闭包等）→ 事实人工裁决；规则引用的类型必须已在本体注册" data-page-node-id="CD9lCCqQM0aeslrcTmYz6j2">⚖ SWRL</button>
             <button class="btn sm ghost" onclick="openOntSettings()" title="本体设置：命名空间 / IRI 生成策略（P2-6 Project Settings，影响后续新建实体）" data-page-node-id="e7I9M1HRCGdis99AmqfWjW">⚙</button>
+            <button class="btn sm ghost" onclick="openOntRuntime()" title="运行期语义健康度：本体体检覆盖面 / SHACL 发现 / 能力问题通过率 / 图库状态" data-page-node-id="ontRuntimeBtn20261124">📊 运行期语义</button>
             <span class="tag" id="ont-version-badge" title="本体版本（消费基线 SemVer）。编辑只留变更记录、版本号仅在发布时升级" style="font-weight:600;" data-page-node-id="t4tcMWGHRsLkahyQGYUHVu">🧬 v-</span>
           </div>
           <!-- 本体就绪检测条已移除（2026-09-02 二轮调整）：状态类文字不占中栏空间；loadOntologyReadiness 保留 null 安全 -->
@@ -1677,6 +1678,11 @@
              因为按"面板先列需要人处理的事"——观察期工单就是"本应做什么"，
              不放到最前就没人看得到。数据全部来自 /api/events/*。 -->
         <div id="ev-panel"><div class="loading">加载事件面板…</div></div>
+        <!-- 静默兜底台账（2026-11-25，P0 让错误可见）：架构评估实测全仓 69% 的
+             `except Exception` 是静默吞掉的。执行过程中的降级在聊天里逐轮可见
+             （SSE `degrade` 事件）；这里给**全局视角**：这台机器整体哪里在漏。
+             数据来自 /api/health/degrade，进程内累计，不自动轮询。 -->
+        <div id="dg-panel"><div class="loading">加载降级台账…</div></div>
         <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:14px;" id="ops-kpis" data-page-node-id="j7t9LTQW4sbWXn0HOGCqz5"></div>
         <!-- 平台能力总览（2026-10-18 v2 方案收口）：LLM 健康 / 编排运行 / 会话排查 / 治理就绪 四层一屏总览。
              取数全部复用既有口径（llm_health 为 LLM 层唯一真源），各段独立降级，不新造指标。 -->
@@ -2056,9 +2062,11 @@
 <!-- 2026-10-29 AI 答复呈现层（来源标注 + 正文限高内滚；内容不删、不折叠，遵守 B5-8） -->
 <script src="/static/js/mods/51-answer-view.js" defer></script>
 <script src="/static/js/mods/52-events.js" defer></script>
+<script src="/static/js/mods/55-degrade-panel.js" defer></script>
 <!-- 2026-11-03 多方案对比卡（FR-MG-6：多方案生成 + 比较 + 多维度打分） -->
 <!-- 2026-11-06 P0：我的反馈追踪页 -->
 <script src="/static/js/mods/53-my-feedback.js" defer></script>
 <script src="/static/js/mods/58-alternatives.js" defer></script>
+<script src="/static/js/mods/54-ont-runtime.js" defer></script>
 </body>
 </html>

@@ -122,7 +122,7 @@ def _h_extract_entities(conn, wi: dict) -> dict:
         return {"ok": False, "writes": False, "error": "文档未完成解析，无法抽取",
                 "result": {"doc_id": doc_id, "parse_status": row["parse_status"]}}
 
-    from vector2graph import extract_candidates
+    from services.vector2graph import extract_candidates
     title_row = conn.execute(
         "SELECT title FROM doc_metadata WHERE document_id=?", (doc_id,)).fetchone()
     query = (title_row[0] if title_row and title_row[0] else row["filename"])[:80]
@@ -212,7 +212,7 @@ def _h_autofix_sysml(conn, wi: dict) -> dict:
 
     # ② 修复（autofix 内部自带自校验回滚）
     try:
-        import sysml_autofix_tools as af
+        from services.tools import sysml_autofix_tools as af
         fx = af.exec_tool("sysml_v2_autofix", {"code": code})
     except Exception as e:
         return {"ok": False, "writes": False,

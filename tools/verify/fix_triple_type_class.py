@@ -1,5 +1,5 @@
 """一次性数据修复：把「type 谓词但 object_type='literal'」的历史三元组
-重置为待物化，让它们重走**已修正**的写图链（graph_db.py:809 会按 class 处理）。
+重置为待物化，让它们重走**已修正**的写图链（adapters/graph_db.py:809 会按 class 处理）。
 
 ⚠️ 为什么是「重置 graph_stored」而不是「直接 UPDATE object_type='class'」：
    - 生产代码 `graph_db.sync_pending_triples` 已有

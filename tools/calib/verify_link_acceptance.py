@@ -38,13 +38,13 @@ import time
 def _find_root():
     _d = os.path.dirname(os.path.abspath(__file__))
     for _ in range(6):
-        if os.path.isfile(os.path.join(_d, "memory_service.py")):
+        if os.path.isfile(os.path.join(_d, "services/memory_service.py")):
             return _d
         _p = os.path.dirname(_d)
         if _p == _d:
             break
         _d = _p
-    raise SystemExit("找不到仓库根（未找到 memory_service.py）")
+    raise SystemExit("找不到仓库根（未找到 services/memory_service.py）")
 
 
 ROOT = _find_root()

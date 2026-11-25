@@ -106,7 +106,7 @@ def graph_data_properties(type: Optional[str] = None, conn=Depends(db_session)):
     #   都按 `p.required` 渲染），用户填完保存却被 400 拦住 —— 前后端口径不一致。
     #   这里刻意**不吞异常**：字典查不到类型也不会抛（classify 回退为自身），
     #   真出错就该让它响，而不是静默回到"没有必填"。
-    from ontology_semantics import OntologyValidator
+    from core.domain.ontology_semantics import OntologyValidator
     _req = set(OntologyValidator(conn)._merged_constraints(type).get("required") or [])
     if _req:
         for d in out:
@@ -321,7 +321,7 @@ def graph_merge_edge(body: dict, conn=Depends(db_session),
 
     属性/来源文档并入 keep，dup 置 deprecated 留痕；审计 + CommitRepo 打点。
     """
-    from entity_resolver import merge_relation
+    from services.entity_resolver import merge_relation
     keep_id = str(body.get("keep_id") or "").strip()
     dup_id = str(body.get("dup_id") or "").strip()
     if not keep_id or not dup_id:

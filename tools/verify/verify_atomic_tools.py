@@ -5,7 +5,7 @@
 ## 为什么这两个工具值得单独一道门禁
 
 `agent/tool_side_effect.py` 那轮盘点发现：沙箱与文档库**早就存在**，但从未接成工具：
-  · `sandbox.py`：Python/JS 沙箱，进程隔离 + 超时强杀 + builtins/import 白名单
+  · `adapters/sandbox.py`：Python/JS 沙箱，进程隔离 + 超时强杀 + builtins/import 白名单
   · `pypdf` / `pdfplumber` / `python-docx` / `openpyxl` 全部已安装
   · `SELECT COUNT(*) FROM tools WHERE name LIKE '%code%'` = **0**
 ⇒ 模型"算一下、转一下、读个 PDF"只能靠心算或拒绝。

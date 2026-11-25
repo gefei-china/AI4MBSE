@@ -270,7 +270,7 @@ def recall_memories(conn, query: str, agent_id: str = "chat", scopes: list | Non
     #   作用域隔离仍由 `scopes` 承载（project/user 槽），**不放松**；这里放松的只是 agent_id 维度。
     _cross_penalty = _cfg_float("memory_cross_domain_penalty", DEFAULT_CROSS_PENALTY)
     try:
-        from memory_service import MemoryService
+        from services.memory_service import MemoryService
 
         def _collect(rows, cross: bool, seen_ids: set):
             nonlocal dropped          # ⚠️ 必须声明：`dropped += 1` 否则会让它成为 _collect 的局部变量，
@@ -333,7 +333,7 @@ def recall_memories(conn, query: str, agent_id: str = "chat", scopes: list | Non
                 "WHERE project_id=? AND enabled=1 ORDER BY id", (project_id,)).fetchall()
             if prow:
                 # 相关性：复用 VectorEngine bigram 余弦（零依赖、确定性），与 agent_memory 路同口径可比
-                from knowledge_engine import VectorEngine
+                from services.knowledge_engine import VectorEngine
                 ve = VectorEngine()
                 qv = ve._vector(query or "")
                 scored = []

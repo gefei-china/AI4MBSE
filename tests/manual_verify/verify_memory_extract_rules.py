@@ -136,7 +136,7 @@ def main():
                     except Exception:
                         pass
 
-    target = os.path.join(_ROOT, "memory_service.py")
+    target = os.path.join(_ROOT, "services/memory_service.py")
     bak = target + ".mutbak"
     # (变异锚点, 探针键, 期望：掐断后该探针**漏网**)
     MUTS = [
@@ -194,7 +194,7 @@ def main():
                 os.remove(probe_file)
             except Exception:
                 pass
-    print("  [restored] memory_service.py 已还原")
+    print("  [restored] services/memory_service.py 已还原")
 
     print("\n" + "=" * 62)
     print("C'. 还原后基线复跑（防还原不干净）")
@@ -212,7 +212,7 @@ def main():
     print("D. reflow 不再把图谱实体写进 agent_memory")
     print("=" * 62)
     src2 = open(target, encoding="utf-8").read()
-    rf = open(os.path.join(_ROOT, "knowledge_reflow.py"), encoding="utf-8").read()
+    rf = open(os.path.join(_ROOT, "services/knowledge_reflow.py"), encoding="utf-8").read()
     ck("D1. reflow 只沉淀 经验/决策/风险 三类",
        '_EXP_TYPES = ("经验", "决策", "风险")' in rf and 'et in _EXP_TYPES' in rf)
     ck("D2. reflow 拒收占位 note（'规则提炼' 等无信息量串）",

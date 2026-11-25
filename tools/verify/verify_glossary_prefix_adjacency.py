@@ -139,13 +139,13 @@ def _mismatch(conn):
 
 def load_migration(mutate=None):
     """加载迁移模块源码，可选文本变换后 exec —— 变异自证用。"""
-    path = os.path.join(ROOT, "database", "migrations", "glossary.py")
+    path = os.path.join(ROOT, "database", "migrations", "core/domain/glossary.py")
     with open(path, encoding="utf-8") as f:
         src = f.read()
     if mutate:
         src = mutate(src)
     ns = {"__name__": "glossary_migration_mut"}
-    exec(compile(src, "glossary.py", "exec"), ns)
+    exec(compile(src, "core/domain/glossary.py", "exec"), ns)
     return ns["_migrate_glossary_canonical_align"]
 
 

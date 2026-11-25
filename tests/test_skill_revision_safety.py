@@ -107,7 +107,7 @@ def test_register_skills_does_not_touch_ai_improve_draft(skills_conn, monkeypatc
     #
     # ⚠️ 2026-11-07 修正：原断言盯 `content`，但 2026-11-07 起默认**保留正文**
     #   （正文与 triggers 由 DB 为准，防止"重启把人工修改抹掉"；要下发新正文须
-    #   `register_skills.py --force-content`）。判据若仍盯 content，就会把
+    #   `services/tools/register_skills.py --force-content`）。判据若仍盯 content，就会把
     #   "按设计保留" 判成"main 没执行"—— 这正是本测试注释里警告的**假红**。
     #   ⇒ 自证改盯**默认模式确实会更新**的字段（description/category/builtin/scope），
     #     反空转的目的不变：main 没跑到写入，这些字段不会变。
@@ -274,15 +274,15 @@ def _code_only(path: str) -> str:
 
 def test_prompt_has_no_hard_char_limit():
     """prompt **代码**不得再出现「200字内」这类硬压缩要求。"""
-    code = _code_only("skill_improve.py")
+    code = _code_only("services/skill_improve.py")
     assert "200字内" not in code, "★ prompt 仍有「200字内」的强制压缩要求"
-    src = open(os.path.join(ROOT, "skill_improve.py"), encoding="utf-8").read()
+    src = open(os.path.join(ROOT, "services/skill_improve.py"), encoding="utf-8").read()
     assert "85%" in src, "缺少「不得少于原文 85%」的保真约束"
 
 
 def test_no_hard_input_truncation_to_3000():
     """输入**代码**不得再硬截 3000 字（长手册会被腰斩）。"""
-    code = _code_only("skill_improve.py")
+    code = _code_only("services/skill_improve.py")
     assert "[:3000]" not in code, "★ 输入仍被硬截 3000 字"
 
 

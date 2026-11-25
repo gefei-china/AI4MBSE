@@ -158,7 +158,7 @@ def run_simulation(body: dict, conn=Depends(db_session), user: dict = Depends(cu
     is_demo_scene = bool(scene_id)
     if sim_id > 0 and not is_demo_scene:
         try:
-            from knowledge_reflow import reflow_from_impact
+            from services.knowledge_reflow import reflow_from_impact
             rf = reflow_from_impact(conn, sim_id, changes, result["comparison"], title=title,
                                     project_id=project_id)
             if rf.get("candidates", 0) > 0:

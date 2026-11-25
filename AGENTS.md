@@ -17,6 +17,32 @@
 - 铁律 3：新增/修改后端功能**必须走 `services/` + `repositories/`**，不要在 router 里直接写 SQL（存量 ≈971 处是历史债，只做新老划断）。
 - 铁律 4：**私有化离线部署**，不引入外部 CDN / 构建链 / 新依赖。
 
+### 1.1 分层归属（2026-11-25 P1，**改任何模块前先看这里**）
+
+原来 75 个业务模块散在仓库根（1.6 MB），现在已物理归位到 4 个分层包：
+
+| 层 | 位置 | 内容（示例） | 允许依赖 |
+|---|---|---|---|
+| 域内核 | `core/domain/` | 本体（`ontology_owl` / `ontology_semantics` / `ontology_reasoning`）、SysML 元模型与校验（`sysml_ast` / `sysml_profile` / `sysml_v2_check`）、`glossary` / `text_normalize` / `ingest_gate` | 只 `core.*` |
+| 适配层 | `adapters/` | `graph_db`、`vector_index`、`fts_search`、`semantic_cache`、`mcp_client`、`zhiyuan_client`、`web_tools`、`sandbox` | `core.*` + `database` |
+| 应用服务 | `services/` | `knowledge_engine`、`entity_resolver`、`triple_store`、`vector2graph`、`sysml_importer`、`memory_service`、`task_queue`、`hil_service`、`metrics_core`、`governance`、`report_generator` … | `core.*` `adapters.*` `repositories` `database` `llm` `knowledge_pipeline` |
+| Agent 工具 | `services/tools/` | 全部 `*_tools.py`（`file_tools` / `sysml_*_tools` …）+ 全部 `register_*.py` | 同上（与 `services` 同层） |
+
+- **根目录同名文件只是 6 行兼容垫片**（`sys.modules[__name__]` 别名），让 `tools/` 750 个脚本、
+  85 个门禁/测试、`docs/` 里的旧路径继续可用，且**模块身份唯一**（不会有两份状态）。
+  ⇒ **绝对不要往垫片里加代码**，也不要新增根目录业务模块：`verify_layer_ownership.py` 会判红。
+- 新代码一律写新路径（`from adapters.graph_db import get_writer`）。产品代码里旧路径实测 **0 处**。
+- 真正权威的归属表（含每个模块路径 / 是否 CLI / 8 条存量依赖豁免及理由 / 全仓越界基线 87 处）：
+  **`docs/architecture/layer_ownership.json`**；设计说明见 `docs/architecture/分层归属与约束-20261125.md`。
+- ⚠️ 拼仓库根下的资产（`checker.jar` / `sysml.library` / `sysml_models` / `mbse.db` / `integrations/*.json`）
+  必须用 `core.paths.repo_root()`，**不要再用 `dirname(abspath(__file__))`** ——搬进子目录后它会指向包目录，
+  而"路径错 + 上层 except"= 校验器静默 unavailable（P1 前有 11 个模块这么写）。
+- ⚠️ **新建层/新目录后必须登记进 4 处扫描器白名单**，否则该目录会**悄悄从账本里消失而门禁仍绿**：
+  `tools/scan_silent_except.py:PRODUCT_DIRS`、`tools/verify/verify_gate_portability.py:APP_DIRS`、
+  `tools/verify/verify_no_fake_actor.py:SCAN_DIRS`、`tools/verify/verify_no_mutation_residue.py:_scan_dirs`。
+  实测教训：`adapters/` 漏登记 ⇒ 静默兜底总数 2564 → 2508，差的 **56 条正好等于** `adapters` 单独扫出的
+  silent 数，看上去像"治理见效"，实际一条都没少。现由 `verify_layer_ownership.py` 的 **[F1]** 强制。
+
 ## 2. 功能 → 文件映射（改这个功能，只看这几处）
 
 | 我要改… | 前端 | 后端 |
@@ -28,20 +54,20 @@
 | 会话列表 / 新建任务 / 角色快捷 / **澄清作答与中断固化**（`/clarify-answer` 支持 `free_text`、`/messages/partial`、消息接口回传 `pending_clarify`） | `js/mods/03-chat.js`、`12-chatsend.js`、`11-pipeline.js`（澄清卡/提示条/执行详情） | `routers/conversations.py`、`repositories/conversation_repo.py` |
 | 左侧「项目」组（项目 = 任务容器；数据来源 = 本地工作空间 / 远端 SSH；项目内任务列表） | `js/mods/41-projects.js`、`index.html`（`#gnav-project`）、`css/gnav.css`（§16/16.1） | `routers/projects.py`、`repositories/project_repo.py`、`database/migrations/columns.py`（`projects.source/workspace/remote`） |
 | 消息渲染 / Markdown / 卡片 | `js/mods/05-markdown.js`、`06-cards.js` | `routers/conversations.py` |
-| 归一确认（人在回路） | `js/mods/07-norm.js`、`06-cards.js`（入口按钮） | `norm_apply.py`、`routers/conversations.py` |
+| 归一确认（人在回路） | `js/mods/07-norm.js`、`06-cards.js`（入口按钮） | `services/norm_apply.py`、`routers/conversations.py` |
 | 文档库（文档上传/列表/生命周期） | `js/mods/20-docs.js` | `routers/meta.py`（`/api/documents/*` 共 20 个端点）、`knowledge_pipeline/ingest.py` |
 | 知识库页装载 / 分页组件 | `js/mods/15-kb.js` | `routers/knowledge_parts/*` |
-| 本体模型 / 术语词典 | `js/mods/21-ontology.js`、`23-ontform.js`、`18-glossary.js` | `ontology_*.py`、`routers/glossary.py` |
-| 知识图谱（视图/编辑/推理） | `js/mods/25-graphview.js`、`26-grapheditor.js`、`34-graphtabs.js`、`22-ontgraph.js` | `graph_db.py`、`triple_store.py`、`routers/graph_workspace.py` |
+| 本体模型 / 术语词典 | `js/mods/21-ontology.js`、`23-ontform.js`、`18-glossary.js` | `core/domain/ontology_*.py`、`routers/glossary.py` |
+| 知识图谱（视图/编辑/推理） | `js/mods/25-graphview.js`、`26-grapheditor.js`、`34-graphtabs.js`、`22-ontgraph.js` | `adapters/graph_db.py`、`services/triple_store.py`、`routers/graph_workspace.py` |
 | 分支 / MR / 合并 | `js/mods/27-branch.js`、`24-graph.js` | `repositories/branch_repo.py`、`routers/branches.py` |
 | 能力中心（Agent/技能/工具/插件） | `js/mods/28-studio.js`、`30-agents.js`、`36-capability.js` | `plugin_system/*`（插件数据访问层在 **`plugin_system/store/`**，2026-09-18 由 `store.py` 拆包）、`routers/plugins.py`、`routers/studio_parts/*` |
 | 影响分析 / 仿真 / 一致性 | `js/mods/09-impact.js` | `services/impact_engine.py` |
-| 报告 | `js/mods/13-reports.js` | `report_generator.py`、`routers/reports.py` |
+| 报告 | `js/mods/13-reports.js` | `services/report_generator.py`、`routers/reports.py` |
 | 用户/角色/权限 | `js/mods/31-admin.js` | `routers/users.py` |
-| 审计 / 运行监控 | `js/mods/19-governance.js`、`31-admin.js` | `routers/meta.py`、`governance.py` |
+| 审计 / 运行监控 | `js/mods/19-governance.js`、`31-admin.js` | `routers/meta.py`、`services/governance.py` |
 | Agent 流水线 / 提示词装配 | （运行时，无 UI） | `agent/pipeline_parts/*`（`stream.py` 为 SSE 主路径；`common.py` 是唯一 shared） |
-| SysML 解析 / 导入 | `js/mods/14-sysml.js`、`08-sysmlview.js` | `sysml_importer.py`、`sysml_profile.py` |
-| 视图→图谱（v2g） | `js/mods/17-v2g.js` | `vector2graph.py` |
+| SysML 解析 / 导入 | `js/mods/14-sysml.js`、`08-sysmlview.js` | `services/sysml_importer.py`、`core/domain/sysml_profile.py` |
+| 视图→图谱（v2g） | `js/mods/17-v2g.js` | `services/vector2graph.py` |
 | 建表 / 补列 / 数据迁移 | — | `database/migrations/*`（S7-3 起按域分 8 个文件）、`database/schema.py`（**唯一定序编排者**，顺序即语义） |
 | 配置 / 参数 | `js/mods/35-ctxconfig.js` | `core/config.py` |
 

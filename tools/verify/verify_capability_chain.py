@@ -128,7 +128,7 @@ check("A6 旧判据在 '[]' 上为 False（即判成『有数据』）—— 与
       _old_pred("[]") is False and mcp_health._meta_tool_count("[]") == 0,
       "old=%r new=%r" % (_old_pred("[]"), mcp_health._meta_tool_count("[]")))
 
-_src_health = _code_lines(_read("mcp_health.py"))
+_src_health = _code_lines(_read("services/mcp_health.py"))
 check("A7 旧写法已从代码行中清除（正则锚定行，避免命中注释）",
       re.search(r"^\s+.*not\s+\(srv\.get\(\"tool_meta\"\)\s+or\s+\"\"\)\.strip\(\)",
                 _src_health, re.M) is None)

@@ -55,7 +55,7 @@ TIMEOUT_ERR = "Fuseki HTTP 502: upstream connect failed: context timed out"
 
 
 def make_client():
-    #类名是 `FusekiWriter`（`graph_db.py:416`，继承 `GraphDBWriter`），
+    #类名是 `FusekiWriter`（`adapters/graph_db.py:416`，继承 `GraphDBWriter`），
     # 熔断逻辑挂在它的 `query_sparql`（:539）上——日志里那句
     # `graph_db.fuseki.query_sparql 失败` 就是它打的。
     from graph_db import FusekiWriter

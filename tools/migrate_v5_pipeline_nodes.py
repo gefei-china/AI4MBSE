@@ -10,7 +10,7 @@
             系统建模/工程建模/模型校验/模型质量/影响评估/变更影响/预评审/质量校验/
             质量评审/报告生成/知识问答/文件操作/数据导入/任务规划/多Agent编排
 2. `description` 经 `sanitize_description` 截断 ≤200 字（本脚本描述均 <200，附断言）。
-3. `system_prompt` 若同时含 `SysML` 与 `代码`，`register_sysml_check_tools.py` 的
+3. `system_prompt` 若同时含 `SysML` 与 `代码`，`services/tools/register_sysml_check_tools.py` 的
    `BINDING_RULE_SQL` 会**自动绑 `sysml_v2_validate`** —— 这是好事，但要显式绑定，
    因为不保证规则命中（`review` 就是靠显式 BINDINGS 兜底的）。
    本脚本对N2/N3/N4 显式绑 validate，其余节点按需。

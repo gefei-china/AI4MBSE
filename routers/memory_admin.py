@@ -293,7 +293,7 @@ def transcript_search(q: str, limit: int = 20, conn=Depends(db_session),
     """L1 流水检索（P0-2）。trigram 命中优先，短词自动走 LIKE 兜底。"""
     if not (q or "").strip():
         return {"error": "q 不能为空", "items": []}
-    from transcript_fts import search_transcripts
+    from adapters.transcript_fts import search_transcripts
     return {"q": q, "items": search_transcripts(conn, q, limit=max(1, min(int(limit), 50)))}
 
 

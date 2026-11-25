@@ -19,7 +19,7 @@
      （这正是 2026-11-06 修过的「按 name 清绑定误删正式版」陷阱）。
 
 ## 两处「重启复活」防线（上一轮踩过，必须同步）
-1. `register_skills.py` 内置包「行业调研」的 skill_md 是 1040 字 v1.0；
+1. `services/tools/register_skills.py` 内置包「行业调研」的 skill_md 是 1040 字 v1.0；
    启动时会更新内置行。虽有 `_keep_content` 保护正文，但**版本/触发词/描述**仍可能被写回。
    ⇒ 同步把内置包正文换成 v3，并把 triggers 改为 v3 的 10 个词。
 2. `data/bootstrap/pipeline_assets.json` 快照里有 1 行「行业调研」（v1.0 1040 字）。

@@ -288,7 +288,7 @@ def eval_graph(case):
 
 
 def _bigrams(s):
-    """字符二元组集合（与 semantic.py 的 bigram 路同构，零外部依赖）。"""
+    """字符二元组集合（与 services/semantic.py 的 bigram 路同构，零外部依赖）。"""
     t = "".join((s or "").split())
     return set(t[i:i + 2] for i in range(len(t) - 1)) or set()
 

@@ -52,10 +52,10 @@ print("  rag.chunk_content_chars =", _cfg.get("rag", "chunk_content_chars"))
 
 # ── C1：源码中不得残留 content[:300] ──
 print("\n=== [C] 静态检查 ===")
-ke = read("knowledge_engine.py")
+ke = read("services/knowledge_engine.py")
 sp = read("knowledge_pipeline/search.py")
 bad = []
-for name, src in (("knowledge_engine.py", ke), ("knowledge_pipeline/search.py", sp)):
+for name, src in (("services/knowledge_engine.py", ke), ("knowledge_pipeline/search.py", sp)):
     for m in re.finditer(r'content["\']\s*,\s*""\)\[:300\]', src):
         bad.append(name)
     # 更宽松地抓 "get(\"content\"...)[:300]"

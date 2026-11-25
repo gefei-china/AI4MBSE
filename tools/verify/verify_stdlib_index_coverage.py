@@ -172,7 +172,7 @@ def main() -> int:
     green = run()
 
     print("\n[变异自证] 把 name 正则改回 `\\w+`，判据应变红")
-    src_path = os.path.join(_ROOT, "sysml_stdlib_tools.py")
+    src_path = os.path.join(_ROOT, "services/tools/sysml_stdlib_tools.py")
     with open(src_path, encoding="utf-8") as f:
         src = f.read()
     mutated = src.replace(

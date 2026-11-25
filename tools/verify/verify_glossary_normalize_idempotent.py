@@ -100,17 +100,17 @@ def _hit(u, k):
 
 
 def _load_variant(mutate=None):
-    """读 glossary.py 源码，可选文本变换，exec 出模块命名空间。
+    """读 core/domain/glossary.py 源码，可选文本变换，exec 出模块命名空间。
 
     变异自证用它：判据函数对「变异后的实现」必须翻红，否则门禁只是在
     复述当前实现、抓不住回归。
     """
-    with open(os.path.join(ROOT, "glossary.py"), encoding="utf-8") as f:
+    with open(os.path.join(ROOT, "core/domain/glossary.py"), encoding="utf-8") as f:
         src = f.read()
     if mutate:
         src = mutate(src)
     ns = {"__name__": "glossary_mut"}
-    exec(compile(src, "glossary.py", "exec"), ns)
+    exec(compile(src, "core/domain/glossary.py", "exec"), ns)
     return ns
 
 

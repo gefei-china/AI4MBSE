@@ -91,7 +91,7 @@ def check_entity_type(conn, etype: str):
     etype = (etype or "").strip()
     if not etype:
         return None
-    from ontology_semantics import GraphStore
+    from core.domain.ontology_semantics import GraphStore
     v = GraphStore(conn).validator
     if etype not in v._load_types():
         known = v.entity_types()
@@ -108,7 +108,7 @@ def validate_props(conn, entity_type: str, properties: dict, branch: str,
     `exclude_id` 必须传：唯一性只在分支内判定，且比对时要排除自身，
     否则编辑已有实例时它自己就在库里，每次保存都被判「违反唯一约束」。
     """
-    from ontology_semantics import GraphStore
+    from core.domain.ontology_semantics import GraphStore
     try:
         return GraphStore(conn).validator.validate_node(
             entity_type, properties or {}, branch or "dev", exclude_id=entity_id) or []
@@ -446,7 +446,7 @@ def write_edge(conn, *, op: str, edge_id=None, source_id: str = "", target_id: s
         # 引用完整性：源/目标必须与关系**同分支**存在（跨分支回退会产生图谱永不渲染的死行，
         # 2026-09-04 清理过 33 条）—— 与 `GraphStore.create_edge` 同口径，此处不重复实现该校验，
         # 直接委托它，避免第三条判定路径。
-        from ontology_semantics import GraphStore
+        from core.domain.ontology_semantics import GraphStore
         ok, res = GraphStore(conn).create_edge(
             source_id, target_id, relation_type, props, branch)
         if not ok:
@@ -480,7 +480,7 @@ def write_edge(conn, *, op: str, edge_id=None, source_id: str = "", target_id: s
                     "error": f"关系类型已废弃且无 canonical 映射: {relation_type}"}
         relation_type = _c
 
-        from ontology_semantics import GraphStore
+        from core.domain.ontology_semantics import GraphStore
         errs = GraphStore(conn).validator.validate_edge(
             row["stype"] or "", relation_type, row["ttype"] or "")
         if errs:

@@ -5,11 +5,11 @@ import json
 import time
 import uuid
 from database import get_db, db_conn
-from knowledge_engine import VectorEngine, QueryRouter  # P1: 双引擎底座
+from services.knowledge_engine import VectorEngine, QueryRouter  # P1: 双引擎底座
 from llm import llm_client
 from core.config import STATIC_DIR
-from file_tools import exec_file_tool, FILE_TOOL_NAMES as _FILE_TOOL_NAMES  # 基础通用文件操作工具
-from report_tools import exec_report_tool, REPORT_TOOL_NAMES as _REPORT_TOOL_NAMES  # 基础通用报告导出工具
+from services.tools.file_tools import exec_file_tool, FILE_TOOL_NAMES as _FILE_TOOL_NAMES  # 基础通用文件操作工具
+from services.tools.report_tools import exec_report_tool, REPORT_TOOL_NAMES as _REPORT_TOOL_NAMES  # 基础通用报告导出工具
 from .definition import AgentDefinition
 
 # Task 4：旧固定编排池常量（与 AgentPipeline._ORCH_AGENTS 保持一致；字符串常量避免循环导入）

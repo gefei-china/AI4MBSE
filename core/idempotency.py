@@ -105,7 +105,7 @@ def classify_write(name, side_effect=""):
     :return: `(is_write, kind)`；kind ∈ read / write / destructive
     """
     try:
-        from hil_service import classify_action as _ca
+        from services.hil_service import classify_action as _ca
         r = _ca(name, side_effect or "") or {}
         kind = str(r.get("kind") or "read")
         return kind in ("write", "destructive"), kind

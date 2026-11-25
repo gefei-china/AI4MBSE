@@ -46,14 +46,14 @@ def check(name, ok, detail=""):
                            ("  -- " + str(detail)) if detail else ""))
 
 
-GD = os.path.join(_ROOT, "graph_db.py")
+GD = os.path.join(_ROOT, "adapters/graph_db.py")
 SRC = open(GD, encoding="utf-8").read()
 
 # ══════════════════════════════════════════════════════════════════
 print("\n[A] 默认端点必须与本仓注册的数据集名一致")
 # ══════════════════════════════════════════════════════════════════
 # 2026-11-22 收敛：端点真值搬到 core.fuseki_runtime，graph_db / CQ / 启动脚本
-# 都读它。判据不能再靠「graph_db.py 源码里有没有那个字面量」——那会逼着
+# 都读它。判据不能再靠「adapters/graph_db.py 源码里有没有那个字面量」——那会逼着
 # 大家继续在四处抄同一个字符串。改为**运行期取值 + 变异自证**。
 import graph_db  # noqa: E402
 from core import fuseki_runtime as _fr  # noqa: E402

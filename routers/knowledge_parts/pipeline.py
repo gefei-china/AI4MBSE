@@ -147,7 +147,7 @@ def instances_preview(body: dict, conn=Depends(db_session)):
     turtle = "\n".join(lines)
 
     # P0-2：可执行推理（分类/传递/一致性，见 ontology_reasoning.py）
-    from ontology_reasoning import run_reasoning
+    from core.domain.ontology_reasoning import run_reasoning
     rr = run_reasoning(conn, triples, inst_count, rel_count)
     return {
         "source": src,
@@ -165,7 +165,7 @@ def graph_bulk_create(body: dict, conn=Depends(db_session),
 
     body = {nodes:[{id,name,entity_type,properties}], edges:[{source_id,target_id,relation_type,props}]}
     """
-    from ontology_semantics import GraphStore
+    from core.domain.ontology_semantics import GraphStore
     result = GraphStore(conn).bulk_create(
         body.get("nodes", []), body.get("edges", []), body.get("branch", "dev"))
     audit(_actor(user), "graph_bulk", f"图谱批量实例化: 成功 {result['created_count']} / 拒绝 {result['rejected_count']}", conn=conn)
@@ -208,7 +208,7 @@ def v2g_candidates(batch_id: Optional[str] = None, limit: int = 100,
     P3 容量管理：支持分页——page>0 时返回 {items,total,page,limit}（按需加载），
     page=0 保持返回数组（兼容既有调用）。
     """
-    from vector2graph import list_candidates
+    from services.vector2graph import list_candidates
     offset = (page - 1) * limit if page > 0 else 0
     items, total = list_candidates(conn, batch_id, limit, offset)
     for c in items:
@@ -226,7 +226,7 @@ def v2g_candidates(batch_id: Optional[str] = None, limit: int = 100,
 @router.post("/api/knowledge/v2g/batches/{batch_id}/clear")
 def v2g_batch_clear(batch_id: str, conn=Depends(db_session), user=Depends(current_user)):
     """P3 容量管理：清理批次——仅允许无待审候选的批次（删除候选记录，已入库实体/溯源不受影响）。"""
-    from vector2graph import clear_batch
+    from services.vector2graph import clear_batch
     result = clear_batch(conn, batch_id)
     if result["skipped"] > 0:
         return JSONResponse({"error": f"该批次仍有 {result['skipped']} 条待审候选，请先处理后再清理"}, 400)
@@ -573,7 +573,7 @@ def ingest_stage(body: SysMLIn, conn=Depends(db_session), user=Depends(current_u
     → 写入 v2g_candidates 候选（source_doc 留痕来源），再由人工确认（v2g/confirm，
     支持 dup_action 消歧前移）后才物化入图。入库留痕 source_type=ai_generated。
     """
-    from sysml_importer import sysml_to_candidates
+    from services.sysml_importer import sysml_to_candidates
     src = (body.source or "text").lower()
     if src not in ("text", "json", "xml"):
         return JSONResponse({"error": f"不支持的来源类型: {src}（支持 text/json/xml）"}, 400)
@@ -594,7 +594,7 @@ def sysml_import(body: SysMLIn, conn=Depends(db_session), user=Depends(current_u
     [DEPRECATED] 直写物化路径已收敛：请改用 POST /api/knowledge/ingest/stage（统一闸门，
     先候选后确认）。本路由保留以兼容历史调用与已归档导入记录回看。
     """
-    from sysml_importer import import_sysml
+    from services.sysml_importer import import_sysml
     result = import_sysml(conn, body.source, body.content, model_name=body.model_name)
     audit(_actor(user), "sysml_import", f"SysML 导入 {body.model_name or body.source}: {result['status']} 实体{result['entity_count']} 关系{result['relation_count']}", conn=conn)
     return result
@@ -602,13 +602,13 @@ def sysml_import(body: SysMLIn, conn=Depends(db_session), user=Depends(current_u
 
 @router.get("/api/knowledge/sysml/imports")
 def sysml_imports(limit: int = 20, conn=Depends(db_session)):
-    from sysml_importer import list_imports
+    from services.sysml_importer import list_imports
     return list_imports(conn, limit)
 
 
 @router.get("/api/knowledge/sysml/imports/{batch_id}")
 def sysml_import_detail(batch_id: str, conn=Depends(db_session)):
-    from sysml_importer import get_import
+    from services.sysml_importer import get_import
     detail = get_import(conn, batch_id)
     if not detail:
         return JSONResponse({"error": "batch not found"}, 404)
@@ -618,7 +618,7 @@ def sysml_import_detail(batch_id: str, conn=Depends(db_session)):
 @router.get("/api/knowledge/profile/export")
 def profile_export(fmt: str = "1x", conn=Depends(db_session)):
     """导出本体为 SysML Profile（fmt=1x → .profile XMI；fmt=v2 → .kerml），供建模工具加载。"""
-    from sysml_profile import to_profile_1x, to_profile_v2
+    from core.domain.sysml_profile import to_profile_1x, to_profile_v2
     from fastapi.responses import Response
     if fmt == "1x":
         return Response(to_profile_1x(conn), media_type="application/xml",
@@ -637,7 +637,7 @@ def sysml_export(branch: Optional[str] = "release", model_name: Optional[str] = 
     与 SysML 导入（POST /api/knowledge/sysml/import）构成"图谱↔SysML"双向一致闭环；
     文本可直接用 SysML v2 建模工具加载或另存 .kerml。
     """
-    from sysml_profile import to_model_v2
+    from core.domain.sysml_profile import to_model_v2
     from fastapi.responses import Response
     ker = to_model_v2(conn, branch=branch or "release",
                       model_name=model_name or "GraphInstanceModel")
@@ -653,7 +653,7 @@ def entity_duplicates(conn=Depends(db_session)):
     高分 merged 会把低分 pending 挤出前 50，导致「上方 pending_pairs 有数、下方待审=0」。
     现默认只查待审、放开条数上限，并返回 total_pending 供一致计数。
     """
-    from entity_resolver import list_dup_candidates
+    from services.entity_resolver import list_dup_candidates
     pending = list_dup_candidates(conn, status='pending', limit=1000)
     total = conn.execute(
         "SELECT COUNT(*) FROM entity_dup_candidates WHERE status='pending'").fetchone()[0]
@@ -670,7 +670,7 @@ def entity_dup_detect(conn=Depends(db_session),
     :686 的 fusion/preprocess（`require_any_permission(WRITE_PERMS)`）口径不一致 ——
     写权限最松的恰好是唯一会**批量改实体**的那个端点。
     """
-    from entity_resolver import detect_and_save_candidates
+    from services.entity_resolver import detect_and_save_candidates
     result = detect_and_save_candidates(conn)
     audit("系统", "entity_dup_detect",
           f"消歧检测: 候选 {result['candidates']} / 自动合并 {result['auto_merged']}"
@@ -682,7 +682,7 @@ def entity_dup_detect(conn=Depends(db_session),
 def entity_dup_review(cid: int, body: dict, conn=Depends(db_session),
                       user=Depends(require_permission("kb_review", "confirm"))):
     """E-3：审阅候选（confirm=合并 / reject=驳回）。"""
-    from entity_resolver import review_candidate
+    from services.entity_resolver import review_candidate
     result = review_candidate(conn, cid, body.get("action", "confirm"))
     if not result.get("ok"):
         return JSONResponse(result, 400)
@@ -696,7 +696,7 @@ def fusion_preprocess(conn=Depends(db_session), user=Depends(require_any_permiss
 
     自动对齐（归一化一致）直接合并留痕；候选对（规则判不了）生成 pending 候选供工序②。
     """
-    from entity_resolver import run_rule_preprocess
+    from services.entity_resolver import run_rule_preprocess
     result = run_rule_preprocess(conn)
     audit(_actor(user), "fusion_preprocess",
           f"规则预处理: 输入 {result['input_n']} / 自动对齐 {result['auto_aligned']} / 候选对 {result['candidates']} / 跳过 {result['skipped']}",
@@ -713,7 +713,7 @@ def fusion_resolve(body: dict = None, conn=Depends(db_session),
     LLM 一次输出：消歧 + 对齐 + 冲突裁决 + 理由 + 置信度，写入 evidence 供审核溯源；
     LLM 不可用 → 降级（标记 degraded），人工直接裁决，流程不中断。
     """
-    from entity_resolver import resolve_pairs_llm
+    from services.entity_resolver import resolve_pairs_llm
     body = body or {}
     result = resolve_pairs_llm(conn, pair_ids=body.get("pair_ids"),
                                limit=int(body.get("limit") or 20), operator=_actor(user))
@@ -741,7 +741,7 @@ def fusion_status(conn=Depends(db_session)):
     #   ⇒ 0.70~0.75 区间的候选界面显示「中」但按「低」处理。
     #   Neo4j 官方口径：「Thresholds express a policy」—— 前端展示的必须是后端真值。
     try:
-        from entity_resolver import _entity_merge_thresholds
+        from services.entity_resolver import _entity_merge_thresholds
         _th = _entity_merge_thresholds(conn)
         thresholds = {"auto": _th["auto"], "flag": _th["flag"],
                       "auto_merge_enabled": _th["auto_merge_enabled"]}
@@ -757,7 +757,7 @@ def fusion_status(conn=Depends(db_session)):
 def entity_merge_rollback(mid: int, conn=Depends(db_session),
                           user=Depends(require_any_permission(WRITE_PERMS))):
     """E-7：撤销合并（恢复 dup、移除补入属性、关系回指）。"""
-    from entity_resolver import rollback_merge
+    from services.entity_resolver import rollback_merge
     result = rollback_merge(conn, mid)
     if not result.get("ok"):
         return JSONResponse(result, 400)
@@ -796,7 +796,7 @@ def entity_merges_list(limit: int = 500, conn=Depends(db_session)):
 def entity_merge(body: MergeIn, conn=Depends(db_session),
                  user=Depends(require_any_permission(WRITE_PERMS))):
     """O-5：手动合并实体（属性融合 + 关系重指向 + dup 软删除保留审计）。"""
-    from entity_resolver import merge_entities
+    from services.entity_resolver import merge_entities
     result = merge_entities(conn, body.keep_id, body.dup_id)
     if not result.get("ok"):
         return JSONResponse({"error": result.get("error", "合并失败")}, 400)
@@ -820,7 +820,7 @@ def engine_retrieve(body: RetrieveIn, conn=Depends(db_session), user=Depends(cur
     result = GraphRAG().retrieve(body.query, body.branch)
     # KB-P1：混合检索附加
     if body.hybrid:
-        from knowledge_engine import hybrid_search
+        from services.knowledge_engine import hybrid_search
         hybrid = hybrid_search(conn, body.query, top_k=body.top_k)
         result["hybrid"] = hybrid
         result["hybrid_count"] = len(hybrid["hits"])
@@ -839,7 +839,7 @@ def chunk_search(body: RetrieveIn, conn=Depends(db_session)):
     # G1（2026-09-21）：默认排除已下线文档；管理侧显式传 include_deprecated=true 才纳入
     _inc_dep = bool(getattr(body, "include_deprecated", False))
     if body.hybrid:
-        from knowledge_engine import hybrid_search
+        from services.knowledge_engine import hybrid_search
         res = hybrid_search(conn, body.query, top_k=body.top_k, branches=branches,
                             include_deprecated=_inc_dep)
         hits = res["hits"]
@@ -854,7 +854,7 @@ def chunk_search(body: RetrieveIn, conn=Depends(db_session)):
 @router.post("/api/knowledge/conflicts/detect")
 def conflicts_detect(conn=Depends(db_session), user=Depends(current_user)):
     """检测矛盾事实并写入 knowledge_conflicts（同归一名称/同三元组的属性值冲突）。"""
-    from entity_resolver import conflict_detect
+    from services.entity_resolver import conflict_detect
     result = conflict_detect(conn)
     audit(_actor(user), "conflict_detect",
           f"冲突检测: 新增 {result['detected']} / 跳过重复 {result['skipped']}", conn=conn)
@@ -865,7 +865,7 @@ def conflicts_detect(conn=Depends(db_session), user=Depends(current_user)):
 def conflicts_list(status: Optional[str] = None, limit: int = 100,
                    conn=Depends(db_session)):
     """冲突列表（pending/resolved/ignored，两侧对象+属性+值+加权分+证据）。"""
-    from entity_resolver import list_conflicts
+    from services.entity_resolver import list_conflicts
     return list_conflicts(conn, status=status or None, limit=limit)
 
 
@@ -874,7 +874,7 @@ def conflicts_adjudicate(conflict_id: int, body: dict = None,
                          conn=Depends(db_session),
                          user=Depends(require_permission("kb_review", "confirm"))):
     """冲突裁决：decision=left|right|ignore（采纳值侧/忽略），两侧属性统一规范值 + 审计留痕。"""
-    from entity_resolver import conflict_adjudicate
+    from services.entity_resolver import conflict_adjudicate
     decision = (body or {}).get("decision", "")
     result = conflict_adjudicate(conn, conflict_id, decision, operator=_actor(user))
     if result.get("ok"):
@@ -896,7 +896,7 @@ def ontology_draft(body: dict = None, conn=Depends(db_session),
     - text：LLM 提炼 / 规则兜底（"X 是 Y 的子类"等）
     - profile：SysML Profile（1.x XMI / 2.x KerML）结构化解析（原 /api/knowledge/profile/parse 能力）
     """
-    from ontology_blueprint import draft_from_text, draft_from_profile
+    from core.domain.ontology_blueprint import draft_from_text, draft_from_profile
     body = body or {}
     source_type = (body.get("source_type") or "text").lower()
     if source_type == "profile":
@@ -920,7 +920,7 @@ def ontology_draft(body: dict = None, conn=Depends(db_session),
 def ontology_drafts_list(batch_id: str = "", status: str = "pending", limit: int = 100,
                          conn=Depends(db_session)):
     """本体草案列表（按 batch 过滤）。"""
-    from ontology_blueprint import list_drafts
+    from core.domain.ontology_blueprint import list_drafts
     return list_drafts(conn, batch_id=batch_id, status=status or None, limit=limit)
 
 
@@ -928,7 +928,7 @@ def ontology_drafts_list(batch_id: str = "", status: str = "pending", limit: int
 def ontology_drafts_apply(body: dict = None, conn=Depends(db_session),
                           user=Depends(require_any_permission(WRITE_PERMS))):
     """P2-1 确认应用本体草案：校验（重名/父类型存在）后写 ontology_types，标记 applied。"""
-    from ontology_blueprint import apply_drafts
+    from core.domain.ontology_blueprint import apply_drafts
     body = body or {}
     ids = [int(x) for x in (body.get("ids") or []) if str(x).isdigit()]
     result = apply_drafts(conn, ids, operator=_actor(user))

@@ -2,8 +2,8 @@
 """批次二 §06 门禁：写操作幂等（hil_confirmations 幂等键）。
 
 **背景（真库实证，口径 2026-10-13 只读）**：
-`hil_service.py` 里有一句**悬空注释**「# 幂等 ID 命名空间（防生成重复确认）」——
-**它描述的常量并不存在**，`grep -n "IDEMPOTENT|_IDEM" hil_service.py` 零命中；
+`services/hil_service.py` 里有一句**悬空注释**「# 幂等 ID 命名空间（防生成重复确认）」——
+**它描述的常量并不存在**，`grep -n "IDEMPOTENT|_IDEM" services/hil_service.py` 零命中；
 `queue_confirmation` 是**无条件 INSERT**。
 ⇒ 后果直接可见：真库 `hil_confirmations` 6 行里，**id 13/14 是一模一样的一对**
 （`agent_id` / `action` / `payload` 全同、`status` 同为 pending）
@@ -47,7 +47,7 @@ import tempfile
 import shutil
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-HIL = os.path.join(ROOT, "hil_service.py")
+HIL = os.path.join(ROOT, "services/hil_service.py")
 SCHEMA = os.path.join(ROOT, "database", "schema.py")
 MIGR = os.path.join(ROOT, "database", "migrations", "columns.py")
 PROD_DB = (os.environ.get("MBSE_DB_PATH") or os.path.join(ROOT, "mbse.db"))

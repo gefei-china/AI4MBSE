@@ -151,8 +151,8 @@ function main() {
       if (!k) continue;
       // ⚠️ 必须在**整个仓库**搜，不能只搜子目录 ——
       //   第一版只搜 agent/ workflows/ routers/ services/，漏掉了仓库根目录的
-      //   knowledge_engine.py / memory_service.py 等，误报了 22 个"死开关"
-      //   （实际 rag.recall_k 在 knowledge_engine.py:352 被读）。
+      //   services/knowledge_engine.py / services/memory_service.py 等，误报了 22 个"死开关"
+      //   （实际 rag.recall_k 在 services/knowledge_engine.py:352 被读）。
       //   ⇒ 这是**判据的假阳性**，按纪律先证伪自己再报问题。
       let hit = '';
       try {

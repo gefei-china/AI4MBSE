@@ -1078,7 +1078,7 @@ def monitor_online_eval_label(body: dict = None, conn=Depends(db_session),
     「✓ 提交并批准 / ✕ 驳回」走既有 /api/studio/hil-confirmations/{id}/decide
     （decide 的 eval_label 分支执行状态流转）——**不建第二套交互**（设计纪律）。
     """
-    from hil_service import HILService
+    from services.hil_service import HILService
     from core import online_eval as oe
     body = body or {}
     qid = int(body.get("queue_id") or 0)

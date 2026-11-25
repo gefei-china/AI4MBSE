@@ -16,7 +16,7 @@ from pydantic import BaseModel, Field
 
 from core.deps import db_session
 from database.connection import get_db
-import view_generator as vg
+from services import view_generator as vg
 
 router = APIRouter(tags=["SysML视图"])
 

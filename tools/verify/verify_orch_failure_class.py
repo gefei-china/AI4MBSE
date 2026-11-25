@@ -108,7 +108,7 @@ check("D4 分类失败不阻断（except 留空）", "_ek = \"\"" in code or "_e
 
 print()
 print("== E task_queue.fail 口径一致（同一词表，不另造）==")
-tq = open(os.path.join(_ROOT, "task_queue.py"), encoding="utf-8").read()
+tq = open(os.path.join(_ROOT, "services/task_queue.py"), encoding="utf-8").read()
 check("E1 fail() 也调同一分类器", "from services import failure_class" in tq)
 check("E2 fail() 也写 error_class", "error_class=?" in tq)
 check("E3 fail() 也有降级", tq.count("status='failed'") >= 2, tq.count("status='failed'"))

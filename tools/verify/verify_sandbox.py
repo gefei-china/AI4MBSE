@@ -41,13 +41,13 @@ import time as _time
 def _find_root():
     _d = os.path.dirname(os.path.abspath(__file__))
     for _ in range(6):
-        if os.path.isfile(os.path.join(_d, "memory_service.py")):
+        if os.path.isfile(os.path.join(_d, "services/memory_service.py")):
             return _d
         _p = os.path.dirname(_d)
         if _p == _d:
             break
         _d = _p
-    raise SystemExit("找不到仓库根（未找到 memory_service.py）")
+    raise SystemExit("找不到仓库根（未找到 services/memory_service.py）")
 
 
 ROOT = _find_root()
@@ -567,7 +567,7 @@ check("E5 sandbox_repo 只碰 sandbox_runs 一张表（引擎数据面可断言�
       set(_stmts) == {"sandbox_runs"}, _stmts)
 _promo_src = open(os.path.join(ROOT, "core", "config_promotion.py"),
                   encoding="utf-8").read()
-_sb_src = open(os.path.join(ROOT, "core", "sandbox.py"), encoding="utf-8").read()
+_sb_src = open(os.path.join(ROOT, "core", "adapters/sandbox.py"), encoding="utf-8").read()
 check("E6 ★config_promotion 唯一配置写入口是 save_override（无 settings 直写/无 _CONFIG 直改）",
       _promo_src.count("save_override(") == 1
       and "INSERT INTO settings" not in _promo_src
