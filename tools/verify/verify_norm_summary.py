@@ -1,4 +1,3 @@
-# CI-OPTIONAL: 2026-11-04 盘点实测：在干净库（init_db 新建，CI 等价口径）上 rc≠0，接线会让 CI 恒红、成为噪音。需先逐条定性（产品缺陷 vs 门禁口径过期）再接线。证据：tmp/backlog_probe.json 的 red 列表；方法见 docs/门禁盘点-20261104.md §4。
 # -*- coding: utf-8 -*-
 """归一校验「按钮徽标」功能验证（2026-10-10）
 
@@ -29,7 +28,8 @@ sys.path.insert(0, ROOT)
 os.chdir(ROOT)
 
 # ── 整库快照到临时库（含 WAL 已提交页）──
-_src = sqlite3.connect("file:mbse.db?mode=ro", uri=True)
+from tools.db_view import open_ro as _open_ro  # noqa: E402
+_src = _open_ro()
 TMP = tempfile.mktemp(suffix=".db")
 _dst = sqlite3.connect(TMP)
 _src.backup(_dst)
@@ -66,9 +66,20 @@ def disc_state(conn):
         "SELECT COUNT(*), COALESCE(SUM(freq),0) FROM glossary_discoveries").fetchone())
 
 conn = get_db()
+# ★ 2026-11-25 修（夹具空转 ⇒ M1 变异恒不翻转）：
+#   原来取"最新一行"，但库里最新那条 `content` 只有 **2 字节**（别处门禁的测试残留），
+#   `_load_norm_report` 解析它得 0 行 ⇒ total=0 ⇒ D4 两边都是 0 恒相等、
+#   M1 变异也翻不动（实测 summary=0 / 前端口径=0 / total=0）。
+#   ⇒ 夹具要挑**有实质内容**的行（>1000 字符），否则无法证明判据有牙齿。
+#   注意这不是"放宽判据"：D4/M1 的语义没变，只是把样本从垃圾行换成真正的版本内容。
 row = conn.execute(
     "SELECT message_id, conversation_id FROM sysml_versions "
-    "WHERE content IS NOT NULL ORDER BY id DESC LIMIT 1").fetchone()
+    "WHERE content IS NOT NULL AND length(content) > 1000 "
+    "ORDER BY id DESC LIMIT 1").fetchone()
+if not row:
+    row = conn.execute(
+        "SELECT message_id, conversation_id FROM sysml_versions "
+        "WHERE content IS NOT NULL ORDER BY id DESC LIMIT 1").fetchone()
 if not row:
     print("无可用样本（sysml_versions 为空），跳过")
     sys.exit(0)
@@ -202,7 +213,21 @@ conn.close()
 # ── 变异自证：证明 D4 判据有牙齿（把后端常量改掉 ⇒ D4 必须翻红） ──
 print("\n── 变异自证（D4）──")
 TARGET = os.path.join(ROOT, "routers/conversations.py")
-ORIG = io.open(TARGET, encoding="utf-8").read()
+# ★ 2026-11-25 修（变异写回把 CRLF 改成 LF ⇒ 工作区永远是脏的）：
+#   原来 `io.open(..., "w", encoding="utf-8", newline="").write(ORIG)` —— 而 `ORIG`
+#   是 **universal newline 读出来的**（里面只有 `\n`），写回时 newline="" 不翻译
+#   ⇒ 一个 CRLF 文件被"还原"成 LF ⇒ `git status` 恒显示 M（内容没变，只有行尾变了）。
+#   危害不是脏工作区本身：CI 里有"跑完门禁工作区必须干净"的兜底断言，
+#   它会把这里当**真实污染**抓出来，而人看到"conversations.py 被改了"会去查产品代码。
+#   ⇒ 读写都按原始行尾风格处理（binary 读写 + 显式翻译）。
+_ORIG_B = io.open(TARGET, "rb").read()
+_CRLF = b"\r\n" in _ORIG_B
+ORIG = _ORIG_B.decode("utf-8").replace("\r\n", "\n")
+
+
+def _write_target(text: str) -> None:
+    data = text.replace("\n", "\r\n") if _CRLF else text
+    io.open(TARGET, "wb").write(data.encode("utf-8"))
 # ⚠️ 锚点必须与 routers/conversations.py 的常量**逐字一致**，否则 assert 中止、自证整段失效。
 # 2026-10-11：`_NR_BLOCKING_STATUSES` 新增 'related'（P1-3 相关但不同实体语义），
 # 变异体也改为"故意漏掉 dup_suspect"（仍与 ANCHOR 差一个元素 ⇒ D3/D4 必然判红）。
@@ -210,7 +235,7 @@ ANCHOR = "_NR_BLOCKING_STATUSES = ('matched_low', 'dup_high', 'dup_suspect', 'no
 MUTANT = "_NR_BLOCKING_STATUSES = ('matched_low', 'dup_high', 'none', 'related', 'rejected')"  # 故意漏掉 dup_suspect
 assert ANCHOR in ORIG, "锚点未找到，自证中止"
 try:
-    io.open(TARGET, "w", encoding="utf-8", newline="").write(ORIG.replace(ANCHOR, MUTANT, 1))
+    _write_target(ORIG.replace(ANCHOR, MUTANT, 1))
     code = (
         "import os,sys,json,re,io,sqlite3,tempfile,hashlib\n"
         f"sys.path.insert(0, r{ROOT!r})\n"
@@ -222,7 +247,7 @@ try:
         "from database import get_db\n"
         "import routers.conversations as RC\n"
         "conn=get_db()\n"
-        "r=conn.execute('SELECT message_id,conversation_id FROM sysml_versions WHERE content IS NOT NULL ORDER BY id DESC LIMIT 1').fetchone()\n"
+        "r=conn.execute('SELECT message_id,conversation_id FROM sysml_versions WHERE content IS NOT NULL AND length(content)>1000 ORDER BY id DESC LIMIT 1').fetchone()\n"
         "MID,CID=r['message_id'],r['conversation_id']\n"
         # 变异体也必须**以归属人身份**调用（同主流程夹具，见上方 OWNER 的说明）
         "u=conn.execute('SELECT COALESCE(user_id,0) u FROM conversations WHERE id=?',(CID,)).fetchone()\n"
@@ -247,8 +272,8 @@ try:
         print("  变异体输出异常：", pr.stdout[-300:], pr.stderr[-300:])
         check("M1 变异体使 D4 翻红 ⇒ 判据有牙齿", False, "无输出")
 finally:
-    io.open(TARGET, "w", encoding="utf-8", newline="").write(ORIG)
-    restored = io.open(TARGET, encoding="utf-8").read() == ORIG
+    _write_target(ORIG)
+    restored = io.open(TARGET, "rb").read() == _ORIG_B
     print("  [回滚校验] conversations.py " + ("已逐字还原 ✅" if restored else "❌ 未还原！"))
     if not restored:
         sys.exit(2)

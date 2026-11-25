@@ -1843,6 +1843,48 @@ jobs:
 
       # 2026-11-09：评测集语料指纹单一真源。实测构建器曾自拼 v1 指纹、
       # 打分门禁用 v2 ⇒ 构建成功但评测集被拒绝使用，且构建侧看不到失败。
+      # 2026-11-25：从 broken 上调（原记录已过期）。SSE 心跳保活/降级显式化：66 项（含 2 组变异）全绿，零外部依赖
+      - name: Guard sse_heartbeat
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_sse_heartbeat.py
+
+      # 2026-11-25：从 broken 上调（原记录已过期）。P2 重画：66 项全绿，零外部依赖（读源码 + 临时库）
+      - name: Guard replan_p2
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_replan_p2.py
+
+      # 2026-11-25：从 broken 上调（原记录已过期）。P3 DAG 挂点：124 项全绿，零外部依赖
+      - name: Guard replan_p3
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_replan_p3.py
+
+      # 2026-11-25：从 broken 上调（原记录已过期）。多轮上下文：135 项全绿，零外部依赖
+      - name: Guard multiturn_context
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_multiturn_context.py
+
+      # 2026-11-25：从 broken 上调（原记录已过期）。工具名合法性护栏：17 项全绿
+      - name: Guard s4_toolname
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_s4_toolname.py
+
+      # 2026-11-25：从 broken 上调（原记录已过期）。工具输入契约：26 通过 + 1 环境跳过（无 embedding 时显式 SKIP）
+      - name: Guard tool_input_schema
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_tool_input_schema.py
+
+      # 2026-11-25：从 broken 上调（原记录已过期）。S4 角色块上限与注入口径（32 项）
+      - name: Guard s4_prompt
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_s4_prompt.py
+
+      # 2026-11-25：从 broken 上调（原记录已过期）。归一化报告一致性：14 项全绿
+      # （本门禁的变异自证会**就地改** routers/conversations.py 的常量，finally 还原；
+      #   下面的「跑完门禁工作区必须干净」那步是它的兜底）。
+      - name: Guard norm_summary
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_norm_summary.py
+
       - name: Guard evalset fingerprint
         if: ${{ !cancelled() }}
         run: python tools/verify/verify_evalset_fingerprint.py

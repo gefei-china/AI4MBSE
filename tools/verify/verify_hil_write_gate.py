@@ -44,7 +44,8 @@ TMP_DB = os.path.join(REPO, "tmp", "hil_gate_test.db")
 os.makedirs(os.path.dirname(TMP_DB), exist_ok=True)
 if os.path.exists(TMP_DB):
     os.remove(TMP_DB)
-_src = sqlite3.connect("file:mbse.db?mode=ro", uri=True)
+from tools.db_view import open_ro as _open_ro  # noqa: E402
+_src = _open_ro()
 _dst = sqlite3.connect(TMP_DB)
 _src.backup(_dst)
 _src.close()
@@ -60,12 +61,28 @@ from agent.mcp_tool_meta import mcp_effect_level  # noqa: E402
 from database import db_conn                      # noqa: E402
 
 
+def _uniq_run_id() -> int:
+    """每次进程唯一的 run_id。
+
+    ★ 2026-11-25 修（夹具跨次复用 pending 单 ⇒ 批次计数累积）：
+      `HILService.queue_confirmation` 的幂等键是
+      `idempotency_key(agent, action, payload, run_id, task_key)`（**不含 trace**），
+      命中条件是「同 key + status='pending' + 窗口内」⇒ 直接返回**旧单**（带
+      `idempotent_hit`）。夹具此前 `agent_ctx` 不带 run_id ⇒ 恒 0 ⇒ 上一次跑残留的
+      pending 单被这次幂等命中 ⇒ `cid_a` 指向旧单，`batch_count` 一路累加到 5
+      （期望 2）⇒ 看起来像"产品重复累加"，其实是夹具没隔离。
+      ⇒ 每次跑用唯一 run_id，保证是**新单**。
+    """
+    import uuid
+    return int(uuid.uuid4().int % 10**12)
+
+
 def _pipe():
     p = AgentPipeline()
     p._load_db_agents()
     p._tool_user = {"id": 1, "role_name": "系统管理员", "username": "tester"}
     p._tool_intent_ctx = {"intent": "智源对接agent"}
-    p._tool_agent_ctx = {"agent": "智源对接agent"}
+    p._tool_agent_ctx = {"agent": "智源对接agent", "run_id": _uniq_run_id()}
     p._tool_conv_ctx = 0
     p._tool_whitelist = None
     p._tool_perm_gate_disabled = True     # 本测试只测闸，不测 RBAC
@@ -135,18 +152,29 @@ section("C. 批次合并（approval fatigue 防线）")
 with db_conn() as c:
     _before = c.execute("SELECT COUNT(*) FROM hil_confirmations").fetchone()[0]
 
+# ★ 2026-11-25 修（固定 trace_id 跨次复用确认单 ⇒ 批次计数累积）：
+#   `_hil_gate` 会按 trace_id 找到"同批次未完成的确认单"并合并进去。
+#   原来 trace_id 写死 "trace-A"/"trace-B" ⇒ **上一次跑残留的确认单被这次命中**，
+#   实测 `batch_count=5`（期望 2），多出来的 3 条全是上次的
+#   `delete_model_relationships X2` ⇒ 判据看起来"产品重复累加"，其实是夹具没隔离。
+#   ⇒ trace_id 带唯一后缀，保证每次跑都是新单。
+import uuid as _uuid
+_UNIQ = _uuid.uuid4().hex[:8]
+_TRACE_A = "trace-A-%s" % _UNIQ
+_TRACE_B = "trace-B-%s" % _UNIQ
+
 p2 = _pipe()
-p2._tool_trace_id = "trace-A"
+p2._tool_trace_id = _TRACE_A
 r1 = p2._hil_gate("create_model_elements", {"name": "包1"},
                   p2._tool_agent_ctx, 0, "mcp")
-p2._tool_trace_id = "trace-A"
+p2._tool_trace_id = _TRACE_A
 # 可逆写在档1是 notify ⇒ 不会入队；用**破坏族**测批次（它确实入队）
 p3 = _pipe()
-p3._tool_trace_id = "trace-B"
+p3._tool_trace_id = _TRACE_B
 a = p3._hil_gate("delete_model_elements", {"name": "X1"},
                  p3._tool_agent_ctx, 0, "mcp")
 cid_a = int((a or {}).get("confirm", {}).get("id") or 0)
-p3._tool_trace_id = "trace-B"
+p3._tool_trace_id = _TRACE_B
 b = p3._hil_gate("delete_model_relationships", {"name": "X2"},
                  p3._tool_agent_ctx, 0, "mcp")
 cid_b = int((b or {}).get("confirm", {}).get("id") or 0)

@@ -81,6 +81,7 @@ check("B4 指纹结构版本不同 → 明确要求重建",
 
 print("\n=== C. strict 门禁真的 exit（变异：退回告警必须被抓住）===")
 import subprocess
+from tools.db_view import open_ro as _open_ro  # noqa: E402
 # ⚠️ 模板里已用 %s 占位 strict 实参，故路径/root 等一律用 %r/拼接预先填好；
 #    不能在替换后再对整串做 % 格式化—— 门禁消息里含 %s 会二次解析炸掉。
 script_tpl = (
@@ -123,7 +124,7 @@ conn.close()
 os.unlink(path)
 
 print("\n=== D. 真实库指纹（只读，供记录）===")
-rc = sqlite3.connect("file:mbse.db?mode=ro", uri=True)
+rc = _open_ro()
 rfp = fpg.fingerprint(rc)
 print("  documents=%s chunks=%s entities=%s relations=%s" %
       (rfp["documents"], rfp["document_chunks"], rfp["entities"], rfp["relations"]))

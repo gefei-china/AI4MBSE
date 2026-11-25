@@ -1,4 +1,3 @@
-# CI-OPTIONAL: [broken] 已知红，记账不进 CI（修好后上调 tier 并接线）；两库都红 [FAIL] FAIL  llm/__init__.py 在 except 分支加 WARNING 
 """S4 验证：工具名合法性护栏 + LLM 静默降级留痕（2026-09-17）。
 
 事故背景（实测定论，非推测）：`tools` 表存在中文名工具（id=1594「知识库查询」）→
@@ -83,8 +82,18 @@ if not real_tools:
     check("剔除项被报告（用于告警）", bad == ["知识库查询", "坏 名"], bad)
 
 print("\n[3] 静默降级必须留痕（llm 层）")
-check("llm/__init__.py 在 except 分支加 WARNING", "LLM 真实调用失败 → 静默回落 Mock" in LLM_SRC)
-check("WARNING 含调用点/异常信息", "调用点=%s intent=%s provider_id=%s" in LLM_SRC)
+# ★ 2026-11-25 修（判据钉旧文案 + 未跟上产品升级）：原断言找字面量
+#   「LLM 真实调用失败 → 静默回落 Mock」，而产品自 2026-10-09（R1）起**不再回落 Mock**，
+#   改为 `error` 日志 + 抛错终止（实测：402 额度耗尽曾回落 Mock ⇒ 用户拿到编造内容），
+#   文案也随之变成「已终止（不再回落 Mock）」⇒ 恒红。
+#   ⇒ 判据拆成两层，守**语义**而不是文案：
+#     ① 失败必须留痕（有 error 级日志且带调用点/意图/provider 三个定位字段）；
+#     ② 必须**不伪造回答**（明确"不再回落 Mock" + 真实 raise 终止路径存在）。
+check("llm 失败必须留痕（error 级日志带 调用点/intent/provider 三个定位字段）",
+      'getLogger("mbse.llm").error(' in LLM_SRC
+      and "调用点=%s intent=%s provider_id=%s" in LLM_SRC)
+check("2026-10-09 起不再回落 Mock：失败抛错终止（绝不伪造回答）",
+      "已终止（不再回落 Mock）" in LLM_SRC and "raise" in LLM_SRC)
 check("降级行为未被改变（仍回落 mock.chat）",
       'except Exception as e:' in LLM_SRC and 'self.mock.chat(messages, stream=stream' in LLM_SRC)
 

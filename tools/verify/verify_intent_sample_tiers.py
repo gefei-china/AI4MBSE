@@ -35,6 +35,7 @@ os.chdir(ROOT)
 from repositories.intent_sample_repo import (  # noqa: E402
     PENDING_SUGGEST_SQL, STATUS_TIER, VALID_STATUS, IntentSampleRepo, tier_of,
 )
+from tools.db_view import open_ro as _open_ro  # noqa: E402
 
 PASS, FAIL = [], []
 
@@ -100,7 +101,7 @@ except Exception as e:  # noqa: BLE001
     check("T3 评测跑批器可导入并取出 SETS", False, repr(e))
 
 print("[4] 真库不变量（口径：全库，只读）")
-_conn = sqlite3.connect("file:mbse.db?mode=ro", uri=True)
+_conn = _open_ro()
 _conn.row_factory = sqlite3.Row
 try:
     _bad_silver = _conn.execute(

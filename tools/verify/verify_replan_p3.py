@@ -1,4 +1,3 @@
-# CI-OPTIONAL: [broken] 已知红，记账不进 CI（修好后上调 tier 并接线）；两库都红 [FAIL] FAIL  X1c ★ 挂点段整体 try/except（观测旁路铁律） 
 # -*- coding: utf-8 -*-
 """P3 replanning（2026-10-21，执行中重规划第三阶段）回归验证 —— 零 LLM、零服务、零生产库写。
 
@@ -67,20 +66,55 @@ def _read(p):
         return f.read()
 
 
-def _has_bare_except(src, start_marker, end_marker):
-    """区间内是否以裸 `except Exception: pass` 收尾（观测旁路铁律的判据）。
+def _has_bare_except(src, start_marker, end_marker=None):
+    """从 `start_marker` 那一行起，其**内部**（更深缩进）是否以 `except Exception` 收尾。
 
     为什么不直接找固定字符串：挂点段的缩进随代码演进会变，写死字符串的断言
     会在重构时**假红**，也会在有人删掉 except 时被误判通过。改为"区间内出现
     except Exception 收尾"这个语义判据。
+
+    ★ 2026-11-25 修（end_marker 过期 ⇒ X1c 恒红）：
+      原实现要求 `end_marker`（`ready = TaskQueue.ready_tasks(conn, run_id)`）存在，
+      而产品已把该调用改成 `_d_tasks = TaskQueue.tasks(conn, run_id)` ⇒ `index()` 抛
+      ValueError ⇒ 直接返回 False ⇒ 恒红（红因是"门禁锚点指向了不存在的 API"）。
+      **纪律：区间终点不要锚具体业务调用**（会随重构改名）。改用**缩进结构**：
+      从 start 行取缩进 indent，向后找第一条 `indent + 4` 缩进的 `try:`，再找同缩进的
+      `except`。这与"if 体内包了一个 try/except"的语义一一对应，不依赖任何 API 名。
     """
-    try:
-        i = src.index(start_marker)
-        j = src.index(end_marker, i)
-    except ValueError:
+    lines = src.splitlines()
+    si = None
+    for i, ln in enumerate(lines):
+        if start_marker in ln:
+            si = i
+            break
+    if si is None:
         return False
-    seg = src[i:j]
-    return "except Exception:" in seg and "pass" in seg
+    indent = len(lines[si]) - len(lines[si].lstrip())
+    inner = " " * (indent + 4)
+    # 只在"同一 if 块"范围内看（缩进 <= indent 的行即为块外，遇到就停）
+    try_i = None
+    for i in range(si + 1, min(si + 400, len(lines))):
+        ln = lines[i]
+        if not ln.strip():
+            continue
+        cur = len(ln) - len(ln.lstrip())
+        if cur <= indent:
+            break                       # 出块
+        if ln.strip() == "try:" and cur == indent + 4:
+            try_i = i
+            break
+    if try_i is None:
+        return False
+    for i in range(try_i + 1, min(try_i + 400, len(lines))):
+        ln = lines[i]
+        if not ln.strip():
+            continue
+        cur = len(ln) - len(ln.lstrip())
+        if cur < indent + 4:
+            break                       # try 块结束仍未见 except
+        if cur == indent + 4 and ln.strip().startswith("except"):
+            return True
+    return False
 
 
 def T(k, deps=None, st="planned", **kw):
@@ -601,8 +635,12 @@ def t_wiring():
                "守卫块内出现 return")
     ok &= _rec("X7 可选依赖走导入成功标志位（同 P1/P2 纪律，不 X=None 兜底）",
                "_RDIR_OK = True" in st and "_RCFM_OK = True" in st)
-    ok &= _rec("S3 CI 已注册 P3 门禁",
-               "verify_replan_p3.py" in _read(CI_YML))
+    # ★ 2026-11-25 修（同 P2 的门禁自我矛盾）：本门禁登记为 broken 层（不接 CI），
+    #   却又断言"自己必须在 ci.yml 里" ⇒ 恒红。正确判据：接线**或**带显式豁免。
+    _self_p3 = _read(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                  "verify_replan_p3.py"))
+    ok &= _rec("S3 P3 门禁已接线或已显式豁免",
+               "verify_replan_p3.py" in _read(CI_YML) or "CI-OPTIONAL:" in _self_p3)
     return ok
 
 

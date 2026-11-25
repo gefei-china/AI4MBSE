@@ -24,6 +24,7 @@ if ROOT not in sys.path:
 os.chdir(ROOT)
 
 from agent.intent import IntentRouter  # noqa: E402
+from tools.db_view import open_ro as _open_ro  # noqa: E402
 
 PASS, FAIL = [], []
 
@@ -35,7 +36,7 @@ def check(name, cond, detail=""):
 
 
 def _load_agents():
-    c = sqlite3.connect("file:mbse.db?mode=ro", uri=True)
+    c = _open_ro()
     c.row_factory = sqlite3.Row
     rows = c.execute(
         "SELECT name, display_name, description, intent_keywords FROM agents "

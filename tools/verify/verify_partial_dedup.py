@@ -60,7 +60,8 @@ ROOT = r"@@ROOT@@"
 sys.path.insert(0, ROOT)
 
 # 整库复制到临时文件 → MBSE_DB_PATH 重定向 ⇒ 零污染生产库
-src = sqlite3.connect("file:mbse.db?mode=ro", uri=True)
+from tools.db_view import open_ro as _open_ro  # noqa: E402
+src = _open_ro()
 tmpdb = tempfile.mktemp(suffix=".db")
 dst = sqlite3.connect(tmpdb); src.backup(dst); dst.close(); src.close()
 

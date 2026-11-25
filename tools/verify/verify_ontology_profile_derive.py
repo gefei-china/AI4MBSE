@@ -35,6 +35,7 @@ if ROOT not in sys.path:
 os.chdir(ROOT)
 
 from services import ontology_profile_service as ops  # noqa: E402
+from tools.db_view import open_ro as _open_ro  # noqa: E402
 
 PASS, FAIL = [], []
 
@@ -109,7 +110,7 @@ _p4 = ops.plan(_fx2, name="另一个名字")
 check("P3b 换个名字就能建（不因拒绝而卡死）", _p4.get("action") == "create", _p4.get("action"))
 
 print("[4] 真库：派生画像与类型集一致（防手工改库后漂移）")
-_rc = sqlite3.connect("file:mbse.db?mode=ro", uri=True)
+_rc = _open_ro()
 _rc.row_factory = sqlite3.Row
 try:
     _real = ops.build(_rc)

@@ -41,7 +41,7 @@ if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
 from database.bootstrap_assets import (       # noqa: E402
-    SPEC, snapshot_path, load_snapshot, snapshot_drift)
+    SPEC, snapshot_path, load_snapshot, snapshot_drift, dump_snapshot_text)
 
 PASS, FAIL = [], []
 
@@ -99,6 +99,17 @@ if _conn is not None:
           "这些在库里、快照里没有（请 export 后提交）: %s" % _d["missing_in_snapshot"][:8])
     check("A3 声明性字段与快照一致（改了没导出会红）", not _d["field_diff"],
           "不一致: %s" % _d["field_diff"][:8])
+    # ── A2c：**绑定**漂移（2026-11-25 补，实测缺口）────────────────────────
+    # ★ 为什么必须单独一条：`snapshot_drift()` 早就算好了 `relation_drift` 且纳入了
+    #   它的 `ok`，但本门禁只挑了 `missing_in_snapshot` 与 `field_diff` 两个字段断言
+    #   ⇒ **绑定条数漂移完全不在判据论域内**。
+    #   实测后果：真库 `system_mgmt` 有 21 条绑定，HEAD 快照只有 7 条（14 条从未导出），
+    #   A2/A3 全绿、A4c 也用 `库 >= 快照` 的弱判据（空库从快照重建，两侧必然相等）
+    #   ⇒ 这 14 条绑定**只存在于本机库**，一旦换机器/重装就永久丢失，而门禁一声不响。
+    #   A4c 抓不到的原因值得记住：它的临时库是**从快照自举出来的**，
+    #   "库 >= 快照"在自举产物上恒成立 ⇒ 对"真库比快照多"这种形态天然无感。
+    check("A2c 绑定（agent_tools/agent_team_members）与快照一致", not _d["relation_drift"],
+          "这些绑定只在库或只在快照里（请 export 后提交）: %s" % _d["relation_drift"][:8])
     # ── A2b：快照有、库无 ──────────────────────────────────────────────
     # ⚠️ 这一条是**变异自证抓出来的判据缺口**（本轮实测）：
     #   A4 的临时库是**从快照自举出来的** ⇒ 快照里塞个幽灵 agent，临时库里也有它
@@ -249,6 +260,40 @@ try:
 except Exception as _e_a6:
     check("A6 自举遇到「同名多行」必须跳过（不得把多行覆盖成同一份）", False,
           "%s: %s" % (type(_e_a6).__name__, str(_e_a6)[:120]))
+
+# ── A7：A2c 的变异自证（**正向断言没有牙齿就等于没写**）──────────────────
+# 做法：把快照复制一份，从副本里**删掉一条真实绑定**，用同一个 snapshot_drift()
+# 去比 ⇒ `relation_drift` 必须非空。若仍为空，说明 A2c 的判据根本没接上。
+# 只动临时副本，不碰仓库里的快照（真库只读连接）。
+if _conn is not None:
+    try:
+        import copy as _copy
+        import json as _json
+        import tempfile as _tf
+        _snap_full = _json.load(open(_sp, encoding="utf-8"))
+        _rel = (_snap_full.get("relations") or {}).get("agent_tools") or []
+        if not _rel:
+            check("A7 ★变异：快照删掉一条绑定 ⇒ A2c 必须判红", False,
+                  "快照 agent_tools 为空，无法构造变异（判据可能空转）")
+        else:
+            _mut = _copy.deepcopy(_snap_full)
+            _dropped = _mut["relations"]["agent_tools"].pop(0)
+            _tf_dir = _tf.mkdtemp(prefix="snapmut_")
+            _mut_path = os.path.join(_tf_dir, "pipeline_assets.mut.json")
+            with open(_mut_path, "w", encoding="utf-8", newline="\n") as _f:
+                _f.write(dump_snapshot_text(_mut))
+            _d_mut = snapshot_drift(_conn, path=_mut_path)
+            check("A7 ★变异：快照删掉一条绑定 ⇒ A2c 必须判红",
+                  bool(_d_mut["relation_drift"]),
+                  "删掉 %s 后 relation_drift 仍为空 ⇒ A2c 判据没接上" % (_dropped,))
+            try:
+                os.remove(_mut_path)
+                os.rmdir(_tf_dir)
+            except Exception:
+                pass
+    except Exception as _e_a7:
+        check("A7 ★变异：快照删掉一条绑定 ⇒ A2c 必须判红", False,
+              "%s: %s" % (type(_e_a7).__name__, str(_e_a7)[:120]))
 
 if _conn is not None:
     try:

@@ -101,9 +101,15 @@ check("B1 list_conversations 接受 user 参数",
 check("B2 SQL 里带 user 条件（不是 Python 侧筛）",
       "c.user_id=?" in p_src and "c.user_id IS NULL" in p_src,
       "未在 SQL 里收窄 ⇒ 取回全量再筛，等于'看不见但仍可逐个 id 捞'")
+# ★ 2026-11-25 修（判据钉拼接写法 ⇒ 恒红）：原正则要求
+#   `if user is not None:` 后**紧跟** `sql += " WHERE (c.user_id IS NULL`。
+#   产品已重构成「条件列表 `wheres.append(...)` + 末尾 `" AND ".join(wheres)`」，
+#   语义完全一致（匿名 user=None 不追加任何 user 条件），但字面量对不上 ⇒ 恒红。
+#   改判**语义**：`if user is not None` 分支内确实追加了 user 归属条件。
 check("B3 匿名不加 user 条件（口径②）",
-      re.search(r"if user is not None:\s*\n\s*sql \+= \" WHERE \(c\.user_id IS NULL",
-                p_src) is not None)
+      re.search(r"if user is not None:\s*\n(?:[^\n]*\n){0,6}?[^\n]*c\.user_id IS NULL",
+                p_src) is not None,
+      "未找到「仅当 user 非空才追加归属条件」的分支 ⇒ 匿名可能被加上 user 过滤（或反过来无条件放行）")
 # ⚠️ 反向：不得出现"取回全量再 Python 过滤"的形态
 check("B4 不得先取全量再在 Python 里筛",
       not re.search(r"rows\s*=\s*self\.rows\([^)]*ORDER BY[^)]*\)\s*\n\s*return \[r for r in rows",
@@ -189,9 +195,15 @@ if os.path.exists(PROD_DB):
     _pc.close()
     print("  真库：会话 %d 条，其中无归属（user_id NULL/0）%d 条，孤儿 project_id %d 条"
           % (_tot, _nullu, _orphanp))
-    check("F1 真库确有大量无归属会话（这正是口径①要保护的对象）", _nullu > 0,
-          "若已全部回填，口径①可收紧")
-    check("F2 孤儿 project_id 存在（口径④要容忍，不能因此丢会话）", True)
+    # ★ 2026-11-25：空库（CI 等价）下 `_tot == 0`，F1 必然 FAIL —— 但它验的是
+    #   "**口径①要保护的对象确实存在**"这个前提取证，不是产品行为缺陷。
+    #   空库没有会话是常态，不是缺陷 ⇒ 显式 SKIP（计入输出，不静默）。
+    if _tot == 0:
+        print("  [SKIP] F1/F2：本库无会话（空库/CI 常态）⇒ 前提取证无从谈起")
+    else:
+        check("F1 真库确有大量无归属会话（这正是口径①要保护的对象）", _nullu > 0,
+              "若已全部回填，口径①可收紧")
+        check("F2 孤儿 project_id 存在（口径④要容忍，不能因此丢会话）", True)
 else:
     print("  [SKIP] 未找到真库")
 
@@ -201,15 +213,25 @@ TMP_DB = os.path.join(TMP, "t.db")
 try:
     _tc = sqlite3.connect(TMP_DB)
     _tc.row_factory = sqlite3.Row
-    _tc.execute("""CREATE TABLE conversations (
-        id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT, intent TEXT, status TEXT,
-        user_id INTEGER, phase TEXT, created_at TEXT, updated_at TEXT, project_id TEXT DEFAULT '',
-        current_intent TEXT, last_slots TEXT, pending_clarify TEXT)""")
+    # ★ 2026-11-25 修（手抄 DDL 缺列 ⇒ 门禁崩在 OperationalError）：
+    #   原来手抄 `conversations` 的 CREATE TABLE，漏了 `pinned_at`（产品后来加的列），
+    #   而 `repositories/conversation_repo.list_conversations` 的 SELECT 引用了它
+    #   ⇒ `no such column: c.pinned_at` ⇒ 整条门禁崩（不是断言失败，是异常退出）。
+    #   只对**会被产品 SQL 查询**的 `conversations` 用 ddl_for（与 schema.py 同源）；
+    #   users/projects/messages 是本门禁自造的最小陪衬表（产品不按它们的全量 schema 查），
+    #   用全量 DDL 反而会引入 `username NOT NULL` 等无关约束 ⇒ 保留最小定义。
+    #   **纪律：夹具里"产品会查的表"必须与产品同源，"纯陪衬表"才可最小化。**
+    #   ⚠️ 同源必须含**两条来源**：CREATE TABLE **和** 迁移加列 ——
+    #      `conversations.pinned_at` 正是 `migrations/columns.py:_add` 补的，
+    #      只用 ddl_for 仍缺它（本轮实测第二次踩到）。故用 ddl_statements_for（含 ALTER）。
+    from tools.verify._schema_ddl import ddl_statements_for
+    for _s in ddl_statements_for("conversations"):
+        _tc.execute(_s)
     _tc.execute("CREATE TABLE users (id INTEGER PRIMARY KEY, display_name TEXT)")
     _tc.execute("CREATE TABLE projects (id TEXT PRIMARY KEY, name TEXT)")
     _tc.execute("CREATE TABLE messages (id INTEGER PRIMARY KEY, conversation_id INTEGER)")
-    _tc.execute("INSERT INTO users VALUES (1,'王工'),(2,'张三')")
-    _tc.execute("INSERT INTO projects VALUES ('pA','项目A')")
+    _tc.execute("INSERT INTO users (id, display_name) VALUES (1,'王工'),(2,'张三')")
+    _tc.execute("INSERT INTO projects (id, name) VALUES ('pA','项目A')")
     # id1: NULL 归属；id2: user1；id3: user2；id4: NULL 且属项目A
     _tc.executemany(
         "INSERT INTO conversations (id,title,user_id,project_id,updated_at) VALUES (?,?,?,?,?)",

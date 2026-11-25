@@ -53,6 +53,7 @@ import sys
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 os.chdir(ROOT)
 sys.path.insert(0, ROOT)
+from tools.db_view import open_ro as _open_ro  # noqa: E402
 
 PASS = 0
 FAIL = 0
@@ -126,7 +127,7 @@ def main():
     print("\n=== ③ `looks_awaiting_permission`：真实答复判得出、正常完成不误判 ===")
     _real = None
     try:
-        c = sqlite3.connect("file:mbse.db?mode=ro", uri=True)
+        c = _open_ro()
         row = c.execute(
             "SELECT content FROM messages WHERE id=4979").fetchone()
         c.close()

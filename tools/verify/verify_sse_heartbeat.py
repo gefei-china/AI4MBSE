@@ -1,4 +1,3 @@
-# CI-OPTIONAL: [broken] 已知红，记账不进 CI（修好后上调 tier 并接线）；两库都红 [FAIL] ^^^^^^^^^^^^^ | AssertionError: 变异锚点丢失：            _terminal = True | yield f"event: error 
 # -*- coding: utf-8 -*-
 """P1-2（SSE 心跳保活）与 P1-3（降级显式化）回归验证 —— 零 LLM、零库写入，可反复跑。
 
@@ -294,16 +293,37 @@ def _worker_closes_source(src=None) -> bool:
     会一直检查到同步版（它本来就有 close）⇒ 判据恒真、变异恒不翻转（踩过）。
     只认 worker 函数体内那处：消费侧 finally 那处是"尽力而为"
     （worker 正跑时会抛 `already executing` 被吞），不能算数。
+
+    ★ 2026-11-25 修（判据范围找错 ⇒ M4b 恒 VACUOUS）：
+      原实现用 `s.find("_th.Thread(target=_worker", i)` 当函数体终点。但产品在
+      2026-11-03 为继承 ContextVar 改成了 `_th.Thread(target=lambda: _sse_ctx2.run(_worker)`，
+      `find` 返回 **-1** ⇒ 走 `else len(s)` 分支 ⇒ body 被截到**文件末尾**，
+      把后面 `detach` 分支与原路径的两处 close 都算进 worker 体内
+      ⇒ 删掉 worker 那处后仍判"有 close" ⇒ 变异恒不翻转（VACUOUS）。
+      **纪律：函数体范围必须用 AST 取（`end_lineno`），不能用"找下一个特征串"** ——
+      特征串会随产品演进（这次就是），而 AST 边界不会。
     """
     s = src if src is not None else open(SSE_SRC, encoding="utf-8").read()
-    a = s.find("async def iter_with_heartbeat_async")
-    if a < 0:
+    import ast
+
+    def _body_text(fn):
+        lines = s.splitlines()
+        return "\n".join(lines[fn.lineno - 1: fn.end_lineno])
+
+    try:
+        tree = ast.parse(s)
+    except SyntaxError:
         return False
-    i = s.find("def _worker():", a)
-    if i < 0:
+    target = None
+    for node in ast.walk(tree):
+        if isinstance(node, ast.AsyncFunctionDef) and node.name == "iter_with_heartbeat_async":
+            for sub in node.body:
+                if isinstance(sub, ast.FunctionDef) and sub.name == "_worker":
+                    target = sub
+                    break
+    if target is None:
         return False
-    j = s.find("_th.Thread(target=_worker", i)
-    body = s[i:(j if j > i else len(s))]
+    body = _body_text(target)
     return ('getattr(iterator, "close", None)' in body) and ("close()" in body)
 
 
@@ -332,18 +352,15 @@ def m_i4b():
     import asyncio
     src_mut = _load_sse(mutate=[
         # ① worker 内那处
-        ("            try:\n"
-         "                close = getattr(iterator, \"close\", None)\n"
-         "                if callable(close):\n"
-         "                    close()\n"
-         "            except Exception:\n"
-         "                pass\n"
-         "            try:\n"
-         "                loop.call_soon_threadsafe(q.put_nowait, (True, _DONE))",
-         "            try:\n"
-         "                loop.call_soon_threadsafe(q.put_nowait, (True, _DONE))",
-         "            try:\n"
-         "                close = getattr(iterator, \"close\", None)"),
+        #   ⚠️ 2026-11-25 修（锚点过期导致整条 M4b 崩）：
+        #   原锚点把 close 块**连同它后面的** `try: loop.call_soon_threadsafe(...)` 一起算进来，
+        #   而产品在 close 块之后新增了 `box["worker_done"] = True`（detach 判定用，见
+        #   core/sse.py:316）⇒ 逐字节不匹配 ⇒ AssertionError「变异待替换文本丢失」。
+        #   **纪律：变异锚点只圈"要删的那一段"，不得把邻居行写进锚点** ——
+        #   邻居行会随产品演进（这次就是），锚点应只对"要改的东西"有约束。
+        (_ASYNC_WORKER_CLOSE_BLOCK,
+         "            pass  # 变异：worker 内不关源\n",
+         _ASYNC_WORKER_CLOSE_BLOCK),
         # ② async finally 那处
         ("        try:\n"
          "            close = getattr(iterator, \"close\", None)\n"
@@ -807,9 +824,14 @@ def m_i11():
 def m_i11b():
     """变异：except 分支不再置终态（还原双 error 旧写法）→ I11f 必须判红。"""
     print("\n=== 变异 M11：except 分支不置终态（旧写法，会弹两条 error）===")
-    app, ns = _build_conv_app(mutate=("            _terminal = True\n            yield f\"event: error",
-                                      "            yield f\"event: error",
-                                      "            _terminal = True\n            yield f\"event: error"))
+    # ⚠️ 2026-11-25 修（锚点过期）：原锚点是 `_terminal = True\n            yield f"event: error`，
+    #   要求这两行**紧邻**。但产品在中间插了 5 行注释 + `_fail_reason = "exception:..."`
+    #   （S1 那次改动：把"这轮失败了"与"是否已通知前端"解耦）⇒ 逐字节不匹配 ⇒ M11 崩。
+    #   改用「`_terminal = True` + 紧接一个注释行开头 `# ──`」：只圈**要删的那一行**，
+    #   不要求它后面紧跟什么（邻居会随产品演进）。唯一性已实测 = 1 处。
+    _M11_ANCHOR = "            _terminal = True\n            # ──"
+    _M11_MUT = "            # ──"
+    app, ns = _build_conv_app(mutate=(_M11_ANCHOR, _M11_MUT, _M11_ANCHOR))
     _, text = _post_stream(app, ns, [], raise_exc=RuntimeError("上游 502"))
     return _rec("M11 旧写法复现（两条 error）→ 证明 I11f 非空转",
                 text.count("event: error") == 2, f"count={text.count('event: error')}", VACUOUS)

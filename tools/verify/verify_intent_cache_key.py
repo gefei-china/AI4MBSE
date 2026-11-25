@@ -30,6 +30,7 @@ from agent.intent import IntentRouter  # noqa: E402
 #   >95% 是评测刷的）⇒ 必须在此**显式开启**作为前提，否则 C1/C3/C4/C7/C8 会全失败，
 #   并被误读成"key 口径又坏了"。⚠️ 别把这几条断言删掉了事 —— 机制仍在（可开）。
 from core import config as _cfg  # noqa: E402
+from tools.db_view import open_ro as _open_ro  # noqa: E402
 _cfg._CONFIG.setdefault("intent", {})["cache_enabled"] = True
 
 PASS, FAIL = [], []
@@ -82,7 +83,7 @@ def check(tag, cond, detail=""):
 def ddl_from_real_db():
     """优先用**真库**的 DDL，避免手抄漂移（本仓已被此坑咬过两次）。"""
     try:
-        c = sqlite3.connect("file:mbse.db?mode=ro", uri=True)
+        c = _open_ro()
         try:
             row = c.execute("SELECT sql FROM sqlite_master WHERE name='intent_cache'").fetchone()
             return row[0] if row else None

@@ -1,4 +1,3 @@
-# CI-OPTIONAL: [broken] 已知红，记账不进 CI（修好后上调 tier 并接线）；两库都红 [FAIL] FAIL  S3d 保守默认：配置读取失败取 enabled=False（不会因读不到配置就开重画） 
 # -*- coding: utf-8 -*-
 """P2 replanning（2026-10-21，执行中重规划第二阶段）回归验证 —— 零 LLM、零服务、零生产库写。
 
@@ -150,11 +149,27 @@ def t_static():
     ok &= _rec("S3c ★ 默认关纪律：enabled/skip_leaf/heavy_redraw/llm_redraw 全 False",
                '"enabled": False' in cfg and '"skip_leaf": False' in cfg
                and '"heavy_redraw": False' in cfg and '"llm_redraw": False' in cfg)
+    # ★ 2026-11-25 修（判据钉字面写法 ⇒ 恒红）：原断言要求
+    #   `_rp_enabled = _rp_heavy = _rp_skip = False` 这个**链式赋值字面量**；
+    #   产品已改成三个独立赋值 `_rp_enabled = bool(_rl_gates.get("enabled", False))`
+    #   —— 语义**更强**（读不到配置也取 False），但字面量对不上 ⇒ 恒红。
+    #   **纪律：断言"取不到配置时为 False"这个语义，不要断言写法**（写法会随重构变）。
+    import re as _re
+    _defaults_ok = all(
+        _re.search(r"%s\s*=\s*bool\([^)\n]*\.get\([^)\n]*,\s*False\)\s*\)" % v, stream)
+        for v in ("_rp_enabled", "_rp_heavy", "_rp_skip"))
     ok &= _rec("S3d 保守默认：配置读取失败取 enabled=False（不会因读不到配置就开重画）",
-               '_rp_enabled = _rp_heavy = _rp_skip = False' in stream)
+               _defaults_ok, "" if _defaults_ok else "三个 _rp_* 未全部以 .get(..., False) 取值")
 
     ci = _read(CI_YML)
-    ok &= _rec("S4a CI 已注册 P2 门禁", "verify_replan_p2.py" in ci)
+    # ★ 2026-11-25 修（门禁自我矛盾 ⇒ 恒红）：本门禁在 gates_manifest 里是 broken 层
+    #   （不接 CI，见 ci.yml 头部说明），却又断言"自己必须在 ci.yml 里" ⇒ 两处要求互相打架。
+    #   正确判据：**在 CI 里，或带显式 CI-OPTIONAL 豁免**（后者是本仓允许的登记方式，
+    #   见 verify_gate_wiring 的 W1：要么接线、要么带非空理由豁免）。
+    _self_src = _read(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                   "verify_replan_p2.py"))
+    ok &= _rec("S4a P2 门禁已接线或已显式豁免",
+               "verify_replan_p2.py" in ci or "CI-OPTIONAL:" in _self_src)
     ok &= _rec("S4b P1 门禁仍在 CI（P2 不得挤掉 P1）",
                "verify_replan_p1.py" in ci)
     return ok

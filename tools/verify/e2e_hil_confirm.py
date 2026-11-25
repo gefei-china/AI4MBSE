@@ -59,7 +59,8 @@ PKG_NAME = "HIL闭环验证包_%s" % time.strftime("%H%M%S")
 def mcp_call(tool, args, timeout=90):
     """直连 MCP 平台调工具（**独立于本系统**，用于回读事实）。"""
     import sqlite3
-    c = sqlite3.connect("file:mbse.db?mode=ro", uri=True)
+    from tools.db_view import open_ro as _open_ro  # noqa: E402
+    c = _open_ro()
     c.row_factory = sqlite3.Row
     r = c.execute("SELECT endpoint,headers FROM mcp_servers WHERE name='zhiyuan-dev-mcp'").fetchone()
     c.close()
@@ -263,7 +264,7 @@ def main():
     # ══ ⑦ 落库回执 ══
     section("⑦ 确认单落库状态与执行回执")
     import sqlite3
-    c = sqlite3.connect("file:mbse.db?mode=ro", uri=True)
+    c = _open_ro()
     c.row_factory = sqlite3.Row
     row = c.execute("SELECT id,action,status,tool_type,level,result_json,exec_idem_key,"
                     "decided_by,batch_count FROM hil_confirmations WHERE id=?",
