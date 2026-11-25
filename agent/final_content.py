@@ -251,30 +251,7 @@ def normalize_ordinal_headings(text: str):
     return "".join(out), changed
 
 
-def close_open_fences(text: str) -> str:
-    """闭合正文末尾**未配对**的 ``` 围栏。已配对则**一字不动**地原样返回。
-
-    ★ 2026-11-04（真库实证 conv 990408 / msg 5761，21432 字，围栏 13 个=奇数）：
-      流式连接中断时，正文可能正好停在代码块中间 ⇒ 随后追加的
-      「⏹ 连接已中断」提示直接**落进代码块内部** ⇒ 用户看到提示被当成代码高亮，
-      后续正文也被吞进代码块。
-
-    ⚠️ 只在**确实存在未配对**时补一个闭合围栏；已配对的一律不动 ——
-      本函数在**呈现层**收尾处调用，多加一个 ``` 会让正常正文多出围栏。
-    """
-    s = str(text or "")
-    if "```" not in s:
-        return s
-    n, pos = 0, 0
-    while True:
-        i = s.find("```", pos)
-        if i < 0:
-            break
-        n += 1
-        pos = i + 3
-    if n % 2 == 0:          # 已配对 ⇒ 原样返回（不改一个字）
-        return s
-    return s + "\n```\n"
+from core.domain.text_normalize import close_open_fences  # noqa: F401  (P1 收敛：下沉域层，保留旧路径兼容)
 
 
 # ══════════════════════════════════════════════════════════════════════════════

@@ -122,7 +122,7 @@ def recover_all() -> int:
                         continue
             # 闭合流式输出里未配对的 ``` 围栏，否则说明文字会落进代码块内部
             try:
-                from agent.final_content import close_open_fences
+                from core.domain.text_normalize import close_open_fences
                 body = close_open_fences(body)
             except Exception:
                 pass

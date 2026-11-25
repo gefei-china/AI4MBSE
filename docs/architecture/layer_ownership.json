@@ -48,7 +48,7 @@
    "database",
    "models"
   ],
-  "direction_baseline": 87,
+  "direction_baseline": 85,
   "direction_baseline_note": "全仓（core+services+adapters+core.domain）层间越界总数基线，2026-11-25 实测。只卡增量：新增越界即红；要降低必须真改代码后下调此值。"
  },
  "modules": {

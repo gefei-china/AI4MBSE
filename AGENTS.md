@@ -32,7 +32,7 @@
   85 个门禁/测试、`docs/` 里的旧路径继续可用，且**模块身份唯一**（不会有两份状态）。
   ⇒ **绝对不要往垫片里加代码**，也不要新增根目录业务模块：`verify_layer_ownership.py` 会判红。
 - 新代码一律写新路径（`from adapters.graph_db import get_writer`）。产品代码里旧路径实测 **0 处**。
-- 真正权威的归属表（含每个模块路径 / 是否 CLI / 8 条存量依赖豁免及理由 / 全仓越界基线 87 处）：
+- 真正权威的归属表（含每个模块路径 / 是否 CLI / 8 条存量依赖豁免及理由 / 全仓越界基线 85 处（2026-11-25 已收敛 2 处））：
   **`docs/architecture/layer_ownership.json`**；设计说明见 `docs/architecture/分层归属与约束-20261125.md`。
 - ⚠️ 拼仓库根下的资产（`checker.jar` / `sysml.library` / `sysml_models` / `mbse.db` / `integrations/*.json`）
   必须用 `core.paths.repo_root()`，**不要再用 `dirname(abspath(__file__))`** ——搬进子目录后它会指向包目录，

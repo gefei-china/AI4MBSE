@@ -588,7 +588,7 @@ def _derive_capability_effect(name: str, script: str, schema: dict) -> tuple:
 
 def _create_tool(spec: dict, user=None) -> dict:
     """注册 HTTP 工具（与 Studio 表单同一路径：必须有 kind='http'，否则永远调不动）。"""
-    from routers.studio_parts.tools import _derive_http_side_effect
+    from core.domain.http_tool_policy import _derive_http_side_effect
     from repositories.studio_repo import StudioRepo
 
     name = str(spec.get("name") or "").strip()
