@@ -151,7 +151,7 @@ def dream_preview(note_limit: int = 80, include_wiki: int = 0, include_index: in
     ⚠️ 候选里 `contradicted` = 流水里有反证（需人工判断是否真错），
     `verified` = 流水关键词重合且无否定。两者都**不自动生效**。
     """
-    from core.memory_dream import dream
+    from services.memory_dream import dream
     _limit = max(10, min(int(note_limit), 300))
     pkg = dream(conn, note_limit=_limit)
     cands = []
@@ -192,7 +192,7 @@ def dream_apply(body: dict, conn=Depends(db_session), user=Depends(current_user)
     拒绝条件（任一）：无 fingerprint / fingerprint 与当前重跑结果不一致 /
     memory_ids 为空 / 候选里没有该 id 的 correct 项。
     """
-    from core.memory_dream import dream, apply_candidates
+    from services.memory_dream import dream, apply_candidates
     fp = str((body or {}).get("fingerprint") or "").strip()
     ids = (body or {}).get("memory_ids") or []
     try:
@@ -231,7 +231,7 @@ def dream_apply(body: dict, conn=Depends(db_session), user=Depends(current_user)
 @router.get("/api/memory/dream/wiki")
 def dream_wiki(topic: str = "", conn=Depends(db_session), user=Depends(current_user)):
     """编译后的记忆 wiki 页面（L2→L3）。不带 topic 时返回页名清单，避免一次吐全文。"""
-    from core.memory_dream import dream, load_wiki_page
+    from services.memory_dream import dream, load_wiki_page
     # 优先读落盘版本（`persist` 过就是同一份），没有则现编译
     if topic:
         md = load_wiki_page(topic)
@@ -249,7 +249,7 @@ def dream_wiki(topic: str = "", conn=Depends(db_session), user=Depends(current_u
 def dream_persist(conn=Depends(db_session), user=Depends(current_user),
                   _u=Depends(require_permission("memory", "manage"))):
     """把当前编译出的 wiki 页落盘到 `data/memory_wiki/`，返回写入文件清单。"""
-    from core.memory_dream import dream, persist_wiki
+    from services.memory_dream import dream, persist_wiki
     pkg = dream(conn)
     res = persist_wiki(pkg["wiki"])
     audit(audit_user(user), "memory_dream_persist",

@@ -1982,7 +1982,7 @@ class ToolMixin:
                 # ⚠️ 必须显式提示"不得作为事实来源"：记忆是模型自己写的，可能过期或错误，
                 #    Dreaming 的 contradicted 项已在检索侧排除，但 verified 也不等于事实。
                 _mid = int((arguments or {}).get("id") or 0)
-                from core.memory_dream import memory_fetch as _mfetch
+                from services.memory_dream import memory_fetch as _mfetch
                 try:
                     from database import get_db as _gdb
                     _c = _gdb()

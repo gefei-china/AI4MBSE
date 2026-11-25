@@ -182,7 +182,7 @@ def test_alert_business_metrics_exclude_probe():
     用文本定位每段 SQL 的**所在行**再断言含 `_PROBE`——比"文件里出现过"
     更严：能抓住"只改了其中一条"这类半截修复。
     """
-    src = _src("core/alert_evaluator.py")
+    src = _src("services/alert_evaluator.py")
     lines = src.splitlines()
 
     def _block_has_probe(start_kw: str, span: int = 8) -> bool:
@@ -215,7 +215,7 @@ def test_alert_fail_rate_keeps_probe_on_purpose():
 
     若有人把这里也"统一"加上 `_PROBE`，等于把警报器捂上 ⇒ 本用例红。
     """
-    src = _src("core/alert_evaluator.py")
+    src = _src("services/alert_evaluator.py")
     lines = src.splitlines()
     for i, l in enumerate(lines):
         if "SELECT COUNT(*) c, COALESCE(SUM(call_failed),0) f FROM llm_usage_stats" in l:
@@ -229,7 +229,7 @@ def test_alert_fail_rate_keeps_probe_on_purpose():
 
 def test_alert_latency_uses_sane_latency_guard():
     """延迟 p95 还要过 `sane_latency_where`（实测 2 行 file_read 记了 ≈56.8 年）。"""
-    src = _src("core/alert_evaluator.py")
+    src = _src("services/alert_evaluator.py")
     assert "_sane_lat()" in src, "★ 延迟统计缺少量纲守卫（56 年脏行会拉爆 p95）"
 
 
@@ -252,7 +252,7 @@ def test_consumers_use_probe_mark_singleton():
     hand_rolled = re.compile(r"COALESCE\(\s*\w*\s*\.?\s*is_probe\s*,\s*0\s*\)\s*=\s*0")
     for rel in ("core/attribution.py", "core/evolution_report.py",
                 "core/capability_effective.py", "core/capability_registry.py",
-                "core/alert_evaluator.py"):
+                "services/alert_evaluator.py"):
         src = _src(rel)
         assert "probe_mark import" in src, f"★ {rel} 未引用口径真源 probe_mark"
         m = hand_rolled.search(src)

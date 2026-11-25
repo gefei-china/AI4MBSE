@@ -108,7 +108,7 @@ check("M3 注入自动生效调用后 G4 红线必须判红",
       bool(calls_of(mut3) & FORBIDDEN))
 
 # ── G5 晋升前冻结基线（顺序红线）───────────────────────────────
-promo = src("core/config_promotion.py")
+promo = src("services/config_promotion.py")
 ptree = ast.parse(promo)
 fn = next((n for n in ptree.body
            if isinstance(n, ast.FunctionDef) and n.name == "execute_confirmation"), None)
@@ -153,7 +153,7 @@ check("G7 配置台账有回滚按钮（入 HIL 队列）",
       "requestConfigRollback" in adm and "/api/config/rollback" in adm)
 
 # ── G8 提案溯源 ────────────────────────────────────────────────
-cp = src("core/config_proposal.py")
+cp = src("services/config_proposal.py")
 pr = src("repositories/proposal_repo.py")
 check("G8 generate 支持 origin / source_feedback_ids",
       "source_feedback_ids: Optional[list]" in cp)

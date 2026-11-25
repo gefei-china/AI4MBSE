@@ -207,7 +207,7 @@ class MemoryMixin:
                     pass
                 if _idx_on and _idx_rows and lines:
                     try:
-                        from core.memory_dream import build_index
+                        from services.memory_dream import build_index
                         _idx = build_index(conn, max_lines=_idx_rows + 2,
                                            max_bytes=25 * 1024)
                         _nav = [ln for ln in _idx["text"].splitlines()

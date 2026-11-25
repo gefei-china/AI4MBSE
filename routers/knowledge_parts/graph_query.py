@@ -14,7 +14,7 @@ def graph_update_edge(eid: int, body: dict, conn=Depends(db_session),
     执行后核验**全部**收进 `core.graph_write_gate.write_edge(op='edge_update')`。
     端点只保留分支守卫、入参形态检查与提交打点（打点是端点特有副作用，不属写口）。
     """
-    from core.graph_write_gate import write_edge
+    from services.graph_write_gate import write_edge
 
     branch = body.get("branch") or "dev"
     g = _release_guard(conn, branch)

@@ -4,7 +4,7 @@
 ## 为什么需要这个工具（2026-11-16）
 
 `agent_memory` 有完整的证据链字段（`verify_state` / `evidence_ref` /
-`evidence_note` / `source_credibility`），`core/memory_dream.py` 也有完整的三态
+`evidence_note` / `source_credibility`），`services/memory_dream.py` 也有完整的三态
 判定逻辑（`_verify_claim`：否定优先两遍判定 + 数值冲突分级）。
 
 **但真机实测：295 条记忆全部 `unverifiable`、`evidence_ref` 全空。**

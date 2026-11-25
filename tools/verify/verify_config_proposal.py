@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""P1-3 门禁：配置提案器（core/config_proposal.py + proposal_repo + proposals 路由）。
+"""P1-3 门禁：配置提案器（services/config_proposal.py + proposal_repo + proposals 路由）。
 
 **背景（2026-10-18《自进化 AI 平台调研评估》路线图 P1-3）**：RefineGate 从
 「内容评审」泛化为「配置评审」——读 P1-2 归因器聚出的首坏步模式，按规则注册表
@@ -419,7 +419,7 @@ def main():
     check("E2 core/config.py 双登记（DEFAULT_CONFIG + CONFIG_SCHEMA）",
           _cf.count('"config_proposal"') >= 2,
           f"count={_cf.count('\"config_proposal\"')}")
-    _eng = open(os.path.join(ROOT, "core", "config_proposal.py"),
+    _eng = open(os.path.join(ROOT, "services", "config_proposal.py"),
                 encoding="utf-8").read()
     _rep = open(os.path.join(ROOT, "repositories", "proposal_repo.py"),
                 encoding="utf-8").read()

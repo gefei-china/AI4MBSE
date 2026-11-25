@@ -38,7 +38,7 @@ from __future__ import annotations
 import json
 from typing import Any, Dict
 
-from core.alternatives import (
+from services.alternatives import (
     build_comparison_table,
     load_config_from_db,
     score_alternatives,

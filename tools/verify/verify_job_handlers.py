@@ -2,7 +2,7 @@
 """P0-C 第二步：长任务业务端点接入作业队列 —— 不变式 + 变异自证。
 
 ## 为什么需要这个门禁（"能力齐了但没人用"是真实发生过的）
-上一轮`core/job_queue.py` 交付后，全仓 **grep 不到任何业务端点调用它**
+上一轮`services/job_queue.py` 交付后，全仓 **grep 不到任何业务端点调用它**
 （只在 schema / 自身 / 门禁里出现）—— 队列能力齐备却无人使用，
 长任务仍同步占连接。这类"最后��公里没通"的缺陷没有任何单测会自然报警，
 只能靠一个**断言业务端点确实接了队列**的门禁。
@@ -47,7 +47,7 @@ _MUT_VERDICT = []   # 变异结论（M1/M2/M3…）：必须全部 PASS（即"�
 _MUT_DETAIL = []    # 变异期的中间断言：红是预期，仅供人核对
 _IN_MUT = [False]
 
-JQ_SRC = os.path.join(ROOT, "core", "job_queue.py")
+JQ_SRC = os.path.join(ROOT, "services", "job_queue.py")
 JH_SRC = os.path.join(ROOT, "services", "job_handlers.py")
 KP_SRC = os.path.join(ROOT, "knowledge_pipeline", "ingest.py")
 

@@ -48,7 +48,7 @@
       "database",
       "models"
     ],
-    "direction_baseline": 42,
+    "direction_baseline": 19,
     "direction_baseline_note": "全仓（core+services+adapters+core.domain）层间越界总数基线，2026-11-25 实测。只卡增量：新增越界即红；要降低必须真改代码后下调此值。"
   },
   "modules": {
@@ -723,6 +723,62 @@
       "shim": true,
       "cli": false,
       "bytes": 34412
+    },
+    "config_promotion": {
+      "layer": "services",
+      "path": "services/config_promotion.py",
+      "legacy_path": "core/config_promotion.py",
+      "shim": true,
+      "cli": false,
+      "bytes": 22211
+    },
+    "config_proposal": {
+      "layer": "services",
+      "path": "services/config_proposal.py",
+      "legacy_path": "core/config_proposal.py",
+      "shim": true,
+      "cli": false,
+      "bytes": 23242
+    },
+    "graph_write_gate": {
+      "layer": "services",
+      "path": "services/graph_write_gate.py",
+      "legacy_path": "core/graph_write_gate.py",
+      "shim": true,
+      "cli": false,
+      "bytes": 35062
+    },
+    "alert_evaluator": {
+      "layer": "services",
+      "path": "services/alert_evaluator.py",
+      "legacy_path": "core/alert_evaluator.py",
+      "shim": true,
+      "cli": false,
+      "bytes": 28271
+    },
+    "memory_dream": {
+      "layer": "services",
+      "path": "services/memory_dream.py",
+      "legacy_path": "core/memory_dream.py",
+      "shim": true,
+      "cli": false,
+      "bytes": 30490
+    },
+    "alternatives": {
+      "layer": "services",
+      "path": "services/alternatives.py",
+      "legacy_path": "core/alternatives.py",
+      "shim": true,
+      "cli": false,
+      "bytes": 22544
+    },
+    "job_queue": {
+      "layer": "services",
+      "path": "services/job_queue.py",
+      "legacy_path": "core/job_queue.py",
+      "shim": true,
+      "cli": false,
+      "bytes": 24814
     }
   },
   "exemptions": {

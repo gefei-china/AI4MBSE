@@ -19,7 +19,7 @@ from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
-from core.alternatives import (
+from services.alternatives import (
     build_comparison_table,
     load_config_from_db,
     normalize_dimensions,

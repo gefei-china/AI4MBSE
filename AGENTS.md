@@ -19,7 +19,7 @@
 
 ### 1.1 分层归属（2026-11-25 P1，**改任何模块前先看这里**）
 
-原来 75 个业务模块散在仓库根（1.6 MB），现在已物理归位到 4 个分层包（随后又有 9 个原本住在 `core/` 的应用服务归位到 `services/`，`core/X.py` 留垫片；归属表共 84 条）：
+原来 75 个业务模块散在仓库根（1.6 MB），现在已物理归位到 4 个分层包（随后又有 9 个原本住在 `core/` 的应用服务归位到 `services/`，`core/X.py` 留垫片；归属表共 91 条）：
 
 | 层 | 位置 | 内容（示例） | 允许依赖 |
 |---|---|---|---|
@@ -32,8 +32,8 @@
   85 个门禁/测试、`docs/` 里的旧路径继续可用，且**模块身份唯一**（不会有两份状态）。
   ⇒ **绝对不要往垫片里加代码**，也不要新增根目录业务模块：`verify_layer_ownership.py` 会判红。
 - 新代码一律写新路径（`from adapters.graph_db import get_writer`）。产品代码里旧路径实测 **0 处**。
-- 真正权威的归属表（含每个模块路径 / 是否 CLI / 8 条存量依赖豁免及理由 / 全仓越界基线 42 处（2026-11-25 从 87 分四批收敛 45 处））：
-  **`docs/architecture/layer_ownership.json`**；设计说明见 `docs/architecture/分层归属与约束-20261125.md`。
+- 真正权威的归属表（含每个模块路径 / 是否 CLI / 8 条存量依赖豁免及理由 / 全仓越界基线 19 处（2026-11-25 从 87 分五批收敛 68 处））：
+  **`docs/architecture/layer_ownership.json`**；设计说明见 `docs/architecture/分层归属与约束-20261125.md`；**改 `stream.py` 前必读** `docs/architecture/stream-py拆分规避契约-20261125.md`（105 个门禁读它的源码文本，禁止随意搬方法）。
 - ⚠️ 拼仓库根下的资产（`checker.jar` / `sysml.library` / `sysml_models` / `mbse.db` / `integrations/*.json`）
   必须用 `core.paths.repo_root()`，**不要再用 `dirname(abspath(__file__))`** ——搬进子目录后它会指向包目录，
   而"路径错 + 上层 except"= 校验器静默 unavailable（P1 前有 11 个模块这么写）。

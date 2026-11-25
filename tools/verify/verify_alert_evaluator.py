@@ -73,7 +73,7 @@ with db_conn() as c:
 #   ⇒ today=0 ⇒ 判据恒 0 ⇒ **每天有 30 分钟窗口必红**（本轮实测撞上）。
 #   修法不是"把测试改成 localtime"（那样与生产存值相反），而是
 #   ① 夹具仍写 UTC（与生产一致）；
-#   ② 业务 SQL 把存储列也转本地（见 core/alert_evaluator.py 同处注释）；
+#   ② 业务 SQL 把存储列也转本地（见 services/alert_evaluator.py 同处注释）；
 #   ③ 时间戳用 SQL 生成，避免 Python 与 SQLite 两套时钟。
 
 with db_conn() as c:
@@ -131,7 +131,7 @@ check("M1j 审计链完好 = 1.0", m["audit_chain_ok"] == 1.0, m["audit_chain_ok
 #   都必须把**存储列**也转本地（`date(created_at,'localtime')`），否则在中国时区
 #   每天本地 00:00~08:00 会把"今日"算成 0（成本突增告警失效 8 小时）。
 _AE_SRC = open(os.path.join(os.path.dirname(os.path.dirname(
-    os.path.dirname(os.path.abspath(__file__)))), "core", "alert_evaluator.py"),
+    os.path.dirname(os.path.abspath(__file__)))), "services", "alert_evaluator.py"),
     encoding="utf-8").read()
 check("M1g' 今日/昨日成本 SQL 把 created_at 转本地再比（UTC 存值对齐）",
       "date(created_at,'localtime')" in _AE_SRC

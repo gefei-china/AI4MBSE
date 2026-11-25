@@ -3,7 +3,7 @@
 
 ## 真机事故（2026-11-16）
 
-`agent_memory` 有完整的证据链字段，`core/memory_dream.py` 有完整的三态判定
+`agent_memory` 有完整的证据链字段，`services/memory_dream.py` 有完整的三态判定
 （`_verify_claim`：否定优先两遍判定 + 数值冲突分级）。**但真机 295 条记忆
 全部 `unverifiable`、`evidence_ref` 全空 —— 校验机制建好了没通电。**
 

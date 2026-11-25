@@ -145,7 +145,7 @@ check("R4d 规则降级 `_extract_worthy` 的硬门保持不变（安全底线�
       MemoryService._extract_worthy("你好，我是 MBSE 平台的通用助手", 10)[0] is False)
 
 print("\n[3] A/B 度量（不臆造未测指标）", flush=True)
-DREAM = load("core/memory_dream.py", name="memory_dream_mut")
+DREAM = load("services/memory_dream.py", name="memory_dream_mut")
 p1 = {"candidates": [], "index": {"text": "x"}}
 p2 = {"candidates": [{"state": "contradicted"}], "index": {"text": "xy"}}
 d = DREAM["compare_packages"](p1, p2)
@@ -192,7 +192,7 @@ for label, path, mut, run in (
          ns["archive_apply"](c, ns["sweep"](c, older_than_days=90), confirm=True)))(fixture())),
     ("M3 恒用硬 prompt ⇒ R4 翻红", "services/memory_service.py", _m3,
      lambda ns: "一律 worth=false" not in ns["MemoryService"]._deposit_prompt()),
-    ("M4 未实测项填 0 ⇒ R5 翻红", "core/memory_dream.py", _m4,
+    ("M4 未实测项填 0 ⇒ R5 翻红", "services/memory_dream.py", _m4,
      lambda ns: ns["compare_packages"](p1, p2)["memory_hit_rate"] is None),
 ):
     try:

@@ -522,7 +522,7 @@ else:
 # ═══════════════════════════════════════════════════════════════
 section("E 接线：钩子/端点/告警/repo/写入点/迁移")
 # ═══════════════════════════════════════════════════════════════
-_promo_src = _read(os.path.join("core", "config_promotion.py"))
+_promo_src = _read(os.path.join("services", "config_promotion.py"))
 check("E1a 复测钩子接入 apply 分支",
       _promo_src.count("_recheck_after_change(conn, conf=conf, kind=HIL_ACTION_APPLY") == 1)
 check("E1b 复测钩子接入 rollback 分支（回滚后同样复测）",
@@ -577,7 +577,7 @@ finally:
     me.collect_signals = _orig_collect
 check("E2g 猴子补丁已复位（后续断言不受污染）",
       me.collect_signals is _orig_collect)
-_ale_src = _read(os.path.join("core", "alert_evaluator.py"))
+_ale_src = _read(os.path.join("services", "alert_evaluator.py"))
 check("E3a 告警器消费 misevolution 引擎",
       "from core import misevolution" in _ale_src)
 check("E3b evaluate_once None 跳过（没数据不判，skipped_unknown）",

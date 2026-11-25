@@ -352,7 +352,7 @@ def main():
     check("E4 31-admin.js 三函数 + loadOps 主链钩子",
           all(k in _ad for k in ("async function loadOpsBadCases", "async function runBadcaseCollect",
                                  "async function triageBadcase", "loadOpsBadCases(); }catch(e){}")))
-    _ae = open(os.path.join(ROOT, "core", "alert_evaluator.py"), encoding="utf-8").read()
+    _ae = open(os.path.join(ROOT, "services", "alert_evaluator.py"), encoding="utf-8").read()
     check("E5 alert_evaluator 消费 open_badcase_count（不造第二套告警）",
           "from core.badcase import open_badcase_count" in _ae)
 

@@ -171,8 +171,8 @@ def main():
     # 常驻后台循环**不应**继承（会把某次请求的 ctx 固化进循环）
     ck("B12 常驻后台循环未被误改（alert/watchdog/job_queue/mcp_health 保持裸线程）",
        all(k not in (ROOT / f).read_text(encoding="utf-8")
-           for f, k in [("core/alert_evaluator.py", "copy_context"),
-                        ("core/job_queue.py", "copy_context"),
+           for f, k in [("services/alert_evaluator.py", "copy_context"),
+                        ("services/job_queue.py", "copy_context"),
                         ("services/mcp_health.py", "copy_context")]))
 
     # ── C 变异自证 ──

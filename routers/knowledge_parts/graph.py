@@ -135,7 +135,7 @@ def graph_add_node(body: GraphNodeIn, conn=Depends(db_session),
     #   ⚠️ status="reviewed" 必须显式传：图库内手动创建 = 工程师显式确认行为，
     #   与 API 直写（`POST /entities` 默认 candidate 进审核队列）语义不同，
     #   原实现由 `GraphStore.create_node` 内部写死，迁移时不能丢。
-    from core.graph_write_gate import write_entity
+    from services.graph_write_gate import write_entity
     res = write_entity(conn, op="create", entity_id=nid, name=body.name,
                        entity_type=body.entity_type, properties=body.properties,
                        branch=body.branch or "dev", actor=_actor(user),
@@ -198,7 +198,7 @@ def graph_update_node(nid: str, body: GraphNodeIn, conn=Depends(db_session),
     except Exception:
         _gchg = []
     _gdiff = "；".join(_gchg[:20])
-    from core.graph_write_gate import write_entity
+    from services.graph_write_gate import write_entity
     res = write_entity(conn, op="update", entity_id=nid, name=body.name,
                        entity_type=body.entity_type, properties=body.properties,
                        branch=branch, actor=_actor(user), x=body.x, y=body.y,
@@ -231,7 +231,7 @@ def graph_delete_node(nid: str, branch: Optional[str] = "dev", conn=Depends(db_s
         return JSONResponse({"error": g}, 400)
     # ★ 2026-11-21 P0-0：统一写入口。删除的**执行后核验是反向断言**（行必须消失），
     #   不能复用"回读到且一致"的语义 —— 否则删除失败也会报成功。
-    from core.graph_write_gate import write_entity
+    from services.graph_write_gate import write_entity
     res = write_entity(conn, op="delete", entity_id=nid, branch=b,
                        actor=_actor(user), log_op="node_delete",
                        audit_event="graph_node_delete")
@@ -250,7 +250,7 @@ def graph_add_edge(body: GraphEdgeIn, conn=Depends(db_session),
     if g:
         return JSONResponse({"error": g}, 400)
     # ★ 2026-11-21 P0-0：统一写入口（关系类型门禁与实体同一把尺子 + 执行后核验）。
-    from core.graph_write_gate import write_edge
+    from services.graph_write_gate import write_edge
     res = write_edge(conn, op="edge_create", source_id=body.source_id,
                      target_id=body.target_id, relation_type=body.relation_type,
                      props=body.props, branch=body.branch or "dev", actor=_actor(user))
@@ -273,7 +273,7 @@ def graph_delete_edge(eid: int, conn=Depends(db_session),
     if g:
         return JSONResponse({"error": g}, 400)
     # ★ 2026-11-21 P0-0：统一写入口（删除的核验是反向断言：行必须消失）。
-    from core.graph_write_gate import write_edge
+    from services.graph_write_gate import write_edge
     res = write_edge(conn, op="edge_delete", edge_id=eid,
                      branch=row["branch"] or "dev", actor=_actor(user))
     if not res.get("ok"):

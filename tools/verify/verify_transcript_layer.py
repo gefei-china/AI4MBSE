@@ -8,7 +8,7 @@
   T5 记忆层迁移幂等（第二次不新增列、不重复重建）
   M1/M2 变异自证：去掉 UPDATE 触发器的删旧 / 不建 INSERT 触发器
 
-⚠️ 为什么必须单列这个门禁：`core/memory_dream.py` 的取证能力完全建立在
+⚠️ 为什么必须单列这个门禁：`services/memory_dream.py` 的取证能力完全建立在
    transcripts 可检索上。索引一旦 stale，Dreaming 会"安静地一条证据都找不到"，
    而所有上层判据仍显示通过 —— 属于典型的静默降级。
 """

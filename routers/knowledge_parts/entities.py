@@ -45,7 +45,7 @@ def _entity_type_check(conn, etype: str):
     `core.graph_write_gate.check_entity_type`，与属性校验、写入、留痕、执行后核验同处一模块。
     端点**不应**再直接调它 —— 请走 `write_entity(...)`，否则又多出一条"只查类型不校验属性"的路径。
     """
-    from core.graph_write_gate import check_entity_type
+    from services.graph_write_gate import check_entity_type
     return check_entity_type(conn, etype)
 
 
@@ -204,7 +204,7 @@ def create_entity(ent: EntityIn, conn=Depends(db_session),
     # ★ 2026-11-21 P0-0：统一写入口 —— 门禁 → 属性校验 → 写入 → 留痕 → **执行后核验**。
     #   改前本端点只查「类型是否存在」、**不校验属性**，与图谱入口（validate_node）
     #   是两把尺子；且写入后没有回读核验，接口 200 但库里不是那个样子时无人知晓。
-    from core.graph_write_gate import write_entity
+    from services.graph_write_gate import write_entity
     res = write_entity(conn, op="create", entity_id=ent.id, name=ent.name,
                        entity_type=ent.entity_type, properties=ent.properties,
                        branch=ent.branch or "dev", actor=_actor(user),
@@ -251,7 +251,7 @@ def update_entity(entity_id: str, ent: EntityIn, conn=Depends(db_session),
     # ★ 2026-11-21 P0-0：统一写入口（门禁→校验→写入→留痕→执行后核验）。
     #   字段级 diff 仍在这里算（它是展示用的业务信息），但**写入与审计**交给统一入口，
     #   避免"端点自己写一遍、Agent 工具链再写一遍"两条路径各自漏留痕。
-    from core.graph_write_gate import write_entity
+    from services.graph_write_gate import write_entity
     res = write_entity(conn, op="update", entity_id=entity_id, name=ent.name,
                        entity_type=ent.entity_type, properties=ent.properties,
                        branch=b, actor=_actor(user),

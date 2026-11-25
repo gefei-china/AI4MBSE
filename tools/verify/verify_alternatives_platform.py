@@ -219,11 +219,11 @@ print("=" * 72)
 #   ② **锚点未命中 = 变异体没变 = 假绿** ⇒ 「锚点命中数」本身必须是��条断言。
 from core import alternatives as _alt_mod
 
-_alt_src = io.open(os.path.join(REPO, "core/alternatives.py"), encoding="utf-8").read()
+_alt_src = io.open(os.path.join(REPO, "services/alternatives.py"), encoding="utf-8").read()
 
 
 def _mutate(src_text, old, new):
-    """把 core/alternatives.py 的片段替换后 exec 出孪生体（磁盘源文件一字不动）。"""
+    """把 services/alternatives.py 的片段替换后 exec 出孪生体（磁盘源文件一字不动）。"""
     if old not in src_text:
         return None
     ns = {"__name__": "mutant_alternatives"}

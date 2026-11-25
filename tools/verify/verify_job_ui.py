@@ -229,7 +229,7 @@ def t_f3(core, docs, jobs_py, schema_py):
     # ★ 2026-10-13：原先 `py_sts` 是**手抄的硬编码集合** —— 后端新增一个状态
     #   （如 `timeout`）时门禁发现不了，它只会拿"手抄的老集合"去比前端，
     #   **永远 PASS** ⇒ 这正是 `62c168e`「硬编码快照必然失效」在门禁自身的复现。
-    #   改为从**真相源** `core/job_queue.py` 的 TERMINAL/ACTIVE 真取。
+    #   改为从**真相源** `services/job_queue.py` 的 TERMINAL/ACTIVE 真取。
     py_sts = set()
     try:
         from core.job_queue import ACTIVE as _A, TERMINAL as _T

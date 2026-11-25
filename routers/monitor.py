@@ -407,7 +407,7 @@ def alert_metrics(conn=Depends(db_session)):
     而它们只有在编排 run 结束时才会被评估；非编排流量（会话直答等绝大多数真实请求）
     长期处于无告警守护状态，这是评估报告的 P0-d。
     """
-    from core.alert_evaluator import GLOBAL_METRICS
+    from services.alert_evaluator import GLOBAL_METRICS
     return {
         "run_scope": [{"key": "success_rate", "desc": "run 级成功率（%）", "evaluated_at": "run 结束"},
                       {"key": "avg_latency", "desc": "run 总耗时（ms）", "evaluated_at": "run 结束"},
@@ -420,7 +420,7 @@ def alert_metrics(conn=Depends(db_session)):
 @router.post("/api/monitor/alerts/evaluate")
 def evaluate_alerts_now(cooldown_min: int = 30, conn=Depends(db_session)):
     """立即执行一次全局规则评估（不等下一个周期；验证规则配得对不对就用它）。"""
-    from core.alert_evaluator import evaluate_once
+    from services.alert_evaluator import evaluate_once
     res = evaluate_once(conn=conn, cooldown_min=max(0, int(cooldown_min or 0)))
     return {"ok": True, **res}
 
@@ -579,7 +579,7 @@ def list_alert_rules(conn=Depends(db_session)):
 @router.post("/api/monitor/alert-rules")
 def create_alert_rule(r: AlertRuleIn, conn=Depends(db_session), user=Depends(current_user)):
     # P0-d：白名单加入周期评估器的全局指标（run 级四个 + GLOBAL_METRICS）
-    from core.alert_evaluator import GLOBAL_METRICS
+    from services.alert_evaluator import GLOBAL_METRICS
     allowed = ("success_rate", "avg_latency", "error_count", "mock_rate") + GLOBAL_METRICS
     if r.metric not in allowed:
         return JSONResponse({"error": f"不支持的指标: {r.metric}（可选: {', '.join(allowed)}）"}, 400)
@@ -604,7 +604,7 @@ def update_alert_rule(rid: int, r: AlertRuleIn, conn=Depends(db_session), user=D
     row = conn.execute("SELECT id FROM alert_rules WHERE id=?", (rid,)).fetchone()
     if not row:
         return JSONResponse({"error": "告警规则不存在"}, 404)
-    from core.alert_evaluator import GLOBAL_METRICS
+    from services.alert_evaluator import GLOBAL_METRICS
     if r.metric not in ("success_rate", "avg_latency", "error_count", "mock_rate") + GLOBAL_METRICS:
         return JSONResponse({"error": f"不支持的指标: {r.metric}"}, 400)
     conn.execute(

@@ -48,13 +48,13 @@ def skip(name, why):
 
 def load_dream(mutate=None):
     """读产品模块源码，可选文本变换后 exec —— 变异自证的标准姿势。"""
-    path = os.path.join(ROOT, "core", "memory_dream.py")
+    path = os.path.join(ROOT, "services", "memory_dream.py")
     with open(path, encoding="utf-8") as f:
         src = f.read()
     if mutate:
         src = mutate(src)
     ns = {"__name__": "memory_dream_mut"}
-    exec(compile(src, "core/memory_dream.py", "exec"), ns)
+    exec(compile(src, "services/memory_dream.py", "exec"), ns)
     return ns
 
 
@@ -272,7 +272,7 @@ def main():
     )
     for label, flag, mut in mutants:
         try:
-            src = open(os.path.join(ROOT, "core", "memory_dream.py"),
+            src = open(os.path.join(ROOT, "services", "memory_dream.py"),
                        encoding="utf-8").read()
             changed = mut(src)
             assert changed != src, "变异锚点失效（源码已改写，判据需同步更新）"

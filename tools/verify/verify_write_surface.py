@@ -68,8 +68,8 @@ WRITE_SQL = re.compile(
 #: 注：推断通道（write_inferred_*）委托仓储写入，本身没有直接 SQL，
 #:     由 W3 单独静态锁接线，不放进本台账。
 REGISTRY = {
-    ("core/graph_write_gate.py", "write_edge"): "unified",
-    ("core/graph_write_gate.py", "write_entity"): "unified",
+    ("services/graph_write_gate.py", "write_edge"): "unified",
+    ("services/graph_write_gate.py", "write_entity"): "unified",
 
     ("repositories/knowledge_repo.py", "create_entity"): "repository",
     ("repositories/knowledge_repo.py", "create_relation"): "repository",
@@ -182,7 +182,7 @@ def check():
     _add(not stale, "W2 台账无过期键（改动后同步更新）",
          "已消失: " + "; ".join(f"{f}::{n}" for f, n in stale[:12]))
 
-    with open(os.path.join(ROOT, "core", "graph_write_gate.py"), encoding="utf-8") as f:
+    with open(os.path.join(ROOT, "services", "graph_write_gate.py"), encoding="utf-8") as f:
         gate_src = f.read()
     with open(os.path.join(ROOT, "routers", "graph_workspace.py"), encoding="utf-8") as f:
         ws_src = f.read()

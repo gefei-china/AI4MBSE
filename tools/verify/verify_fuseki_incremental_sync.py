@@ -194,7 +194,7 @@ def _checks(c):
     i_commit = body.index("conn.commit()")
     i_flush = body.index("_projection_flush(conn)")
     ck("F10a db_session 在 commit 之后才 flush", i_flush > i_commit and "\n    else:" in body[i_commit:i_flush])
-    gate_src = open(os.path.join(_ROOT, "core", "graph_write_gate.py"), encoding="utf-8").read()
+    gate_src = open(os.path.join(_ROOT, "services", "graph_write_gate.py"), encoding="utf-8").read()
     ck("F10b 写入口只 mark，不直接 flush", "_projection_flush" not in gate_src
        and "_projection_mark(" in gate_src and "_projection_capture(" in gate_src)
 

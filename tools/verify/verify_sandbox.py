@@ -8,7 +8,7 @@
      （ci.yml 执行行 + 原参数），差分判回归——双臂顺序（门禁共享
      ROOT/tmp）、每臂独立临时库/配置副本、影子层只进实验组、源码
      内容指纹防评估期间外部编辑污染（均为实测踩坑后立规）；
-  ② 晋升（core/config_promotion.py）：verdict=pass 才可发起 ⇒ 入
+  ② 晋升（services/config_promotion.py）：verdict=pass 才可发起 ⇒ 入
      hil_confirmations ⇒ 人批准后才经 save_override 真改配置并落
      config_history；回滚同样过人。**没有任何自动写配置的路径**。
 
@@ -565,7 +565,7 @@ import re as _re                                       # noqa: E402
 _stmts = _re.findall(r'(?:INSERT\s+INTO|UPDATE|DELETE\s+FROM)\s+(\w+)', _rep)
 check("E5 sandbox_repo 只碰 sandbox_runs 一张表（引擎数据面可断言）",
       set(_stmts) == {"sandbox_runs"}, _stmts)
-_promo_src = open(os.path.join(ROOT, "core", "config_promotion.py"),
+_promo_src = open(os.path.join(ROOT, "services", "config_promotion.py"),
                   encoding="utf-8").read()
 _sb_src = open(os.path.join(ROOT, "core", "adapters/sandbox.py"), encoding="utf-8").read()
 check("E6 ★config_promotion 唯一配置写入口是 save_override（无 settings 直写/无 _CONFIG 直改）",

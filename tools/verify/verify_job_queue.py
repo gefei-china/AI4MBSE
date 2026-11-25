@@ -29,7 +29,7 @@ PASS, FAIL, VACUOUS = "PASS", "FAIL", "VACUOUS"
 _results = []
 _MUT_RED = []
 _IN_MUT = [False]
-JQ_SRC = os.path.join(ROOT, "core", "job_queue.py")
+JQ_SRC = os.path.join(ROOT, "services", "job_queue.py")
 
 DDL = """
 CREATE TABLE IF NOT EXISTS job_jobs (

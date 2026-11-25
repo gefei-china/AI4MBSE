@@ -587,7 +587,7 @@ def _merge_cohort_items(conn, branch: str, who: str, items) -> tuple:
     #   原实现绕过类型门禁/留痕/post_check，且**不写 entity_versions**（推理并入的实体
     #   历史上没有版本行）。推断类型可能不在本体（兜底 '实体' 实测不在 54 类型里），
     #   所以走 write_inferred_* 的「告警不阻断 + 留痕 + 回读核验」档，而不是严格档。
-    from core.graph_write_gate import write_inferred_edge, write_inferred_entity
+    from services.graph_write_gate import write_inferred_edge, write_inferred_entity
 
     # 2) 幂等补实体（仅当前分支缺失时插入，status='reviewed' → 并入图即显示）
     created_entities, failed = [], []

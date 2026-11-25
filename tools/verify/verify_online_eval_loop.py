@@ -307,7 +307,7 @@ def main():
     met = oe.online_eval_metrics(_fresh())
     for k in ("eval_backlog_pending", "eval_promoted_7d", "eval_auto_coverage"):
         _rec("F1 %s 在 GLOBAL_METRICS" % k, k in ae_mod.GLOBAL_METRICS)
-    ev_src = _read("core/alert_evaluator.py")
+    ev_src = _read("services/alert_evaluator.py")
     _rec("F2 alert_evaluator 有 online_eval_metrics 供数",
          "from core.online_eval import online_eval_metrics" in ev_src)
     seed_src = _read("services/seed_registry.py")

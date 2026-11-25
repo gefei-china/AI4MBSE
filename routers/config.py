@@ -55,7 +55,7 @@ def _log_changes(conn, entries, source: str, user, note: str) -> list:
     entries: [(section, key, old, new, applied)]；old/new 必须已由 _mask 脱敏。
     skipped_masked 之类的「未真正写入」用 applied=0 留痕，台账不撒谎。
     """
-    from core.config_promotion import _insert_history
+    from services.config_promotion import _insert_history
     ids = []
     for sec, key, old, new, applied in entries:
         ids.append(_insert_history(conn, sec, key, old, new, source, 0,

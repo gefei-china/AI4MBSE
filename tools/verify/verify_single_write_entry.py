@@ -41,7 +41,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-GATE = os.path.join(ROOT, "core", "graph_write_gate.py")
+GATE = os.path.join(ROOT, "services", "graph_write_gate.py")
 PARTS = os.path.join(ROOT, "routers", "knowledge_parts")
 
 #: 参与统计的写端点文件（相对仓库根；首批范围；扩范围时同步抬/降预算）
