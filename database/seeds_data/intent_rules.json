@@ -28,10 +28,10 @@
     },
     {
       "trigger": "追溯矩阵",
-      "intent": "review",
+      "intent": "trace_verification",
       "weight": 30.0,
       "source": "user",
-      "note": "「追溯矩阵检查」属评审类。无此规则时被术语归一化带偏到 knowledge_qa（CI 黄金集实测错例之一）。"
+      "note": "「追溯矩阵检查」的目标意图是 trace_verification（分类法：需求-模型追溯矩阵/覆盖率/孤儿元素）。原值 review 是 trace_verification Agent 出现之前的兜底，造成「规则→review 但关键词层→trace_verification」两层打架；2026-11-26 对齐。已存在的库里该行仍是 review（种子只补不覆盖），但关键词层优先，行为一致。"
     },
     {
       "trigger": "接口变更",

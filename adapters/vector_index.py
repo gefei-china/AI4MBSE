@@ -49,10 +49,42 @@
      缓存文件名随之变化 ⇒ 旧文件被**自然绕过**。
      为什么用 epoch 而不是删文件：本环境 `os.remove` 被 safe-delete 策略拦截，
      `drop_disk_cache()` 会**静默返回 0**（"删不掉就算了"）⇒ 依赖删除的方案在这里不可靠。
+
+══════════════════════════════════════════════════════════════════════
+★ 2026-11-26 事故修复：mmap 跨进程文件锁 ⇒ 缓存写不进去，门禁"时红时绿"
+══════════════════════════════════════════════════════════════════════
+**现象**：门禁 `verify_vector_binary_cache` 单独跑绿、批量/真机跑红
+（`hit_bin 增量=+0`），且 `tmp/vec_cache/` 里散落 12 个 `*.tmp.npy` 半成品。
+
+**根因（受控实验，两条互相咬合）**：
+  ① `_load_binary` 用 `np.load(mmap_mode="r")` ⇒ **Windows 下文件被映射期间不允许替换**。
+     实测：另起一个进程持有 mmap 后，本进程 `os.replace` 立刻
+     `PermissionError [WinError 5]`；而对运行中的服务用 `os.rename` 探针得到
+     `LOCKED PermissionError 32`（服务正持有 `openai-compat_1024_0.npy`）。
+  ② `_save_binary` 的 `except Exception: return False` **静默吞掉**该失败 ⇒
+     缓存永远更新不了 ⇒ 只要"磁盘缓存与库行数不一致"（插入/重算后必然如此），
+     每次检索都判陈旧→重建→写盘失败→下次还陈旧 ⇒ `hit_bin` **恒 +0**。
+     更精确：`_ensure_group` 里 `got = cls._load_binary(...)` 之后 `got[0]` **一直持有映射**，
+     直到函数返回 —— 而 `_save_binary` 就在返回之前调用 ⇒ **陈旧缓存的第一次重建写盘必失败**，
+     与"有没有别的进程"无关。（跨进程只是让失败面更大：连正常保存也会被锁。）
+
+**为什么算 flaky 而不是常红**：只有当「缓存陈旧」**且**「有进程正持有该文件」两件事
+同时成立才红。服务没起 / 纪元刚 bump（新路径无人持有）时就是绿的 —— 红绿取决于时序。
+
+**修法**：
+  ① 改用**普通加载**（`np.load(mp)`，不走 mmap）：实测 4.6ms → 10.6ms，
+     多花 6ms 换掉整个跨进程锁问题（缓存 29MB，本来也要读）。**别再改回 mmap。**
+  ② 写盘失败**必须留痕**：`_STATS["save_fail"]` + 明细 + WARNING，
+     不再静默 —— 静默失败是"红=有问题"这个信号失效的直接原因。
+  ③ `bump_epoch()` 顺手**清掉更早的纪元文件**（保留新纪元 + 前 1 个）：
+     实测累积 85 个纪元 ≈ **2.6 GB** 磁盘占用，且删不掉（safe-delete）。
 """
 import hashlib
 import json
+import logging
 import os
+
+_log = logging.getLogger(__name__)
 
 try:
     import numpy as _np
@@ -99,10 +131,61 @@ def bump_epoch() -> str:
         with open(_epoch_path(), "w", encoding="utf-8") as f:
             f.write(nxt)
         ChunkVectorIndex._MATRICES.clear()
+        _prune_old_epochs(keep=(nxt, cur))
         return nxt
     except Exception:
         # 写不进纪元只意味着"缓存可能陈旧"，不该让调用方失败
         return _read_epoch()
+
+
+def _prune_old_epochs(keep: tuple, keep_extra: int = 1) -> int:
+    """清掉更早纪元的缓存文件，只保留 `keep` 里的纪元 + 前 `keep_extra` 个。
+
+    为什么需要：epoch 进文件名后旧文件**没人再读**，但每对 ≈29MB。
+    实测累积 **85 个纪元 / 2.6 GB** —— 而且本环境 `os.remove` 被 safe-delete 拦，
+    `drop_disk_cache()` 只会静默返回 0 ⇒ 只能在这里顺手清。
+    best-effort：删不掉就当无事发生（只影响磁盘占用，不影响正确性）。
+    """
+    try:
+        if not os.path.isdir(CACHE_DIR):
+            return 0
+        keepset = {str(k) for k in keep if str(k)}
+        epochs = set()
+        for f in os.listdir(CACHE_DIR):
+            parts = f.rsplit(".", 2)          # x.npy / x.ids.npy
+            stem = parts[0] if len(parts) > 1 else f
+            if "_" in stem:
+                epochs.add(stem.rsplit("_", 1)[-1])
+        try:
+            ordered = sorted(epochs, key=lambda s: int(s))
+        except Exception:
+            return 0
+        # 保留目标纪元 + 序号在它之前的 keep_extra 个
+        idx = {e: i for i, e in enumerate(ordered)}
+        protected = set(keepset)
+        for e in keepset:
+            i = idx.get(e)
+            if i is None:
+                continue
+            protected.update(ordered[max(0, i - keep_extra):i + 1])
+        n = 0
+        for f in os.listdir(CACHE_DIR):
+            if f == "epoch.txt":
+                continue
+            parts = f.rsplit(".", 2)
+            stem = parts[0] if len(parts) > 1 else f
+            if "_" not in stem:
+                continue
+            if stem.rsplit("_", 1)[-1] in protected:
+                continue
+            try:
+                os.remove(os.path.join(CACHE_DIR, f))
+                n += 1
+            except Exception:
+                pass                      # safe-delete 拦截等：删不掉就算了
+        return n
+    except Exception:
+        return 0
 
 
 def _cache_paths(version: str, dim: int) -> tuple:
@@ -120,7 +203,7 @@ class ChunkVectorIndex:
     """按 (embed_version, dim) 分组的归一化向量矩阵 + 批量余弦检索。"""
 
     _MATRICES = {}   # (version, dim) -> {"m": float32 ndarray(单位行向量), "ids": [chunk_id]}
-    _STATS = {"hit_bin": 0, "hit_json": 0, "miss": 0}   # 命中率观测
+    _STATS = {"hit_bin": 0, "hit_json": 0, "miss": 0, "save_fail": 0}   # 命中率/写盘失败观测
 
     @classmethod
     def available(cls) -> bool:
@@ -162,14 +245,20 @@ class ChunkVectorIndex:
     # ── 磁盘二进制缓存（L2 新增）──────────────────────────────────────
     @classmethod
     def _load_binary(cls, version: str, dim: int):
-        """尝试 np.load(mmap)。返回 (matrix, ids) 或 None。"""
+        """尝试 np.load（**普通加载，不用 mmap**）。返回 (matrix, ids) 或 None。
+
+        ⚠️ 2026-11-26 实测：`mmap_mode="r"` 会让本进程持有文件映射，期间**任何进程的
+        `os.replace` 写这个文件都会 PermissionError**（WinError 5/32）⇒ `_save_binary`
+        静默失败 ⇒ 陈旧缓存永远修不掉 ⇒ 门禁 `hit_bin` 恒 0（时红时绿）。
+        代价实测：mmap 4.6ms / 普通 10.6ms（29MB × 7079 行）——**6ms 换掉整类跨进程锁问题**。
+        """
         if not _HAS_NUMPY:
             return None
         mp, ip = _cache_paths(version, dim)
         if not (os.path.exists(mp) and os.path.exists(ip)):
             return None
         try:
-            m = _np.load(mp, mmap_mode="r")
+            m = _np.load(mp)          # ← 故意不用 mmap：见上面的实测说明
             ids = _np.load(ip)
             if m.ndim != 2 or m.shape[1] != dim or len(ids) != m.shape[0]:
                 return None
@@ -186,6 +275,11 @@ class ChunkVectorIndex:
            传 "x.npy.tmp" 会写成 "x.npy.tmp.npy" ⇒ `os.replace` 找不到源文件
            ⇒ 静默失败 ⇒ 下次仍走 JSON（实测 3242ms，缓存形同虚设）。
         ⇒ 这里用**已带 .npy 的临时名**，并显式断言源文件存在后再 rename。
+
+        ⚠️ 2026-11-26：失败**必须留痕**（`_STATS["save_fail"]` + WARNING）。
+        原实现 `except: return False` 静默吞掉 —— 而 Windows 下目标文件被别的进程 mmap
+        时 `os.replace` 恰好会抛 `PermissionError`，于是"缓存永远更新不了"这件事
+        **在日志里一点痕迹都没有**，只剩一个恒为 0 的 `hit_bin`。
         """
         if not _HAS_NUMPY:
             return False
@@ -197,12 +291,34 @@ class ChunkVectorIndex:
             _np.save(tmpm, mat)
             _np.save(tmpi, _np.asarray(ids, dtype=_np.int64))
             if not (os.path.exists(tmpm) and os.path.exists(tmpi)):
+                cls._note_save_fail(version, dim, "tmp 未生成", (tmpm, tmpi))
                 return False
             os.replace(tmpm, mp)
             os.replace(tmpi, ip)
             return True
-        except Exception:
+        except Exception as e:
+            cls._note_save_fail(version, dim, f"{type(e).__name__}: {e}",
+                                (locals().get("tmpm"), locals().get("tmpi")))
             return False
+
+    @classmethod
+    def _note_save_fail(cls, version: str, dim: int, why: str, tmps=()) -> None:
+        """写盘失败留痕（不抛异常：调用方只损失"下次快一点"）。
+
+        同时 best-effort 清掉半成品 `.tmp.npy` —— 实测残留 12 个 × 29MB = 348MB，
+        而且它们不会再被任何代码读到（`_load_binary` 只认最终名）。
+        """
+        cls._STATS["save_fail"] = cls._STATS.get("save_fail", 0) + 1
+        cls._STATS["save_fail_detail"] = {"version": version, "dim": dim, "why": why[:200]}
+        _log.warning("[vec_cache] 二进制缓存写盘失败（下次仍走 JSON 重建）：%s", why)
+        for p in tmps:
+            if not p:
+                continue
+            try:
+                if os.path.exists(p):
+                    os.remove(p)
+            except Exception:
+                pass
 
     @classmethod
     def _rows_fingerprint(cls, rows) -> str:

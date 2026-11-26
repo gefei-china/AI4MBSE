@@ -1195,6 +1195,31 @@ class FlowPlannerMixin:
         try:
             if _given_run_id:
                 TaskQueue.clear_run(conn, run_id)
+            # ★ 2026-11-26：**与流式路径同一段接线** —— 分派打分留痕不能只有一条编排路径有。
+            #
+            #   真机证据（2026-11-26 跑真实对话后查库）：
+            #     · 流式 `/chat/stream` 落库的任务：`config` 里有 assign_score /
+            #       capability_match / load_snapshot（全库 367 行有值，全是这条路径产生的）；
+            #     · 非流式 `/chat`（走本函数）落库的任务：`config` 里**一个都没有**。
+            #   ⇒ 同一张 `agent_tasks` 表混着「有留痕」和「无留痕」两种行，
+            #     看板把两批混在一起算 ⇒ 平均分被 0 拉低，「这次为什么派给它」
+            #     在非流式侧**根本无法回答**（而这条路径承担 Flow 节点 / 试跑 / 直调）。
+            #   这是「同一语义在多处各写一份，最后必然对不上」的典型：
+            #     接线的**开关**与**权重**都只有一份（config `agent_assignment`），
+            #     但**调用点**只写在了流式那一侧。
+            #   ⚠️ 只在候选能力等价时改派，且失败不得阻断编排 —— 与 stream.py 完全同口径。
+            try:
+                from core.config import get as _cfg_aa_ns
+                _aa_on_ns = bool(_cfg_aa_ns("agent_assignment", "enabled", True))
+            except Exception:
+                _aa_on_ns = True
+            if _aa_on_ns and plan:
+                try:
+                    from services.assignment_integration import _assign_load_aware as _ala_ns
+                    plan = _ala_ns(plan)
+                except Exception:
+                    # 分派增强失败不影响编排（它只做择优与留痕）
+                    pass
             TaskQueue.create_plan(conn, run_id, plan, assigned_by="session",
                                   conversation_id=int(conversation_id or 0))
             guard = 0

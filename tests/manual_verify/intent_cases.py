@@ -1,5 +1,8 @@
 # -*- coding: utf-8 -*-
-"""意图评测集**内置种子**（29 例 / 9 类意图）—— 2026-09-26 从 eval_intent_routing.py 抽出。
+"""意图评测集**内置种子**（29 例 / 10 类意图）—— 2026-09-26 从 eval_intent_routing.py 抽出。
+
+⚠️ 类别数 2026-11-26 由 9 → 10：`trace_verification` 成为金标里出现过的意图
+   （原 `追溯矩阵检查一下` 标 review，与该意图的分类法定义和现网路由不一致，已改）。
 
 为什么抽出来：样本池（`intent_samples` 表）的"内置种子导入"需要同一份清单，
 而评测脚本需要它作 DB 不可用时的回退。**两份清单会漂移**，故收敛到这一个**无副作用**的数据模块
@@ -34,7 +37,13 @@ BUILTIN_CASES = [
     ("做一次需求质量评审", "requirement_quality", ""),
     ("这份需求的模糊词有哪些", "requirement_quality", ""),
     ("帮我校验一下这段sysml代码", "review", ""),
-    ("追溯矩阵检查一下", "review", "规则表"),
+    # ★ 2026-11-26：「追溯矩阵检查一下」原标 review（tag=规则表，来自旧规则 追溯矩阵→review）。
+    #   现在 `trace_verification` 这个 Agent 已存在，其分类法定义就是
+    #   「追溯核验：需求-模型追溯矩阵、覆盖率、孤儿元素识别」（core/intent_taxonomy.py:106），
+    #   且关键词层（agents.intent_keywords 含「追溯矩阵」）按设计**优先于**规则层。
+    #   实测：真库与干净库都判 trace_verification（route=rule_scored conf=0.95）。
+    #   ⇒ 标签改为分类法里更具体的那个意图；tag 不再是「规则表」（那条规则已随之改向）。
+    ("追溯矩阵检查一下", "trace_verification", ""),
     # report_generation
     ("生成一份需求分析报告", "report_generation", "泛词陷阱"),
     ("输出这次评审的报告", "report_generation", ""),

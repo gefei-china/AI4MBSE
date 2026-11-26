@@ -124,33 +124,72 @@ def main() -> int:
     if ok:
         print("\n[变异自证] 破坏词法符号表（清空），判据应变红")
         src_path = os.path.join(_ROOT, "core/domain/sysml_v2_check.py")
-        with open(src_path, encoding="utf-8") as f:
+        # ⚠️ newline="" 必不可少：默认 text mode 会把行尾翻译成 os.linesep，
+        #    该文件是 w/lf，写回就变 CRLF ⇒ 下面的「逐字还原」断言必然失败
+        #    （而且失败点在**回滚之后**，看起来像"回滚坏了"，实际是读写口径不一致）。
+        with open(src_path, encoding="utf-8", newline="") as f:
             src = f.read()
-        # ⚠️ 定义形态是 `_LEX_DEFAULT = r"..."`（**无括号**）⇒ 首版正则
-        #   `_LEX_DEFAULT\s*=\s*"(.*?)(")` 匹配不到 ⇒ 变异没做就报"锚点未找到"。
-        #   ⇒ 改为按**行**定位（r 前缀用两段可选匹配）。
-        m = re.search(r'^(_LEX_DEFAULT\s*=\s*r?")(.*?)(["\']\s*$)',
-                      src, re.M)
-        assert m, "未找到 _LEX_DEFAULT 定义（形态可能又变了，请人工检查）"
-        mutated = src[:m.start(2)] + "" + src[m.end(2):]
-        with open(src_path, "w", encoding="utf-8") as f:
+        # ★ 2026-11-26 重写锚点与变异手段，两处都失效过：
+        #   ① 锚点：原正则要求 `_LEX_DEFAULT = r"..."` 写成**单行、行尾即引号**；
+        #      而源码现在是**跨行括号 + 隐式拼接**：
+        #          _LEX_DEFAULT = (r"token recognition error|mismatched character"
+        #                          r"|at character \d+|no viable alternative at character")
+        #      ⇒ 正则完全匹配不到 ⇒ 变异根本没做，门禁却报"锚点未找到"（看起来像脚本坏了）。
+        #   ② 变异手段：原来"把引号内内容清空"。就算锚点修好，清空后剩下的
+        #      `(r"" r"|at character \d+|...")` 是**隐式拼接** ⇒ 符号表**依然非空**
+        #      ⇒ 判据仍绿 ⇒ 自证报告"空转断言"，但真因是变异打空，不是判据无能。
+        #   改法：按**括号配平**扫描取整段赋值（不依赖单行/多行形态），
+        #      替换成 `_LEX_DEFAULT = r"(?!)"`（永不匹配 —— 用空串 `""` 反而匹配一切，
+        #      源码里 `_NEVER` 的注释就写着这个坑）。
+        _mark = "_LEX_DEFAULT = "
+        assert _mark in src, "未找到 _LEX_DEFAULT 赋值（形态可能又变了，请人工检查）"
+        i = src.index(_mark)
+        j = i + len(_mark)
+        depth = 0
+        while j < len(src):
+            ch = src[j]
+            if ch == "(":
+                depth += 1
+            elif ch == ")":
+                depth -= 1
+                if depth == 0:
+                    j += 1
+                    break
+            elif ch == "\n" and depth == 0:
+                break
+            j += 1
+        old = src[i:j]
+        assert "token recognition" in old or "at character" in old or "no viable" in old, (
+            "抓到的 _LEX_DEFAULT 段不含预期词法文案，实际=%r" % old[:80])
+        mutated = src[:i] + '_LEX_DEFAULT = r"(?!)"' + src[j:]
+        assert mutated != src and "_LEX_DEFAULT = r\"(?!)" in mutated
+        with open(src_path, "w", encoding="utf-8", newline="") as f:
             f.write(mutated)
         try:
             import importlib
 
             import sysml_v2_check as C
             importlib.reload(C)
-            red = not all(p for _, p in invariant_checks())
-            print(f"[变异自证] {'已变红（真判据）' if red else '**仍是绿 ⇒ 空转断言**'}")
-            ok = ok and red
+            # 变异生效自检：符号表必须**真的**变成"什么都不匹配"
+            #   —— 不做这步就会重犯上面第 ② 条：变异打空却怪判据。
+            _lex_now, _ = C._signs()
+            _空转 = bool(_lex_now.search("token recognition error at: 'x'"))
+            if _空转:
+                print("[变异自证] ✗ 变异未生效：清空后仍能匹配 token recognition error"
+                      " ⇒ 自证无效（不是判据空转）")
+                ok = False
+            else:
+                red = not all(p for _, p in invariant_checks())
+                print(f"[变异自证] {'已变红（真判据）' if red else '**仍是绿 ⇒ 空转断言**'}")
+                ok = ok and red
         finally:
-            with open(src_path, "w", encoding="utf-8") as f:
+            with open(src_path, "w", encoding="utf-8", newline="") as f:
                 f.write(src)
             import importlib
 
             import sysml_v2_check as C
             importlib.reload(C)
-        with open(src_path, encoding="utf-8") as f:
+        with open(src_path, encoding="utf-8", newline="") as f:
             assert f.read() == src, "回滚失败！"
         print("[OK  ] 回滚校验：生产代码已逐字还原")
         print("=" * 78)

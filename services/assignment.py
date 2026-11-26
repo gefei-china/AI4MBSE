@@ -39,6 +39,36 @@
    且它对中文有效：「状态视图」与「SysML v2 状态视图代码」共享 bigram「状态」「状视」
    「视图」⇒ 重合度显著高于与「报告生成」的（共享「生成」一个）。
 
+**★ 2026-11-26 口径修复（`bigram_overlap` 的分母被长能力词自我稀释）**
+
+  上面 ③ 的口径有两个实测缺陷，是 `verify_load_aware_assign` D1 从 6/8 掉到 4/8 的**主因**
+  （候选池 2026-11-06/11-14 又进了 4 个新 Agent，把缺陷放大到必现）：
+
+  **缺陷 A「整条 capability 当长串算重合度」**：`md/docx/pdf 导出` 是一串**并列词元**，
+      当长串算时它自己贡献 12 个 bigram（含 `/d`、`x/` 这种跨标点噪声），
+      与「导出为文档」只相交 1 个 ⇒ **1/12 = 0.083 < 门槛 0.12 ⇒ 判 0**
+      ⇒ 真正"能导出文档"的 Agent 输给 `review` 的「预评审报告导出」（0.167）。
+      同族受害者：`MBSE/SysML v2 概念解释` 只与「概念」相交 ⇒ **1/15 = 0.067** ⇒ 归 0。
+      后果不止丢分：**全 0 并列时 top-1 由名字序决定**，实测让 `capabilities=[]` 的
+      「智源数据读写agent」拿到第一（一个没有任何能力描述的 Agent 赢了一整池）。
+  **缺陷 B「短能力词天然占优」**：分母取 `min(|cg|,|tg|)` ⇒ `变更影响`（3 个 bigram）
+      命中 1 个 = 0.333，而 `依赖链 BFS 遍历`（7 个 bigram）命中 2 个（依赖/遍历）= 0.286
+      ⇒ **命中信息更多的一方反而输**，与语义无关。
+  **同族反向证据（说明门槛本身是坏的，不是用例太苛刻）**：无关任务
+      「把这段代码格式化一下」最高分 **0.111**，而真实体最低分 **0.07**（knowledge_qa）
+      ⇒ **噪声能压过真匹配，符号是反的**。
+
+  **修法**（实测三口径对照见 `tmp/probe_bigram_variants.py`，保留在会话取证里）：
+  - `_cap_tokens()`：按 `/、,，;；|·（）()[]【】` 与空白把 capability 切成**词元**，
+    逐词元算重合度取最大（枚举型 capability 的正确语义就是"命中任一即算"）；
+  - `WEAK_MATCH_FACTOR`（默认取 0.5）：`inter < 2`（只命中 1 个 bigram = 2 个汉字）视为弱证据，
+    分数减半 —— 否则 `导出`/`遍历`/`规范` 这种通用 2 字词元命中即 1.0，与词表精确命中同分，
+    会把「过路词」抬成「专长证据」。
+  - 实测：D1 命中 4/8 → **8/8**；无关任务最高分 0.111 → **0.100**（低于门槛 0.12 ⇒ 判 0）；
+    真实体最低分 0.07 → **0.17** ⇒ 「真实体 − 噪声」由 **−0.04 转为 +0.07**（符号修正）。
+  - 层级不变：词表精确命中（第①层）**短路返回 1.0/0.8，不再进 bigram 判分**；
+    而弱证据（仅 2 个汉字命中）最多给到 0.5，不会与"精确命中"混同。
+
 **权重取 0.5 / 0.3 / 0.2（理由，不是不拍脑袋）**：
 - `capability_match` 0.5：匹配是分派的**主因**，但实测有未覆盖面 ⇒ 不给满权，留给负载纠偏；
 - 负载 0.3：与原值同量级（0.3），编排内单批并发 ≤6，负载差异有限，权重不宜高于匹配；
@@ -85,6 +115,16 @@ DEFAULT_SUCCESS_RATE = 0.5
 #   （重合度 ~0.09），而真同族配对普遍 >0.25 —— 0.12 落在两者之间，能滤掉噪声又不砍真匹配。
 BIGRAM_MIN_OVERLAP = 0.12
 
+#: capability 串里的**并列分隔符**（★ 2026-11-26）：这些是"枚举/限定"标点，不是能力名的一部分。
+#: ⚠️ 不含 `-` `_`：中文术语里连字符常属整体（「需求-模型追溯」），切开会造出假并列。
+_CAP_SEP = re.compile(r"[/、,，;；|·（）()\[\]【】\s]+")
+
+#: 弱证据折减系数（★ 2026-11-26）：只命中 1 个 bigram（= 2 个汉字）时乘此值。
+#: 依据：`导出`/`遍历`/`规范` 这类通用 2 字词元命中即 1.0，会与"词表精确命中"同分
+#:      （实测让 `review` 的「预评审报告导出」压过真正能导出文档的 `report_generation`）。
+#:      取 0.5 而非更低：0.5 仍高于门槛 0.12（弱证据依然计入），但严格低于任何多 bigram 命中。
+WEAK_MATCH_FACTOR = 0.5
+
 
 def normalize_capability(cap):
     """cap → 归一化主词（查 SYNONYM_MAP 反向；无命中原样返回）。"""
@@ -110,28 +150,57 @@ def _bigrams(text: str) -> set:
     return {s[i:i + 2] for i in range(len(s) - 1)}
 
 
+def _cap_tokens(cap) -> list:
+    """capability → 并列词元列表（★ 2026-11-26，见模块 docstring「口径修复」缺陷 A）。
+
+    `md/docx/pdf 导出` 的语义是**并列枚举**（命中任一即算），不是 12 个字符的连续串；
+    整条当长串算会让它自己被自己的长度稀释（实测 1/12=0.083，低于门槛 0.12 ⇒ 判 0）。
+    分隔符只取**明确的并列/限定标点**与空白：`/`、`、`、`,`、`;`、`|`、`·`、括号、空格。
+    ⚠️ 不切中文标点之外的字符（如 `-` `_`）：「需求-模型追溯」这类连字符在中文语境里
+       常是一个整体术语，切开会造出假的并列。
+    """
+    s = str(cap or "")
+    if not s:
+        return []
+    parts = [p for p in _CAP_SEP.split(s) if p]
+    return parts or [s]
+
+
 def bigram_overlap(capabilities, task_text) -> float:
     """★ 2026-10-13：能力词表与任务文本的**字符 bigram 最大重合度**（0~1）。
 
-    做法：对每个 capability，算它与 task_text 的 |交集| / min(|cap|,|task|)，
-    取**最大值**（一个能力词命中即算命中）。
+    做法：对每个 capability 的**每个词元**，算它与 task_text 的 |交集| / min(|cap|,|task|)，
+    取**最大值**（一个词元命中即算命中）。
     用 min 而非 union 作分母：避免"任务文本很长 ⇒ 重合度被稀释"（任务文本通常比能力词长得多）。
     ⚠️ 对**空 capability 集**返回 0（不是 1.0）—— 没能力描述就没有匹配证据。
+
+    ★ 2026-11-26 两处口径修正（依据见模块 docstring「口径修复」，实测数据在那儿）：
+      ① 先 `_cap_tokens()` 切词元再算 —— 否则枚举型 capability（`md/docx/pdf 导出`）
+        被自身长度稀释（1/12=0.083 < 门槛 ⇒ 判 0），真能力反被过路词挤掉；
+      ② `inter < 2`（仅 1 个 bigram = 2 个汉字）视为**弱证据**，分数乘
+        `WEAK_MATCH_FACTOR` —— 否则 `导出`/`遍历`/`规范` 这类通用 2 字词元命中即 1.0，
+        与"词表精确命中"同分，把过路词抬成专长证据。
     """
     tg = _bigrams(task_text)
     if not tg:
         return 0.0
     best = 0.0
     for cap in capabilities or []:
-        cg = _bigrams(str(cap or ""))
-        if not cg:
-            continue
-        inter = len(cg & tg)
-        if not inter:
-            continue
-        denom = min(len(cg), len(tg))
-        if denom:
-            best = max(best, inter / denom)
+        for tok in _cap_tokens(cap):
+            cg = _bigrams(tok)
+            if not cg:
+                continue
+            inter = len(cg & tg)
+            if not inter:
+                continue
+            denom = min(len(cg), len(tg))
+            if not denom:
+                continue
+            v = inter / denom
+            if inter < 2:
+                v *= WEAK_MATCH_FACTOR
+            if v > best:
+                best = v
     return best
 
 

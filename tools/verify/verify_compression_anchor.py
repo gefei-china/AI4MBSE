@@ -1,4 +1,3 @@
-# CI-OPTIONAL: [broken] 已知红，记账不进 CI（修好后上调 tier 并接线）；两库都红 [FAIL] [FAIL] [1] 压缩锚点覆盖组装侧真实产出的全部块名　— 未覆盖 3 个：['【%s %s】\\n%s%s', '【%s 已取回】\\n%s\\n\\n（父章 %s 上一轮已取回，', '【%s 已取回】\\n%s 
 # -*- coding: utf-8 -*-
 """verify_compression_anchor.py —— 守卫：五档压缩必须能裁到**主路径**产出的块。
 
@@ -28,6 +27,8 @@
 
   [1] 组装侧真实产出的块名清单（从 history.py/session_artifacts.py 提取）
       必须全部出现在压缩侧的可识别锚点集合里
+  [1b] **射程自检**：主路径四个块名必须仍在扫描结果里 ——
+      防"把扫描范围收窄"伪装成"覆盖变好"（未覆盖=0，但根本没扫到东西）
   [2] 用**真实** `_apply_context_budget` + 真实块喂 `apply_tier`：
       逐档 delta 必须出现负值（真裁到了），否则总闸空转
   [3] 变异自证：把压缩侧锚点替换成非主路径块名 ⇒ [1][2] 必须翻红
@@ -111,15 +112,36 @@ def anchors_of(src):
 
 
 def main_path_block_names():
-    """组装侧**真实**产出的块名（从 history.py / session_artifacts.py 提取）。
+    """组装侧**真实**产出的、会进 system prompt 的块名。
 
     只取**字面量前缀**：形如 `【话题：{g['topic']} 摘要】` 要归一为 `【话题：`
     （后半段是变量，压缩侧只需认得前缀即可定位块）。
+
+    ★ 2026-11-26：**射程收窄到 system 区块的产出函数**。
+      原实现扫 `history.py` / `session_artifacts.py` 的**全部** `【…` 字面量，
+      于是把 `read_attachment_section` 的**工具回包**（`{"ok":…, "result": "【%s 已取回】…"}`
+      与 `"【%s %s】"`，共 3 条）也算成"压缩必须覆盖的块"⇒ [1] 恒红。
+      但总闸 `_apply_context_budget` 只重裁 `messages[0]`（system），**从不处理工具回包**
+      —— 要求压缩器认得它们是**判据射程过宽**，不是缺陷。
+
+      ⚠️ 收窄必须有**正向覆盖断言**兜底（见 main() 的 [1b]）：否则下次有人再缩范围，
+      `未覆盖=0` 照样绿 —— 那正是"账本数字变好，因为扫描器少扫了一块"。
     """
     names = set()
-    for fp in (HIST, os.path.join(ROOT, "agent", "session_artifacts.py")):
-        s = open(fp, encoding="utf-8").read()
-        for m in re.finditer(r'f?"(【[^"{\n]{2,30})', s):
+    # (文件, 限定函数名集合；None = 整文件)
+    #   · history.py 只认两个**组装历史块**的函数（工具回包在 _read_attachment_section 等）
+    #   · session_artifacts.py 整文件都是产物摘要（DIGEST_MARK 是模块级常量）
+    #   · prompt.py 只认附件块（其余 prompt 段不是"可压缩的独立块"）
+    for fp, funcs in (("agent/pipeline_parts/history.py",
+                       {"_load_history", "_load_history_legacy"}),
+                      ("agent/session_artifacts.py", None),
+                      ("agent/pipeline_parts/prompt.py", {"_build_attachment_block"})):
+        s = open(os.path.join(ROOT, fp), encoding="utf-8").read()
+        if funcs is None:
+            scoped = s
+        else:
+            scoped = "\n".join(_func_source(s, fn) for fn in funcs)
+        for m in re.finditer(r'f?"(【[^"{\n]{2,30})', scoped):
             names.add(m.group(1))
     # 归一：去掉 f-string 变量段，只留可定位的字面量块头
     norm = set()
@@ -129,6 +151,25 @@ def main_path_block_names():
             norm.add(n)
     norm.add("【话题：")     # 形如 【话题：{...} 摘要】 的字面量前缀
     return norm
+
+
+def _func_source(src, name):
+    """取某个函数定义的源码段（找不到返回空串，由正向覆盖断言兜底报红）。"""
+    import ast
+    try:
+        tree = ast.parse(src)
+    except Exception:
+        return ""
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == name:
+            return "\n".join(src.splitlines()[node.lineno - 1:(node.end_lineno or node.lineno)])
+    return ""
+
+
+#: 主路径的四个块名 —— 正向覆盖断言用（[1b]）。任何一个从扫描结果里消失，
+#: 就说明"射程被收窄"（不是"覆盖变好了"）。
+MUST_HAVE = ("【话题：", "【相关历史片段（第", "【本会话既有产物】",
+             "【用户上传资料（优先依据）】")
 
 
 def main():
@@ -150,6 +191,15 @@ def main():
         (covered if ok else uncovered).append(b)
     check("[1] 压缩锚点覆盖组装侧真实产出的全部块名", not uncovered,
           "未覆盖 %d 个：%s" % (len(uncovered), sorted(uncovered)[:6]))
+
+    # [1b] 射程自检：主路径四个块名必须仍在扫描结果里
+    #     —— 防"把范围收窄"伪装成"覆盖变好"（未覆盖=0 但根本没扫到东西）
+    #     ⚠️ 用**包含**而不是相等：采集时块名会被截断到 30 字符
+    #       （`【相关历史片段（第 %d 轮 · %s，相关度 %s）】` 必然超长），
+    #       相等语义会把它误报成"没扫到"（实测第一版就这么红的）。
+    _missing = [m for m in MUST_HAVE if not any(m in p for p in produced)]
+    check("[1b] 射程自检：主路径四个块名都在扫描结果里（防空转/防收窄）", not _missing,
+          "本该扫到却没扫到：%s（扫描结果 %d 个）" % (_missing, len(produced)))
 
     # [2] 真实路径逐档必须真裁 —— 样本**只含主路径块**（生产真实形态）
     before, deltas, after = run_tiers(real_budget, real_trunc, include_legacy=False)

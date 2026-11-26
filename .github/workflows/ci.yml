@@ -778,9 +778,64 @@ jobs:
         if: ${{ !cancelled() }}
         run: python tools/verify/verify_tiered_compression.py
 
+      # ── 2026-11-26 新增：五档压缩的**锚点覆盖**（原 broken）──────────────
+      # 它守的是「总闸静默失效」：压缩器认不认得主路径真实产出的块名
+      #   （【话题：…摘要】/【相关历史片段…】/【本会话既有产物】/【用户上传资料】）。
+      # 此前一直挂 broken，真因是**判据射程过宽**：把 read_attachment_section 的
+      #   工具回包（【%s 已取回】）也算成"必须覆盖的块"，而总闸只重裁 messages[0]。
+      # 已收窄到 system 区块的产出函数，并补 [1b] 射程自检（收窄即红，防"少扫=变好"）。
+      - name: Guard 压缩锚点覆盖主路径块名（含射程自检 + 变异）
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_compression_anchor.py
+
       - name: Guard 技能注入边界（23 项）
         if: ${{ !cancelled() }}
         run: python tools/verify/verify_skill_injection.py
+
+      # ── 2026-11-26 新增：负载感知分派（原 broken）──────────────────────────
+      # 它守的是「分派凭什么选这个 Agent」：services/assignment.py 的 rank_candidates
+      #   等 170 行原为零调用点，现已接线进 stream.py（B 组守接线位置与 try 包裹），
+      #   而 D 组用现行 active 候选池实跑标定：能力域任务的 top-1 必须命中对应 Agent。
+      # 此前挂 broken 的真因不是接线，是 **`bigram_overlap` 分母口径**：
+      #   ① 整条 capability 当长串算 ⇒ `md/docx/pdf 导出` 被自身长度稀释成 0.083（< 门槛）⇒ 判 0；
+      #   ② 短能力词天然占优（`变更影响` 1/3 赢 `依赖链 BFS 遍历` 2/7）⇒ 命中信息更多的一方反而输。
+      #   修法：按并列标点切词元后取最优 + 仅 2 个汉字命中视为弱证据减半；
+      #   实测 D1 4/8 → 8/8，同时把「无关任务最高分 0.111 > 真实体最低 0.07」这个**反向符号**修正为 0.100 < 0.167。
+      # D1e 专门守这条（噪声必须低于门槛），G 组三变异分别证明词表层/切词元/弱证据减半都在承重。
+      - name: Guard 负载感知分派（41 项 + 3 变异）
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_load_aware_assign.py
+
+      # ── 2026-11-26 新增：截断口径前后端一致（原 backlog）────────────────────
+      # 守的是「用户看到的『已截断』提示与真实截断同源」：user_input 上限、日志截断的
+      #   长度列、界面键与后端字段、文案默认值，四处任一处脱钩都会让用户看到
+      #   「没截断」而实际被砍（或反之）。这是最典型的「界面说谎」类缺陷。
+      # 纯静态（不连库、不起服务），30 判据 + 4 变异，实测 12.7s。
+      - name: Guard 内容截断口径前后端一致（30 项 + 4 变异）
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_truncation_policy.py
+
+      # ── 2026-11-26 新增：Agent 角色块不得被字符腰斩（原 backlog）──────────────
+      # 守的是「Agent 的必留段和输出示例不许被 cap 砍掉」——砍掉示例 = 模型自由发挥，
+      #   这是 v2_constraints 注释里记录的原始事故（"156 行 TMS 模型踩了 7 条语义错"）。
+      # 此前从未接线，表面红因是 I3/I4「前置条件不成立」、M1~M3「守卫空转」；
+      # 真因是**被测样本已退役**：那批 2361~5956 tok 的视图 Agent 于 2026-10-14 下线，
+      #   现存 24 个 active 里最长的也远小于 cap=8000 ⇒ 变异体没有样本可伤。
+      # 已改为门禁自带夹具（有段 11k / 无段 12k 字符）+ [F1]~[F3] 夹具自检（夹具不够长即红）。
+      - name: Guard Agent 角色块段级装配（11 项 + 3 变异）
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_role_block_sections.py
+
+      # ── 2026-11-26 新增：分派留痕必须落到**列**上（真机验证查出）──────────────
+      # 时间线：先修好 bigram 口径（D1 4/8→8/8），门禁全绿；随后真机跑一次真实对话，
+      #   发现 `agent_tasks.assign_score` **全表 642 行都是 0.0**、`load_snapshot` 全是 '{}'。
+      #   真因：接线把分数写进 config（367 行有值），而 create_plan 的 INSERT 没有这两列
+      #   ⇒ 列停在建表默认值。看板/查询读的是列 ⇒「这次为什么派给它」依然无法回答。
+      #   **单元级门禁（F 组）看不到这件事：它直接调接线函数看 config，不经过落库。**
+      # 本门禁把「接线 → 落库 → 查列」串起来，并配 3 个变异；只写临时库，不碰生产库。
+      - name: Guard 分派留痕落列（9 项 + 3 变异）
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_assign_trace_persisted.py
 
       # ── 2026-10-30：技能包磁盘文件 ↔ skills 表 内容一致性 ────────────────
       # 实测缺陷：技能「智源平台管理」磁盘 skill.md 是 v1.0（1677 字，讲已失效的
@@ -2252,6 +2307,28 @@ jobs:
       - name: Guard 本体导出三格式合法与语义等价（rdflib 全量解析 + 变异自证）
         if: ${{ !cancelled() }}
         run: python tools/verify/verify_ontology_export_formats.py
+
+      # ── 2026-11-26 新增：向量二进制缓存（原 broken，flaky 根因已修）──────────
+      # 为什么 nightly 而不是 pr：要**生产真库的存量向量**（7079 × 1024 维）才能量
+      #   命中/陈旧/写盘，耗时约 30s；干净库按设计 SKIP(rc=0)。
+      # 它此前"单独绿、批量红"的真因是实现 bug：`np.load(mmap_mode="r")` 持有文件映射
+      #   ⇒ 别的进程 `os.replace` 报 PermissionError ⇒ `_save_binary` 静默失败
+      #   ⇒ 陈旧缓存永远修不掉。已改为普通加载 + 写盘失败留痕，并新增
+      #   「加载后仍可原子替换」这条回归守卫。
+      - name: Guard 向量二进制缓存（正确性 / 写盘 / 陈旧 / 可替换，真库 >15s）
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_vector_binary_cache.py
+
+      # ── 2026-11-26 新增：意图路由评测（原 broken）──────────────────────
+      # 两次独立干净库 + 阈值下限 + 泛词陷阱子集 + 两次逐位一致 + 5 组变异。
+      # 此前 E2 恒红（macro_f1 0.79 < 0.84），真因是**金标标签过期**：
+      #   「追溯矩阵检查一下」还标 review，而 trace_verification 这个意图
+      #   （分类法：需求-模型追溯矩阵/覆盖率）出现后，关键词层按设计优先命中它。
+      #   标签修正后 accuracy 回到基线 0.9310、macro_f1 0.9242，未动阈值与指标口径。
+      # 不放在 PR：语义兜底层随 embedding 可达性变化（CI 无内网 ⇒ 降级 bigram）。
+      - name: Guard 意图路由评测（两次干净库 + 阈值 + 变异）
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_eval_routing.py
   nightly-evals:
     # 同 nightly-guards：只在定时 / 手动触发。此前无 `if:` ⇒ 每个 PR 都跑评测
     #（还带 secrets.OPENAI_API_KEY），PR 上要么白等、要么因缺 secret 空转。

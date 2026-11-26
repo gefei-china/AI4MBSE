@@ -196,12 +196,28 @@ def case_real_db() -> None:
         r = conn.execute("""SELECT
               ROUND(100.0*SUM(length(COALESCE(expected_output,''))=0)/COUNT(*),1) eo_empty_pct,
               ROUND(100.0*SUM(status='failed')/COUNT(*),1) fail_pct,
+              SUM(length(COALESCE(expected_output,''))=0) eo_empty_n,
               COUNT(*) n FROM agent_tasks WHERE created_at>='2026-11-01'""").fetchone()
-        print("    11 月：n=%d，expected_output 空置率 %.1f%%，任务失败率 %.1f%%"
-              % (r["n"], r["eo_empty_pct"], r["fail_pct"]))
-        check("C1 11 月 expected_output 空置率口径未漂移（±10pct 内）",
-              abs(r["eo_empty_pct"] - 24.2) <= 10.0,
-              "实测 %.1f%%（门禁登记时 24.2%%）" % r["eo_empty_pct"])
+        print("    11 月：n=%d，expected_output 空置率 %.1f%%（空置 %d 条），任务失败率 %.1f%%"
+              % (r["n"], r["eo_empty_pct"], r["eo_empty_n"] or 0, r["fail_pct"]))
+        # ★ 2026-11-26 修判据方向：原判据是「与登记值 24.2% 相差 ≤10pct」（双边）。
+        #   问题：**指标真的变好也会判红**。实测 2026-11-26 空置率 13.3%，差 10.9pct ⇒ 红，
+        #   而这恰恰是兜底上线后的**期望结果**（登记时 n=186 / 空 45；现在 n=315 / 空 42
+        #   ⇒ 分母近翻倍而空置绝对数还略降），不是口径漂移。
+        #   「变好」与「口径坏了」在原判据下**信号完全相同** ⇒ 必须拆成两条：
+        #     C1  只在**变差**时红（守兜底不被回退）—— 这是真正要保护的那一侧；
+        #     C1b 变好时要求**样本量未缩水**（分母腰斩 ⇒ 是口径漂移，不是改善）。
+        #   ⚠️ 别把 C1b 写成「n ≥ 某个固定数」：那个数会随月份增长再次过期，
+        #      条件挂在"变好"这一前提上，只有改善时才要求样本量，正常波动不误伤。
+        _EO_BASELINE, _EO_N_BASE = 24.2, 186      # 登记值（2026-11-17 实测）
+        check("C1 11 月空置率未变差（兜底仍生效；容差 +10pct）",
+              r["eo_empty_pct"] <= _EO_BASELINE + 10.0,
+              "实测 %.1f%% > 登记 %.1f%%+10 ⇒ 兜底可能被回退" % (r["eo_empty_pct"], _EO_BASELINE))
+        _improved = r["eo_empty_pct"] < _EO_BASELINE - 10.0
+        check("C1b 空置率改善时样本量未缩水（排除『分母变小』冒充改善）",
+              (not _improved) or (r["n"] or 0) >= _EO_N_BASE * 0.9,
+              "空置率 %.1f%% 显著低于登记 %.1f%%，但 n=%d < 登记 %d×0.9 ⇒ 疑似口径漂移而非改善"
+              % (r["eo_empty_pct"], _EO_BASELINE, r["n"] or 0, _EO_N_BASE))
         r2 = conn.execute("""SELECT
               ROUND(100.0*SUM(status='failed')/SUM(CASE WHEN length(COALESCE(expected_output,''))=0 THEN 1 ELSE 0 END),1) fr_empty,
               ROUND(100.0*SUM(status='failed')/SUM(CASE WHEN length(COALESCE(expected_output,''))!=0 THEN 1 ELSE 0 END),1) fr_full

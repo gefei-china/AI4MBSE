@@ -161,6 +161,16 @@ print("\n=== D. 标定效果（现行 active 候选池实跑）===")
 #   现改为「在现行词表下，各能力域任务 top-1 命中对应 Agent」+「视图域交给意图路由」。
 _RETIRED_VIEW_AGENTS = ("需求视图生成", "结构视图生成", "交互视图（IBD）生成", "用例视图生成",
                         "活动图生成", "状态机视图生成", "参数视图生成", "顺序视图（时序图）生成")
+# 无关任务样本（D1e 抗噪 + G 组变异体共用；放在模块级是因为 G 组在 if 块外也要用）
+_NOISE = ["把这张幻灯片排版调好看", "今天天气怎么样", "帮我订一张去北京的机票",
+          "统计上个月的销售额并做图", "把这段代码格式化一下", "写一首关于春天的诗"]
+# 默认空态：真库缺失时 D 组会打 SKIP，但 G 组仍要能执行并**如实判红**
+#   （曾经的做法是 G 组引用未定义变量 ⇒ 直接 NameError 崩掉，看起来像"脚本坏了"，
+#    而不是"自证无法进行"；初始化成空态后表现为断言红，指向明确）
+_ags = []
+_hit = 0
+_nmax = 0.0
+cases = []
 if os.path.exists(PROD_DB):
     _c = sqlite3.connect("file:%s?mode=ro" % PROD_DB, uri=True)
     _c.row_factory = sqlite3.Row
@@ -183,7 +193,14 @@ if os.path.exists(PROD_DB):
     cases = [("把需求里的条目逐条理清", "requirement_structuring"),
              ("读懂这段自然语言并澄清其中的歧义", "requirement_analysis"),
              ("把结论装订成一份可交付的稿子并导出为文档", "report_generation"),
-             ("检查各部分描述是否前后一致并给出合理性评价", "review"),
+             # ★ 2026-11-26 换措辞（原「检查各部分描述是否前后一致并给出合理性评价」）。
+             #   原措辞与 2026-11-14 新增的 `requirement_conflict_check`（能力词「一致性检查」）
+             #   **正面相撞**：文本里的「前后一致」就是「一致性检查」的原义，两者实测同分 0.50
+             #   ⇒ 靠名字序取胜（D1b 判并列红，抓得对）。该用例写于 2026-10-26，
+             #   当时池里**没有**这个 Agent（`agents.created_at` 可查）⇒ 是候选池漂移导致的
+             #   标签失配，不是打分器退化。改为只指向 review 独有语义（规范性/打分/问题定位）
+             #   的措辞，**不放宽判据**（仍需 top-1 命中且领先 ≥0.1）。
+             ("给整份模型打个规范性分并逐条指出该改的地方", "review"),
              ("核对模型中的错误并按优先级修好", "model_validation_repair"),
              ("给出几种候选方案并逐一比较取舍", "多方案生成"),
              ("讲清两种方法论在概念上的差别与适用路线", "knowledge_qa"),
@@ -192,7 +209,11 @@ if os.path.exists(PROD_DB):
     _margins = []
     for _t, _want in cases:
         _sc = sorted(((A.capability_match(_caps, _t), _n) for _n, _caps in _ags), reverse=True)
-        _ok_top = _sc and _sc[0][1] == _want
+        # ⚠️ 命中必须**有匹配证据**（score>0）：全 0 并列时 top-1 由名字序决定，
+        #    那种"命中"是排序巧合。实测证据：视图任务「生成状态机视图」全池 0 分，
+        #    名字序把 `capabilities=[]` 的「智源数据读写agent」排到第一 ——
+        #    一个没有任何能力描述的 Agent 赢了整池，若不加这条就会被记成"命中"。
+        _ok_top = bool(_sc) and _sc[0][0] > 0 and _sc[0][1] == _want
         _hit += 1 if _ok_top else 0
         _m = (_sc[0][0] - _sc[1][0]) if len(_sc) > 1 else _sc[0][0]
         _margins.append((_m, _ok_top, _t))
@@ -227,6 +248,34 @@ if os.path.exists(PROD_DB):
                    reverse=True)
     print("  [INFO] 视图任务「生成状态机视图」打分 top-1=%s(%.2f) —— 视图域由意图路由负责"
           % (_v_sc[0][1] if _v_sc else "-", _v_sc[0][0] if _v_sc else 0))
+    if _v_sc and _v_sc[0][0] == 0:
+        print("         （全池 0 分 ⇒ 该行的 top-1 是**名字序巧合**，无匹配证据；"
+              "D1 的命中判据已要求 score>0，不会把它记成命中）")
+
+    # D1e 抗噪：**无关任务不得拿到高于门槛的分**（★ 2026-11-26 新增）
+    #   为什么必须新加：本项修 `bigram_overlap` 分母口径时，副作用最可能出现在"抗噪"这一侧
+    #   （切词元会让短词元更容易命中 ⇒ 无关任务也可能拿分）。实测修前不变量就是坏的：
+    #     无关任务最高 0.111 vs 真实体最低 0.07（knowledge_qa）⇒ **噪声能压过真匹配**；
+    #   修后 0.100 vs 0.17 ⇒ 符号修正。若只断言"命中率变好"，这个坏符号不会被发现 ——
+    #   把它写成断言，防止后人再调分母时把噪声面放大。
+    #   ⚠️ 这里用**原始 bigram_overlap** 而不是 `capability_match`：后者已经把低于门槛的
+    #      值折成 0，两边都被折成 0 时"落差"就不可见了 —— 那正是判据失去分辨力的形态。
+    _nmax, _nwho = 0.0, ""
+    for _t in _NOISE:
+        for _n, _caps in _ags:
+            _v = A.bigram_overlap(_caps, _t)
+            if _v > _nmax:
+                _nmax, _nwho = _v, "%s@『%s』" % (_n, _t[:8])
+    _cap_of = {_n: _c for _n, _c in _ags}
+    _real_min = min(A.bigram_overlap(_cap_of[_w], _t) for _t, _w in cases if _w in _cap_of)
+    print("  抗噪：无关任务最高 %.3f (%s)｜真实体最低 %.3f" % (_nmax, _nwho or "-", _real_min))
+    check("D1e 无关任务最高分低于门槛（噪声判 0，不会被误采纳为专长证据）",
+          _nmax < A.BIGRAM_MIN_OVERLAP,
+          "无关任务拿到 %.3f ≥ 门槛 %.3f（%s）⇒ 口径被调宽" % (_nmax, A.BIGRAM_MIN_OVERLAP, _nwho))
+    check("D1e2 真实体最低分高于无关任务最高分（区分度的符号必须为正）",
+          _real_min > _nmax,
+          "真实体 %.3f ≤ 噪声 %.3f ⇒ 噪声能压过真匹配（修前实测正是 −0.04）"
+          % (_real_min, _nmax))
 
     # D2 原词表覆盖率（本条守护"为什么不能只用词表"这个前提）
     _allcaps = set()
@@ -275,41 +324,90 @@ check("F4 原 config 若为 JSON 字符串也被正确合并",
       _assign_load_aware([{"key": "t1", "title": "需求条目化", "agent": "requirement_structuring",
                            "deps": [], "config": '{"a":1}'}])[0]["config"].get("a") == 1)
 
-print("\n=== G. 变异自证（抽掉 bigram 匹配这一层）===")
+print("\n=== G. 变异自证（三处逻辑各自承重）===")
 # ⚠️ 曾试过"把 weight_capability 置 0"，但 D1 断言的是 **`capability_match()` 的排序**，
 #    而 `capability_match` **不读权重**（权重只在 `_score` 里用）⇒ 改权重完全动不了 D1，
-#    命中数当然不变。**变异必须打在 D 组真正依赖的那段逻辑上。**
-# 本次变异：让 `capability_match` 跳过第 ② 层 bigram 匹配（回到"只有词表"）
-#   —— 那正是 2026-10-13 之前的形态（词表覆盖 12% ⇒ 8 视图全 0）。
-_big = "    _ov = bigram_overlap(caps, task_text)"
-if _big not in a_src:
-    print("  [VACUOUS] 锚点不在源码里，自证中止")
-else:
-    _mut = a_src.replace(_big, "    _ov = 0.0  # MUTATION: 跳过 bigram 匹配（回到只有词表）")
+#    命中数当然不变。**变异必须打在判据真正依赖的那段逻辑上。**
+# ★ 2026-11-26：判据从 1 处承重变成 3 处，各配一个变异体 —— 只证明"bigram 层被用到了"
+#   是不够的，新加的分母口径（切词元 / 弱证据减半）若不被变异证明，就没人知道它是否真在起作用。
+
+
+def _run_mutant(mut_src):
+    """在内存副本上执行变异源码，返回 (命中数, 归零例数, 无关任务最高原始分)。"""
     _ns = {"__name__": "_mut_assign"}
+    exec(compile(mut_src, "<mutant>", "exec"), _ns)
+    _h = _z = 0
+    for _t, _want in cases:
+        _sc = sorted(((_ns["capability_match"](_caps, _t), _n) for _n, _caps in _ags), reverse=True)
+        if _sc and _sc[0][0] == 0:
+            _z += 1
+        # 与 D1 同一口径：必须 score>0 才算命中
+        if _sc and _sc[0][0] > 0 and _sc[0][1] == _want:
+            _h += 1
+    _nm = 0.0
+    for _t in _NOISE:
+        for _n, _caps in _ags:
+            _v = _ns["bigram_overlap"](_caps, _t)
+            if _v > _nm:
+                _nm = _v
+    return _h, _z, _nm
+
+
+_MUTS = [
+    # (编号, 说明, 锚点原文, 替换文本, 该变异应当让哪条判据翻红)
+    ("M1", "capability_match 跳过 bigram 层（回到只有 6 组词表）",
+     "    _ov = bigram_overlap(caps, task_text)",
+     "    _ov = 0.0  # MUTATION: 跳过 bigram 匹配",
+     "D1 命中率"),
+    ("M2", "bigram_overlap 不切词元（回到整条 capability 当长串）",
+     "    parts = [p for p in _CAP_SEP.split(s) if p]\n    return parts or [s]",
+     "    return [s]  # MUTATION: 不切词元",
+     "D1 命中率"),
+    # ⚠️ 锚点必须带**整行边界**：`WEAK_MATCH_FACTOR = 0.5` 在模块 docstring 里也出现过，
+    #    不带边界的 replace 会先改到文档串、真常量不动 ⇒ 变异**打空**（行为毫无变化，
+    #    却看起来"变异已成"）。本门禁第一版就踩了这个，靠 G.M3 的失败信息才看出来。
+    ("M3", "弱证据不再减半（2 字词元命中即给满分）",
+     "\nWEAK_MATCH_FACTOR = 0.5\n",
+     "\nWEAK_MATCH_FACTOR = 1.0  # MUTATION\n",
+     "D1e 抗噪"),
+]
+for _mid, _desc, _old, _new, _guard in _MUTS:
+    if _old not in a_src:
+        # 锚点不见了 ⇒ 自证无法进行。**不能静默跳过**（跳过=没人发现自证已废）
+        check("G.%s 变异锚点存在于源码（自证前提）" % _mid, False,
+              "锚点不在源码里，%s 自证中止：%r" % (_mid, _old[:40]))
+        continue
     try:
-        exec(compile(_mut, "<mutant>", "exec"), _ns)
-        _mA = _ns
-        _hits = 0
-        _zeros = 0
-        for _t, _want in cases:
-            _sc = sorted(((_mA["capability_match"](_caps, _t), _n) for _n, _caps in _ags), reverse=True)
-            if _sc and _sc[0][0] == 0:
-                _zeros += 1
-            if _sc and _sc[0][1] == _want:
-                _hits += 1
-        print("  变异体下能力域 top-1 命中: %d/%d（其中 %d 例匹配度直接归 0）"
-              % (_hits, len(cases), _zeros))
-        check("G1 变异体命中率显著低于现行实现（bigram 匹配确实在承重）",
-              _hits < _hit, "变异体 %d/%d vs 现行 %d/%d —— D1 抓不住变异，自证无效"
-              % (_hits, len(cases), _hit, len(cases)))
-        check("G2 变异体确实出现匹配度归 0 的用例（词表覆盖不到的直接塌成 0）",
-              _zeros > 0, "无一例归 0 ⇒ 变异没生效或词表已够用（需重新评估）")
-        _muts.append(("M1", "capability_match 跳过 bigram 层（回到只有 6 组词表）"))
-        print("  [SELF-PROOF] M1 抽掉 bigram 匹配 —— 能力域 top-1 命中率下降，"
-              "证明该层是主要区分来源（改前它们全靠词表、恒为 0）")
+        _h, _z, _nm = _run_mutant(a_src.replace(_old, _new, 1))
     except Exception as e:
-        check("G1 变异体执行成功", False, str(e))
+        check("G.%s 变异体可执行" % _mid, False, "%s: %s" % (_mid, e))
+        continue
+    print("  %s 变异体：命中 %d/%d（归零 %d 例）｜无关任务最高 %.3f"
+          % (_mid, _h, len(cases), _z, _nm))
+    if _guard == "D1 命中率":
+        check("G.%s 命中率低于现行实现（『%s』确实承重）" % (_mid, _desc),
+              _h < _hit, "变异体 %d/%d vs 现行 %d/%d ⇒ D1 抓不住该变异"
+              % (_h, len(cases), _hit, len(cases)))
+    else:
+        # 抗噪型变异：命中数可能不变（口径放宽只会让分更高），但**噪声必须过门槛**
+        _hit_ok = _nm > _nmax and _nm >= A.BIGRAM_MIN_OVERLAP
+        check("G.%s 无关任务最高分被抬到门槛以上（『%s』确实在压噪声，D1e 会因此翻红）"
+              % (_mid, _desc), _hit_ok,
+              "变异体噪声 %.3f vs 现行 %.3f（门槛 %.3f）—— 若三者相等，说明变异**打空**"
+              "（锚点可能命中了注释/文档串而非真代码），不是判据抓不住"
+              % (_nm, _nmax, A.BIGRAM_MIN_OVERLAP))
+    _muts.append((_mid, _desc))
+
+# M1 的"归零"证据单独留一条（词表覆盖 12% ⇒ 抽掉 bigram 那批任务直接塌成 0）
+try:
+    _h1, _z1, _ = _run_mutant(a_src.replace(_MUTS[0][2], _MUTS[0][3], 1))
+    check("G2 M1 变异体确实出现匹配度归 0 的用例（词表覆盖不到的直接塌成 0）",
+          _z1 > 0, "无一例归 0 ⇒ 变异没生效或词表已够用（需重新评估）")
+except Exception as e:
+    check("G2 M1 复跑成功", False, str(e))
+
+for _mid, _desc in _muts:
+    print("  [SELF-PROOF] %s %s —— 对应判据已翻红" % (_mid, _desc))
 
 print("\n" + "=" * 60)
 print("常态断言：%d 条，%d 通过 / %d 失败" % (_ok + _fail, _ok, _fail))

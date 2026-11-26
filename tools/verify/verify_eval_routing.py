@@ -167,6 +167,10 @@ def _run_on_clean_db(runs=RUNS):
                                % (re_.returncode, (re_.stdout or re_.stderr)[-500:]))
         d = json.loads(m.group(1))
         d["_sample_source"] = "builtin" if "builtin" in (re_.stdout or "") else "pool"
+        # ★ 2026-11-26：把子进程输出尾部留在这里 —— 判据失败时要能直接看到
+        #   「哪一类在丢分 / 哪几条被判错」。此前只有 `f1=0.7909 thr=0.84`，
+        #   拿到红也定位不了（实测只能手工重跑并逐个打 per_class）。
+        d["_tail"] = (re_.stdout or "").splitlines()[-60:]
         results.append(d)
         shutil.rmtree(tmpdir, ignore_errors=True)
     return results, actual_paths
@@ -196,6 +200,15 @@ def judge(results, paths=None, baseline_acc=None, baseline_f1=None,
                    % (i + 1, d.get("macro_f1", -1), thr_f1, baseline_f1),
                    d.get("macro_f1", -1) >= thr_f1,
                    "f1=%s thr=%s" % (d.get("macro_f1"), thr_f1))
+        # ★ 2026-11-26：E2 红时必须说清「哪一类丢分」——macro-F1 对小类极敏感，
+        #   而类名（如预测出金标里没有的类，n=0 ⇒ F1=0）从分数本身看不出来。
+        if d.get("macro_f1", -1) < thr_f1 and d.get("_tail"):
+            print("      ── E2 失败诊断（子进程输出尾部：分类型指标 / 错例）──")
+            for ln in d["_tail"]:
+                if ("分类指标" in ln or "macro-F1" in ln or "accuracy =" in ln
+                        or ln.strip().startswith(("❌", "「")) or " P=" in ln
+                        or "混淆矩阵" in ln):
+                    print("      " + ln.rstrip())
         # ⚠️ 数据不足报 null，不报 0（否则被读成"全部判错"）
         n = d.get("generic_trap_n", 0)
         ga = d.get("generic_trap_acc", None)

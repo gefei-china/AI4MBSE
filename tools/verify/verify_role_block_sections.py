@@ -1,6 +1,4 @@
-# CI-OPTIONAL: [backlog] 从未接线，待逐个定性（接入 pr 需先过「全新克隆+空库能绿」）；未接线（2026-11-04 盘点未覆盖，待逐个定性） 
 # -*- coding: utf-8 -*-
-# CI-OPTIONAL: B 真库金标门禁——I3/I4 前置条件要求库里存在含『视图规范参考』段的 Agent（2026-10-18 干净库实测前置不成立，M1/M2/M3 变异自证随之空转）；生产库样本专用
 """verify_role_block_sections.py —— 守卫：Agent 角色块**不得被字符腰斩**。
 
 ## 为什么需要它（2026-11-11 可行性验证发现）
@@ -75,6 +73,65 @@ class _FakeDef:
         self.system_prompt = sp
 
 
+# ── ★ 2026-11-26：夹具样本（把"被测对象"从已退役的长 Agent 手里接回来）──────
+# 事故形态（第三次同族，前两次是 verify_load_aware_assign 的 D 组与
+# verify_compression_anchor 的锚点）：本门禁的 I3/I4 与 M1~M3 **全靠**真库里存在
+# "超 cap 且含 `### 视图规范参考`"的 Agent，而那批正是 2026-10-14（commit 07ffea0
+# 「B4-4 下线视图 Agent 双轨」）退役的 8 个视图生成 Agent（prompt 2361~5956 tok）。
+# 退役后实测：active 24 个里只有 3 个有段结构，且**没有一个超过 cap=8000**
+# ⇒ `tgt` 为空（I3/I4 直接判红 + I3a/I3b 两条断言根本没执行）
+# ⇒ M1/M2/M3 的变异都抓不到差异（报"守卫空转"）。
+# **症状看起来像"守卫失效"，真因是"被测样本已不存在"。**
+# 修法：把样本变成门禁**自带**的夹具 —— 判据测的是装配函数的行为，
+#      与"库里恰好有没有长 Agent"无关；真库那份仍照跑（I1/I2 对真 Agent 有意义）。
+_FIXTURE_ROLE = "\n".join([
+    "# 你是 SysML v2 活动图生成 Agent。",
+    "",
+    "## 职责",
+    "依据需求与功能模型产出活动图代码。" + "活动图的控制流必须完整表达。" * 150,
+    "",
+    "## 输入",
+    "需求条目、功能清单、上下文工程。" + "输入不足时应主动澄清而不是猜测。" * 150,
+    "",
+    "## 输出",
+    "纯 SysML v2 代码块，不含解释文字。" + "代码块语言标记必须是 sysml。" * 150,
+    "",
+    "## 工作流程",
+    "1. 读取需求 → 2. 识别动作 → 3. 建立控制流 → 4. 自检。" + "每步都要留痕。" * 150,
+    "",
+    "## 约束",
+    "语法形式以【输出示例】为唯一依据。" + "不得自创语法。" * 150,
+    "",
+    "### 视图规范参考",
+    "视图规范的长篇参考内容（可裁段）。" + "此处是可裁剪的规范正文。" * 150,
+    "",
+    "## 输出示例",
+    "```sysml",
+    "action def Demo {",
+    "    action a1;",
+    "    action a2;",
+    "    first a1 then a2;",
+    "}",
+    "```",
+])
+
+# 无段结构的超长夹具：专供 M3（"无段结构 Agent 被改写 ⇒ I2 必须判红"）。
+# ⚠️ 少了它，M3 同样空转 —— 真库现在的无段结构 Agent 最长也只有 2040 tok（远小于 cap），
+#    M3 的变异体没有任何样本可改写，于是"变异抓不到差异"被误读成"守卫失效"。
+_FIXTURE_FLAT = "你是一个通用助手。请按用户要求完成任务并给出结论。" * 400
+
+
+def _fixture_agents(cap):
+    """夹具 + 真库 Agent 合并；返回 (agents, 有段夹具长度, 无段夹具长度)。
+
+    ⚠️ 两个夹具都必须**真的超过 cap**，否则 I3/I4 与 M1~M3 又会退化成空转
+    —— 这正是本次事故的形态，所以「夹具够长」本身写成断言（见 [F1]/[F3]）。
+    """
+    return ([("__fixture_view_role__", _FIXTURE_ROLE),
+             ("__fixture_flat_role__", _FIXTURE_FLAT)],
+            len(_FIXTURE_ROLE), len(_FIXTURE_FLAT))
+
+
 def survey(pipe, agents, cap):
     """跑一遍全部 Agent，返回 (structured_fail, unstructured_changed, stats)。"""
     structured_fail, unstructured_changed = [], []
@@ -122,6 +179,18 @@ def main():
     print("  `_AGENT_ROLE_CAP` = %d 字符；active Agent = %d 个"
           % (cap, len(agents)))
 
+    # ★ 2026-11-26：夹具并入被测集（理由见 `_FIXTURE_ROLE` 上方注释）
+    _fx, _fx_len, _flat_len = _fixture_agents(cap)
+    check("[F1] 有段夹具确实超过 cap（否则 I3/I4 与 M1/M2 会退化成空转——本次事故形态）",
+          _fx_len > cap, "夹具 %d 字符 ≤ cap %d" % (_fx_len, cap))
+    check("[F2] 夹具含可裁段『视图规范参考』与必留段『输出示例』",
+          "视图规范参考" in _FIXTURE_ROLE and "输出示例" in _FIXTURE_ROLE
+          and "```sysml" in _FIXTURE_ROLE)
+    check("[F3] 无段夹具确实超过 cap 且**无段标题**（否则 M3 空转）",
+          _flat_len > cap and not any(l.lstrip().startswith("#") for l in _FIXTURE_FLAT.splitlines()),
+          "夹具 %d 字符 ≤ cap %d" % (_flat_len, cap))
+    agents = _fx + agents
+
     fails, changed, n_struct = survey(pipe, agents, cap)
     check("[I1] 有段结构的 Agent 必留段齐全（职责/输入/输出/工作流程/约束/输出示例）",
           not fails, "缺失: %s" % fails[:3])
@@ -130,24 +199,28 @@ def main():
     print("  （有段结构 %d 个 / 无段结构 %d 个）" % (n_struct, len(agents) - n_struct))
 
     # I3：可裁段折叠为占位且留有"可查原文"提示
-    tgt = next((sp for _n, sp in agents if "视图规范参考" in sp), "")
-    if tgt:
-        out = pipe._build_role_block(_FakeDef(tgt), cap=cap)
-        folded = pipe._ROLE_TRIM_PLACEHOLDER in out
-        check("[I3a] 可裁段（视图规范参考）超上限时折叠为占位", folded)
-        check("[I3b] 占位文案说明「可查原文」（否则模型不知去哪找）",
-              "原文" in pipe._ROLE_TRIM_PLACEHOLDER or "Agent 定义" in pipe._ROLE_TRIM_PLACEHOLDER)
+    # ★ 2026-11-26：改从**夹具**取样本，不再靠真库里有没有那样的 Agent
+    #   （那批 Agent 已于 2026-10-14 退役 ⇒ 原写法让 I3/I4 直接判红且 I3a/I3b 没执行）。
+    tgt = _FIXTURE_ROLE
+    out = pipe._build_role_block(_FakeDef(tgt), cap=cap)
+    folded = pipe._ROLE_TRIM_PLACEHOLDER in out
+    check("[I3a] 可裁段（视图规范参考）超上限时折叠为占位", folded)
+    check("[I3b] 占位文案说明「可查原文」（否则模型不知去哪找）",
+          "原文" in pipe._ROLE_TRIM_PLACEHOLDER or "Agent 定义" in pipe._ROLE_TRIM_PLACEHOLDER)
+    # I3c：真库里若仍有含该段的 Agent，也要覆盖（有则测真库，无则如实记录，不判红）
+    _real_tgt = next((sp for _n, sp in load_agents() if "视图规范参考" in sp), "")
+    if _real_tgt:
+        check("[I3c] 真库同类 Agent 同样被折叠为占位",
+              pipe._ROLE_TRIM_PLACEHOLDER in pipe._build_role_block(_FakeDef(_real_tgt), cap=cap))
     else:
-        check("[I3] 存在含『视图规范参考』段的 Agent（前置条件）", False)
+        print("  [INFO] 真库当前无含『视图规范参考』的 active Agent"
+              "（8 个视图 Agent 已于 2026-10-14 退役）⇒ I3c 用夹具覆盖，不判红")
 
     # I4：必留段本身超 cap 时不再腰斩
-    if tgt:
-        out = pipe._build_role_block(_FakeDef(tgt), cap=10)   # 极端 cap
-        kept_example = "输出示例" in out and "```sysml" in out
-        check("[I4] 必留段超 cap 时**不再腰斩**（示例代码块完整保留）", kept_example,
-              "输出=%d 字符" % len(out))
-    else:
-        check("[I4] 必留段超 cap 时不再腰斩（前置条件）", False)
+    out = pipe._build_role_block(_FakeDef(tgt), cap=10)   # 极端 cap
+    kept_example = "输出示例" in out and "```sysml" in out
+    check("[I4] 必留段超 cap 时**不再腰斩**（示例代码块完整保留）", kept_example,
+          "输出=%d 字符" % len(out))
 
     # 收益量化（供报告引用，非判据）
     rows = [(_n, count_tokens(sp),

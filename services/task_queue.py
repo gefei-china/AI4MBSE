@@ -210,6 +210,24 @@ class TaskQueue:
                 "计划质量：%d/%d 个子任务缺 expected_output，已兜底生成最小完成标准：%s",
                 len(_noexp), len(plan), ",".join(_noexp[:8]))
         n = 0
+        # ★ 2026-11-26：列存在性探测（**一次**，循环外）。
+        #   为什么需要：`assign_score` / `load_snapshot` 是后续 `_migrate_*` 补的列，
+        #   而本函数的调用方**不只有生产库** —— 门禁/测试会自建最小表
+        #   （`verify_expected_output_backstop` 就是这样，它建的表没有这两列）。
+        #   加列依赖后若直接 INSERT，那些自建表全部 `no such column` 崩掉
+        #   （实测：rc=1，报 `table agent_tasks has no column named assign_score`）。
+        #   ⇒ 缺列时退回旧版 INSERT，但**必须留 warning**：
+        #      静默退回就是"分派留痕又不生效了却没人知道"，正是不该再犯的形态。
+        _has_trace_cols = True
+        try:
+            _tcols = {_r[1] for _r in conn.execute("PRAGMA table_info(agent_tasks)")}
+            _has_trace_cols = ("assign_score" in _tcols and "load_snapshot" in _tcols)
+        except Exception:
+            _has_trace_cols = False
+        if not _has_trace_cols:
+            logging.getLogger("mbse.planner").warning(
+                "agent_tasks 缺 assign_score/load_snapshot 列 ⇒ 本次分派留痕**只写 config**，"
+                "看板读列将拿不到分数。自建表请补齐这两列；生产库跑 database.init_db()。")
         for t in plan:
             deps = [d for d in (t.get("deps") or []) if d in plan_keys]
             # ★ B1-11：把 Agent 名解析成权威写法再落库，并**额外存一份快照**。
@@ -222,17 +240,71 @@ class TaskQueue:
             except Exception:
                 _resolved_name = ""
             _agent_name = _resolved_name or str(t.get("agent") or "")
-            conn.execute(
-                "INSERT INTO agent_tasks (run_id, task_key, title, agent_id, agent_name_snapshot, "
-                "task_type, config, deps, status, assigned_by, seq, context, expected_output, "
-                "conversation_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                (run_id, t.get("key", ""), t.get("title", ""), _agent_name,
-                 _resolved_name or _agent_name,
-                 t.get("task_type", "agent"), json.dumps(t.get("config") or {}, ensure_ascii=False),
-                 json.dumps(deps, ensure_ascii=False),
-                 "ready" if not deps else "planned", assigned_by, t.get("seq", 0),
-                 (t.get("context") or "")[:1000], (t.get("expected_output") or "").strip()[:500],
-                 int(conversation_id or 0)))
+            # ★ 2026-11-26 真机验证查出的缺陷：`assign_score` / `load_snapshot` **两列从未被写过**。
+            #
+            #   证据（真机，非静态分析）：
+            #     · `SELECT assign_score, COUNT(*) GROUP BY assign_score` ⇒ 全表 642 行**都是 0.0**
+            #       （0.0 是建表默认值 `REAL DEFAULT 0`，不是算出来的分）；
+            #     · `config LIKE '%capability_match%'` ⇒ 367 行有值。
+            #   ⇒ 接线（`assignment_integration._assign_load_aware`）只把分数写进 **config**，
+            #     而本函数的 INSERT **根本没有这两列** ⇒ 列停留默认值。
+            #   为什么这很坏：stream.py:859 的注释白纸黑字写着「打分留痕（assign_score /
+            #     load_snapshot 落库）—— 此前这两列 0/222 有值」，可**声称的目标至今没达成**；
+            #     而看板/查询读的是**列**（有类型、有索引），读到的永远是 0.0
+            #     ⇒ 「这次为什么派给它」在生产数据上依然无法回答。
+            #   ⚠️ 门禁 F 组抓不到：它直接调 `_assign_load_aware` 看 config，**不经过落库**。
+            #      （这正是「单元级绿、真机不生效」的形态，所以本轮真机验证才有价值。）
+            #
+            #   修法：config 是唯一真源，两列是**派生投影**（从 config 提升，不重复计算）。
+            #   取不到就保持列默认值，不写假值（缺数据要看得见，不能伪造成 0 分）。
+            _cfg_for_cols = {}
+            try:
+                _raw_cfg = t.get("config")
+                if isinstance(_raw_cfg, str):
+                    # ⚠️ 原实现是 `json.dumps(t.get("config") or {})`：入参若是**字符串**
+                    #   （调用方自己 json 过的），落库会**二次编码** ⇒ 存成带引号的 JSON 字符串，
+                    #   下游 `json.loads(cfg)` 拿到的是 str 而不是 dict ⇒ `.get()` 抛
+                    #   AttributeError，多数消费点包在 try 里 ⇒ **静默丢配置**。
+                    #   实测（tmp/probe_taskqueue_cols.py 的 t3 用例）确实复现。
+                    #   故在此归一化：字符串解析成 dict；解析失败的非 JSON 文本进 `_raw` 保留信息。
+                    try:
+                        _cfg_for_cols = json.loads(_raw_cfg) or {}
+                    except Exception:
+                        _cfg_for_cols = {"_raw": _raw_cfg}
+                    if not isinstance(_cfg_for_cols, dict):
+                        _cfg_for_cols = {"_raw": _raw_cfg}
+                elif isinstance(_raw_cfg, dict):
+                    _cfg_for_cols = dict(_raw_cfg)
+            except Exception:
+                _cfg_for_cols = {}
+            _col_score = _cfg_for_cols.get("assign_score")
+            _col_load = _cfg_for_cols.get("load_snapshot")
+            _row_head = (run_id, t.get("key", ""), t.get("title", ""), _agent_name,
+                         _resolved_name or _agent_name,
+                         t.get("task_type", "agent"), json.dumps(_cfg_for_cols, ensure_ascii=False),
+                         json.dumps(deps, ensure_ascii=False),
+                         "ready" if not deps else "planned", assigned_by, t.get("seq", 0),
+                         (t.get("context") or "")[:1000], (t.get("expected_output") or "").strip()[:500],
+                         int(conversation_id or 0))
+            if _has_trace_cols:
+                conn.execute(
+                    "INSERT INTO agent_tasks (run_id, task_key, title, agent_id, agent_name_snapshot, "
+                    "task_type, config, deps, status, assigned_by, seq, context, expected_output, "
+                    "conversation_id, assign_score, load_snapshot) "
+                    "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    _row_head + (
+                        # REAL 列：只接受数值；字符串/None 走默认 0.0（不把脏值静默转成有效分）
+                        (float(_col_score) if isinstance(_col_score, (int, float)) else 0.0),
+                        # TEXT 列：快照原样存 JSON（缺失时存 '{}'，与默认值一致）
+                        (json.dumps(_col_load, ensure_ascii=False)
+                         if isinstance(_col_load, dict) else "{}")))
+            else:
+                # 兼容分支：表没有这两列（自建夹具表）⇒ 只写旧字段，已在上面留 warning
+                conn.execute(
+                    "INSERT INTO agent_tasks (run_id, task_key, title, agent_id, agent_name_snapshot, "
+                    "task_type, config, deps, status, assigned_by, seq, context, expected_output, "
+                    "conversation_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    _row_head)
             n += 1
         conn.commit()
         if conversation_id:

@@ -3,8 +3,8 @@
  "generated_at": "2026-11-26 09:45:00",
  "doc": "门禁清单唯一真源。由 tools/gate_runner.py 执行、tools/verify/verify_gate_manifest.py 守卫。分层依据：工具 2026-11-04 的双环境实测（真库 + 干净库）。",
  "budget": {
-  "broken": 10,
-  "backlog": 64,
+  "broken": 6,
+  "backlog": 60,
   "tolerated_steps": 39
  },
  "tiers": {
@@ -273,6 +273,12 @@
    "reason": "产物版本链**按主体分组**判据（15 断言）：不同 package 各自 v0.1、parent 只在同主体内串联、旧版收敛限同主体、命名按主体锁定。需真库外键与既有数据 ⇒ local。2026-11-13 新增（真机 conv 990727：需求视图 v0.1 与用例视图被串成一条链，用例视图还继承了需求视图的名字）"
   },
   {
+   "script": "verify_assign_trace_persisted.py",
+   "tier": "pr",
+   "timeout": 120,
+   "reason": "守「分派留痕真的落到 agent_tasks 的列上」。2026-11-26 真机验证查出：接线只把分数写进 config（367/642 行有值），而 create_plan 的 INSERT 根本没有 assign_score/load_snapshot 两列 ⇒ 全表 642 行恒为建表默认值 0.0 / '{}'，看板读列永远拿不到分，「为什么派给它」在生产数据上无法回答。已修 INSERT + config 二次编码；本门禁串起「接线→落库→查列」并配 3 变异（M1 删列 / M2 写死 0 / M3 二次编码）"
+  },
+  {
    "script": "verify_asset_audit.py",
    "tier": "pr",
    "timeout": 120
@@ -495,9 +501,9 @@
   },
   {
    "script": "verify_checker_three_paths.py",
-   "tier": "backlog",
+   "tier": "local",
    "timeout": 180,
-   "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+   "reason": "守 SysML 校验的错因三路归类（词法/语法/语义）——用户看到的错误分类对不对。2026-11-26 修好失效的变异自证（锚点原匹配单行形态、且清空引号内容后隐式拼接仍非空 ⇒ 变异打空），本机 rc=0（56s，变异已真判红）。降 local 的理由：① 需 checker.jar 三件套（132MB，不入库）② real_checker_checks() 在 C.available() 为假时返回 FAIL 而非 SKIP ⇒ CI 的 ubuntu runner 上接线即常红"
   },
   {
    "script": "verify_chunk_gold.py",
@@ -580,9 +586,8 @@
   },
   {
    "script": "verify_compression_anchor.py",
-   "tier": "broken",
-   "timeout": 240,
-   "reason": "两库都红 [FAIL] [FAIL] [1] 压缩锚点覆盖组装侧真实产出的全部块名　— 未覆盖 3 个：['【%s %s】\\\\n%s%s', '【%s 已取回】\\\\n%s\\\\n\\\\n（父章 %s 上一轮已取回，', '【%s 已取回】\\\\n%s"
+   "tier": "pr",
+   "timeout": 240
   },
   {
    "script": "verify_config_proposal.py",
@@ -806,9 +811,9 @@
   },
   {
    "script": "verify_eval_routing.py",
-   "tier": "broken",
+   "tier": "nightly",
    "timeout": 240,
-   "reason": "两库都红 [FAIL] [FAIL] E2 run1 macro_f1=0.7909 >= 阈值 0.84（基线 0.9158）  <- f1=0.7909 thr=0.84"
+   "reason": "真库/干净库均绿（12s）；但语义兜底层随 embedding 可达性变化（本机已降级 bigram、CI 无内网）⇒ 不拿来阻断 PR。2026-11-26 转绿：macro_f1 0.79→0.92 的根因是**金标标签过期**（追溯矩阵→trace_verification，与分类法/现网路由一致），未改阈值/口径"
   },
   {
    "script": "verify_evalset_fingerprint.py",
@@ -853,7 +858,7 @@
    "script": "verify_expected_output_backstop.py",
    "tier": "local",
    "timeout": 120,
-   "reason": "expected_output（完成标准）落库兜底：prompt 口径一致 + create_plan 唯一收口兜底 + config 判空防误覆盖。★ 归 local：C 组读真库 11 月失败率口径（空20% vs 非空6.1%，干净库无数据必红）。实测 0.4s"
+   "reason": "expected_output（完成标准）落库兜底：prompt 口径一致 + create_plan 唯一收口兜底 + config 判空防误覆盖。★ 归 local：C 组读真库 11 月失败率口径（登记时 空20% vs 非空6.1%；2026-11-26 复测 空59.5% vs 非空9.2%，方向一致），干净库无数据必红。2026-11-26 把 C1 从『与登记值相差±10pct』改成『只在变差时红 + 改善时要求样本量未缩水』——原判据把"指标真变好"判成"口径漂移"（13.3% vs 登记 24.2%）"
   },
   {
    "script": "verify_explicit_required_guard.py",
@@ -1278,9 +1283,9 @@
   },
   {
    "script": "verify_load_aware_assign.py",
-   "tier": "broken",
-   "timeout": 240,
-   "reason": "两库都红 [FAIL] [FAIL] D1 能力域任务 top-1 命中 ≥ 7/8  只中 6/8"
+   "tier": "pr",
+   "timeout": 120,
+   "reason": "2026-11-26 修 bigram_overlap 分母口径（切并列词元 + 弱证据减半）后 41 项 3 变异全绿，干净库/生产库同绿，实测 1.5s"
   },
   {
    "script": "verify_long_query_entity_link.py",
@@ -1312,9 +1317,9 @@
   },
   {
    "script": "verify_mcp_availability.py",
-   "tier": "backlog",
+   "tier": "local",
    "timeout": 180,
-   "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+   "reason": "守 MCP 可用性链路（巡检线程在转 / last_check 自动前移 / 库内 online 非僵尸 / 工具已动态落库 71 个）——用户「工具能不能用」的直接依据。降 local 的理由：判据依赖**活服务的巡检线程**（实测 `last_check` 需真实前移 18s），CI runner 无服务 ⇒ 接线即常红。本机 rc=0（16 项）"
   },
   {
    "script": "verify_mcp_capcard.js",
@@ -2042,9 +2047,9 @@
   },
   {
    "script": "verify_role_block_sections.py",
-   "tier": "backlog",
-   "timeout": 180,
-   "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+   "tier": "pr",
+   "timeout": 120,
+   "reason": "守 Agent 角色块**不得被字符腰斩**（必留段/输出示例被砍 ⇒ 模型自由发挥 ⇒ 已知事故形态）。2026-11-26 修好自证空转：I3/I4 与 M1~M3 原全靠真库里『超 cap 且含视图规范参考』的 Agent，而那批 8 个视图 Agent 已于 2026-10-14 退役 ⇒ 前置消失。改为自带两个夹具（有段 11k / 无段 12k 字符）+ F1~F3 夹具自检，实测 11 项 3 变异全绿，生产库/干净库同绿"
   },
   {
    "script": "verify_role_manual_filter.py",
@@ -2454,9 +2459,9 @@
   },
   {
    "script": "verify_truncation_policy.py",
-   "tier": "backlog",
-   "timeout": 180,
-   "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+   "tier": "pr",
+   "timeout": 120,
+   "reason": "守内容截断口径的**前后端一致**（user_input 上限 / 日志截断与长度列 / 界面键与后端 / 文案默认值）——用户看到的「已截断」提示与真实截断必须同源。纯静态 30 判据 + 4 变异全绿，实测 12.7s"
   },
   {
    "script": "verify_turn_override_e2e.py",
@@ -2515,9 +2520,9 @@
   },
   {
    "script": "verify_vector_binary_cache.py",
-   "tier": "broken",
+   "tier": "nightly",
    "timeout": 240,
-   "reason": "两库都红 [FAIL] [FAIL] ★ 第二次命中二进制（hit_bin 增量=+0，应为 1）"
+   "reason": "真库绿但慢（30s > 15s）；2026-11-26 修掉 flaky 根因（mmap 跨进程文件锁 ⇒ 写盘静默失败）+ 重写判据去掉两处空转断言，连跑多次 + 变异自证全绿"
   },
   {
    "script": "verify_version_diff.py",
