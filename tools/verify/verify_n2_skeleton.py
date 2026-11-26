@@ -153,25 +153,49 @@ def main() -> int:
     print(f"  [OK  ] Agent 返回类型 {type(out).__name__}，"
           f"长度 {len(str(out))} 字符")
 
-    # ③ 从**消息表**读代码块，而不是从返回值的字符串里抓 ——
-    #    实测踩坑：`pipe.execute()` 返回的 dict 里 code 字段是 agent_meta JSON，
-    #    直接对它跑校验会得到 `missing EOF at '{'` 的假失败。
-    #    真实产出在 messages.content 的 ```sysml 块里。
+    # ③ 代码来源优先级（2026-11-26 修正）——
+    #    a) `pipe._sysml_last_pass_code`：LLM 先调 sysml_v2_validate 校验成功后，
+    #       工具层缓存的那份 code。模型越规范、越走工具校验，代码越可能**只存在于工具参数**，
+    #       回答正文里只剩「（附：本轮已校验的 SysML v2 模型代码）」这类说明文字。
+    #    b) `_sysml_last_checked_code`：校验过但未必 pass 的版本。
+    #    c) 消息表 ```sysml 块：兜底，且必须过滤掉说明文字（曾把 26 字符的中文说明
+    #       送 checker，得到 16 条词法错，误报成「L0 卡无效」）。
     import re
-    with db_conn() as c2:
-        rows = c2.execute(
-            "SELECT content FROM messages "
-            "WHERE conversation_id=? AND role='assistant' ORDER BY id",
-            (conv_id,)).fetchall()
+    passed = getattr(pipe, "_sysml_last_pass_code", None)
+    checked = getattr(pipe, "_sysml_last_checked_code", None)
     blocks = []
-    for m in rows:
-        found = re.findall(r"```(?:sysml|sysmlv2)?\s*\n(.*?)```",
-                           m["content"] or "", re.S | re.I)
-        blocks.extend(found)
+    for tag, candidate in (("工具层 pass-code", passed), ("工具层 checked-code", checked)):
+        if isinstance(candidate, str) and candidate.strip():
+            blocks.append(candidate.strip())
+            print(f"  代码取自 {tag}（{len(candidate)} 字符）")
+            break
     if not blocks:
-        print("\n  [FAIL] 消息里没有 ```sysml 代码块 ⇒ 生成格式不合规")
+        with db_conn() as c2:
+            rows = c2.execute(
+                "SELECT content FROM messages "
+                "WHERE conversation_id=? AND role='assistant' ORDER BY id",
+                (conv_id,)).fetchall()
+        for m in rows:
+            found = re.findall(r"```(?:sysml|sysmlv2)?\s*\n(.*?)```",
+                               m["content"] or "", re.S | re.I)
+            blocks.extend(found)
+        # 说明文字不是模型代码：必须有 package/part def 等 SysML 结构才算
+        blocks = [b for b in blocks if len(b.strip()) > 30 and
+                  re.search(r"\b(package|part def|attribute def|requirement def)\b", b)]
+    if not blocks:
+        print("\n  [FAIL] 没拿到可用的 SysML 代码块 ⇒ 生成格式不合规")
+        print("  （工具层无 pass/checked code，消息表里也没有可校验的模型代码）")
         return 1
-    print(f"  从消息表抽到 {len(blocks)} 个代码块")
+    print(f"  可校验代码块 {len(blocks)} 个")
+
+    # 判据自证：说明文字必须被过滤（否则回到旧假红形态）
+    _note = "（附：本轮已校验的 SysML v2 模型代码）"
+    _is_code = lambda b: len(b.strip()) > 30 and bool(
+        re.search(r"\b(package|part def|attribute def|requirement def)\b", b))
+    if _is_code(_note):
+        print("  [FAIL] 判据自证失败：说明文字被当成模型代码")
+        return 1
+    print("  [OK  ] 判据自证：说明文字不会被当成模型代码")
 
     print("\n── 步骤 3：官方校验器 verdict（逐轮）──")
     all_pass = True

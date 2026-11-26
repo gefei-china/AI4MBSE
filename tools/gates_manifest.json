@@ -4,7 +4,7 @@
  "doc": "门禁清单唯一真源。由 tools/gate_runner.py 执行、tools/verify/verify_gate_manifest.py 守卫。分层依据：工具 2026-11-04 的双环境实测（真库 + 干净库）。",
  "budget": {
   "broken": 0,
-  "backlog": 1,
+  "backlog": 0,
   "tolerated_steps": 39
  },
  "tiers": {
@@ -1476,9 +1476,9 @@
   },
   {
    "script": "verify_n2_skeleton.py",
-   "tier": "backlog",
+   "tier": "local",
    "timeout": 180,
-   "reason": "2026-11-26 实测红因：**判据抽错代码块** —— 从 messages.content 抽到 26 字符的「（附：本轮已校验的 SysML v2 模型代码）」说明文字送 checker，报 16 条词法错；真代码走工具参数（已有 _sysml_last_pass_code 通道）。属门禁判据过期，不是产品坏了。保留 backlog，待改用工具层 pass-code 通道后再定层。"
+   "reason": "2026-11-26 修判据后真跑全绿：原从 messages.content 抽到 26 字符的中文说明「（附：本轮已校验的 SysML v2 模型代码）」送 checker，报 16 条词法错。改为优先取工具层 _sysml_last_pass_code（模型走工具校验后代码只在工具参数里），消息表兜底并过滤说明文字；加判据自证。真机 1933 字符 verdict=pass / 0 硬错。降 local：真 LLM + checker.jar，CI 跑不了。"
   },
   {
    "script": "verify_n3_e2e_real.py",
