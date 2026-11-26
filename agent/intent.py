@@ -842,6 +842,19 @@ class IntentRouter:
         s = (t or "").strip()
         if not s or len(s) > 16:
             return False
+        # ★ 2026-11-26（同会话连续指令实测 + Rasa CALM 标杆）：**自带明确新意图的短指令不是续写**。
+        #   原判据只看「短 + 动词开头」，把「生成架构骨架 / 生成活动图 / 生成状态机视图」
+        #   全判成续写 ⇒ 在本函数（detect 第 941 行）直接继承上一轮意图，
+        #   DB 强特异优先（第 1056 行）根本没机会执行 ⇒ 同会话连续下三条建模指令全落同一个节点。
+        #   标杆做法：Rasa CALM 把 flow 切换当作独立的 `pattern_continue_interrupted`
+        #   对话修复模式，而不是靠「句子短」隐式继承；意图漂移要先判定再决定承接还是切换。
+        #   这里用确定性的 DB 强特异探测做漂移闸门：命中任何 Agent 的高特异关键词，
+        #   就说明用户发起了一个**有名字的新任务**，不能当作「继续」。
+        #   A/B（真库 + confirmed 48 条）：3 条新任务被正确拒绝；12 条真续写（继续/接着/
+        #   出P1样板/来个用例图…）db 强特异全为 None，行为零变化；48 条中仅
+        #   「生成一份需求分析报告」改变——由误续写回到正确的 report_generation。
+        if self._db_kw_priority(s.lower()):
+            return False
         if any(x in s for x in ("不是", "错了", "不对", "改成", "换成", "重新", "算了")):
             return False
         # ⚠️ 不要在这里写 `\b`：中文字符在 Python 3 里也算 word 字符，

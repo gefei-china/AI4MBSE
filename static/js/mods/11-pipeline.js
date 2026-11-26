@@ -2305,7 +2305,7 @@ async function clarifyAnswerSend(){
     const _ansSummary = (answers.map(a=>a.value).join('；') || note || '').trim();
     _continueInSameBox(card, r.resume_text || '【已回答澄清】请继续', {
       user_msg_id: r.resume_of_user_msg_id || 0,
-      append: r.resume_append || '',
+      append: r.append_text || '',
     }, _ansSummary);
   }catch(e){ toast('提交失败：' + (e.message||'')); if(btn){ btn.disabled=false; btn.textContent='✉ 发送补充信息'; } }
 }
@@ -2328,7 +2328,7 @@ async function clarifySkipSend(){
                         {method:'POST', body:JSON.stringify({skip:true})});
     if(r && r.resume_text){
       _text = r.resume_text;
-      _resumeOf = {user_msg_id: r.resume_of_user_msg_id || 0, append: r.resume_append || ''};
+      _resumeOf = {user_msg_id: r.resume_of_user_msg_id || 0, append: r.append_text || ''};
     }
   }catch(e){ /* 接口异常不阻断续答：用本地兜底文案直接跑（退回旧的"不清挂起"行为） */ }
   // ★ 2026-10-16 Q2：在原输出盒内续接，不新起一轮

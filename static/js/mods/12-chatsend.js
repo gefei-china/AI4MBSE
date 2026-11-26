@@ -257,7 +257,7 @@ async function _submitClarify(msg, input){
       setPendingClarify(null);
       _continueInSameBox(null, r.resume_text, {
         user_msg_id: r.resume_of_user_msg_id || 0,
-        append: r.resume_append || '',
+        append: r.append_text || '',
       }, msg.slice(0, 40));
       return false;                  // ★ 与原 return 等价：终止 sendChat
     }

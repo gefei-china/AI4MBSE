@@ -1840,6 +1840,11 @@ jobs:
         if: ${{ !cancelled() }}
         run: python tools/verify/verify_budget_needsuser_p1.py
 
+      # 2026-11-26 新增：澄清回答前后端字段契约 + hover 摘要卡超时终态（18 断言 + 变异自证）。
+      - name: Guard clarify_frontend_contract
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_clarify_frontend_contract.py
+
       - name: Guard chat area scrollbar
         if: ${{ !cancelled() }}
         run: python tools/verify/verify_chat_area_scrollbar.py

@@ -275,8 +275,14 @@ async function showTaskTip(el){
   tip.style.top = (r.top - 6) + 'px';
   tip.style.display = 'block';
   const sumEl0 = document.getElementById('tt-sum');
+  // ★ 2026-11-26（用户实测反馈「确认后页面没反应」）：hover 卡必须限时。
+  //   后端 /summary 同步调 LLM 概括（重试可达分钟级），而 api() 是裸 fetch、无超时
+  //   ⇒ 请求既不返回也不抛错时，占位文案「正在生成摘要…」会永久停住，看起来像卡死。
+  //   6s 超时后走本地兜底，保证任何情况下都有终态文案。
+  const _ctl = (typeof AbortController !== 'undefined') ? new AbortController() : null;
+  const _timer = _ctl ? setTimeout(()=>_ctl.abort(), 6000) : 0;
   try{
-    const r2 = await api(`/api/conversations/${id}/summary`);
+    const r2 = await api(`/api/conversations/${id}/summary`, _ctl ? {signal:_ctl.signal} : {});
     if(_taskTipId !== id) return;   // 已切换到其它会话，忽略过期结果
     const txt = String((r2 && r2.summary) || '').trim();
     const src = String((r2 && r2.source) || '');
@@ -296,9 +302,11 @@ async function showTaskTip(el){
     }
   }catch(e){
     if(_taskTipId !== id) return;
-    // 摘要接口不可用（旧后端/网络）→ 本地兜底：取最后一条 AI+用户消息合成概述（仍不做硬截断）
+    // 摘要接口不可用/超时（旧后端/网络/模型慢）→ 本地兜底：取首尾消息合成概述（仍不做硬截断）
+    const _ctl2 = (typeof AbortController !== 'undefined') ? new AbortController() : null;
+    const _timer2 = _ctl2 ? setTimeout(()=>_ctl2.abort(), 4000) : 0;
     try{
-      const mr = await api(`/api/conversations/${id}/messages?limit=40`);
+      const mr = await api(`/api/conversations/${id}/messages?limit=40`, _ctl2 ? {signal:_ctl2.signal} : {});
       if(_taskTipId !== id) return;
       const msgs = Array.isArray(mr) ? mr : (mr && Array.isArray(mr.messages) ? mr.messages : []);
       const clean = s => String(s||'').replace(/```[\s\S]*?```/g,' ').replace(/[#*`>\[\](){}\r\n]/g,' ').replace(/\s+/g,' ').trim();
@@ -309,7 +317,11 @@ async function showTaskTip(el){
       if(sumEl0) sumEl0.textContent = txt || '（摘要加载失败）';
     }catch(e2){
       if(sumEl0) sumEl0.textContent = '（摘要加载失败）';
+    }finally{
+      if(_timer2) clearTimeout(_timer2);
     }
+  }finally{
+    if(_timer) clearTimeout(_timer);
   }
 }
 function hideTaskTip(){

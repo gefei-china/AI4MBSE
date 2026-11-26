@@ -15,6 +15,7 @@ import ast
 import json
 import os
 import pathlib
+import re
 import sqlite3
 import sys
 
@@ -109,6 +110,25 @@ def main():
         g = router.detect(text, conn=conn)
         check("C9 explain 前置仍接住：%s" % text[:12], g == "knowledge_qa", g)
 
+    # ── 同会话意图漂移：短续写判据不得吞掉自带新意图的指令 ──
+    # 2026-11-26 实测：同会话连续 4 条指令，后 3 条被上一轮 requirement_structuring
+    # 带走。根因 `_is_short_continuation` 只看「短 + 动词开头」，在 detect 第 941 行
+    # 早于 DB 强特异优先直接继承。标杆：Rasa CALM 用 pattern_continue_interrupted
+    # 显式判定 flow 切换，而非靠句子短隐式继承。
+    for text in ("生成架构骨架", "生成活动图", "生成状态机视图"):
+        check("C10 新任务不被误判续写：%s" % text,
+              not router._is_short_continuation(text))
+    for text in ("继续", "接着做", "下一步", "出P1样板", "生成视图",
+                 "做一下", "给我看看", "好的", "来个用例图"):
+        check("C11 真续写仍被承接：%s" % text,
+              router._is_short_continuation(text))
+    _switched = router.detect("生成活动图", conn=conn,
+                              prev_intent="requirement_structuring")
+    check("C12 带上一轮意图时仍切到 view_expansion",
+          _switched == "view_expansion", _switched)
+    check("C13 切换路由为 DB 强特异而非 continue",
+          router._last_meta.get("route") == "rule_scored", router._last_meta)
+
     # ── 变异自证：把「建模」注回信号表 ⇒ C4/C5/C6 必须翻红 ──
     old_sigs = tuple(["建模"] + [s for s in (sigs or [])])
     check("M0 变异体确实与原体不同", old_sigs != tuple(sigs or []))
@@ -129,6 +149,16 @@ def main():
     check("M3 信号删空后 C3 会翻红",
           not bool(empty._COMPOSITE_SIGNALS) and
           not {"代码", "并", "再"}.issubset(set(empty._COMPOSITE_SIGNALS)))
+
+    # 变异自证：重实现「旧的短续写判据」（无 DB 强特异闸门）⇒ C10 必须翻红
+    def _old_short(t):
+        s = (t or "").strip()
+        if not s or len(s) > 16:
+            return False
+        return bool(re.match(
+            r"^(出|做|生成|输出|显示|给我|帮我把?|来个|补|加上|改|完善|优化|整理)", s))
+    check("M4 旧判据把「生成活动图」当续写（证明 C10 非空转）",
+          _old_short("生成活动图") and not router._is_short_continuation("生成活动图"))
 
     print("\n汇总：PASS=%d FAIL=%d" % (len(PASS), len(FAIL)))
     print("口径：真库只读 + 确定性层；不调 LLM、不写库")

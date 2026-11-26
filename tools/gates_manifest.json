@@ -563,6 +563,12 @@
    "reason": "真实浏览器门禁（agent-browser + Chromium）：需本机 8000 服务与真库数据，CI runner 无该组合 ⇒ 本机跑。2026-11-13 起纳入 G5 论域（此前 .js 全在论域外）"
   },
   {
+   "script": "verify_clarify_frontend_contract.py",
+   "tier": "pr",
+   "timeout": 120,
+   "reason": "2026-11-26 新增：跨前端字段契约。后端 /clarify-answer 返回 append_text，前端三处读 r.resume_append ⇒ DB 单轮化在 UI 路径静默失效；既有 26/0 门禁在 Python 侧手工映射故漏测。另守 hover 摘要卡 6s 超时 + 兜底终态（防止「正在生成摘要…」永久占位）。18 断言 + 3 变异，纯静态不调 LLM。"
+  },
+  {
    "script": "verify_closure_on_prod_copy.py",
    "tier": "local",
    "timeout": 600,
