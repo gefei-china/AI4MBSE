@@ -46,6 +46,13 @@ if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
 # ── 干净库：先切库后 import（core.config/DB_PATH import 期绑定，顺序即正确性）──
+# ★ 2026-11-26：**切换前先记住"真正的真库"**。下面 D 段的"真库只读勘察"原来读
+#   `os.environ["MBSE_DB_PATH"]`，而本行之后它已经被改成这个干净临时库
+#   ⇒ D 段勘察的其实是**自己建的夹具库**（里面还带着本门禁自己插入的 status='done'
+#   夹具行）⇒ 报"bad_cases.status 越界 {'done': 1}"，而真库实际只有 6 条 open。
+#   **纪律：任何"改环境变量/切库"的夹具，必须在改动前把原值保存下来**，
+#   后续凡是要指"真库"的地方一律用保存值 —— 不能用同一个变量名图省事。
+_PROD_DB_BEFORE_SWITCH = os.environ.get("MBSE_DB_PATH") or os.path.join(ROOT, "mbse.db")
 _TMP = os.path.join(ROOT, "tmp", "verify_statemachine")
 os.makedirs(_TMP, exist_ok=True)
 _CLEAN_DB = os.path.join(_TMP, "clean.db")
@@ -277,7 +284,7 @@ def main():
 
     # ── D. 真库只读勘察（注册表声明覆盖的真实数据佐证）──────────────
     print("\n== D. 真库只读勘察（8 表 9 列状态取值 ⊆ 对应机 states）==")
-    _prod = (os.environ.get("MBSE_DB_PATH") or os.path.join(ROOT, "mbse.db"))
+    _prod = _PROD_DB_BEFORE_SWITCH      # 用**切换前**保存的真库路径（见文件头说明）
     if not os.path.exists(_prod):
         skip("D1 真库勘察", "mbse.db 不存在（CI 环境）")
     else:

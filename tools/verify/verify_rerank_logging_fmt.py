@@ -198,6 +198,20 @@ def capture(fn, *a, **kw) -> tuple[str, bool]:
 # B1 rag_rerank「解析失败」告警（真代码路径：喂非 JSON 的 content）
 import services.rag_rerank as rr   # noqa: E402
 
+# ★ 2026-11-26 修（夹具没到"解析失败"那一步 ⇒ B2/B3/B4 假红）：
+#   2026-11-02 引入三态开关 `rag.rerank_mode`，默认 **auto**（条件重排）：
+#   `auto` 下先过 `needs_rerank(hits)`，不命中就 `return hits[:top_k]` ——
+#   而本夹具喂的是 4 条极短 hit（"x0".."x3"），**必然不触发**条件重排
+#   ⇒ 根本走不到 LLM、也走不到解析失败分支 ⇒ 告警自然为空。
+#   本组要验的是"解析失败时有没有留痕（含 content 线索与 provider）"，
+#   前提是**必须真的走到那一步** ⇒ 夹具显式置 `on`（绕过 auto 判定），
+#   这是"夹具与判据同口径"，不是放宽断言（B2/B3/B4 的判据一字未改）。
+_rr_mode_orig = getattr(rr, "_rerank_mode", None)
+try:
+    rr._rerank_mode = lambda: "on"
+except Exception:
+    pass
+
 _real_chat = None
 try:
     from llm import llm_client as _lc

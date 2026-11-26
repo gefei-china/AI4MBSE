@@ -53,7 +53,7 @@ function dgRender(snap){
   const card = (lv, cls) => {
     const n = Number(by[lv] || 0);
     return `<div class="kpi" style="padding:10px 12px;">`
-      + `<div class="n" style="font-size:20px;color:${n ? ('var(--' + cls + ')') : 'var(--mut)'};">${n}</div>`
+      + `<div class="n" style="font-size:20.5px;color:${n ? ('var(--' + cls + ')') : 'var(--mut)'};">${n}</div>`
       + `<div class="l">${dgLevelBadge(lv)}</div></div>`;
   };
   h += card('critical', 'red');
@@ -72,7 +72,7 @@ function dgRender(snap){
   }
 
   h += '<div style="max-height:400px;overflow:auto;">'
-    + '<table style="width:100%;border-collapse:collapse;font-size:12.8px;">'
+    + '<table style="width:100%;border-collapse:collapse;font-size:13.5px;">'
     + '<thead><tr style="text-align:left;color:var(--mut);">'
     + '<th style="padding:6px 8px;width:26%;">位置</th>'
     + '<th style="padding:6px 8px;width:14%;">级别</th>'
@@ -113,7 +113,7 @@ async function loadDegradePanel(){
     box.innerHTML = '<div class="panel" style="margin-bottom:14px;">'
       + '<div class="ph">静默兜底台账 <span class="badge">P0 让错误可见</span>'
       + '<span class="st r" style="margin-left:auto;">台账不可用</span></div>'
-      + '<div class="pb"><div style="padding:10px;font-size:13px;color:var(--red);">'
+      + '<div class="pb"><div style="padding:10px;font-size:13.5px;color:var(--red);">'
       + '读取 /api/health/degrade 失败：' + esc(String(err).slice(0, 300))
       + '<div class="mut" style="margin-top:6px;">这不是"零降级" —— 是读不到。'
       + '请检查服务是否正常运行。</div></div></div></div>';

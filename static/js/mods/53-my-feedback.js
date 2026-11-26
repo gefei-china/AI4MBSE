@@ -96,14 +96,14 @@
       + ' <span class="st '+_cls(it.state||'new')+'">'+_esc(it.state_label||labels[it.state]||it.state)+'</span>'
       + '<span style="flex:1"></span><button class="btn sm ghost" onclick="document.getElementById(\'mfb-detail\').innerHTML=\'\'">收起</button>'
       + '</div><div class="pb">';
-    h += '<div style="font-size:13px;color:var(--mut);margin-bottom:8px;">消息 #'+_esc(it.message_id)
+    h += '<div style="font-size:13.5px;color:var(--mut);margin-bottom:8px;">消息 #'+_esc(it.message_id)
       + ' · 会话 #'+_esc(it.conversation_id||'—')+' · '+_esc(it.quality||it.feedback_type||'')
       + ' · 提交于 '+_esc(it.created_at_local||it.created_at||'')+'</div>';
     h += '<div style="font-size:13.5px;font-weight:500;margin-bottom:6px;">处理时间线（仅列真实发生的事）</div>';
     h += tl.map(function(x){
       return '<div style="display:flex;gap:10px;padding:6px 0;border-bottom:1px solid var(--line);">'
         + '<span style="font-size:12px;color:var(--mut);white-space:nowrap;min-width:120px;">'+_esc(String(x.at||'—').slice(5,16))+'</span>'
-        + '<span style="flex:1;"><b style="font-size:13px;">'+_esc(x.title)+'</b>'
+        + '<span style="flex:1;"><b style="font-size:13.5px;">'+_esc(x.title)+'</b>'
         + (x.detail?'<div style="font-size:12px;color:var(--mut);">'+_esc(x.detail)+'</div>':'')
         + '</span></div>';
     }).join('');

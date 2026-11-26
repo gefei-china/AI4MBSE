@@ -281,6 +281,14 @@ EXECUTABLE_BUILTIN_NAMES = frozenset(
 def builtin_has_executor(name: str) -> bool:
     """该名字在内置通道是否有执行器（决定「要不要注入给模型」）。"""
     return str(name or "") in EXECUTABLE_BUILTIN_NAMES
+
+
+#: `tool_call_logs` 落库失败是否已报过（**每进程只报一次**，见 `_log_tool_call` 的 except）。
+#: 为什么要这个标志：落库失败是**旁路噪声**，重复打印只会把真正的问题淹掉；
+#: 但一次都不报则会让"日志表结构漂移 ⇒ 调用日志静默消失"完全不可见。
+_TC_LOG_FAILED_ONCE = False
+
+
 class ToolMixin:
     """工具定义、执行、重试策略与调用留痕。"""
 
@@ -3030,8 +3038,29 @@ class ToolMixin:
                      # S0（2026-10-28）：探针/验证噪声标记，统计侧据此排除（core/probe_mark）
                      _is_probe),
                 )
-        except Exception:
-            pass  # 观测落库失败不影响工具执行
+        except Exception as _e:
+            # ★ 2026-11-26：原来这里是**纯 `pass`**（"观测落库失败不影响工具执行"）。
+            #   旁路原则本身是对的 —— 观测失败绝不该阻断工具执行。但**完全静默**有代价：
+            #   本轮实测 D6 时，夹具表缺 3 列（产品新加的 result_len/result_truncated/is_probe）
+            #   ⇒ INSERT 抛 `no column named ...` ⇒ 被这里吞掉 ⇒ **一行都没落库且毫无痕迹**，
+            #   从现象上**与"写入点代码坏了"完全一样**（我差点误判成产品缺陷）。
+            #   真实环境里同理：一旦表结构与代码漂移，工具调用日志会**整体静默消失**，
+            #   而"日志表里没有坏调用"会被读成"没有坏调用"—— 这是最危险的一种静默。
+            #   ⇒ 改为**每进程首次失败留一条 error 日志**（不刷屏、不阻断）：
+            #     只在第一次失败时打印，之后静默（failure 是持续状态，重复打印只增加噪声）。
+            global _TC_LOG_FAILED_ONCE
+            if not _TC_LOG_FAILED_ONCE:
+                _TC_LOG_FAILED_ONCE = True
+                try:
+                    import logging as _lg
+                    _lg.getLogger("mbse.tools").error(
+                        "tool_call_logs 落库失败（观测旁路，不阻断执行；本次进程只报一次）："
+                        "tool=%s type=%s 异常=%s: %s。"
+                        "⚠️ 若为 'no column named ...'，说明表结构与代码漂移 —— "
+                        "工具调用日志正在**静默丢失**，请跑 init_db 或补迁移。",
+                        name, tool_type, type(_e).__name__, str(_e)[:200])
+                except Exception:
+                    pass
         # P0-b：闭 tool span（sid=0 ⇒ LIFO 弹线程栈顶，即本次工具）。
         # 放在**方法级**而非 DB try 内：落库失败/异常出口也必须闭 span，否则
         # 线程栈泄漏 ⇒ 后续工具的 parent 挂到已闭节点上、end 时悬挂。

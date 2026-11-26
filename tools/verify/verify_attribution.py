@@ -455,11 +455,38 @@ def main():
                   "%d 坏（首坏 %d + 级联 %d）"
                   % (tgt, la, lf, ta, tf, r["counts"]["total"], r["counts"]["bad"],
                      r["counts"]["bad_first"], r["counts"]["bad_cascade"]))
-            check("D1 ★引擎计数 == 裸 SQL 对账（total/bad/good 三通道 + 首坏+级联=坏）",
-                  r["counts"]["total"] == la + ta and r["counts"]["bad"] == lf + tf
-                  and r["counts"]["good"] == (la + ta) - (lf + tf)
-                  and r["counts"]["bad_first"] + r["counts"]["bad_cascade"] == r["counts"]["bad"],
-                  f"engine={r['counts']} raw=({la}+{ta}, {lf}+{tf})")
+            # ★ 2026-11-26 修（对账口径漏了截断项 ⇒ 恒红）：
+            #   `attribute_session` 有**有意截断**：步骤数超 `attribution.max_steps`（默认 500）
+            #   时保留**最早**的 500 条（首坏在头部，丢的是尾部级联），并把
+            #   `truncated=True` / `dropped=n` 写进结果（core/attribution.py:409-419）。
+            #   原断言直接要求 `engine.total == la+ta` ⇒ 真库某会话 600 条步骤时
+            #   engine=500 / raw=600 ⇒ 恒红（我实测这条会话就是这样，差恰好 100 = dropped）。
+            #   **纪律：对账必须把"被丢弃的量"也算进去** —— 否则"总数不等"永远是红的，
+            #   而它既可能是漏数、也可能是有意截断，判据必须能区分这两者。
+            #   ⇒ 拆成四条，任一条不成立都说明真有问题：
+            #     (a) total + dropped == 原始条目数 —— **一条不丢、一条不多**（这是核心）
+            #     (b) good + bad == total —— 内部三分自洽
+            #     (c) 未截断时才要求 bad 精确等于库中失败数；截断时只要求 bad <= 失败数
+            #         （保留部分不可能包含比全部更多的失败）
+            #     (d) 首坏 + 级联 == 坏（原来的，保留）
+            _raw_n = la + ta
+            # ⚠️ 字段名是 `dropped_steps`（core/attribution.py:433），不是 `dropped`。
+            #   我第一版读 `dropped` 恒得 0 ⇒ 与 truncated=True 自相矛盾，差点误判成
+            #   "截断发生却不记录丢弃数"的产品缺陷。**读别人的返回结构，先核对键名**。
+            _dropped = int(r.get("dropped_steps") or 0)
+            _trunc = bool(r.get("truncated"))
+            _t = r["counts"]["total"]
+            _ok_a = (_t + _dropped == _raw_n)
+            _ok_b = (r["counts"]["good"] + r["counts"]["bad"] == _t)
+            _ok_c = (r["counts"]["bad"] == lf + tf) if not _trunc \
+                else (r["counts"]["bad"] <= lf + tf)
+            _ok_d = (r["counts"]["bad_first"] + r["counts"]["bad_cascade"]
+                     == r["counts"]["bad"])
+            check("D1 ★引擎计数 == 裸 SQL 对账（total+dropped=原始；good+bad=total；"
+                  "首坏+级联=坏；未截断时 bad 精确对账）",
+                  _ok_a and _ok_b and _ok_c and _ok_d,
+                  f"engine={r['counts']} truncated={_trunc} dropped={_dropped} "
+                  f"raw=({la}+{ta}); 明细 a={_ok_a} b={_ok_b} c={_ok_c} d={_ok_d}")
             check("D2 verdict 三态取值合法且与坏步数自洽",
                   r["verdict"] in A.VERDICTS
                   and (r["verdict"] == "attributed") == (r["counts"]["bad"] > 0),
@@ -499,13 +526,24 @@ def main():
     import tempfile
     _d6dir = mkdtemp(prefix="verify_attr_d6_")
     _d6db = os.path.join(_d6dir, "d6.db")
+    # ★ 2026-11-26 修（夹具手抄 DDL 缺列 ⇒ 写入静默丢失，误判成"写入点坏了"）：
+    #   原夹具手抄 `tool_call_logs` 的列清单，缺 `result_len` / `result_truncated` /
+    #   `is_probe` 三列（产品后来加的，见 `_log_tool_call` 的 INSERT 列表）
+    #   ⇒ INSERT 抛 `no column named ...` ⇒ 被 `_log_tool_call` 的
+    #   `except Exception: pass`（旁路原则，有意不阻断主流程）吞掉 ⇒ **0 行落库**
+    #   ⇒ D6 看到 `rows=[]`，看起来像"写入点修复失效"。**产品没问题，夹具过期。**
+    #   ⇒ 夹具表一律 `ddl_statements_for(...)`（含迁移列），绝不手抄。
+    from tools.verify._schema_ddl import ddl_statements_for as _ddl_stmts
+    _d6_tbl_ddl = _ddl_stmts("tool_call_logs")
     _child = (
         "import os, sys, sqlite3, json\n"
         "db = sys.argv[1]\n"
         "os.environ['MBSE_DB_PATH'] = db\n"
         "sys.path.insert(0, sys.argv[2])\n"
         "c = sqlite3.connect(db)\n"
-        "c.execute('CREATE TABLE tool_call_logs (id INTEGER PRIMARY KEY, intent TEXT, agent_name TEXT, tool_name TEXT NOT NULL, tool_type TEXT, arguments TEXT, result TEXT, ok INTEGER, latency_ms INTEGER, conversation_id INTEGER, user_name TEXT, run_id INTEGER, task_key TEXT, failure_kind TEXT, call_kind TEXT, capability_id TEXT, trace_id TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP)')\n"
+        "_stmts = json.loads(sys.argv[3])\n"
+        "for _s in _stmts:\n"
+        "    c.execute(_s)\n"
         "c.commit(); c.close()\n"
         "from agent.pipeline_parts.tools import ToolMixin\n"
         "class Dummy: pass\n"
@@ -523,7 +561,8 @@ def main():
         "    {'ok': True, 'result': 'done'}, {'intent': 'chat'}, {'agent': 'a'}, 100, 0.0)\n"
         "c = sqlite3.connect(db); c.row_factory = sqlite3.Row\n"
         "print(json.dumps([dict(r) for r in c.execute('SELECT tool_name, ok, failure_kind, run_id, task_key, trace_id FROM tool_call_logs')], ensure_ascii=False))\n")
-    _cp = subprocess.run([sys.executable, "-c", _child, _d6db, ROOT],
+    _cp = subprocess.run([sys.executable, "-c", _child, _d6db, ROOT,
+                          _json.dumps(_d6_tbl_ddl)],
                          capture_output=True, text=True, encoding="utf-8", timeout=180)
     try:
         _rows = _json.loads(_cp.stdout.strip().splitlines()[-1]) if _cp.stdout.strip() else []

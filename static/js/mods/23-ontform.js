@@ -729,7 +729,7 @@ async function ontologyActionsLoad(tid){
     box.innerHTML = acts.length
       ? acts.map(a=>{
           const p = a.pre_condition ? ' pre' : '', q = a.post_condition ? ' post' : '';
-          const badge = (p||q) ? ' <span style="color:var(--mut);font-size:11px;">['+(p.trim()+q.trim())+']</span>' : '';
+          const badge = (p||q) ? ' <span style="color:var(--mut);font-size:11.5px;">['+(p.trim()+q.trim())+']</span>' : '';
           return '<span class="chip" style="display:inline-flex;align-items:center;gap:4px;padding:3px 8px;border:1px solid var(--line);border-radius:12px;font-size:12.5px;">'
             + esc(a.tool_name) + badge
             + '<a href="javascript:;" onclick="ontologyActionUnbind(\''+esc(a.tool_name)+'\')" title="解绑" style="color:var(--mut);">×</a></span>';

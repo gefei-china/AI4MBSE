@@ -537,10 +537,10 @@ function renderMcpTools(){
   };
   list.innerHTML = items.map(it=>{
     const src = it.side_effect_source === 'manual'
-      ? '<span style="color:#185FA5;font-size:11px;" title="人工设定，MCP 升级也不会被覆盖">manual</span>'
-      : '<span style="color:var(--mut);font-size:11px;" title="按平台契约自动派生，MCP 升级会跟着变">auto</span>';
+      ? '<span style="color:#185FA5;font-size:11.5px;" title="人工设定，MCP 升级也不会被覆盖">manual</span>'
+      : '<span style="color:var(--mut);font-size:11.5px;" title="按平台契约自动派生，MCP 升级会跟着变">auto</span>';
     const dep = it.status === 'deprecated'
-      ? '<span style="color:#A32D2D;font-size:11px;">（服务端已移除）</span>' : '';
+      ? '<span style="color:#A32D2D;font-size:11.5px;">（服务端已移除）</span>' : '';
     // ★ 2026-11-06（用户：「显示标 manual 怎么操作」）：上一版**只展示、没给操作入口**
     //   —— 用户能看到 manual/auto 标签，却无法把某个工具标成 manual（只能直接调接口）。
     //   这里每行右侧加一个紧凑下拉：自动 / 只读 / 写 / 破坏性。
@@ -1659,13 +1659,13 @@ function _hdrRow(mode, key, maskText) {
   if (mode === 'masked') {
     // 已保存：只读。key 用灰色静态文本（不可编辑 —— 改名等于删旧建新，容易误会）
     row.innerHTML =
-      '<span class="hdr-k" style="flex:1;font-family:monospace;font-size:13px;color:var(--fg);" title="请求头名称">' + esc(key) + '</span>' +
-      '<span class="hdr-mask" style="flex:1.5;font-family:monospace;font-size:13px;color:var(--mut);" title="出于安全不回显明文，只显示长度">' + esc(maskText) + '</span>' +
+      '<span class="hdr-k" style="flex:1;font-family:monospace;font-size:13.5px;color:var(--fg);" title="请求头名称">' + esc(key) + '</span>' +
+      '<span class="hdr-mask" style="flex:1.5;font-family:monospace;font-size:13.5px;color:var(--mut);" title="出于安全不回显明文，只显示长度">' + esc(maskText) + '</span>' +
       '<button type="button" class="btn sm ghost" onclick="hdrStartEdit(this)" style="' + btnCss + '" title="改成新值（不改就保持原样）">改</button>' +
       '<button type="button" class="btn sm ghost" onclick="hdrRemoveRow(this)" style="' + btnCss + ';color:var(--red,#A32D2D);" title="删除该请求头">✕</button>';
   } else if (mode === 'edit') {
     row.innerHTML =
-      '<span class="hdr-k" style="flex:1;font-family:monospace;font-size:13px;">' + esc(key) + '</span>' +
+      '<span class="hdr-k" style="flex:1;font-family:monospace;font-size:13.5px;">' + esc(key) + '</span>' +
       '<input class="tool-hdr-val" placeholder="输入新值（不填=放弃修改）" autocomplete="off" ' +
       'style="flex:1.5;border:1px solid var(--blue-bd,#8ab4f8);border-radius:6px;padding:4px 8px;font-size:13.5px;">' +
       '<button type="button" class="btn sm ghost" onclick="hdrCancelEdit(this)" style="' + btnCss + '" title="放弃修改，恢复原值">取消</button>' +
@@ -2207,10 +2207,10 @@ async function loadLLMProviders() {
     items.map(p=>{
       const disabled = p.status==='disabled';
       return `<tr>
-      <td><b>${esc(p.name)}</b>${p.is_default===1?' <span class="st b" style="font-size:10.5px;">默认</span>':''}
+      <td><b>${esc(p.name)}</b>${p.is_default===1?' <span class="st b" style="font-size:11.5px;">默认</span>':''}
         ${p.description?`<div style="font-size:11.5px;color:var(--mut);margin-top:2px;max-width:240px;line-height:1.45;">${esc(p.description)}</div>`:''}</td>
       <td>${p.model_type==='embedding'?'<span class="st b">向量</span>':(p.model_type==='multimodal'?'<span class="st" style="background:#f3e8ff;color:#7c3aed;">多模态</span>':'<span class="st g">对话</span>')}${p.model_type!=='embedding'&&p.model_type!=='multimodal'&&hasVisionTag(p)?' <span class="st" style="background:#eef2ff;color:#3f51b5;" title="支持图片理解：AI 建模会话中上传的图片会作为多模态内容送给该模型">🖼 视觉</span>':''}
-        <div style="font-size:11px;color:var(--mut);margin-top:2px;">${fmtCtxTier(p.context_window)} · 思考:${esc((p.model_params&&(p.model_params.thinking_level||p.model_params.thinking_mode))||'模型默认')}</div></td>
+        <div style="font-size:11.5px;color:var(--mut);margin-top:2px;">${fmtCtxTier(p.context_window)} · 思考:${esc((p.model_params&&(p.model_params.thinking_level||p.model_params.thinking_mode))||'模型默认')}</div></td>
       <td style="font-size:12.5px;">${esc(p.model_name)}</td>
       <td><label class="sw" title="设为该类型（对话/向量）的默认模型"><input type="checkbox" ${p.is_default===1?'checked':''} onchange="toggleLLMDefault(${p.id},this.checked)"><span class="sl"></span></label></td>
       <td>${disabled?'<span class="st g">停用</span>':'<span class="st ok">启用</span>'}</td>

@@ -622,7 +622,7 @@ function capRenderBindHealthPanel() {
     + '<button class="btn sm" onclick="capBindBatch()" style="font-size:12px;">批量执行</button>'
     + '<button class="btn sm ghost" onclick="capBindSelClear()" style="font-size:12px;">取消选择</button>'
     + '</div>';
-  body.innerHTML = '<div style="padding:14px 16px 24px;font-size:13px;line-height:1.7;">'
+  body.innerHTML = '<div style="padding:14px 16px 24px;font-size:13.5px;line-height:1.7;">'
     + '<div style="margin-bottom:8px;">' + chips + '</div>'
     + '<input id="cap-bind-kw" placeholder="搜索 Agent / 能力 / 原因" value="' + esc(kw) + '"'
     + ' oninput="capBindSearch(this.value)"'

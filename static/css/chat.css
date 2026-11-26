@@ -29,7 +29,7 @@
 .llm-pick-btn{display:inline-flex;align-items:center;gap:5px;max-width:220px;border:1px solid var(--line);border-radius:6px;padding:3px 8px;font-size:12.5px;background:var(--card);color:var(--fg);cursor:pointer;font-family:inherit;}
 .llm-pick-btn:hover{border-color:var(--blue);}
 .llm-pick-btn .llm-pick-label{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
-.llm-pick-btn .llm-pick-caret{color:var(--mut);font-size:10.5px;}
+.llm-pick-btn .llm-pick-caret{color:var(--mut);font-size:11.5px;}
 /* 2026-11-01 修（米爸反馈"没有会话改参数的入口了"）：
    根因不是没渲染，而是**布局把它挤出了可视区** —— 原先整块 panel 是
    `max-height:440px; overflow-y:auto`，模型列表（7 个 ≈ 490px）在前、
@@ -64,7 +64,7 @@
 .lp-sub{margin:0 8px 8px 20px;border-left:2px solid var(--blue-l);padding-left:8px;}
 .lp-sub .llm-turn-box{margin-top:2px;padding:8px 9px;border-top:none;background:rgba(255,193,7,.06);border-radius:6px;}
 .llm-pick-tag{margin:0;}
-.llm-pick-tag{font-size:10.5px;padding:1px 6px;border-radius:5px;background:var(--line);color:var(--mut);white-space:nowrap;}
+.llm-pick-tag{font-size:11.5px;padding:1px 6px;border-radius:5px;background:var(--line);color:var(--mut);white-space:nowrap;}
 .llm-pick-tag.ctx{background:#eef2ff;color:#3f51b5;}
 .llm-pick-tag.think{background:#fff4e5;color:#b26a00;}
 .llm-pick-tag.pri{background:#e8f5e9;color:#2e7d32;}
@@ -76,18 +76,18 @@
 /* 二级区内的参数行（沿用原 .llm-turn-* 语义，只调间距适配嵌套） */
 .llm-turn-box{margin-top:6px;padding:9px 10px;border-top:1px dashed var(--line);background:rgba(255,193,7,.06);border-radius:0 0 8px 8px;}
 .llm-turn-head{font-size:12.5px;font-weight:600;color:var(--fg);display:flex;align-items:center;gap:6px;flex-wrap:wrap;}
-.llm-turn-note{font-weight:400;font-size:11px;color:var(--mut);}
+.llm-turn-note{font-weight:400;font-size:11.5px;color:var(--mut);}
 .llm-turn-row{display:flex;align-items:center;gap:6px;margin-top:7px;flex-wrap:wrap;}
 .llm-turn-row label{font-size:11.5px;color:var(--mut);white-space:nowrap;}
 .llm-turn-row select{font-size:12px;padding:2px 6px;border:1px solid var(--line);border-radius:5px;background:var(--card);color:var(--fg);max-width:96px;}
 .llm-turn-reset{margin-top:6px;font-size:11.5px;color:var(--blue-d);cursor:pointer;}
 .llm-turn-reset span:hover{text-decoration:underline;}
-.llm-turn-def{font-weight:400;font-size:10.5px;color:var(--mut);}
+.llm-turn-def{font-weight:400;font-size:11.5px;color:var(--mut);}
 /* 不支持设置的占位：不用 disabled 的 select（那会看起来"能点但点不动"），
    直接显示不可设置 + hover 说明原因（米爸：不支持的可以提示，或屏蔽入口）。 */
 .llm-turn-off{display:inline-block;font-size:11.5px;color:var(--mut);background:var(--line);
   padding:2px 8px;border-radius:5px;cursor:not-allowed;}
-.llm-turn-why{margin-top:6px;font-size:11px;color:var(--amb);line-height:1.6;background:var(--amb-l);
+.llm-turn-why{margin-top:6px;font-size:11.5px;color:var(--amb);line-height:1.6;background:var(--amb-l);
   padding:5px 8px;border-radius:6px;}
 .tb-sel{border:1px solid var(--line);border-radius:6px;padding:3px 8px;font-size:12.5px;background:#fff;color:var(--fg);cursor:pointer;max-width:160px;}
 .tb-sel:focus{outline:none;border-color:var(--blue);}

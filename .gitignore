@@ -198,3 +198,9 @@ mbse_system.zip
 # docs/skill_backup/ 是技能正文改写前的原文备份（skill_95/133/136 等），属本机回退凭证；
 # 可重建的真源是 skills 表 + data/bootstrap/pipeline_assets.json，别把重复正文塞进历史。
 /docs/skill_backup/
+
+# ── 字号统一前的静态文件备份（2026-11-26）──
+# `static/_fsbackup*` 是把 38 处越界字号统一到规范档位前的原文备份，属**本机回退凭证**；
+# 真源就是 static/ 下的现行文件（改动已逐处可见于 git diff，38 增 38 删对称）。
+# 门禁 `verify_typography_scale` 的 `_iter_files` 也已跳过 `_fsbackup` 目录（同口径）。
+/static/_fsbackup*/

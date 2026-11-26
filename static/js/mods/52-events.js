@@ -143,7 +143,7 @@ async function loadEventPanel(){
         <button class="btn" style="font-size:12.5px;padding:3px 10px;" onclick="loadEventPanel()" title="刷新（本面板不自动轮询）">刷新</button>
       </div>
       <div class="pb" style="padding:0;max-height:300px;overflow:auto;">
-        <table style="width:100%;font-size:13px;">
+        <table style="width:100%;font-size:13.5px;">
           <thead><tr><th>工单</th><th>来源</th><th>建议动作</th><th>模式</th><th>依据</th><th>策略</th><th>创建</th><th></th></tr></thead>
           <tbody>${rowsObs}</tbody>
         </table>
@@ -153,7 +153,7 @@ async function loadEventPanel(){
     <div class="panel" style="margin-bottom:14px;">
       <div class="ph">② 已执行 / 已结 <span class="badge">闭环回执</span><span class="badge">${done.length} 条</span></div>
       <div class="pb" style="padding:0;max-height:260px;overflow:auto;">
-        <table style="width:100%;font-size:13px;">
+        <table style="width:100%;font-size:13.5px;">
           <thead><tr><th>工单</th><th>动作</th><th>状态</th><th>结果 / 错误</th><th>时间</th></tr></thead>
           <tbody>${rowsDone}</tbody>
         </table>
@@ -163,7 +163,7 @@ async function loadEventPanel(){
     <div class="panel" style="margin-bottom:14px;">
       <div class="ph">③ 事件台账 <span class="badge">含被过滤的 —— 回答"为什么没动"</span><span class="badge">${(trg&&trg.items||[]).length} 条</span></div>
       <div class="pb" style="padding:0;max-height:280px;overflow:auto;">
-        <table style="width:100%;font-size:13px;">
+        <table style="width:100%;font-size:13.5px;">
           <thead><tr><th>事件</th><th>来源</th><th>发起者</th><th>处置</th><th>原因</th><th>时间</th></tr></thead>
           <tbody>${rowsTrg}</tbody>
         </table>
@@ -173,7 +173,7 @@ async function loadEventPanel(){
     <div class="panel" style="margin-bottom:14px;">
       <div class="ph">④ 来源与开关 <span class="badge">放开执行是逐来源显式动作</span></div>
       <div class="pb" style="padding:0;max-height:240px;overflow:auto;">
-        <table style="width:100%;font-size:13px;">
+        <table style="width:100%;font-size:13.5px;">
           <thead><tr><th>来源</th><th>名称</th><th>模式</th><th>策略版本</th><th>接收范围</th><th></th></tr></thead>
           <tbody>${rowsSrc}</tbody>
         </table>

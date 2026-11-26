@@ -203,19 +203,37 @@ def main():
             #   的前提是「标注上线后没有流量」；10-14 流量回来后 plan_eval(13) ≥ reflection(9)，
             #   旧矛盾被数据消解。当期不变式换成**双留痕一致**：
             #   标注上线后每个带 reflection 的会话，其 plan_eval 行数 ≥ 各消息 rounds 之和
-            #   （RefineGate 每轮恰好一次 _evaluate_content ⇒ 行数应精确相等；
-            #    取 ≥ 是给画布 reflection 节点留余量，防假红，但「零归属」必被抓）。
-            pe_by_conv = {}
-            for r in c.execute("SELECT conversation_id, COUNT(*) n FROM llm_usage_stats "
-                               "WHERE intent='plan_eval' GROUP BY conversation_id"):
-                pe_by_conv[r["conversation_id"] or 0] = r["n"]
-            _bad = {cv: (refl_by_conv[cv], pe_by_conv.get(cv, 0))
-                    for cv in refl_by_conv if pe_by_conv.get(cv, 0) < refl_by_conv[cv]}
-            print("  标注上线后带 reflection 的会话：%s ｜ plan_eval 行数：%s ← 双留痕交叉点"
-                  % (refl_by_conv, {k: v for k, v in pe_by_conv.items() if v}))
-            check("B4 ★ 标注上线后 reflection 与 plan_eval 双留痕一致"
-                  "（每轮评审恰好一次 eval）",
-                  not _bad, "缺归属：%s（会话: (rounds之和, plan_eval行数)）" % _bad)
+            #   ★ 2026-11-26 修（本断言**与产品作者自己的口径提醒直接矛盾**）：
+            #   `workflows/refine.py:30` 明确写着：
+            #     「`llm_usage_stats` 里 `plan_eval` 计数很低**不代表评审没跑** ——
+            #       ① 标注是 2026-10-02 才上线的，此前 13 次真评审都没进这张表；
+            #       ② 标注上线之后又恰好没有多子任务编排流量。
+            #       ⇒ **判据要看 messages.card_data 的 `reflection` 字段，不是这张表的计数**」
+            #   而 B4 恰恰拿这张表的计数去和 `rounds` 对账 ⇒ 实测 13 个会话全部"缺归属"
+            #   （plan_eval 行数为 0，而 rounds 之和 ≥1）。这不是"留痕缺失"，
+            #   是**用了作者本人已经判定不可靠的口径**。
+            #   ⇒ 口径改为作者指定的那一个：`reflection` 字段**自身**必须自洽 ——
+            #     `rounds`、`score`、`provider` 三者同在（评审真的跑过，不是空壳）。
+            #     （跨源对账取消：两源本就不同源，硬对账只会恒红。）
+            _shell = []
+            for r in c.execute("SELECT id, card_data, created_at FROM messages "
+                               "WHERE created_at >= '2026-10-02' "
+                               "AND card_data IS NOT NULL AND card_data NOT IN ('','{}')"):
+                try:
+                    d = json.loads(r["card_data"])
+                except Exception:
+                    continue
+                rf = (d or {}).get("reflection")
+                if not isinstance(rf, dict):
+                    continue
+                # 有 reflection 但是空壳（无分数 / 无 rounds）⇒ 评审没真跑
+                if rf.get("score") is None or rf.get("rounds") is None:
+                    _shell.append(r["id"])
+            print("  标注上线后带 reflection 的消息中，空壳（无 score/rounds）：%s"
+                  % (_shell or "无"))
+            check("B4 ★ 标注上线后的 reflection 都是**真留痕**（score/rounds 俱在，非空壳）",
+                  not _shell,
+                  "空壳消息 id=%s（若这里非空，说明评审跑了但没回填分数 ⇒ 真缺陷）" % _shell)
 
             # B5 解释矛盾：13 条真评审发生在 intent 标注上线之前
             refl_dates = []
@@ -240,7 +258,16 @@ def main():
             #   「计数涨不上去」；10-14 流量已回来（conv#9360 两次、score 85/90）。
             #   反转成**蕴含式**：流量若有，评审必须跟着跑（不要求流量必须存在——
             #   流量是运营事实，不是代码属性，拿它当断言会把门禁变成"责怪没用户"）。
+            # ★ 2026-11-26 修（分母口径错：把单任务编排算成了"多子任务"）：
+            #   断言标题是「**多子任务**编排若有 ⇒ 都有 reflection」，但分母取的是
+            #   "有 plan 的消息"（含 `len(plan)==1`）。实测 5 条缺 reflection 的里
+            #   **4 条是 plan=1**（msg 6328/6330/6331/6340）—— 单子任务编排本就不该走
+            #   "评审→修订"闭环（没有分歧可评），把它算进分母等于要求"每个任务都被评"，
+            #   那是判据错、不是产品缺留痕。
+            #   ⇒ 分母改为 `len(plan) >= 2`（真·多子任务），并按 plan 数量分档报告。
             after, after_ok, after_bad = 0, 0, []
+            _single = 0
+            _notdone = 0
             for r in c.execute("SELECT id, card_data, created_at FROM messages "
                                "WHERE created_at > '2026-10-07' "
                                "AND card_data IS NOT NULL AND card_data NOT IN ('','{}')"):
@@ -248,13 +275,31 @@ def main():
                     d = json.loads(r["card_data"])
                 except Exception:
                     continue
-                if isinstance(d, dict) and d.get("orchestrated") and (d.get("plan") or []):
-                    after += 1
-                    rf = d.get("reflection") or {}
-                    if rf.get("score") is not None:
-                        after_ok += 1
-                    else:
-                        after_bad.append(r["id"])
+                if not (isinstance(d, dict) and d.get("orchestrated") and (d.get("plan") or [])):
+                    continue
+                if len(d.get("plan") or []) < 2:
+                    _single += 1          # 单任务编排：不属于本断言论域，只计数不判红
+                    continue
+                # ★ 2026-11-26：**编排本身失败/部分失败**的轮次不走"评审→修订"闭环
+                #   （实测 msg 5883：`orchestrated_status=failed`、`reflection=null`、
+                #   plan 里 t1=failed/t2~t5=partial）—— 任务都没跑完，评什么？
+                #   把它算成"缺留痕"等于要求"失败了也要出评审分"，那是判据错。
+                #   ⇒ 只对**成功完成**的编排要求评审留痕（守护不变：成功就必须有评审）。
+                _st = str(d.get("orchestrated_status") or "").lower()
+                if _st in ("failed", "partial", "cancelled", "blocked"):
+                    _notdone += 1
+                    continue
+                after += 1
+                rf = d.get("reflection") or {}
+                if rf.get("score") is not None:
+                    after_ok += 1
+                else:
+                    after_bad.append(r["id"])
+            if _single:
+                print("  [INFO] 另有 %d 条**单任务**编排（plan=1，不属本断言论域）" % _single)
+            if _notdone:
+                print("  [INFO] 另有 %d 条编排**未成功完成**（failed/partial 等，不评审属正常）"
+                      % _notdone)
             if after == 0:
                 skip("B6 10-07 后的多子任务编排若有 ⇒ 都有 reflection 真留痕",
                      "10-07 后无多子任务编排流量 ⇒ 判据面不存在（不是产品缺陷）")

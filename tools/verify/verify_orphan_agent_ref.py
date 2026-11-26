@@ -75,7 +75,32 @@ check("A3 DDL 与迁移口径一致",
       and '"agent_name_snapshot", "TEXT DEFAULT \'\'' in m_src)
 
 print("\n=== B. create_plan 真写快照 ===")
-_cp = t_src.split("def create_plan")[1][:2200] if "def create_plan" in t_src else ""
+
+
+def _func_src(src: str, fname: str) -> str:
+    """按 **AST 边界**取整段函数源码。
+
+    ★ 2026-11-26 修（写死 2200 字符 ⇒ 假红）：原实现是
+      `t_src.split("def create_plan")[1][:2200]`，靠"截前 2200 字符"当函数体。
+      而 `create_plan` 后来加了**Agent 名解析校验**（B1-11）等逻辑，函数变长，
+      INSERT 语句落到 4519 字符处 ⇒ 截断段里没有 `agent_name_snapshot`
+      ⇒ B1 恒红（红因是"函数变长"，不是"快照没写"）。
+      **纪律：取函数体用 AST 的 `end_lineno`，不要用字符数截断**
+      （字符数会随任何无关改动失效）。
+    """
+    import ast
+    try:
+        tree = ast.parse(src)
+    except SyntaxError:
+        return ""
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == fname:
+            lines = src.splitlines()
+            return "\n".join(lines[node.lineno - 1: node.end_lineno])
+    return ""
+
+
+_cp = _func_src(t_src, "create_plan")
 check("B1 INSERT 语句含 agent_name_snapshot", "agent_name_snapshot" in _cp)
 check("B2 取值来自解析后的权威名（不是盲抄 plan 原值）",
       "resolve_agent_name(" in _cp or "_resolved_name" in _cp,
@@ -112,28 +137,52 @@ try:
     _tc.execute("INSERT INTO agents VALUES (2,'zhiyuan_mgmt','disabled')")
     _tc.commit()
     # 计划里的名字大小写/空格与权威名不一致 ⇒ 解析应命中
-    _plan = [{"key": "t1", "title": "A", "agent": " DESIGN ", "deps": []},
-             {"key": "t2", "title": "B", "agent": "zhiyuan_mgmt", "deps": []},
-             {"key": "t3", "title": "C", "agent": "不存在的Agent", "deps": []}]
-    TaskQueue.create_plan(_tc, 1, _plan)
+    # ★ 2026-11-26 修（产品行为已升级，D 组期望过期）：
+    #   原 D 组把 `zhiyuan_mgmt`(disabled) 与 `不存在的Agent` 混在**同一个计划**里，
+    #   期望"解析失败时回落原值继续落库"（旧行为）。而 `create_plan` 自 B1-11 起改为
+    #   **解析不了就抛 ValueError 并中止落库** —— 理由是旧行为更危险：
+    #   孤儿引用会静默降级成「通用问答Agent」（无任何工具），产出"看似成功实则没调工具"。
+    #   ⇒ 断言必须跟着产品升级（这是**收紧**，不是放宽）：
+    #     D1/D2 合法名归一（原样保留）
+    #     D3'   孤儿引用 ⇒ **抛错且一行都不落**（新增，比"回落原值"强得多）
+    #     D5    快照仍能对上 agents.name
+    _tc.execute("DELETE FROM agent_tasks")
+    _tc.commit()
+    # ① 合法计划（含大小写/空格抖动）⇒ 落库且归一为权威名
+    _plan_ok = [{"key": "t1", "title": "A", "agent": " DESIGN ", "deps": []}]
+    TaskQueue.create_plan(_tc, 1, _plan_ok)
     _rows = {r["task_key"]: (r["agent_id"], r["agent_name_snapshot"])
              for r in _tc.execute("SELECT task_key,agent_id,agent_name_snapshot FROM agent_tasks")}
-    print("  落库结果: %s" % {k: v for k, v in _rows.items()})
+    print("  合法计划落库结果: %s" % {k: v for k, v in _rows.items()})
     check("D1 t1 快照解析为权威名 design（大小写/空格被归一）",
           _rows["t1"][1] == "design", str(_rows["t1"]))
     check("D2 t1 的 agent_id 也归一为权威名（消除孤儿根因）",
           _rows["t1"][0] == "design", str(_rows["t1"]))
-    check("D3 t2 指向已 disabled 的 Agent：快照仍记录当时的值（留痕）",
-          _rows["t2"][1] == "zhiyuan_mgmt", str(_rows["t2"]))
-    check("D4 t3 查不到时回落原值（不写空、不丢信息）",
-          _rows["t3"][1] == "不存在的Agent" and _rows["t3"][0] == "不存在的Agent",
-          str(_rows["t3"]))
+
+    # ② 含孤儿引用的计划 ⇒ 必须抛错，且**一行都不落**
+    _n_before = _tc.execute("SELECT COUNT(*) FROM agent_tasks").fetchone()[0]
+    for _bad_name, _why in (("zhiyuan_mgmt", "指向已 disabled 的 Agent"),
+                            ("不存在的Agent", "名字根本不存在")):
+        _raised2 = None
+        try:
+            TaskQueue.create_plan(_tc, 2, [{"key": "x1", "title": "B",
+                                            "agent": _bad_name, "deps": []}])
+        except ValueError as _e2:
+            _raised2 = str(_e2)
+        check("D3 孤儿引用（%s）⇒ **拒绝落库**并给出可读原因" % _why,
+              bool(_raised2) and ("Agent" in _raised2 or "agent" in _raised2),
+              "raised=%r" % (_raised2[:80] if _raised2 else None))
+    _n_after = _tc.execute("SELECT COUNT(*) FROM agent_tasks").fetchone()[0]
+    check("D4 被拒绝的计划**一行都不落**（不留半截任务；旧行为会静默降级成无工具 Agent）",
+          _n_after == _n_before, "before=%s after=%s" % (_n_before, _n_after))
+
     _tc.commit()
-    # D5 孤儿判定：快照能对上 ⇒ 不是孤儿
+    # D5 快照判定：快照能对上 agents.name ⇒ 不是孤儿
     _snap_ok = _tc.execute(
         "SELECT COUNT(*) FROM agent_tasks WHERE agent_name_snapshot<>'' "
         "AND agent_name_snapshot IN (SELECT name FROM agents)").fetchone()[0]
-    check("D5 快照可对上 agents.name 的行数（t1+t2）", _snap_ok == 2, "got=%s" % _snap_ok)
+    check("D5 快照可对上 agents.name 的行数（=1，仅合法计划那行）", _snap_ok == 1,
+          "got=%s" % _snap_ok)
     _tc.close()
 finally:
     shutil.rmtree(TMP, ignore_errors=True)

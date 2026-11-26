@@ -187,7 +187,7 @@ function isRow(s) {
   const _real = (s.real !== undefined && s.real !== null) ? Number(s.real) : null;
   const _seen = Number(s.seen_count) || 0;
   const cntCell = _real !== null
-    ? `<div>${_real}</div>${_seen > _real ? `<div style="font-size:11px;color:var(--mut);" title="seen_count 含历史回填，不等于真实使用次数">采集${_seen}</div>` : ''}`
+    ? `<div>${_real}</div>${_seen > _real ? `<div style="font-size:11.5px;color:var(--mut);" title="seen_count 含历史回填，不等于真实使用次数">采集${_seen}</div>` : ''}`
     : `${_seen}`;
   return `<tr>
     <td style="max-width:420px;">

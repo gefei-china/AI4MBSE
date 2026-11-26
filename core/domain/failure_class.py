@@ -54,6 +54,11 @@ _INPUT_KW = (
     #   ③ `不能为空` —— 文件/参数校验的高频形态。
     "invalid_argument", "invalid_arguments", "缺少必填参数", "不能为空",
     "必填参数", "缺少必要参数",
+    # ★ 2026-11-26（F1 存量覆盖）：`LIKE or GLOB pattern too complex` —— SQLite 对
+    #   查询模式复杂度有硬上限，**同一个查询重发必然同样失败** ⇒ 永久失败。
+    #   原来落 `internal`（可重试）⇒ 白重试一次完整检索。归 input_invalid 后不再重试。
+    #   （措辞按 SQLite 原文，只匹配这一族，不影响其他错误。）
+    "pattern too complex",
 )
 _OUTPUT_KW = (
     "schema_truncated", "parse_error", "json decode", "unexpected token",
@@ -71,6 +76,10 @@ _TIMEOUT_KW = (
     # ★ 2026-10-30（P0-2）：`无输出` 与 `无产出` 同义（真库 36 行，旧判 transient）。
     #   两者都可重试 ⇒ **不改变重试行为**，只把归因从"网络瞬态"纠正为"停滞"。
     "无输出",
+    # ★ 2026-11-26（F1 存量覆盖）：`子任务未产生输出` —— 与"无输出"同义但措辞不同，
+    #   原来落到 `internal` 兜底（internal 也是可重试，故**不改变重试行为**，
+    #   只把归因从"未知内部错误"纠正为"停滞无产出"，排障时能直接看出该查哪一环）。
+    "未产生输出",
 )
 _INTERRUPTED_KW = (
     "孤儿运行", "进程重启", "执行线程丢失", "interrupted", "orphan",

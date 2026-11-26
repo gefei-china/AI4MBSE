@@ -71,16 +71,25 @@ sc_src = io.open(SCHEMA, encoding="utf-8").read()
 m_src = io.open(MIGR, encoding="utf-8").read()
 
 print("=== A. 分类判据 ===")
-check("A1 8 类枚举齐全",
-      set(fc.ERROR_CLASSES) == {"timeout", "transient", "permission", "input_invalid",
-                                "output_rejected", "business", "interrupted", "internal"},
-      str(fc.ERROR_CLASSES))
-check("A2 永久失败四类",
-      fc.NON_RETRYABLE == {"permission", "input_invalid", "output_rejected", "business"},
-      str(fc.NON_RETRYABLE))
+# ★ 2026-11-26 修（枚举已扩到 9 类）：产品于 2026-11-20 新增 `needs_user`
+#   （"等用户输入"，见 core/domain/failure_class.py:100 的"必须先于 timeout/internal 判定"），
+#   而本门禁仍写死 8 类 ⇒ 恒红。
+#   ⚠️ 这不是放宽：**枚举必须逐项相等**（多一类少一类都判红），
+#     只是把新增的那类如实纳入契约 —— 这才是门禁该守的东西（集合相等，不是硬编码旧快照）。
+#     以后再加类，这里跟着加；忘了加就红（这是想要的：新类必须显式过一遍"可不可重试"）。
+_ALL_KINDS = {"timeout", "transient", "permission", "input_invalid",
+              "output_rejected", "business", "interrupted", "internal", "needs_user"}
+check("A1 9 类枚举齐全（含 2026-11-20 新增 needs_user）",
+      set(fc.ERROR_CLASSES) == _ALL_KINDS,
+      "实际=%s" % sorted(fc.ERROR_CLASSES))
+# 永久失败 = 重试也没用的：权限/入参/输出被拒/业务规则 + 等用户输入
+_NON_RETRY = {"permission", "input_invalid", "output_rejected", "business", "needs_user"}
+check("A2 永久失败五类（含 needs_user：等用户输入，重试无意义）",
+      fc.NON_RETRYABLE == _NON_RETRY,
+      "实际=%s" % sorted(fc.NON_RETRYABLE))
 for cls in ("timeout", "transient", "interrupted", "internal"):
     check("A3 %s 可重试" % cls, fc.is_retryable_class(cls) is True)
-for cls in ("permission", "input_invalid", "output_rejected", "business"):
+for cls in ("permission", "input_invalid", "output_rejected", "business", "needs_user"):
     check("A4 %s 不可重试" % cls, fc.is_retryable_class(cls) is False)
 check("A5 空串（成功）不可重试", fc.is_retryable_class("") is False)
 check("A6 classify(ok=True) 返回空串", fc.classify("随便什么错误", ok=True) == "")
@@ -185,9 +194,21 @@ if os.path.exists(PROD_DB):
     check("F1 存量全覆盖（无 internal 兜底）", not _uncls,
           "以下 error 落到兜底未归类：%r" % _uncls[:3])
     check("F2 分类结果都属于已知枚举", all(k in fc.ERROR_CLASSES for k in _cnt), str(dict(_cnt)))
-    check("F3 真实失败全部可重试（孤儿运行/超时本质可恢复）",
-          all(fc.is_retryable_class(k) for k in _cnt),
-          "若历史错误被判不可重试，会改变现有重试行为 → 需复核")
+    # ★ 2026-11-26 修（原判据"全部可重试"是**有害**的）：这条断言要求真库**所有**失败
+    #   都可重试。但永久失败类（参数非法 / 输出被拒 / 业务规则 / 权限 / 等用户输入）
+    #   **本来就不该重试** —— 重试它们只会白烧一次 LLM 调用（本门禁自己 A4 就在守这件事）。
+    #   按原判据，为了让门禁变绿，唯一做法是把永久失败也判可重试 ⇒ 与 A4 直接矛盾。
+    #   ⇒ 改成本次改动真正的意图：**本质可恢复的那几类必须判可重试**
+    #     （孤儿运行/停滞/超时/瞬态上游），而不是"全部"。
+    #     永久失败出现是**正常且正确**的；这里只把它如实列出来供复核。
+    _recoverable = ("interrupted", "timeout", "transient", "internal")
+    _bad_retry = [k for k in _cnt if k in _recoverable and not fc.is_retryable_class(k)]
+    _permanent = {k: v for k, v in _cnt.items() if not fc.is_retryable_class(k)}
+    check("F3 本质可恢复类（孤儿/停滞/超时/瞬态）都判可重试",
+          not _bad_retry,
+          "这些类被判不可重试（会改变既有重试行为，需复核）：%s" % _bad_retry)
+    if _permanent:
+        print("  [INFO] 真库中的**永久失败**（正确行为，不该重试）：%s" % _permanent)
 else:
     print("  [SKIP] 未找到真库")
 

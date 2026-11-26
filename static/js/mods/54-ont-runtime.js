@@ -54,7 +54,7 @@ async function loadOntRuntimeMetrics(body) {
   const errs = [chk, shacl, cq, cohorts, inferred].filter(x => x && x.__err).length;
 
   body.innerHTML = `
-    <div style="font-size:13px;color:var(--mut);margin-bottom:14px;line-height:1.7;">
+    <div style="font-size:13.5px;color:var(--mut);margin-bottom:14px;line-height:1.7;">
       以下数字来自真实体检与执行历史。体检覆盖面 &gt; 0 才说明"检查过了"；
       跳过（skip）不计入通过。${errs ? `<span style="color:var(--red);">（${errs} 项数据源读取失败）</span>` : ''}
     </div>
@@ -64,30 +64,30 @@ async function loadOntRuntimeMetrics(body) {
       ${_ontCard('结构问题', issues, `降级扫描 ${degraded} 项`, degraded ? 'var(--red)' : 'var(--blue-d)')}
       ${_ontCard('SHACL 发现', findings, '校验违规留痕', findings === '—' ? 'var(--mut)' : (findings ? 'var(--red)' : 'var(--blue-d)'))}
     </div>
-    <div style="font-size:14px;font-weight:600;margin-bottom:10px;">❓ 能力问题（最近 ${logs.length} 次执行）</div>
+    <div style="font-size:14.5px;font-weight:600;margin-bottom:10px;">❓ 能力问题（最近 ${logs.length} 次执行）</div>
     <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:10px;">
       ${_ontCard('通过', pass, `通过率 ${rate}%`, 'var(--blue-d)')}
       ${_ontCard('失败', fail, '需关注', fail ? 'var(--red)' : 'var(--blue-d)')}
       ${_ontCard('跳过', skip, '降级不是通过', skip ? 'var(--mut)' : 'var(--blue-d)')}
     </div>
     <div id="ont-cq-skip-detail" style="font-size:12px;color:var(--mut);margin-bottom:16px;line-height:1.6;"></div>
-    <div style="font-size:14px;font-weight:600;margin-bottom:10px;">⚖ 推理裁决（A3-d）</div>
+    <div style="font-size:14.5px;font-weight:600;margin-bottom:10px;">⚖ 推理裁决（A3-d）</div>
     <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:18px;">
       ${_ontCard('待审批次', pending, '推理物化等待人工裁决', pending ? 'var(--red)' : 'var(--blue-d)')}
       ${_ontCard('已物化推断', inferredN, 'status=inferred', 'var(--blue-d)')}
     </div>
 
     <div style="border-top:1px solid var(--line);padding-top:14px;margin-bottom:16px;">
-      <div style="font-size:14px;font-weight:600;margin-bottom:8px;">🔍 A3-a 按对象查上下文</div>
+      <div style="font-size:14.5px;font-weight:600;margin-bottom:8px;">🔍 A3-a 按对象查上下文</div>
       <div style="display:flex;gap:6px;">
-        <input id="ont-runtime-q" placeholder="输入需求/部件编号或名称" style="flex:1;padding:7px 10px;border:1px solid var(--line);border-radius:6px;font-size:13px;">
+        <input id="ont-runtime-q" placeholder="输入需求/部件编号或名称" style="flex:1;padding:7px 10px;border:1px solid var(--line);border-radius:6px;font-size:13.5px;">
         <button class="btn sm" onclick="ontQueryContext()">查询</button>
       </div>
       <div id="ont-runtime-result" style="font-size:12.5px;margin-top:8px;color:var(--mut);line-height:1.7;"></div>
     </div>
 
     <div style="border-top:1px solid var(--line);padding-top:14px;margin-bottom:16px;">
-      <div style="font-size:14px;font-weight:600;margin-bottom:8px;">📖 A3-c 术语批量映射</div>
+      <div style="font-size:14.5px;font-weight:600;margin-bottom:8px;">📖 A3-c 术语批量映射</div>
       <div id="ont-map-panel" style="font-size:12.5px;color:var(--mut);">正在加载候选…</div>
     </div>
 

@@ -136,7 +136,7 @@
               <td style="font-size:12.5px;color:var(--mut);">${esc(x.link_kind ? x.link_kind + ' #' + x.link_id : '—')}</td>
             </tr>`).join('') + '</table>';
       } else {
-        h += '<div style="font-size:13px;color:var(--mut);">窗口内没有可展示的反馈明细。</div>';
+        h += '<div style="font-size:13.5px;color:var(--mut);">窗口内没有可展示的反馈明细。</div>';
       }
       const tk = rep.tick || {};
       const tkTxt = tk.running

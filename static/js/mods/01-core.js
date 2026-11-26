@@ -566,9 +566,9 @@ const MODAL_FORMS = {
             <div id="f-mcp-tools-panel" style="display:none;margin-top:8px;">
               <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:6px;">
                 <input id="f-mcp-tools-q" placeholder="搜索工具名或描述…" oninput="renderMcpTools()"
-                       style="flex:1;min-width:120px;border:1px solid var(--line);border-radius:6px;padding:4px 8px;font-size:13px;">
+                       style="flex:1;min-width:120px;border:1px solid var(--line);border-radius:6px;padding:4px 8px;font-size:13.5px;">
                 <select id="f-mcp-tools-filter" onchange="renderMcpTools()"
-                        style="border:1px solid var(--line);border-radius:6px;padding:4px 6px;font-size:13px;">
+                        style="border:1px solid var(--line);border-radius:6px;padding:4px 6px;font-size:13.5px;">
                   <option value="">全部档位</option>
                   <option value="read">只读</option>
                   <option value="write">写</option>

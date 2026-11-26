@@ -465,7 +465,7 @@ async function _annotateAbnormalEnd(aiBox, bootAtStart){
     const note = document.createElement('div');
     note.className = 'boot-restart-note';
     note.style.cssText = 'margin-top:8px;padding:6px 10px;border-left:3px solid #e8590c;'
-      + 'background:rgba(232,89,12,.10);color:#b23c00;font-size:13px;line-height:1.6;';
+      + 'background:rgba(232,89,12,.10);color:#b23c00;font-size:13.5px;line-height:1.6;';
     note.textContent = '⚠ 服务在本次生成期间重启过（新进程 PID ' + (cur.pid || '?')
       + '，启动于 ' + (cur.started_at || '?') + '），本轮流式中断。'
       + '已生成内容已保留在下方，请直接重发这条消息。';

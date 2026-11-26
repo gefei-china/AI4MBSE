@@ -119,17 +119,23 @@ TMP = mkdtemp(prefix="verify_cycle_")
 TMP_DB = os.path.join(TMP, "t.db")
 try:
     _c = sqlite3.connect(TMP_DB)
-    # ⚠️ 列集合须与生产 agent_tasks 对齐：`create_plan` 现在会写 agent_name_snapshot（B1-11），
-    #    漏列会 OperationalError。⚠️ 注释**只能写在 SQL 三引号之外**（写在里面是语法错误）。
-    _c.execute("""CREATE TABLE agent_tasks (
-        id INTEGER PRIMARY KEY AUTOINCREMENT, run_id INTEGER, task_key TEXT, title TEXT,
-        agent_id TEXT, agent_name_snapshot TEXT DEFAULT '',
-        task_type TEXT, config TEXT, deps TEXT, status TEXT DEFAULT 'planned',
-        result TEXT, metadata TEXT, error TEXT, assigned_by TEXT, seq INTEGER DEFAULT 0,
-        latency_ms INTEGER DEFAULT 0, context TEXT DEFAULT '', expected_output TEXT DEFAULT '',
-        conversation_id INTEGER DEFAULT 0,
-        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-        updated_at TEXT DEFAULT CURRENT_TIMESTAMP)""")
+    # ★ 2026-11-26 修（夹具缺 agents 表 ⇒ 本例全被"Agent 解析"提前打断）：
+    #   `create_plan` 自 B1-11 起会先做 **Agent 名解析校验**（`resolve_agent_name`
+    #   查 `agents` 表、只认 `status='active'`），解析不了就抛 ValueError 并中止落库。
+    #   本夹具只建了 `agent_tasks`，没有 `agents` ⇒ `P()` 默认的 `design` 解析失败
+    #   ⇒ **所有用例都在"Agent 不存在"上抛错**，而本门禁要验的是"图结构非法"
+    #   ⇒ 判据面整体不存在（踩到的是 B 项的问题，不是 A/D 项的环检测）。
+    #   ⇒ 补 agents 表 + 在役行；两张表都用 ddl_statements_for（含迁移列，防再漂移）。
+    from tools.verify._schema_ddl import ddl_statements_for as _ddl_stmts
+    for _s in _ddl_stmts("agent_tasks"):
+        _c.execute(_s)
+    for _s in _ddl_stmts("agents"):
+        _c.execute(_s)
+    # 门禁用到的 Agent 名（P() 默认 design；B 组用 zhiyuan_mgmt 验证孤儿）
+    _c.execute("INSERT INTO agents (name, display_name, status, builtin) "
+               "VALUES ('design','设计 Agent','active',1)")
+    _c.execute("INSERT INTO agents (name, display_name, status, builtin) "
+               "VALUES ('requirement_analysis','需求分析 Agent','active',1)")
     _c.commit()
     _c.close()
 
@@ -171,7 +177,44 @@ finally:
 
 print("\n=== E. 主路径对异常有明确降级（不是静默 return）===")
 s_src = read_stream_source()
-check("E1 create_plan 被 try 包住", re.search(r'try:\s*\n\s*TaskQueue\.create_plan\(', s_src) is not None)
+
+
+def _calls_inside_try(src: str, callee: str) -> bool:
+    """至少有一处 `callee(` 调用**处于 try 块内**（按缩进结构判断）。
+
+    ★ 2026-11-26 修（判据要求"紧跟 try:" ⇒ 假红）：
+      原判据 `try:\\s*\\n\\s*TaskQueue\\.create_plan\\(` 要求 `try:` 的**下一行**就是调用。
+      而真实主路径在调用之前还有一段「计划语义校验」（含 `raise ValueError` 与
+      `except ValueError: raise`）⇒ 调用并不紧跟 `try:` ⇒ 恒红。
+      本项要验的是语义「调用被 try 包住、异常有处可落」，不是排版。
+      ⇒ 改为缩进结构判定：从调用行向上找**同级或更外层**的 `try:`，
+        且二者之间不出现同级的 `except`/`finally`/`else`（那说明 try 已闭合）。
+    """
+    lines = src.splitlines()
+    for i, ln in enumerate(lines):
+        if callee not in ln or ln.lstrip().startswith("#"):
+            continue
+        ind = len(ln) - len(ln.lstrip())
+        for j in range(i - 1, -1, -1):
+            cur = lines[j]
+            if not cur.strip():
+                continue
+            cind = len(cur) - len(cur.lstrip())
+            body = cur.strip()
+            if cind > ind:
+                continue                      # 更深的行与 try 层级无关
+            if body.startswith(("except", "finally", "else")):
+                break                         # 遇到同级的 except ⇒ 该 try 已闭合
+            if body.startswith("try:"):
+                return True
+            if cind < ind:
+                # 更外层的内容：继续向上找（try 可能包在更大块里），但只允许再走一层
+                continue
+    return False
+
+
+check("E1 create_plan 被 try 包住（按缩进结构判定，不要求紧跟 try:）",
+      _calls_inside_try(s_src, "TaskQueue.create_plan("))
 check("E2 捕获的是 ValueError（精确）", "except ValueError as _vde" in s_src)
 check("E3 写了 blocked 任务行留痕（可在库里查到原因）",
       '"blocked"' in s_src and "_plan_invalid" in s_src)

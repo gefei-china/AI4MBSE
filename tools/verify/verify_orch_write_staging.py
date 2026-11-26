@@ -139,15 +139,37 @@ def main():
           bool((cj.get("arguments") or {}).get("content")), str(cj)[:200])
 
     # ── ③ 非编排上下文仍然中断（证明闸没被拆掉）──
-    print("\n=== ③ 会话直答路径 · save_artifact ⇒ **仍然**中断（闸未失效）===")
+    # ★ 2026-11-26 修（探针失效，不是我改坏了闸）：
+    #   本组原本用 `save_artifact` 当探针来证明"确认闸仍在"。而 2026-11-26 米爸批准
+    #   把 `save_artifact` 按策略降为 **notify**（真库实证：81 张卡里过期 26%，
+    #   其中 save_artifact 占 7 张，而不可逆的 delete_model_elements **过期 0** ⇒
+    #   不是用户不看卡，是卡被低价值事项占满），它**不再中断** ⇒ ⑧ 判红。
+    #   **语义未变**（"闸没被拆掉"仍然成立），故换一个仍为 confirm 的写工具做探针：
+    #   `file_write` 走同一条 `write → confirm` 策略，且参数简单可构造。
+    #   ⚠️ 同时补一条反向断言（⑧b），把"save_artifact 已按策略降级"**如实记录** ——
+    #     否则将来有人只看本门禁会误以为 save_artifact 也该中断，
+    #     又会把它改回 confirm（或误判成闸坏了）。
+    print("\n=== ③ 会话直答路径 · file_write ⇒ **仍然**中断（闸未失效）===")
     p2 = new_pipeline()
     p2._orch_subtask = False          # 关键：非编排
-    r2 = run_tool(p2, "save_artifact", {"title": "gate_probe2.sysml",
-                                        "content": "package Q { part def B; }", "kind": "sysml"})
+    import tempfile as _tf
+    _probe_path = os.path.join(_tf.gettempdir(), "gate_probe2.txt")
+    r2 = run_tool(p2, "file_write", {"path": _probe_path, "content": "probe"})
     t2 = json.dumps(r2, ensure_ascii=False)
     check("⑧ 直答路径出现 confirm_required（确认闸仍在）",
           bool(r2.get("confirm_required")), t2)
     check("⑨ 直答路径**未**暂存", "已暂存" not in str(r2.get("result") or ""), t2)
+
+    # ── ③b save_artifact 已按策略降级为 notify（如实记录，勿当缺陷）──
+    print("\n=== ③b 会话直答路径 · save_artifact ⇒ 按策略 **不**中断（notify 档）===")
+    _p3b = new_pipeline()
+    _p3b._orch_subtask = False
+    _r3b = run_tool(_p3b, "save_artifact", {"title": "gate_probe3.sysml",
+                                            "content": "package Q { part def B; }",
+                                            "kind": "sysml"})
+    _t3b = json.dumps(_r3b, ensure_ascii=False)
+    check("⑧b save_artifact 在直答路径不再要求确认（2026-11-26 策略：notify）",
+          not _r3b.get("confirm_required"), _t3b)
 
     # ── ④ 修复类工具豁免（不得暂存，否则校验-修复闭环被卡死）──
     print("\n=== ④ 修复类工具豁免（sysml_v2_autofix 不得暂存）===")

@@ -28,6 +28,19 @@
       "scope": "global",
       "match_key": "write",
       "decision_point": "tool_write",
+      "level": "notify",
+      "conditions": {
+        "tool": "save_artifact"
+      },
+      "reason": "★ 2026-11-26（米爸批准，观察一周）：AI 产物保存降为「只留痕不拦」。依据是实测分级错误而非放宽 —— 真库 81 张确认卡里过期 21 张（26%），按 action 看：save_artifact 过期 7、file_write 3、sysml_v2_autofix 3、skill_script_run 3，而**不可逆的 delete_model_elements 过期 0**（executed 15 + approved 7 = 22 张全部被处理）。⇒ 用户并非不看卡，而是卡被低价值事项占满（approval fatigue）。save_artifact 只**新增产物**、不改动任何已有数据、且总由用户显式要求触发，属「低后果/易回退」一侧（OWASP LLM03:2026 Complete mediation 口径）。仍保留留痕（notify）⇒ 事后可审计；要收紧把 level 改回 confirm 即可。",
+      "timeout_min": 0,
+      "fallback_level": "confirm",
+      "priority": 19
+    },
+    {
+      "scope": "global",
+      "match_key": "write",
+      "decision_point": "tool_write",
       "level": "confirm",
       "conditions": {
         "side_effect": "write"

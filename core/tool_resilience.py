@@ -16,6 +16,13 @@ RETRYABLE_KEYWORDS = (
     "timeout", "timed out", "connection", "network", "getaddrinfo",
     "refused", "reset", "unreachable", "bad gateway", "service unavailable",
     "gateway timeout", "too many requests", "5xx", "503", "502", "504", "429",
+    # ★ 2026-11-26（F1 存量覆盖）：LLM 熔断（`_CircuitOpen`）是**临时不可用** ——
+    #   熔断窗口过完会自行试探恢复，届时同一请求能成功 ⇒ 属可重试（transient）。
+    #   原来落 `internal`，语义上也是可重试，故**不改变重试行为**，
+    #   只把归因从"未知内部错误"纠正为"上游临时不可用"（排障时一眼能看出该等还是该查）。
+    #   ⚠️ 只认**技术标识** `circuitopen`，不用宽泛的"熔断"二字：
+    #      后者会把"熔断已生效、请勿重试"这类提示也判成可重试，反而造成重试风暴。
+    "circuitopen",
 )
 
 DEFAULT_POLICY = {

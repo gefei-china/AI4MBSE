@@ -222,11 +222,21 @@ conn.commit()
 _b_tmp = conn.execute("SELECT COUNT(*) FROM capability_registry WHERE source_table="
                       "'skills'").fetchone()[0]
 check("B0 一次性 skills 行先有投影", _b_tmp >= 1, "got %s" % _b_tmp)
+# ★ 2026-11-26 修（判据假设"干净库里只有夹具行"，与实际不符）：
+#   本门禁跑在自建干净库（`_CLEAN_DB`），而该库经 `init_db()` **会 seed 内置技能**
+#   ⇒ skills 源本来就有 33 条投影。原断言要求删除后 `_sk == 1`（"只剩 A 段夹具 1 行"）
+#   在 seed 之后必然不成立（实测 got 34 = 33 条内置 + 夹具）。
+#   本项要验的语义是「**删源行 ⇒ 其投影随之消失**」，与"总量是多少"无关
+#   ⇒ 改成**差值判据**：删 1 行后投影必须恰好少 1（多删/少删都判红）。
+#   这比原判据更严：不依赖库里有几行，且能抓住"连带删掉别人的投影"这类新问题。
+_sk_before = _b_tmp
 conn.execute("DELETE FROM skills WHERE name='gate_b_tmp'")
 st = cr.reconcile_capability_registry(conn)
 conn.commit()
 _sk = conn.execute("SELECT COUNT(*) FROM capability_registry WHERE source_table='skills'").fetchone()[0]
-check("B1 删 skills 源行 ⇒ 其投影随之删除", _sk == 1, "got %s（应只剩 A 段夹具 1 行）" % _sk)
+check("B1 删 skills 源行 ⇒ 其投影随之删除（恰好少 1 行，不多不少）",
+      _sk == _sk_before - 1,
+      "before=%s after=%s（期望恰好 %s）" % (_sk_before, _sk, _sk_before - 1))
 conn.execute(
     "INSERT INTO capability_registry (capability_id, kind, display_name, "
     "source_table, source_id, status, lifecycle, version, publisher, visibility, "

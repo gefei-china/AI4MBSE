@@ -154,14 +154,28 @@ _EVOLUTION_PIPELINE = Machine(
 
 _INTENT_SAMPLE = Machine(
     entity="intent_sample",
-    states=("new", "suggested", "confirmed", "rejected"),
+    # ★ 2026-11-26（补全唯一事实源）：库中存在 `silver`(164) / `synth`(200) 两态，
+    #   而本机只登记了 4 态 ⇒ 状态机**不完整**（真库勘察门禁抓到）。
+    #   这两个都是**代码真实写入**的，不是脏数据：
+    #     · `silver` —— `tools/_intent_silver_label.py` 双标一致后的银标（quality 档）；
+    #     · `synth`  —— 合成样本（`tools/intent_eval_snapshot.py` 按它取评测集）。
+    #   ⇒ 登记为合法态（评测侧按 status 取样，漏登记会让"合法样本"看起来像脏数据）。
+    states=("new", "suggested", "confirmed", "rejected", "silver", "synth"),
     initial="new",
     edges=_edges({
         "new":       [("suggest", "suggested")],
-        "suggested": [("confirm", "confirmed"), ("reject", "rejected")],
+        # 银标/合成是**来源属性**而非流转结果：可由 suggested 直接落银标（双标一致），
+        # 也可由 new 直接进合成池；确认/驳回仍是终态语义，可回写。
+        "suggested": [("confirm", "confirmed"), ("reject", "rejected"),
+                      ("mark_silver", "silver")],
         "rejected":  [("resuggest", "suggested")],
+        "silver":    [("confirm", "confirmed"), ("reject", "rejected")],
+        "synth":     [("mark_silver", "silver"), ("confirm", "confirmed"),
+                      ("reject", "rejected")],
     }),
     desc="意图样本标注流转；评测只吃 confirmed（intent_sample_repo 注释同义）。"
+         "silver=双标一致的银标（tools/_intent_silver_label），"
+         "synth=合成样本（tools/intent_eval_snapshot 按 status 取样）。"
          "当前 update 端点为自由设置（校验成员不校验迁移），强校验待该域接入",
 )
 
@@ -204,12 +218,34 @@ _GENERATION = Machine(
 
 _HIL_CONFIRMATION = Machine(
     entity="hil_confirmation",
-    states=("pending", "approved", "rejected"),
+    # ★ 2026-11-26（补全唯一事实源）：本机原来只登记 pending/approved/rejected 三态，
+    #   而 `services/hil_service.py:37` 的 `STATUSES` 有 **7 态**，且真库实测
+    #   executed 22 / expired 21 / failed 7 全都在（它们不是脏数据，是代码真实写入的）：
+    #     · `executed` / `failed` —— `mark_executed()` 执行回写（460 行起）；
+    #     · `expired`              —— 超时未响应，`fallback_level` 生效后落它；
+    #     · `superseded`           —— 被同批次新卡取代（`hil_service` 幂等/合并路径）。
+    #   ⇒ 登记为合法态并补齐迁移边。**"唯一事实源"必须把代码真正会写的状态都登记**，
+    #     否则"库里出现未登记状态"这件**本该报警**的事会变成常量噪声，
+    #     门禁就被迫常红，真正的新越界反而看不见。
+    states=("pending", "approved", "rejected", "executed", "failed",
+            "expired", "superseded"),
     initial="pending",
     edges=_edges({
-        "pending": [("approve", "approved"), ("reject", "rejected")],
+        # 审批侧
+        "pending":  [("approve", "approved"), ("reject", "rejected"),
+                     ("expire", "expired"), ("supersede", "superseded")],
+        # 执行侧：approved 之后由 mark_executed 回写成功/失败
+        "approved": [("execute", "executed"), ("fail", "failed"),
+                     ("expire", "expired")],
+        # 终态：允许被同批次新卡取代（批次合并/重试场景）
+        "executed":  [("supersede", "superseded")],
+        "failed":    [("supersede", "superseded")],
+        "expired":   [("supersede", "superseded")],
+        "rejected":  [("supersede", "superseded")],
     }),
-    desc="人工介入确认（HIL）：pending → approved/rejected；P1-4 门禁晋升的落点",
+    desc="人工介入确认（HIL）：pending → approved/rejected/expired/superseded；"
+         "approved 再经 mark_executed 落 executed/failed。"
+         "状态集与 services/hil_service.STATUSES 同源（2026-11-26 对齐）",
 )
 
 _DOCUMENT_LIFECYCLE = Machine(
