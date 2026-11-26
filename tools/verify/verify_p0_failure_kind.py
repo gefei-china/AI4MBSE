@@ -95,18 +95,57 @@ def main() -> int:
     # ── 判据② 真实触发一次失败，验落库语义 ──
     print("\n[②] 落库判据：真实触发一次失败")
     before = real_count()
-    pid = 72      # 实测余额不足，稳定复现
+    # ★★ 2026-11-26 修「依赖外部状态」（同族：硬编码备份已消失）：
+    #   原实现 `pid = 72  # 实测余额不足，稳定复现` —— 把**一次观察到的余额不足**
+    #   当成稳定夹具。实测该 provider（deepseek-v4-pro）现在 `status=active` 且调用成功
+    #   ⇒ `call_failed=0` ⇒ 三条判据全红，而 `failure_kind` 的写入逻辑本身没坏。
+    #   ⇒ 改为**主动构造可控失败**：临时把该 provider 的 base_url 指向不可达地址
+    #     （`http://127.0.0.1:1/v1` ⇒ 连接拒绝），走**同一条真实链路**（同一客户端、
+    #     同一 except 分支），只是把"失败源"从外部余额换成本地网络。
+    #   `finally` 严格恢复原值并**校验恢复成功**——绝不把生产配置留在坏状态。
+    pid = 72
+    _prov = sqlite3.connect(DB)
+    _prov.row_factory = sqlite3.Row
+    _orig = None
+    try:
+        _r0 = _prov.execute("SELECT base_url FROM llm_providers WHERE id=?", (pid,)).fetchone()
+        _orig = _r0["base_url"] if _r0 else None
+        if _orig is not None:
+            _prov.execute("UPDATE llm_providers SET base_url=? WHERE id=?",
+                          ("http://127.0.0.1:1/v1", pid))
+            _prov.commit()
+            print(f"    临时把 provider {pid} 的 base_url 指向不可达地址"
+                  f"（原值 {_orig}）⇒ 制造可复现的失败")
+    finally:
+        _prov.close()
     err_kind = ""
     try:
-        llm.llm_client.chat([{"role": "user", "content": "回复OK"}], provider_id=pid)
-    except Exception:                       # noqa: BLE001
-        pass
-    with sqlite3.connect(f"file:{DB}?mode=ro", uri=True) as c:
-        c.row_factory = sqlite3.Row
-        after = c.execute("SELECT count(*) FROM llm_usage_stats").fetchone()[0]
-        row = c.execute(
-            "SELECT used_mock, call_failed, failure_kind, failure_msg "
-            "FROM llm_usage_stats ORDER BY id DESC LIMIT 1").fetchone()
+        try:
+            llm.llm_client.chat([{"role": "user", "content": "回复OK"}], provider_id=pid)
+        except Exception:                   # noqa: BLE001
+            pass
+        with sqlite3.connect(f"file:{DB}?mode=ro", uri=True) as c:
+            c.row_factory = sqlite3.Row
+            after = c.execute("SELECT count(*) FROM llm_usage_stats").fetchone()[0]
+            row = c.execute(
+                "SELECT used_mock, call_failed, failure_kind, failure_msg "
+                "FROM llm_usage_stats ORDER BY id DESC LIMIT 1").fetchone()
+    finally:
+        # 恢复必须是**无条件 + 校验**的：这个库是生产库，
+        # 留在坏 base_url 上会让该 provider 之后所有调用都失败（而且看起来像网络问题）。
+        if _orig is not None:
+            _p2 = sqlite3.connect(DB)
+            try:
+                _p2.execute("UPDATE llm_providers SET base_url=? WHERE id=?", (_orig, pid))
+                _p2.commit()
+                _now = _p2.execute("SELECT base_url FROM llm_providers WHERE id=?",
+                                   (pid,)).fetchone()
+                _back_ok = bool(_now) and _now[0] == _orig
+            finally:
+                _p2.close()
+            print("    恢复 base_url=%s ⇒ %s" % (_orig, "成功" if _back_ok else "**失败（需人工修）**"))
+            if not _back_ok:
+                ok = False
     # ⚠️ 2026-10-09 首版把 `after` 写在 `with` 块外用同名变量 ⇒
     #   这里必须**在连接关闭前**取出总数，否则后面读到的是错的。
     if row is None or after <= before:

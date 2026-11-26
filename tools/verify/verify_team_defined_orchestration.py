@@ -85,13 +85,50 @@ _m = td.get("members") or []
 #   原写法 `len(_m) == 14` 是**过期快照**——门禁会随正常演进而误红，
 #   而红的原因不是能力退化。这与MEMORY 里「清单里的数字都是快照」同源。
 #   改为"下限 + 关键成员必须在"：既能守住退化，又不锁死演进。
-ck(len(_m) >= 14, "A4 成员数 %d >= 14（下限；随流水线节点接入会增长）" % len(_m))
+# ★ 2026-11-26：A4 的 `>= 14` 是 **2026-10-09 的快照**，已被 2026-10-10 的团队重建取代：
+#   实测 `agent_team_members`（main=160）**14 行**，其中 `review` / `requirement_analysis`
+#   自建表起就是 `enabled=0`（职能分别由流水线 N4 `model_validation_repair` 与
+#   `requirement_structuring` 承载）⇒ **实际成员 12 个**。
+#   ⇒ 保留「不得低于重建基线」的语义（12），但**数字本身不是价值**：
+#     真正该守的是「每个视图能力都有承载者」⇒ 新增 A4c 来守它（见下）。
+_BASELINE_MEMBERS = 12      # 2026-10-10 重建后的基线；架构再变须人工复核此值
+ck(len(_m) >= _BASELINE_MEMBERS,
+   "A4 成员数 %d >= %d（2026-10-10 重建基线；不得再倒退）"
+   % (len(_m), _BASELINE_MEMBERS))
+# 把「有意停用的成员」显式打出来 —— 否则下一个人只会看到"数字变小了"，
+# 不知道是架构选择还是有人误删。
+_db0 = sqlite3.connect("file:%s?mode=ro"
+                       % (os.environ.get("MBSE_DB_PATH") or os.path.join(ROOT, "mbse.db")),
+                       uri=True)
+_disabled_members = [r[0] for r in _db0.execute(
+    "SELECT a.name FROM agent_team_members tm JOIN agents a ON a.id=tm.sub_agent_id "
+    "WHERE tm.main_agent_id=160 AND tm.enabled=0")]
+_db0.close()
+if _disabled_members:
+    print("  [INFO] 有意停用的成员 %d 个：%s（职能由流水线节点承载）"
+          % (len(_disabled_members), _disabled_members))
 # 但**关键成员必须在册**——这是真断言，不随演进放松
 _KEY_MEMBERS = ("architecture_skeleton", "view_expansion",
                 "model_validation_repair", "trace_verification")
 _names = {m.get("name") or m.get("agent") or "" for m in _m}
 _missing = [k for k in _KEY_MEMBERS if k not in _names]
 ck(not _missing, "A4b ★关键流水线成员在册（缺：%s）" % (_missing or "无"))
+
+# ── A4c ★8 个视图能力都必须有承载者（2026-11-26 新增，守的是刚修好的真缺陷）──
+#   实测缺陷：`view_expansion` 的关键词表里**唯独缺「需求视图」**
+#   （其余 5 个视图词都在）⇒ 用户说「生成需求视图」时全池无信号
+#   ⇒ 被 `is_noise` 当寒暄丢掉（实得 chat）。补词后才恢复 direct。
+#   ⇒ 判据必须逐个视图守住「有承载」，否则哪天再丢一个词，只会表现为
+#     「用户说的话被当闲聊」（这是最难排查的形态：不报错、不降级、只是答非所问）。
+_VIEW_WORDS = ("需求视图", "活动视图", "用例视图", "状态机视图", "时序视图", "IBD视图")
+_kw_all = []
+for _mem in _m:
+    _kw_all += [str(k or "") for k in (_mem.get("intent_keywords") or [])]
+_kw_flat = "|".join(_kw_all)
+_lost_views = [v for v in _VIEW_WORDS if v not in _kw_flat]
+ck(not _lost_views,
+   "A4c ★8 个视图能力都有承载者（缺词：%s）—— 缺词会让用户指令被当闲聊"
+   % (_lost_views or "无"))
 
 _caps = [m for m in _m if m.get("capabilities")]
 ck(len(_caps) == len(_m),
@@ -238,8 +275,15 @@ _code_only = _re.sub(r"#.*", "", _team_seg)          # 去掉行注释
 _code_only = _re.sub(r'"""[\s\S]*?"""', "", _code_only)  # 去掉块注释
 ck("[:300]" not in _code_only,
    "G8 ★team 分支代码内不再有 [:300] 截断（注释里的历史说明不算）")
-ck("[:4000]" in _code_only,
-   "G9 保留超长 prompt 防御上限（[:4000]，不是无上限拼接）")
+# ★ 2026-11-26 修「钉死某个数字」：原断言字面量 `"[:4000]" in _code_only`，
+#   而上限已于 2026-10-27 提升为 **[:8000]**（理由：真库最大 `agents.system_prompt`
+#   = 7,981 字符，4000 会真的把主 Agent 的拆解规则裁掉一半）。
+#   ⇒ 判据要守的是「**有**防御上限且不是无上限拼接」，具体数字是运维参数。
+#   改为提取实际数字并设下界：既守住"不得无上限"，又不阻止有理由的上调。
+_m_lim = _re.search(r"\[:(\d{4,})\]", _code_only)
+ck(bool(_m_lim) and int(_m_lim.group(1)) >= 4000,
+   "G9 保留超长 prompt 防御上限（实测 [:%s]，须 ≥4000 —— 不是无上限拼接）"
+   % (_m_lim.group(1) if _m_lim else "无"))
 
 print("\n== G10-G12. 多意图 stage_hint 双路径接线（2026-10-29） ==")
 # 背景：stage_hint（阶段序约束）此前**只有流式路径**注入 planner prompt，

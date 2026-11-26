@@ -235,9 +235,27 @@ ck("消歧候选表为空 → dedup_queue=0 且 dedup_accuracy=None（队列空�
    db_one("SELECT COUNT(*) FROM entity_dup_candidates") == 0
    and dash["metrics"]["dedup_queue"]["value"] == 0
    and dash["metrics"]["dedup_accuracy"]["value"] is None)
-ck("本体必填约束 0 个 → ontology_required_attrs 告警（这才是「属性完整度无从评估」的正解）",
-   dash["metrics"]["ontology_required_attrs"]["value"] == 0
-   and dash["metrics"]["ontology_required_attrs"]["status"] == "alert")
+# ★ 2026-11-26 修「判据钉死某时刻的数量」：
+#   原断言「本体必填约束 **0 个** → ontology_required_attrs 必须 alert」。
+#   该判据写于本体库还空的时候；现在实测 1/28 个实体类型有 required（value=3.6%）
+#   ⇒ 原判据**必然红**，而产品行为是对的（3.6% 仍属"几乎无从评估"，status=alert）。
+#   改为守语义：**覆盖率低（<10%）必须 alert；覆盖率上来了则不该再 alert**
+#   —— 后一条是反向护栏，否则"永远 alert"也能骗过前半句。
+_req_n0 = sum(1 for r in db.execute(
+    "SELECT constraints FROM ontology_types WHERE type_kind='entity'")
+    if json.loads(r["constraints"] or "{}").get("required"))
+_tot_n0 = db_one("SELECT COUNT(*) FROM ontology_types WHERE type_kind='entity'")
+_cov = (_req_n0 * 100.0 / _tot_n0) if _tot_n0 else 0.0
+_m_req = dash["metrics"]["ontology_required_attrs"]
+if _cov < 10:
+    ck("本体必填约束覆盖率 <10% → ontology_required_attrs 必须 alert"
+       "（属性完整度几乎无从评估）",
+       _m_req["status"] == "alert",
+       "覆盖 %d/%d=%.1f%%，status=%s" % (_req_n0, _tot_n0, _cov, _m_req["status"]))
+else:
+    ck("本体必填约束覆盖率 ≥10% → 不该再 alert（否则告警失去分辨力）",
+       _m_req["status"] != "alert",
+       "覆盖 %d/%d=%.1f%%，status=%s" % (_req_n0, _tot_n0, _cov, _m_req["status"]))
 _req_n = sum(1 for r in db.execute(
     "SELECT constraints FROM ontology_types WHERE type_kind='entity'")
     if json.loads(r["constraints"] or "{}").get("required"))
@@ -270,18 +288,42 @@ if lats:
     ck("slow_query_share == 慢查询数/总数",
        abs(dash["metrics"]["slow_query_share"]["value"] - round(slow * 100 / len(lats), 1)) < 0.05,
        f'slow={slow} n={len(lats)}')
-ev = db.execute("SELECT detail FROM eval_reports ORDER BY created_at DESC LIMIT 1").fetchone()
+# ★ 2026-11-26 修**口径错位**（本仓反复出现的「同一语义两处各算一份」）：
+#   产品侧 `services/metrics_core.eval_quality()` 优先读 `eval_kind='rag_retrieval'`
+#   那一行（该表多类型混存：rag_retrieval / trace_consistency / generation_quality，
+#   2026-11-05 就因取最新一行拿到 trace 报告导致知识看板 500）。
+#   而本门禁原先写的是 `ORDER BY created_at DESC LIMIT 1` = **最新一行**
+#   ⇒ 实测最新 #36（2026-11-18）的 detail.summary 是 `{}`，
+#   于是 `rs=None` ⇒ `round(rs*100,1)` 抛 TypeError ⇒ **门禁崩溃**（rc=1 但显示 ✅ 一堆）。
+#   ⇒ 判据必须与产品**同源**：同样优先 rag_retrieval，取不到再退回最新一行。
+_cols_ev = {_r[1] for _r in db.execute("PRAGMA table_info(eval_reports)")}
+_ev_sel = "SELECT id, detail FROM eval_reports"
+ev = None
+if "eval_kind" in _cols_ev:
+    ev = db.execute(_ev_sel + " WHERE eval_kind='rag_retrieval' "
+                              "ORDER BY created_at DESC LIMIT 1").fetchone()
+if not ev:
+    ev = db.execute(_ev_sel + " ORDER BY created_at DESC LIMIT 1").fetchone()
 if ev:
     det = json.loads(ev["detail"] or "{}")
-    rs = (det.get("summary") or {}).get("graph", {}).get("entity_recall")
-    rq = (det.get("summary") or {}).get("doc", {}).get("recall@5")
-    ck("eval_recall_structured == eval_reports.detail.summary.graph.entity_recall*100",
-       abs(dash["metrics"]["eval_recall_structured"]["value"] - round(rs * 100, 1)) < 0.05,
-       f'{dash["metrics"]["eval_recall_structured"]["value"]} vs {round(rs*100,1)}')
-    ck("eval_recall_semi == eval_reports.detail.summary.doc.recall@5*100",
-       abs(dash["metrics"]["eval_recall_semi"]["value"] - round(rq * 100, 1)) < 0.05)
-    ck("负对照召回为 0（证明指标在真测对齐关系，不是假绿）",
-       dash["metrics"]["eval_negative_control"]["value"] == 0)
+    _summ = det.get("summary") or {}
+    rs = ((_summ.get("graph") or {}).get("entity_recall"))
+    rq = ((_summ.get("doc") or {}).get("recall@5"))
+    # ⚠️ 缺失时必须 SKIP 而不是崩：`round(None*100,1)` 抛 TypeError，
+    #   而「崩溃」在 CI 里和「判红」长得一样，却给不出任何可诊断信息。
+    #   同时也不假装通过 —— 那条判据在这个环境**无从验证**，要如实说出来。
+    if rs is None or rq is None:
+        print("  [SKIP] 评测报告 #%s 缺 graph.entity_recall / doc.recall@5"
+              "（graph=%r, doc=%r）⇒ 该指标无从对齐，不是产品问题"
+              % (ev["id"], rs, rq))
+    else:
+        ck("eval_recall_structured == eval_reports.detail.summary.graph.entity_recall*100",
+           abs(dash["metrics"]["eval_recall_structured"]["value"] - round(rs * 100, 1)) < 0.05,
+           f'{dash["metrics"]["eval_recall_structured"]["value"]} vs {round(rs*100,1)}')
+        ck("eval_recall_semi == eval_reports.detail.summary.doc.recall@5*100",
+           abs(dash["metrics"]["eval_recall_semi"]["value"] - round(rq * 100, 1)) < 0.05)
+        ck("负对照召回为 0（证明指标在真测对齐关系，不是假绿）",
+           dash["metrics"]["eval_negative_control"]["value"] == 0)
 ck("精确率未计算时必须 value=None（eval_reports 列 0.0 ≠ 精确率为 0）",
    db_one("SELECT entity_precision FROM eval_reports ORDER BY created_at DESC LIMIT 1") == 0
    and dash["metrics"]["eval_precision"]["value"] is None,

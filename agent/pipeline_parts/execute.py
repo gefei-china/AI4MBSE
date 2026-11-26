@@ -113,6 +113,15 @@ class ExecuteMixin:
         team_def = None
         team_decision = None
         team_direct = False
+        # ★★ 2026-11-26：**非流式路径也要如实告知「执行主体」**。
+        #   实测（verify_main_agent_execution 端到端）：显式选主 Agent「智源对接agent」
+        #   却得到 `intent='chat' / agent='通用问答Agent' / notices=[]` ——
+        #   用户完全看不出"我选的主 Agent 生效了吗"。
+        #   而 stream.py 早在 2026-10-28 就补了这条提示（`_subj_note`，
+        #   kind=progress 让前端走"系统告知"而不是"AI 思考"），
+        #   **本条非流式路径当时漏了** —— 又是「同一语义多入口，只在一处修」。
+        #   这里收集后随返回值回传（前端不用也无害，但接口层面"可观测"这个诉求必须满足）。
+        _team_notices: list = []
         # ★ 2026-10-17：澄清探测的 quick_pick 判据取**用户入口原值**（intent_override），
         #   不是被 team/R1 覆写后的 forced_intent（覆写后恒非空 ⇒ 内容级澄清恒被跳过，
         #   见 stream.py 同处注释）。与 `_persist_clarify` 存覆写后的值分工不冲突。
@@ -129,6 +138,11 @@ class ExecuteMixin:
             #   forced_intent 参数本身保留（编排内部直连子 Agent 仍依赖它），只反转入口优先级。
             if forced_intent and forced_intent != team_intent:
                 forced_intent = None
+                # 如实告知「执行主体」：与 stream.py:5064 的 `_subj_note` 同源同义
+                _team_notices.append({
+                    "kind": "progress",
+                    "text": (f"（执行主体）已按你选择的主 Agent「{team_intent}」执行；"
+                             f"忽略了外部传入的定向值")})
             else:
                 forced_intent = team_intent
             # ★ 2026-10-16 R1：落到会话，供后续未显式带 team 的请求回读（同构 stream.py）
@@ -798,8 +812,26 @@ class ExecuteMixin:
                             messages.append({"role": "user", "content": _fail_note})
                         except Exception:
                             pass
+                        # ★★ 2026-11-26：失败轮耗尽时**同样要保留修复工具**。
+                        #   门禁 `verify_p0_repair_round_tools` 实测（假 provider 每轮都失败
+                        #   ⇒ 走的正是本分支、不是"轮次用尽"分支）：收尾轮 `tools=0` 个
+                        #   ⇒ `sysml_v2_autofix` 依然一次都调不到。
+                        #   这与 2026-10-09 修过的那条（"validate 报了 78 个语法错，
+                        #   收尾轮却是 tools=None ⇒ 写不出修复代码"）**是同一个缺陷**，
+                        #   只是换了个入口 —— 又是「同一语义多入口只在一处实现」。
+                        #   判据同源：`repair_tools_needed` 只在上一轮 validate 判 block
+                        #   （有硬错必须修）时才给修复工具；report / 无校验结果一律 None
+                        #   （零行为漂移）。
+                        _repair_tools_f = None
+                        try:
+                            if _lproto.repair_tools_needed(messages):
+                                _repair_tools_f = _repair_tool_subset(tools_def)
+                        except Exception:
+                            _repair_tools_f = None
                         llm_response = llm_client.chat(messages, provider_id=effective_provider,
-                                                      tools=None, _intent=CHAT_TASK_ANSWER, _model_params=_agent_mp)
+                                                      tools=_repair_tools_f,
+                                                      _intent=CHAT_TASK_REPAIR,
+                                                      _model_params=_agent_mp)
                         msg = llm_response["choices"][0]["message"]
                         llm_content = msg.get("content") or ""
                         break
@@ -1417,6 +1449,9 @@ class ExecuteMixin:
             "intent_confidence": _intent_meta["confidence"],
             "needs_clarification": _intent_meta["needs_clarification"],
             "agent": agent_def.name,
+            # 团队模式下的「系统告知」（目前是"执行主体已按你选择的主 Agent"）。
+            # 非流式路径此前**完全没有**这类信息 ⇒ 用户选了主 Agent 也看不出是否生效。
+            "notices": _team_notices,
             "hil_level": hil_level,
             "kb_tags": kb_tags,
             "skill_hits": self._last_skill_hits,

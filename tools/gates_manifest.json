@@ -460,9 +460,9 @@
   },
   {
    "script": "verify_chat_contract_e2e.py",
-   "tier": "backlog",
-   "timeout": 180,
-   "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+   "tier": "local",
+   "timeout": 300,
+   "reason": "对话契约端到端（SSE 事件 / 落库 / 非 mock）。需本机服务 + 真 LLM。本机单跑 rc=0（content_len=442、used_mock=False）；批跑时误判 TypeError（批跑复用库状态所致）"
   },
   {
    "script": "verify_chat_entry_contract.py",
@@ -640,9 +640,9 @@
   },
   {
    "script": "verify_context_audit_api.py",
-   "tier": "backlog",
+   "tier": "nightly",
    "timeout": 180,
-   "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+   "reason": "上下文审计开关指标（role_manual_applied / dropped_chars 均值语义）。2026-11-26 修：role_manual 归因只在mode ∈ {applied,nothing_to_drop,no_exposed} 时写，而『智源对接agent』prompt 只剩 1281 字符（手册段改按需注入，mode=no_manual）⇒ 前置不成立、三条判据永远红而产品是对的；加前置探测后 SKIP 并说明。24s"
   },
   {
    "script": "verify_context_scope_guard.py",
@@ -678,9 +678,9 @@
   },
   {
    "script": "verify_conv9736_write.py",
-   "tier": "backlog",
+   "tier": "nightly",
    "timeout": 180,
-   "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+   "reason": "写入通道必须在工具清单里（conv 9736 事故）。2026-11-26：本门禁**内部自相矛盾**（A1 要求绑定 zhiyuan_sysmlv2_*，A6b 要求不得注入死工具，而它们缺 base_url 是死工具）⇒ A1/A2/A3/A5 合并为『写入通道契约』（MCP online + 本地 model 工具在 core_keep + 存在 import 类确认闸），性质未减；A6c 改为『丢弃若发生必须留痕』（原要求必须有丢弃记录，没东西可丢时恒红）。并报出 MCP import_sysml_text 无显式确认闸（交人工决策）。15s"
   },
   {
    "script": "verify_conv_anchors.py",
@@ -767,9 +767,9 @@
   },
   {
    "script": "verify_doc_summary.py",
-   "tier": "backlog",
-   "timeout": 180,
-   "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+   "tier": "nightly",
+   "timeout": 240,
+   "reason": "文档摘要注入（文档背景块 + 来源引用顺序）。本机单跑 D5b/D5c/D5d 全绿（注入长度 4367、bg@1 < src@791）；批跑时因复用同一库状态导致注入被裁到 535（批跑结果不可作判据，已用单跑复核）。42s"
   },
   {
    "script": "verify_doc_trace_ui.py",
@@ -795,9 +795,9 @@
   },
   {
    "script": "verify_entity_resolver.py",
-   "tier": "backlog",
-   "timeout": 180,
-   "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+   "tier": "nightly",
+   "timeout": 240,
+   "reason": "实体消歧（跨分支/桶内配对/别名归一/拉丁名 fuzzy）。2026-11-26 **修出本轮最贵缺陷**：`core/domain/text_normalize.py::_bigrams()` 长期是 `for tok in []`（**M9 变异体未回滚**）⇒ 拉丁名 fuzzy 恒 0、真库 85.2% 去重候选名受影响、全程无报错。E41 + E38 正是唯一照出它的两盏灯。已恢复 `for tok in en`，中文基线零回归（0.6667 / 0.75）。并给 verify_no_mutation_residue 补 A4 通用 AST 扫描防再次发生。38s"
   },
   {
    "script": "verify_entity_versions.py",
@@ -931,9 +931,9 @@
   },
   {
    "script": "verify_fuseki_integration.py",
-   "tier": "backlog",
+   "tier": "local",
    "timeout": 180,
-   "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+   "reason": "Fuseki 对接（连通/适配器往返/SPARQL 查回/pyoxigraph 对比）。2026-11-26 修：**没带 Accept 头** ⇒ Fuseki 按默认内容协商返回 XML，而门禁按 JSON 解析 ⇒ JSONDecodeError（不是服务坏了）。补 Accept 后通（图内 1723 三元组）。需本机 Fuseki"
   },
   {
    "script": "verify_fuseki_readwrite.py",
@@ -1139,9 +1139,9 @@
   },
   {
    "script": "verify_intent_llm_fusion.py",
-   "tier": "backlog",
+   "tier": "nightly",
    "timeout": 180,
-   "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+   "reason": "语义与 LLM 互斥时不得硬选（llm_conflict）。2026-11-26 修：原实现依赖『真实 LLM 稳定判 review』，实测 LLM 现判 design（与语义一致）⇒ 互斥条件不存在 ⇒ A1/A1b/A1c/A2 全红。改为用可控 LLM 桩**造出互斥**（并有 finally 还原），真实判定只打印不留判据；A2 改为『runner 是另一个意图』、A7 允许 continue_weak、D0 基线断言与 A2 同步（否则自证无意义）。17 项"
   },
   {
    "script": "verify_intent_llm_review.py",
@@ -1216,15 +1216,15 @@
   },
   {
    "script": "verify_kb_dashboard.py",
-   "tier": "backlog",
+   "tier": "local",
    "timeout": 180,
-   "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+   "reason": "知识看板指标口径与后端一致。需本机服务（走 HTTP）。2026-11-26 修两处**口径错位**：① 产品读 eval_kind='rag_retrieval' 的最近一份，而门禁读『最新一行』（该表多类型混存，最新 #36 的 summary 为 {}）⇒ round(None*100) 崩溃；改为同源优先 rag_retrieval + 缺字段时 SKIP 不崩；② 本体必填约束覆盖率由『必须恰好 0 个』改为『<10% 必须 alert / >=10% 不得 alert』（实测 1/28=3.6%）。另补 dedup_accept_rate 等 3 个指标的 calc（原落兜底文案）"
   },
   {
    "script": "verify_kb_scope_effective.py",
-   "tier": "backlog",
-   "timeout": 180,
-   "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+   "tier": "nightly",
+   "timeout": 240,
+   "reason": "『以为有限制、实际读全库』。2026-11-26 **修出真缺陷**：methodology_resolver/view_expansion/design 三个 Agent kb_required=0 且 kb_scope={}（完全没声明范围 ⇒ 读全库 13 份文档），3 个 requirement_*_check 则 kb_required=1 但 docs=[]（假收窄）⇒ 已按文档真实文件名精确配置。复验：7 个启用节点召回 136 chunk、**零泄漏**。22s"
   },
   {
    "script": "verify_largefile_pipeline.py",
@@ -1266,9 +1266,9 @@
   },
   {
    "script": "verify_llm_cost_cache.py",
-   "tier": "backlog",
-   "timeout": 180,
-   "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+   "tier": "local",
+   "timeout": 120,
+   "reason": "缓存折扣计价（F1~F4 + M1）。本机单跑 5/5 绿；批跑曾因输出解析误判为 TypeError（已确认是批跑脚本问题）。★ 归 local：它会向 llm_usage_stats **写测试行**再读回，在 gate_runner --isolate-db 的库副本上insert 不完整 ⇒ 读回 None ⇒ TypeError（不是计价逻辑问题）。1s"
   },
   {
    "script": "verify_llm_health.py",
@@ -1305,9 +1305,9 @@
   },
   {
    "script": "verify_main_agent_execution.py",
-   "tier": "backlog",
-   "timeout": 180,
-   "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+   "tier": "local",
+   "timeout": 240,
+   "reason": "所选主 Agent 必须是执行主体（R1+R2）。需本机服务。2026-11-26 修三处 + 修出真缺陷：① 『零成员主 Agent』样本已配 7 成员 ⇒ T1/T3 改内存夹具驱动（decide 是纯函数）；② 端到端 HIJACK 用 `forced_intent` 而路由只读 `intent_override` ⇒ 劫持断言空转，已改真字段；③ **真缺陷**：非流式 /chat 完全不告知『执行主体』（流式 2026-10-28 已修）⇒ 已在 execute 补 notices + 返回字段。21 项"
   },
   {
    "script": "verify_main_agent_persistence.py",
@@ -1371,9 +1371,9 @@
   },
   {
    "script": "verify_mcp_write_path.py",
-   "tier": "backlog",
-   "timeout": 180,
-   "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+   "tier": "nightly",
+   "timeout": 120,
+   "reason": "MCP 写入正路（import_sysml_text 注入 + 动词词表单一真源）。2026-11-26 修 A6：原断言『载荷 <35k』是快照，实测 35,127 超 127 字，但来源是 2026-11-06/07 **新增 6 个能力工具**（30→36 个）⇒ 总量随能力数线性增长正常；改为『单工具 <3500』+『均值 <1200』（实测最大 todo_write 3080 / 均值 976）。8s"
   },
   {
    "script": "verify_memory_admin.py",
@@ -1517,7 +1517,8 @@
   {
    "script": "verify_no_mutation_residue.py",
    "tier": "pr",
-   "timeout": 120
+   "timeout": 120,
+   "reason": "产品文件不得停在「变异体」状态。2026-11-26 补 A4 通用 AST 扫描（原只按『已知变异签名』查，而签名表来自另一个门禁的 MUTATIONS ⇒ 不在表里的残留永久不可见：`core/domain/text_normalize.py` 长期是 `for tok in []`（M9 变异体未回滚）⇒ 拉丁名 fuzzy 恒 0、真库 85.2% 候选名受影响、全程无报错）。A4 扫 446 个产品文件，A5 用最小样本自证四种形态全检出且注释/docstring 不误报（正则方案会假红）。实测 4.8s"
   },
   {
    "script": "verify_norm_summary.py",
@@ -1687,15 +1688,15 @@
   },
   {
    "script": "verify_p0_failure_kind.py",
-   "tier": "backlog",
+   "tier": "local",
    "timeout": 180,
-   "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+   "reason": "used_mock 拆分 + failure_kind 分类。2026-11-26 修：原前置『provider 72 余额不足可稳定复现失败』已失效（现 active）⇒ 改为**主动构造**可控失败（临时把 base_url 指向 127.0.0.1:1，finally 严格恢复并校验），走同一条真实链路。归 local：会写生产库 llm_usage_stats 与临时改 llm_providers 行"
   },
   {
    "script": "verify_p0_repair_round_tools.py",
-   "tier": "backlog",
+   "tier": "nightly",
    "timeout": 180,
-   "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+   "reason": "校验报 block 后收尾轮必须保留修复工具。2026-11-26 **修出真缺陷**：execute.py 的『失败轮耗尽』分支`tools=None`（与 2026-10-09 修过的『轮次用尽』分支同因，又一个入口漏了）⇒ 收尾轮 0 个工具、autofix 调不到；已按同源判据（repair_tools_needed）补齐。另端到端 3 项依赖本机 sysml 校验执行器（validate 只能走 MCP）⇒ 加前置断言 SKIP，逻辑由 [①][②] 12 条守护。25s"
   },
   {
    "script": "verify_p0_tool_results_var.py",
@@ -1895,15 +1896,15 @@
   },
   {
    "script": "verify_rag_eval_gate.py",
-   "tier": "backlog",
-   "timeout": 180,
-   "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+   "tier": "local",
+   "timeout": 120,
+   "reason": "消费 run_eval 报告判定检索质量（不重跑）。2026-11-26 打通链路并**修出真缺陷**：run_eval 自拼装指纹（key=chunks/entities_release、过滤 status!='deprecated'），而 build_evalset 写入的是 fingerprint_gate.fingerprint()（key=表名、过滤不带 status）⇒ **比对恒判漂移**、评测永远出不了分。改为调用同一个 fingerprint() 逐 key 比。实跑：doc recall@5 0.939 / graph route_acc 1.0 / neg route_ok 1.0 / 负对照塌到 <=0.05 ⇒ 13 常态 + 4 变异全绿。归 local：需先跑 run_eval 产出报告（依赖 embedding 服务与耗时）"
   },
   {
    "script": "verify_ragflow_adapter.py",
-   "tier": "backlog",
-   "timeout": 180,
-   "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+   "tier": "nightly",
+   "timeout": 120,
+   "reason": "RAGFlow 适配层（配置组名/默认关闭/契约/降级）。2026-11-26 修两处：① SDK 不在本仓 ⇒ 由 FAIL 改 SKIP（判据面不存在，不携带行动信息）；② 门禁桩**漏替换 `sdk_available`**（适配层判的是模块级 sdk_available 而非 _load_sdk）⇒ 『打桩后能走通』必然红；补桩后真跑通 mode=ragflow。1s"
   },
   {
    "script": "verify_rate_limit.py",
@@ -1998,9 +1999,9 @@
   },
   {
    "script": "verify_rerank_effective.py",
-   "tier": "backlog",
-   "timeout": 180,
-   "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+   "tier": "pr",
+   "timeout": 120,
+   "reason": "重排必须『真生效』而非仅开关为真。2026-11-26 修：本门禁守的是『**若**开了重排它必须真生效且失败可见』，而实测 rerank_enabled=False 是**刻意关闭**（默认 provider 31.7s 超时、100% 静默降级）⇒ 关着不是缺陷；改为前置不成立时 SKIP ①②③ 组、但**照常验**②『结构化输出轮关思考』与④『失败必须可见』（与开关无关的真判据）。1s"
   },
   {
    "script": "verify_rerank_logging_fmt.py",
@@ -2010,9 +2011,9 @@
   },
   {
    "script": "verify_rerun_gain.py",
-   "tier": "backlog",
-   "timeout": 180,
-   "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+   "tier": "local",
+   "timeout": 120,
+   "reason": "一次性 A/B 对照（基线会话 vs 九处修复后重跑）。2026-11-26：样本（id>9288 且 title like 'crypto_chain%'）在本库 0 条 ⇒ 判据面不存在，由 FAIL 改 SKIP 并写明如何复验（需手工产出重跑会话）"
   },
   {
    "script": "verify_retrieval_dedup.py",
@@ -2115,9 +2116,9 @@
   },
   {
    "script": "verify_s4_llm_params.py",
-   "tier": "backlog",
-   "timeout": 180,
-   "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+   "tier": "pr",
+   "timeout": 120,
+   "reason": "显式传参 > DB 配置 > 内置默认（含 broker 参数重复的历史事故）。2026-11-26 修两处：① 探针判据由『必须静默降级为 Mock』改为『**到达真实 HTTP**』（产品已改为失败显式抛 LLMUnavailableError，旧判据把改进判成回归）；② 三条代码结构/行号断言锚点随重构失效、其性质已被行为探针更强覆盖 ⇒ 降为 INFO；③ summary/refine 上限由 `==8000` 改 `>=8000`（扩容是同向改进）。14 项"
   },
   {
    "script": "verify_s4_prompt.py",
@@ -2183,9 +2184,9 @@
   },
   {
    "script": "verify_skill_frontmatter.py",
-   "tier": "backlog",
-   "timeout": 180,
-   "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+   "tier": "pr",
+   "timeout": 120,
+   "reason": "skills.frontmatter 与 content 的 YAML 头同源（注入侧取 [:400]，旧版会腰斩）。2026-11-26 实修数据 + 修判据：① 用仓库自带 rebuild 工具重建 frontmatter（**修工具本身**：一条坏项曾拒绝整批、skip_similar 把『长度接近但语义已变』当无需改）；② 3 个技能 content 缺 YAML 头 + 1 个缺 triggers/author ⇒ 按已有 JSON 元数据等价转写（不发明内容）；③ [9] 探针 intent 由 chat 改 design（chat 不命中建模技能，属设计正确）+ 新增 [9a]『探针确实命中技能』防空转。5s"
   },
   {
    "script": "verify_skill_injection.py",
@@ -2320,9 +2321,9 @@
   },
   {
    "script": "verify_team_defined_orchestration.py",
-   "tier": "backlog",
+   "tier": "nightly",
    "timeout": 180,
-   "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+   "reason": "团队定义完整性 + 四档路由（噪声/直行/编排/不支持）。2026-11-26 修 A4/A2/G9 + **修出真缺陷**：① A4『成员 >=14』是 2026-10-09 快照，2026-10-10 团队重建后为 14 行（2 个有意 enabled=0）⇒ 基线改 12 并打印停用成员；② 新增 A4c『8 个视图能力都有承载者』；③ B2.1/B2.2/B2.5/C4 红因是**词表缺口**：view_expansion 唯独缺『需求视图』、knowledge_qa 缺『查询/知识库』、『预评审』只挂在已停用的 review 上 ⇒ 短指令被 is_noise 当闲聊丢掉（用户可感知）；④ G9 由钉死 [:4000] 改为提取实际上限且 >=4000。66 项"
   },
   {
    "script": "verify_tenant_isolation.py",
@@ -2471,9 +2472,9 @@
   },
   {
    "script": "verify_turn_override_e2e.py",
-   "tier": "backlog",
+   "tier": "nightly",
    "timeout": 180,
-   "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+   "reason": "本轮临时推理参数覆盖（思考强度/上下文/temperature）。2026-11-26 修①：原『传关闭比不传多关掉』依赖『不传档存在 enabled 调用』，而本用例 3 次调用全在 thinking_policy.off 名单里 ⇒ 增量恒 0；改为『关闭档必须 100% disabled』（有 enabled 样本时仍走增量分支，两形态都守）。12s"
   },
   {
    "script": "verify_typography_scale.py",
@@ -2483,9 +2484,9 @@
   },
   {
    "script": "verify_ui_intent_brief.py",
-   "tier": "backlog",
-   "timeout": 180,
-   "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+   "tier": "pr",
+   "timeout": 120,
+   "reason": "意图理解摘要 + 代码块默认展开 + 执行过程区高度。2026-11-26 修两处：① ROUTE_TEXT 漏 6 个新增路由取值 （continue/continue_weak/explain_late/platform_read/smalltalk/speech_act，2026-11-06/07 新增判定层）⇒ 界面显示裸英文 key，已补齐翻译并保留 A9 覆盖判据；② B4 组方向**反转**（原守『.proc 必须限高』，与 2026-11-18 用户要求『撤销整区限高、只容器化思考节点』相反）⇒ 改为『不得限高 + 承接方必须存在』（把职责移交给 verify_answer_no_inner_scroll，避免两边都不守），变异同步反转为『加回限高必须判红』。42 项"
   },
   {
    "script": "verify_ui_render_live.py",
@@ -2548,9 +2549,9 @@
   },
   {
    "script": "verify_zhiyuan_matching.py",
-   "tier": "backlog",
-   "timeout": 180,
-   "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+   "tier": "nightly",
+   "timeout": 240,
+   "reason": "智源平台技能/工具匹配与白名单。2026-11-26 修 D3/D4/D5 + **修出真缺陷**：① D3 钉死 6 个工具名，而 sysml_stdlib_meta/sysml_v2_project_check 已 disabled ⇒ 改为『视图正文点名 ∩ active』求交（留下界防塌成空集）；② D4/D5 只排除技能自身名、且要求覆盖**已停用**工具 ⇒ 改为排除全部技能名 + 只要求 active；③ 真缺陷：8 个视图技能正文点名 sysml_ast_extract/sysml_v2_lint 但 allowed_tools 里没有（白名单是注入闸，正文让用却不给）⇒ 已补；guide 技能缺 graph_retrieve 同因已补。99 项"
   },
   {
    "script": "verify_requirement_chain_runtime.py",

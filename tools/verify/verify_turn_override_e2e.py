@@ -162,9 +162,30 @@ def main():
             #   与本轮覆盖无关。把系统既有策略当成"覆盖泄漏"是判据错，不是实现错。
             #   正确判据：**「关闭」比「不传」多出的 disabled 次数** 才是覆盖的真实贡献。
             delta_off = (s2["thinking_off"] or 0) - (s1["thinking_off"] or 0)
-            chk("① 传「关闭」比不传**多关掉**调用（覆盖的真实贡献）",
-                delta_off >= 1, "不传 disabled=%s → 关闭 disabled=%s（+%s）"
-                % (s1["thinking_off"], s2["thinking_off"], delta_off))
+            # ★ 2026-11-26 修①：原判据「传『关闭』比不传**多**关掉」依赖一个前提：
+            #   「不传档里存在 enabled 的对话调用」。实测该前提**不成立**——
+            #   本用例只发 3 次对话调用，而这 3 次的 intent 都在 `llm.thinking_policy.off`
+            #   名单里（probe/routing/doc_summary 这类内部轮），**不传时 off 已经是 3/3**，
+            #   没有 enabled 样本可"多关" ⇒ 增量恒为 0 ⇒ 判据恒红，而覆盖并未失效。
+            #   「覆盖是否按传入值决定」由 ②（传『高』能把同样 3 次翻成 on=3）独立证明。
+            #   ⇒ ① 改为守**覆盖率**：关闭档的对话调用必须**全部** disabled（100%）。
+            #     并保留"若有 enabled 样本则增量必须 ≥1"这一侧，两种形态都守得住。
+            _calls2 = s2["calls"] or 0
+            _off2 = s2["thinking_off"] or 0
+            # 「有没有可多关的样本」= 不传档里**没被关掉**的对话调用数（calls − off）。
+            # ⚠️ 第一版写成 `calls − thinking_on`：`thinking_on` 是"显式 enabled"计数，
+            #   那些既没 on 也没 off 的调用（不带 thinking 字段）会被算成 enabled ⇒
+            #   判定恒为"有样本"，于是永远走增量分支 —— 判据看似改了其实没改。
+            _enabled_sample = ((s1["calls"] or 0) - (s1["thinking_off"] or 0)) > 0
+            if _enabled_sample:
+                chk("① 传「关闭」比不传**多关掉**调用（覆盖的真实贡献）",
+                    delta_off >= 1, "不传 disabled=%s → 关闭 disabled=%s（+%s）"
+                    % (s1["thinking_off"], s2["thinking_off"], delta_off))
+            else:
+                chk("① 传「关闭」⇒ 全部对话调用都 disabled（不传档已全被 off 名单关掉，"
+                    "故守覆盖率而非增量）",
+                    _calls2 > 0 and _off2 == _calls2,
+                    "关闭档 off=%s / calls=%s" % (_off2, _calls2))
             chk("② 传「高」把 disabled 全部翻成 enabled",
                 (s3["thinking_off"] or 0) == 0 and (s3["thinking_on"] or 0) >= 1,
                 "高：off=%s on=%s" % (s3["thinking_off"], s3["thinking_on"]))

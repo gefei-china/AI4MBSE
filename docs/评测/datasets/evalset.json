@@ -1,18 +1,18 @@
 {
  "schema": "p1-6/evalset@1",
- "built_at": "2026-11-17 08:21:53",
+ "built_at": "2026-11-26 15:03:13",
  "seed": 20260921,
  "fingerprint": {
-  "documents": 12,
-  "document_chunks": 7067,
+  "documents": 14,
+  "document_chunks": 7096,
   "entities": 184,
   "relations": 249,
   "release_entity_names_sha1": "77e0c39603cded89",
-  "chunk_sections_sha1": "d377c5302f87de8a",
+  "chunk_sections_sha1": "1f0c962ab73fcfaf",
   "schema_version": 2
  },
  "counts": {
-  "doc": 48,
+  "doc": 49,
   "graph": 18,
   "neg": 30
  },
@@ -2809,39 +2809,95 @@
   {
    "id": "doc-44",
    "kind": "doc",
-   "query": "用户用例视图",
+   "query": "2. 需求视图布局",
    "gold": [
     {
-     "source_doc": "知识库_运行视角_视图规范元素要求(1).md",
+     "source_doc": "建模提示词.docx",
+     "chunk_index": 7
+    },
+    {
+     "source_doc": "建模提示词.docx",
+     "chunk_index": 8
+    },
+    {
+     "source_doc": "建模提示词.docx",
+     "chunk_index": 9
+    },
+    {
+     "source_doc": "建模提示词.docx",
+     "chunk_index": 10
+    },
+    {
+     "source_doc": "建模提示词.docx",
+     "chunk_index": 11
+    },
+    {
+     "source_doc": "建模提示词.docx",
      "chunk_index": 12
     },
     {
-     "source_doc": "知识库_运行视角_视图规范元素要求(1).md",
+     "source_doc": "建模提示词.docx",
      "chunk_index": 13
     },
     {
-     "source_doc": "知识库_运行视角_视图规范元素要求(1).md",
+     "source_doc": "建模提示词.docx",
      "chunk_index": 14
+    },
+    {
+     "source_doc": "建模提示词.docx",
+     "chunk_index": 15
+    },
+    {
+     "source_doc": "建模提示词.docx",
+     "chunk_index": 16
     }
    ],
    "gold_keys": [
     [
-     "知识库_运行视角_视图规范元素要求(1).md",
+     "建模提示词.docx",
+     7
+    ],
+    [
+     "建模提示词.docx",
+     8
+    ],
+    [
+     "建模提示词.docx",
+     9
+    ],
+    [
+     "建模提示词.docx",
+     10
+    ],
+    [
+     "建模提示词.docx",
+     11
+    ],
+    [
+     "建模提示词.docx",
      12
     ],
     [
-     "知识库_运行视角_视图规范元素要求(1).md",
+     "建模提示词.docx",
      13
     ],
     [
-     "知识库_运行视角_视图规范元素要求(1).md",
+     "建模提示词.docx",
      14
+    ],
+    [
+     "建模提示词.docx",
+     15
+    ],
+    [
+     "建模提示词.docx",
+     16
     ]
    ],
    "meta": {
-    "source_doc": "知识库_运行视角_视图规范元素要求(1).md",
-    "section": "### 用户用例视图",
-    "n_gold": 3
+    "source_doc": "建模提示词.docx",
+    "section": "2. 需求视图布局",
+    "n_gold": 10
    },
    "label": "derived"
   },
@@ -2886,6 +2942,45 @@
   },
   {
    "id": "doc-46",
+   "kind": "doc",
+   "query": "利益相关方需求视图",
+   "gold": [
+    {
+     "source_doc": "知识库_运行视角_视图规范元素要求(1).md",
+     "chunk_index": 2
+    },
+    {
+     "source_doc": "知识库_运行视角_视图规范元素要求(1).md",
+     "chunk_index": 3
+    },
+    {
+     "source_doc": "知识库_运行视角_视图规范元素要求(1).md",
+     "chunk_index": 4
+    }
+   ],
+   "gold_keys": [
+    [
+     "知识库_运行视角_视图规范元素要求(1).md",
+     2
+    ],
+    [
+     "知识库_运行视角_视图规范元素要求(1).md",
+     3
+    ],
+    [
+     "知识库_运行视角_视图规范元素要求(1).md",
+     4
+    ]
+   ],
+   "meta": {
+    "source_doc": "知识库_运行视角_视图规范元素要求(1).md",
+    "section": "### 利益相关方需求视图",
+    "n_gold": 3
+   },
+   "label": "derived"
+  },
+  {
+   "id": "doc-47",
    "kind": "doc",
    "query": "场景组成结构视图",
    "gold": [
@@ -2932,45 +3027,6 @@
    "label": "derived"
   },
   {
-   "id": "doc-47",
-   "kind": "doc",
-   "query": "利益相关方需求视图",
-   "gold": [
-    {
-     "source_doc": "知识库_运行视角_视图规范元素要求(1).md",
-     "chunk_index": 2
-    },
-    {
-     "source_doc": "知识库_运行视角_视图规范元素要求(1).md",
-     "chunk_index": 3
-    },
-    {
-     "source_doc": "知识库_运行视角_视图规范元素要求(1).md",
-     "chunk_index": 4
-    }
-   ],
-   "gold_keys": [
-    [
-     "知识库_运行视角_视图规范元素要求(1).md",
-     2
-    ],
-    [
-     "知识库_运行视角_视图规范元素要求(1).md",
-     3
-    ],
-    [
-     "知识库_运行视角_视图规范元素要求(1).md",
-     4
-    ]
-   ],
-   "meta": {
-    "source_doc": "知识库_运行视角_视图规范元素要求(1).md",
-    "section": "### 利益相关方需求视图",
-    "n_gold": 3
-   },
-   "label": "derived"
-  },
-  {
    "id": "doc-48",
    "kind": "doc",
    "query": "定义运行分析用例",
@@ -3008,28 +3064,67 @@
     "n_gold": 3
    },
    "label": "derived"
+  },
+  {
+   "id": "doc-49",
+   "kind": "doc",
+   "query": "用户用例视图",
+   "gold": [
+    {
+     "source_doc": "知识库_运行视角_视图规范元素要求(1).md",
+     "chunk_index": 12
+    },
+    {
+     "source_doc": "知识库_运行视角_视图规范元素要求(1).md",
+     "chunk_index": 13
+    },
+    {
+     "source_doc": "知识库_运行视角_视图规范元素要求(1).md",
+     "chunk_index": 14
+    }
+   ],
+   "gold_keys": [
+    [
+     "知识库_运行视角_视图规范元素要求(1).md",
+     12
+    ],
+    [
+     "知识库_运行视角_视图规范元素要求(1).md",
+     13
+    ],
+    [
+     "知识库_运行视角_视图规范元素要求(1).md",
+     14
+    ]
+   ],
+   "meta": {
+    "source_doc": "知识库_运行视角_视图规范元素要求(1).md",
+    "section": "### 用户用例视图",
+    "n_gold": 3
+   },
+   "label": "derived"
   }
  ],
  "graph_cases": [
   {
    "id": "graph-01",
    "kind": "graph",
-   "query": "系统支持 Ka 频段双向通信 被分配到哪个 数据转发功能",
+   "query": "系统支持 Ka 频段双向通信 被分配到哪个 宽带载荷",
    "gold": {
     "pair": [
      "系统支持 Ka 频段双向通信",
-     "数据转发功能"
+     "宽带载荷"
     ],
     "relation_type": "ALLOCATED_TO",
     "src_id": "S-33b693a5",
-    "tgt_id": "S-1f57692f"
+    "tgt_id": "S-f6499a05"
    },
    "gold_entities": [
     "系统支持 Ka 频段双向通信",
-    "数据转发功能"
+    "宽带载荷"
    ],
    "meta": {
-    "relation_id": 505,
+    "relation_id": 508,
     "verb": "分配"
    },
    "label": "derived",
@@ -3095,22 +3190,22 @@
   {
    "id": "graph-04",
    "kind": "graph",
-   "query": "由 提供全球宽带互联网接入服务 派生出的 星地链路可用度不低于 99.9% 有哪些",
+   "query": "由 单星用户吞吐量不低于 20 Gbps 派生出的 数传速率不低于 2 Gbps 有哪些",
    "gold": {
     "pair": [
-     "提供全球宽带互联网接入服务",
-     "星地链路可用度不低于 99.9%"
+     "单星用户吞吐量不低于 20 Gbps",
+     "数传速率不低于 2 Gbps"
     ],
     "relation_type": "DERIVES",
-    "src_id": "S-b48b1f0a",
-    "tgt_id": "S-b00186d4"
+    "src_id": "S-3bc8e4d7",
+    "tgt_id": "S-74bb7211"
    },
    "gold_entities": [
-    "提供全球宽带互联网接入服务",
-    "星地链路可用度不低于 99.9%"
+    "单星用户吞吐量不低于 20 Gbps",
+    "数传速率不低于 2 Gbps"
    ],
    "meta": {
-    "relation_id": 468,
+    "relation_id": 476,
     "verb": "派生"
    },
    "label": "derived",
@@ -3122,22 +3217,22 @@
   {
    "id": "graph-05",
    "kind": "graph",
-   "query": "宽带通信星座 满足哪些 系统总容量不低于 1 Tbps",
+   "query": "转发器 满足哪些 转发器 EIRP 不低于 55 dBW",
    "gold": {
     "pair": [
-     "宽带通信星座",
-     "系统总容量不低于 1 Tbps"
+     "转发器",
+     "转发器 EIRP 不低于 55 dBW"
     ],
     "relation_type": "SATISFIES",
-    "src_id": "S-08276525",
-    "tgt_id": "S-8dd40723"
+    "src_id": "S-4782d01d",
+    "tgt_id": "S-09853b7a"
    },
    "gold_entities": [
-    "宽带通信星座",
-    "系统总容量不低于 1 Tbps"
+    "转发器",
+    "转发器 EIRP 不低于 55 dBW"
    ],
    "meta": {
-    "relation_id": 499,
+    "relation_id": 486,
     "verb": "满足"
    },
    "label": "derived",
@@ -3176,22 +3271,22 @@
   {
    "id": "graph-07",
    "kind": "graph",
-   "query": "测控链路可用度不低于 99.5% 由哪些 测控链路测试用例 验证",
+   "query": "蓄电池容量不低于 800 Ah 由哪些 系统容量测试用例 验证",
    "gold": {
     "pair": [
-     "测控链路可用度不低于 99.5%",
-     "测控链路测试用例"
+     "蓄电池容量不低于 800 Ah",
+     "系统容量测试用例"
     ],
     "relation_type": "VERIFIED_BY",
-    "src_id": "S-f4b9b8c8",
-    "tgt_id": "S-63ed1a64"
+    "src_id": "S-858e29b7",
+    "tgt_id": "S-8ab1a022"
    },
    "gold_entities": [
-    "测控链路可用度不低于 99.5%",
-    "测控链路测试用例"
+    "蓄电池容量不低于 800 Ah",
+    "系统容量测试用例"
    ],
    "meta": {
-    "relation_id": 516,
+    "relation_id": 523,
     "verb": "验证"
    },
    "label": "derived",
@@ -3203,22 +3298,22 @@
   {
    "id": "graph-08",
    "kind": "graph",
-   "query": "系统支持 Ka 频段双向通信 被分配到哪个 宽带载荷",
+   "query": "星地链路可用度不低于 99.9% 被分配到哪个 功率控制功能",
    "gold": {
     "pair": [
-     "系统支持 Ka 频段双向通信",
-     "宽带载荷"
+     "星地链路可用度不低于 99.9%",
+     "功率控制功能"
     ],
     "relation_type": "ALLOCATED_TO",
-    "src_id": "S-33b693a5",
-    "tgt_id": "S-f6499a05"
+    "src_id": "S-b00186d4",
+    "tgt_id": "S-cd8f2273"
    },
    "gold_entities": [
-    "系统支持 Ka 频段双向通信",
-    "宽带载荷"
+    "星地链路可用度不低于 99.9%",
+    "功率控制功能"
    ],
    "meta": {
-    "relation_id": 508,
+    "relation_id": 506,
     "verb": "分配"
    },
    "label": "derived",
@@ -3284,22 +3379,22 @@
   {
    "id": "graph-11",
    "kind": "graph",
-   "query": "由 星地链路可用度不低于 99.9% 派生出的 平台供电功率不低于 12 kW 有哪些",
+   "query": "由 提供全球宽带互联网接入服务 派生出的 单星用户吞吐量不低于 20 Gbps 有哪些",
    "gold": {
     "pair": [
-     "星地链路可用度不低于 99.9%",
-     "平台供电功率不低于 12 kW"
+     "提供全球宽带互联网接入服务",
+     "单星用户吞吐量不低于 20 Gbps"
     ],
     "relation_type": "DERIVES",
-    "src_id": "S-b00186d4",
-    "tgt_id": "S-33a548cc"
+    "src_id": "S-b48b1f0a",
+    "tgt_id": "S-3bc8e4d7"
    },
    "gold_entities": [
-    "星地链路可用度不低于 99.9%",
-    "平台供电功率不低于 12 kW"
+    "提供全球宽带互联网接入服务",
+    "单星用户吞吐量不低于 20 Gbps"
    ],
    "meta": {
-    "relation_id": 480,
+    "relation_id": 465,
     "verb": "派生"
    },
    "label": "derived",
@@ -3311,22 +3406,22 @@
   {
    "id": "graph-12",
    "kind": "graph",
-   "query": "行波管放大器 满足哪些 功放输出功率不低于 120 W",
+   "query": "宽带通信地面段 满足哪些 星地链路可用度不低于 99.9%",
    "gold": {
     "pair": [
-     "行波管放大器",
-     "功放输出功率不低于 120 W"
+     "宽带通信地面段",
+     "星地链路可用度不低于 99.9%"
     ],
     "relation_type": "SATISFIES",
-    "src_id": "S-97afc1dd",
-    "tgt_id": "S-d712dd29"
+    "src_id": "S-52e1eccf",
+    "tgt_id": "S-b00186d4"
    },
    "gold_entities": [
-    "行波管放大器",
-    "功放输出功率不低于 120 W"
+    "宽带通信地面段",
+    "星地链路可用度不低于 99.9%"
    ],
    "meta": {
-    "relation_id": 490,
+    "relation_id": 503,
     "verb": "满足"
    },
    "label": "derived",
@@ -3365,22 +3460,22 @@
   {
    "id": "graph-14",
    "kind": "graph",
-   "query": "系统总容量不低于 1 Tbps 由哪些 系统容量测试用例 验证",
+   "query": "转发器 EIRP 不低于 55 dBW 由哪些 转发器 EIRP 测试用例 验证",
    "gold": {
     "pair": [
-     "系统总容量不低于 1 Tbps",
-     "系统容量测试用例"
+     "转发器 EIRP 不低于 55 dBW",
+     "转发器 EIRP 测试用例"
     ],
     "relation_type": "VERIFIED_BY",
-    "src_id": "S-8dd40723",
-    "tgt_id": "S-8ab1a022"
+    "src_id": "S-09853b7a",
+    "tgt_id": "S-f519ac97"
    },
    "gold_entities": [
-    "系统总容量不低于 1 Tbps",
-    "系统容量测试用例"
+    "转发器 EIRP 不低于 55 dBW",
+    "转发器 EIRP 测试用例"
    ],
    "meta": {
-    "relation_id": 514,
+    "relation_id": 510,
     "verb": "验证"
    },
    "label": "derived",
@@ -3473,22 +3568,22 @@
   {
    "id": "graph-18",
    "kind": "graph",
-   "query": "由 系统支持 Ka 频段双向通信 派生出的 天线增益不低于 40 dBi 有哪些",
+   "query": "由 系统总容量不低于 1 Tbps 派生出的 单星用户吞吐量不低于 20 Gbps 有哪些",
    "gold": {
     "pair": [
-     "系统支持 Ka 频段双向通信",
-     "天线增益不低于 40 dBi"
+     "系统总容量不低于 1 Tbps",
+     "单星用户吞吐量不低于 20 Gbps"
     ],
     "relation_type": "DERIVES",
-    "src_id": "S-33b693a5",
-    "tgt_id": "S-9a6138cf"
+    "src_id": "S-8dd40723",
+    "tgt_id": "S-3bc8e4d7"
    },
    "gold_entities": [
-    "系统支持 Ka 频段双向通信",
-    "天线增益不低于 40 dBi"
+    "系统总容量不低于 1 Tbps",
+    "单星用户吞吐量不低于 20 Gbps"
    ],
    "meta": {
-    "relation_id": 474,
+    "relation_id": 470,
     "verb": "派生"
    },
    "label": "derived",

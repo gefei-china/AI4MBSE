@@ -85,7 +85,18 @@ def _bigrams(s):
     # P4：无空格连写的拉丁名（normalize 后无空白）补字符级 bigram，
     # 使其参与 fuzzy 比较；否则整串只算 1 个元素，交集恒空 ⇒ fuzzy 恒 0。
     # 含中文的 token 不拆（见 docstring：会造成跨界 bigram，改变中文 fuzzy 基线）。
-    for tok in []:
+    #
+    # ★★ 2026-11-26 事故修复：这里曾是 `for tok in []:` —— **变异测试的残留**。
+    #   `tools/verify/verify_entity_resolver.py` 的 M9 变异正是
+    #   「把 `for tok in en:` 改成 `for tok in []:`」（用于自证 E41 能抓到退化）。
+    #   某次变异执行中途异常/被杀，回滚没跑完 ⇒ 生产代码停在**变异态**并一直如此：
+    #     · `fuzzy_score("ThermalPump","ThermalPumpUnit")` 恒 0.000（连
+    #       `"Thermal Pump"` vs `"Thermal Pump Unit"` 也是 0——两者 token 不同、字符 bigram 缺失）；
+    #     · 真库 297 个去重候选名里 253 个（85.2%）是这种无空格/前缀延伸形态 ⇒
+    #       消歧相似度**大面积失效**，而所有"看起来正常"的输出都不会报错。
+    #   判据 E41（fuzzy ≥0.90）与 E38（M9 锚点存在）正是因此双红 ——
+    #   它们是唯一把这件事照出来的两盏灯。恢复 `en` 即可，逻辑本身没变。
+    for tok in en:
         if len(tok) > 2 and not _ZH_CHAR.search(tok):
             for i in range(len(tok) - 1):
                 bigrams.add(tok[i:i + 2])

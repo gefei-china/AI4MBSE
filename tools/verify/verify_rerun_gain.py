@@ -97,9 +97,17 @@ def main() -> int:
     c = _conn()
     rerun = find_rerun_convs(c)
     if not rerun:
-        print("[FAIL] 未找到重跑会话（id > 9288 且 title like 'crypto_chain%'）")
-        print("       ⇒ 重跑尚未产生数据，无法对照")
-        return 1
+        # ★ 2026-11-26：改为 SKIP（判据面不存在），不是 FAIL。
+        #   本门禁是一次性 A/B 对照：用**手工跑出来的重跑会话**与历史基线比"九处修复"的收益。
+        #   那批会话（id 9240~9248 基线 + 9289 之后的重跑）只存在于当时的库里；
+        #   实测当前库 `title like 'crypto_chain%'` **0 条**（连 crypto 字样都没有）⇒
+        #   从没跑过重跑 ⇒ 没有可比对象。
+        #   判 FAIL 的含义是"产品退化了"，而这里是"样本不在"——两者处置完全不同：
+        #   前者要修代码，后者要么重跑一次采集样本、要么承认这个 A/B 已过期。
+        print("[SKIP] 未找到重跑会话（id > 9288 且 title like 'crypto_chain%'）")
+        print("       ⇒ 判据面不存在：这是一次性 A/B 对照，需手工产出重跑会话才有可比对象。")
+        print("       若要复验：用同一批 crypto_chain 输入在新代码上重跑，再执行本脚本。")
+        return 0
 
     base_all = [_tool_stats(c, v) for v in BASE if list(
         c.execute("SELECT 1 FROM tool_call_logs WHERE conversation_id=? LIMIT 1", (v,)))]

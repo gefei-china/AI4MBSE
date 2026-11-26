@@ -37,6 +37,7 @@
     .venv/Scripts/python.exe -X utf8 tools/verify/verify_no_mutation_residue.py
 退出码：0 = 无残留；1 = 有残留（附还原指引）。
 """
+import ast
 import importlib.util
 import os
 import sys
@@ -183,6 +184,93 @@ def main() -> int:
                         break
     check("A3 产品文件内无**重复的长注释块**（自注入残留的通用特征）",
           not _dups, "；".join(_dups[:4]))
+
+    # ── A4：通用 AST 扫描（2026-11-26 补：已知签名法漏掉了最贵的一次残留）──
+    #   事故：`core/domain/text_normalize.py::_bigrams()` 里长期是
+    #       `for tok in []:   # 本应 for tok in en:`
+    #   —— 那正是 verify_entity_resolver 的 **M9 变异体**，某次中断未回滚。
+    #   后果：拉丁名 fuzzy 恒 0（真库 85.2% 候选名受影响，消歧大面积失效），
+    #        而代码能跑、绝大多数门禁绿、**没有任何报错**。
+    #   A1 的"已知签名"法抓不到它：签名表来自**另一个**变异门禁的 MUTATIONS，
+    #   M9 不在其中 ⇒ 残留永久不可见。
+    #   ⇒ 补一条**与具体门禁无关**的形态扫描：这些写法在产品代码里没有任何正当用途。
+    #     （AST 而非正则：注释/docstring 里讲这段历史的文字不会被误报。）
+    _A4_DIRS = ("agent", "core", "services", "routers", "workflows", "llm", "database",
+                "adapters", "knowledge_pipeline", "graph_db", "models", "plugin_system")
+    _A4_SKIP = {"__pycache__", "tmp", "tests", "backups", "node_modules", ".venv"}
+
+    def _empty_iter(node) -> bool:
+        if isinstance(node, (ast.List, ast.Tuple, ast.Set)):
+            return not getattr(node, "elts", [])
+        if isinstance(node, ast.Call):
+            # ⚠️ 只认**内置名**调用 `set()` / `list()`…，
+            #   **不能**认方法调用：`for t in self.list():` 是正常的"遍历自己的列表"，
+            #   第一版把它当空字面量 ⇒ 误报 `workflows/tools.py:193`（假红）。
+            if not isinstance(node.func, ast.Name):
+                return False
+            return node.func.id in ("set", "list", "dict", "tuple") and not node.args
+        return False
+
+    def _scan(src: str):
+        try:
+            tree = ast.parse(src)
+        except SyntaxError:
+            return None
+        out = []
+        for nd in ast.walk(tree):
+            if isinstance(nd, (ast.For, ast.AsyncFor)) and _empty_iter(nd.iter):
+                out.append((nd.lineno, "for ... in <空字面量>（循环体永不执行）"))
+            elif isinstance(nd, ast.If) and isinstance(nd.test, ast.Constant) \
+                    and nd.test.value in (False, 0):
+                out.append((nd.lineno, "if False/0（语句级死代码）"))
+            elif isinstance(nd, ast.While) and isinstance(nd.test, ast.Constant) \
+                    and nd.test.value in (False, 0):
+                out.append((nd.lineno, "while False/0"))
+        return out
+
+    _a4_hits, _a4_n = [], 0
+    for _d in _A4_DIRS:
+        _base = os.path.join(ROOT, _d)
+        if not os.path.isdir(_base):
+            continue
+        for _dp, _dn, _fn in os.walk(_base):
+            _dn[:] = [x for x in _dn if x not in _A4_SKIP]
+            for _f in _fn:
+                if not _f.endswith(".py"):
+                    continue
+                _p = os.path.join(_dp, _f)
+                try:
+                    _src = open(_p, encoding="utf-8").read()
+                except Exception:
+                    continue
+                _a4_n += 1
+                _r = _scan(_src)
+                for _ln, _why in (_r or []):
+                    _a4_hits.append("%s:%d %s" % (os.path.relpath(_p, ROOT), _ln, _why))
+    print("  [A4] 通用形态扫描 %d 个产品 .py 文件" % _a4_n)
+    check("A4 产品代码无『空字面量迭代 / if False / while False』（与具体门禁无关的残留形态）",
+          not _a4_hits, "；".join(_a4_hits[:5]))
+    # 下界：防扫描器被改坏成空集合后恒真（假绿）
+    check("A4b 扫描规模下界（≥100 个产品文件，防空扫描假绿）", _a4_n >= 100,
+          "只扫到 %d 个" % _a4_n)
+
+    # ── A5：A4 判据自证（最小样本，证明它真的会判红）──
+    _samples = {
+        "空列表迭代": "def f(en):\n    out=set()\n    for tok in []:\n        out.add(tok)\n",
+        "空元组迭代": "def f():\n    for x in ():\n        print(x)\n",
+        "if False": "def f():\n    if False:\n        return 1\n",
+        "while False": "def f():\n    while False:\n        break\n",
+    }
+    _missed = [k for k, c in _samples.items() if not _scan(c)]
+    check("A5 自证：四种残留形态全部检出（防判据空转）", not _missed, "漏检 %s" % _missed)
+    _clean = ("def f(en):\n    for tok in en:\n        print(tok)\n"
+              "def g():\n    if True:\n        return 1\n")
+    check("A5b 自证：正常代码不误报", _scan(_clean) == [], str(_scan(_clean)))
+    # docstring / 注释里出现同样文字**不得**误报（这就是不能用正则的原因）
+    _doc = ('"""示例：\n    for tok in []:\n        ...\n"""\n'
+            "def f(en):\n    # 历史：曾写成 for tok in []:\n    return en\n")
+    check("A5c 自证：docstring/注释里的同形文字不误报（正则方案会在这里假红）",
+          _scan(_doc) == [], str(_scan(_doc)))
 
     # ② 备份比对（仅提示，不判红）：不一致可能是"跑完后又正常改过"
     bak_dir = os.path.join(ROOT, "tmp", "_mut_bak_p1")

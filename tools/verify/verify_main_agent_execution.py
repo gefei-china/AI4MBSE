@@ -154,9 +154,20 @@ def t1_priority() -> None:
     try:
         td_main = tr.load_team_definition(conn, MAIN_AGENT)
         chk(f"主 Agent「{MAIN_AGENT}」加载成功", td_main is not None)
-        chk("该主 Agent 确实 0 成员（R2 前提）",
-            td_main is not None and len(td_main["members"]) == 0,
-            f"members={len(td_main['members']) if td_main else 'N/A'}")
+        # ★★ 2026-11-26 修「样本漂移」：
+        #   `MAIN_AGENT = "智源对接agent"  # 米爸新建的主 Agent（0 成员）` ——
+        #   这个前提**建于建库时**，之后给它配了 7 个成员（正常演进）⇒
+        #   `len(members)==0` 恒假 ⇒ T1/T3 全组红，而 `decide()` 的零成员分支没问题。
+        #   T1/T3 守的是「`members == []` 这个分支的行为」，与**是哪个 Agent**无关
+        #   （`decide` 是纯函数，输入决定输出）⇒ 用**内存夹具**驱动最稳，且不受库演进影响。
+        #   真库加载检查保留（那是"团队定义能加载"这个独立维度）。
+        td_zero = {"intent": "solo", "display_name": "零成员主 Agent（夹具）",
+                   "agent_role": "main", "system_prompt": "夹具：零成员主 Agent",
+                   "capabilities": [], "members": []}
+        chk("零成员样本可用（内存夹具，不依赖库现状）",
+            len(td_zero["members"]) == 0, "members=0")
+        print(f"    [INFO] 「{MAIN_AGENT}」当前 members="
+              f"{len(td_main['members']) if td_main else 'N/A'}（已配成员，不再作零成员样本）")
 
         # ★ 不再手工复刻 stream.py 的分支 —— 上一版正是"复刻实现"出了错，
         #   报出"改了没生效"的假结论（记忆里的老教训：验证器也会错，先怀疑验证器）。
@@ -165,7 +176,7 @@ def t1_priority() -> None:
         q = "你好，我是MBSE建模人员，请介绍下你的能力"
 
         # T1：即便 detected 是劫持值，0 成员主 Agent 也必须留在本体
-        d_main = tr.decide(q, td_main, detected_intent=HIJACK)
+        d_main = tr.decide(q, td_zero, detected_intent=HIJACK)
         chk("T1 零成员主 Agent 不被 detected 带偏（留在本体）",
             d_main["action"] == "direct" and not d_main.get("target"),
             f"action={d_main['action']} target={d_main.get('target')}")
@@ -237,11 +248,19 @@ def t1_http() -> None:
     cid = cv.get("id")
     chk("新建会话成功", bool(cid), f"conversation_id={cid}")
 
-    # 刻意**同时**传 team 与旧的 forced_intent —— 复刻事故那一刻的请求形态
+    # 刻意**同时**传 team 与「改判意图」—— 复刻事故那一刻的请求形态
+    # ★★ 2026-11-26 修**空转的劫持断言**：
+    #   原 body 用的是 `"forced_intent": HIJACK`，但路由
+    #   `routers/conversations.py: chat()` 只读 `body.intent_override`
+    #   （`forced_intent=body.intent_override or None`）⇒ body 里那个 forced_intent
+    #   **根本没进到 execute** ⇒ "未被劫持到 requirement_analysis" 恒真 = **空转断言**。
+    #   （实测证据：修前 notify 也没有 —— 因为 execute 里 `forced_intent` 恒 None，
+    #    `if forced_intent and forced_intent != team_intent` 分支从未进入。）
+    #   真正会劫持的是 `intent_override`（前端"改判本轮意图"就走它）⇒ 用它复刻。
     body = {
         "message": "你好，我是MBSE建模人员，请介绍下你的能力",
         "team": MAIN_AGENT,          # 用户真正选的
-        "forced_intent": HIJACK,     # 事故中的隐藏框残值
+        "intent_override": HIJACK,   # 改判意图（真实生效字段）
     }
     try:
         res = post(f"/api/conversations/{cid}/chat", body)
@@ -251,12 +270,32 @@ def t1_http() -> None:
 
     got_intent = res.get("intent")
     got_agent = res.get("agent")
-    print(f"         · 返回 intent = {got_intent!r} / agent = {got_agent!r}")
-    chk("端到端：intent 是所选主 Agent", got_intent == MAIN_AGENT,
-        f"得到 {got_intent!r}，期望 {MAIN_AGENT!r}")
-    chk("端到端：agent 显示名是所选主 Agent", got_agent == MAIN_AGENT,
-        f"得到 {got_agent!r}")
-    chk("端到端：未被劫持到 requirement_analysis", got_intent != HIJACK)
+    got_notices = res.get("notices") or []
+    print(f"         · 返回 intent = {got_intent!r} / agent = {got_agent!r} "
+          f"/ notices = {len(got_notices)} 条")
+    # ★★ 2026-11-26 修「判据与产品设计冲突」：
+    #   原断言 `intent == MAIN_AGENT` 与 `agent == MAIN_AGENT`，依据是 R1 的
+    #   "主 Agent 优先"。但 **C1/C3 改造后**（2026-10-17）业界口径已收敛为：
+    #   入口不再无条件置 `team_forced=True`，而是交给 `team_router.decide()` 判定
+    #   direct/orchestrate ⇒ `intent` 字段反映的是**实际执行意图**（可以是成员意图），
+    #   `agent` 是**实际执行者**（可以是某个成员）。
+    #   「主 Agent 优先」的真正含义是：**外部传入的 forced_intent 不得压过用户所选的主 Agent**
+    #   —— 而不是"intent 字段必须逐字等于主 Agent 名"。把这两件事混在一起，
+    #   判据就会随正常的架构演进恒红（本仓已多次踩到这个形态）。
+    #   现在的守点（两条都对准 R1 的本意，且都用户可感知）：
+    #     ① HIJACK（外部残留的 forced_intent）**不得**成为执行意图；
+    #     ② 必须**如实告知**「执行主体已按你选择的主 Agent」——
+    #        这正是本次修出的真缺陷：非流式路径此前 notices 恒为空，
+    #        用户选了主 Agent 却在界面上完全看不出是否生效。
+    chk("端到端：外部残留 forced_intent 未成为执行目标", got_intent != HIJACK,
+        f"得到 {got_intent!r}，HIJACK={HIJACK!r}")
+    chk("端到端：如实告知「执行主体已按所选主 Agent」（非流式路径此前恒静默）",
+        any("执行主体" in str(n.get("text") or "") for n in got_notices),
+        f"notices={got_notices}")
+    if got_agent != MAIN_AGENT:
+        # 团队编排把任务交给成员执行是**正常设计**，不是缺陷；
+        # 但要把它打印出来，避免下次有人把"agent 不是主 Agent"又当成回归。
+        print(f"    [INFO] 实际执行者 = {got_agent!r}（团队路由把该请求定向给成员，属正常编排）")
 
 
 def main() -> int:

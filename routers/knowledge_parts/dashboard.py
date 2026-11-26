@@ -150,10 +150,10 @@ _CALC = {
         "来源：同 QueryRouter 统计。公式：route='vector' 的次数 ÷ 三路线总次数 ×100%。"
         "纯向量路线给不出图置信，占比过高 ⇒ 大量请求不可解释。",
     "eval_recall_structured":
-        "来源：eval_reports 最新一行的 detail JSON → summary.graph.entity_recall（**评测脚本实测，非估算**）。"
+        "来源：eval_reports 中 eval_kind='rag_retrieval' 的**最近一份**的 detail JSON → summary.graph.entity_recall（该表多类型混存，取最新一行会拿到 trace 报告）（**评测脚本实测，非估算**）。"
         "对应甲方 7.1(c)「结构化召回 ≥95%」。",
     "eval_recall_semi":
-        "来源：eval_reports 最新一行的 detail JSON → summary.doc.recall@5（文档侧 top-5 召回）。"
+        "来源：同上（eval_kind='rag_retrieval' 最近一份）→ summary.doc.recall@5（文档侧 top-5 召回）。"
         "对应甲方 7.1(d)「半/非结构化召回 ≥75%」。",
     "eval_precision":
         "⚠️ eval_reports 的 entity_precision / f1 列值为 **0.0 = 未计算**（评测脚本只算了召回），"
@@ -162,7 +162,7 @@ _CALC = {
         "来源：eval_reports detail → negative_control.recall@5。做法：把 gold 轮转错位后重算，"
         "分数应归零 —— 用于证明指标确实在测「对齐关系」，而不是普遍虚高。",
     "eval_age_days":
-        "公式：当前日期 − eval_reports 最新一行的 created_at（天）。>30 天说明评测结论已陈旧。",
+        "公式：当前日期 − eval_kind='rag_retrieval' 最近一份报告的 created_at（天）。>30 天说明评测结论已陈旧。",
     # ── 性能与运维 ──
     "engine_rt_p50":
         "来源：query_routing_stats.latency_ms 全量样本。公式：把延迟升序排列后取第 50 百分位"
@@ -181,6 +181,19 @@ _CALC = {
         "来源：audit_logs。取值：created_at 近 7 天的行数（另附近 30 天与累计）。",
     "llm_activity":
         "来源：llm_usage_stats。取值：created_at 近 7 天的行数（另附近 30 天与累计）。",
+    # ── 消歧人工裁决（2026-11-26 补：此前落 _CALC_FALLBACK，用户看不到"怎么算的"）──
+    "dedup_accept_rate":
+        "来源：entity_dup_candidates 的**人工裁决**记录（status ∈ merged / rejected / related）。"
+        "公式：merged ÷ (merged + rejected + related) × 100%，分母为 0 时 value=None（不是 0%）。"
+        "★ 双侧区间：<20% ⇒ 召回不足（该合的没合）；>90% ⇒ 过度自动合并/审核草率。"
+        "零 override 不等于质量好（JAMIA 实证），故不给单侧方向。",
+    "dedup_related_rate":
+        "来源同上。公式：related ÷ (merged + rejected + related) × 100%。"
+        "「相关但不同实体」多为层级关系（部件⊂分系统）被判成候选；长期为 0 说明这类误判未被人工纠正。",
+    "dedup_accuracy":
+        "来源：消歧评测集（人工标注的同/异实体对）。公式：裁决与标注一致的对数 ÷ 评测集总对数 ×100%。"
+        "⚠️ 无评测集时 value=None（不是 0%）：**未评测**与「准确率为 0」是两件事，"
+        "前者要建评测集，后者要修消歧逻辑。",
 }
 
 _CALC_FALLBACK = "⚠️ 该指标尚未登记计算说明（请在 dashboard.py 的 _CALC 中补充）"

@@ -145,8 +145,19 @@ def plan(con, only: str = "") -> list:
             action = "rebuild"
             reason = (f"存了整份正文（{len(fm)} 字符）⇒ 换成 YAML 头（{len(new_fm)} 字符）")
         else:
-            action = "skip_similar"
-            reason = "长度接近 YAML 头，无需改"
+            # ★ 2026-11-26 修：**长度接近不等于内容同源**。
+            #   原逻辑把「长度差 ≤40」一律 `skip_similar`（"无需改"），实测踩到两个：
+            #     · sysml_stdlib_reference_guide：description 从「标准库查询指南：生成前先查
+            #       标准库」变成「标准库使用规范：**查询工具已停用**，成员事实一律以校验器
+            #       诊断为准」—— 长度只差 14 字符，而这句话是**告诉模型该怎么做事**的指令，
+            #       改口后旧版就是错的（模型会去调一个已停用的查询工具）。
+            #     · 智源平台管理：description 末尾多了「任何调用都必须给出可见回复」这条铁律。
+            #   ⇒ 只要两者**不完全相同**，就必须重建（重建是幂等的、更安全的那个动作）。
+            #   `noop` 分支已在上面按 `fm.strip() == new_fm.strip()` 精确判定，
+            #   所以走到这里一定是「长度接近但内容不同」⇒ 一律 rebuild。
+            action = "rebuild"
+            reason = (f"与 YAML 头**内容不同**（长度仅差 {abs(len(fm) - len(new_fm))} 字符，"
+                      f"但语义已变）⇒ 同步为 YAML 头（{len(new_fm)} 字符）")
 
         out.append({
             "id": r["id"], "name": r["name"], "action": action, "reason": reason,
@@ -251,12 +262,24 @@ def apply(rows: list) -> int:
         return 0
 
     s = summarize(rows)
+    # ★ 2026-11-26 修「一条坏项阻断全部」（fail-closed 过头）：
+    #   实测 11 个超限技能里只有 1 个（`变更影响分析`）的 **YAML 头本身**就 >400 字符，
+    #   旧逻辑因此 `return 1` ⇒ **另外 10 个能修的一个都没修**。
+    #   这不是"安全"，是"一处脏数据让整批治理停摆"（同族：全量事务里一条脏行回滚整批）。
+    #   改为：能修的照修；修不了的列入「需人工」并写明原因，最后如实报告。
+    blocked: list[tuple[str, str]] = []
     if s["author_lost"]:
-        print(f"❌ 拒绝执行：这些技能的 author 会丢失 {s['author_lost']}")
-        return 1
-    if s["truncated_after"]:
-        n = [r["name"] for r in chg if r["truncated_after"]]
-        print(f"❌ 拒绝执行：重建后仍超 {INJECT_CAP} 字符会被截断 {n}")
+        blocked += [(n, "author 会丢失") for n in s["author_lost"]]
+    blocked += [(r["name"], f"重建后仍超 {INJECT_CAP} 字符（YAML 头本身过长，需改 content 的 description）")
+                for r in chg if r["truncated_after"]]
+    _bad_names = {n for n, _ in blocked}
+    if _bad_names:
+        chg = [r for r in chg if r["name"] not in _bad_names]
+        print(f"⚠️  {len(blocked)} 个技能**无法自动修复**（已跳过，不阻断其余）：")
+        for _n, _why in blocked:
+            print(f"     · {_n}: {_why}")
+    if not chg:
+        print("❌ 没有可自动修复的技能（全部需人工）。")
         return 1
 
     os.makedirs(os.path.join(_ROOT, "backups"), exist_ok=True)

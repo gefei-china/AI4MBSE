@@ -837,6 +837,28 @@ jobs:
         if: ${{ !cancelled() }}
         run: python tools/verify/verify_assign_trace_persisted.py
 
+      # ══ 2026-11-26（二）：backlog 里修好的 5 条接入 pr ══════════════════════
+      # 都在 pr 预算内（≤8s/条），且不依赖本机常驻服务。
+      - name: Guard 意图理解摘要与执行过程区高度
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_ui_intent_brief.py
+
+      - name: Guard 技能 frontmatter 与 content 同源
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_skill_frontmatter.py
+
+      - name: Guard 重排开关与失败可见
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_rerank_effective.py
+
+      - name: Guard 采样参数优先级
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_s4_llm_params.py
+
+      - name: Guard 变异残留（通用形态扫描）
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_no_mutation_residue.py
+
       # ══ 2026-11-26（二）：backlog 60→56 —— 4 条一次性修到 pr ══════════════════
       # 这 4 条的**共同根因只有两个**，各修一次就批量转绿：
       # ① **硬编码夹具来源已消失**：3 个脚本都写了

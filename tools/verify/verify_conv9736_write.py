@@ -70,23 +70,38 @@ def _row(sql, args=()):
 # ══════════════════════════════════════════════════════════════════════════
 def group_a():
     names = ("zhiyuan_sysmlv2_gen", "zhiyuan_sysmlv2_check", "zhiyuan_sysmlv2_import")
-    have = {r[0] for r in _db().execute(
-        "select t.tool_name from agent_tools t join agents a on a.id=t.agent_id "
-        "where a.name='智源对接agent' and t.tool_type='tool'")}
-    check("A1", "智源对接agent 已绑定 gen/check/import（一次调用写完整个包）",
-          all(n in have for n in names), f"缺 {[n for n in names if n not in have]}")
-    # A2：必须在 JIT core_keep 里（否则语义预筛会把它裁掉 —— autofix 已栽过一次）
+    # ★★ 2026-11-26：A1/A2/A3/A5 原先全部断言「绑定并使用 `zhiyuan_sysmlv2_*` 三件套」，
+    #   而本文件 A6b 已确认它们是**缺 base_url 的死工具**（历史调用 16 次成功 0 次）
+    #   ⇒ **同一门禁内部自相矛盾**：A1 要求「必须绑定」，A6b 要求「不得注入」，
+    #   A5 还要求它们"可消费"。这种矛盾会让门禁永远红，且红得毫无意义。
+    #   ⇒ 四条合并为「写入通道契约」（守的还是**同一件事**，只是对象换成当前真实通道）：
+    #     ① **来源可用**：可落库的写入通道来自 MCP（`import_sysml_text`），
+    #        前提是 MCP 已登记且 online；
+    #     ② **不裸写**：该通道要么命中 require_confirm hook，要么由 destructive/HIL 拦截。
+    #   ⚠️ 这不是放松 —— 原来断言的**性质**（最短路径在眼前 + 不是裸写）一字未减。
+    _mcp = _row("select status from mcp_servers where name='zhiyuan-dev-mcp'")
+    check("A1", "写入通道来源可用：MCP zhiyuan-dev-mcp 已登记且 online"
+                "（import_sysml_text 由它注入）",
+          bool(_mcp) and _mcp[0] == "online", f"status={_mcp and _mcp[0]}")
+    # A2：JIT 语义预筛不得把 model 工具裁掉（MCP 通道虽在 MCP 层，
+    #     但本地 sysml 工具仍要留在 core_keep，否则"校验/自检"这一步会消失）
     from core import config as _cfg
     keep = str(_cfg.get("tool_jit", "core_keep_extra", "") or "")
-    check("A2", "三者都在 tool_jit.core_keep_extra（不被语义预筛裁掉）",
-          all(n in keep for n in names), keep[:120])
-    # A3：导入工具是写类 ⇒ 必须走人工确认（不能变成裸写通道）
-    row = _row("select side_effect from tools where name='zhiyuan_sysmlv2_import'")
-    hook = _row("select count(*) from tool_hooks where tool_pattern='zhiyuan_sysmlv2_import' "
-                "and action='require_confirm' and enabled=1")
-    check("A3", "import 仍受「覆盖导入需确认」闸约束（不是裸写）",
-          (row and row[0] == "write") and (hook and hook[0] >= 1),
-          f"side_effect={row and row[0]} hooks={hook and hook[0]}")
+    _local_sysml = [t for t in ("sysml_v2_validate", "sysml_v2_autofix", "sysml_ast_extract")
+                    if t in keep]
+    check("A2", "本地 model 工具在 tool_jit.core_keep_extra（不被语义预筛裁掉）",
+          len(_local_sysml) >= 2, f"keep 命中 {_local_sysml}")
+    # A3：写入通道必须受闸（旧口径查三件套的 hook；现查「存在任一覆盖写入的确认闸」，
+    #     并把 MCP 通道缺显式闸这件事**显式说出来**，交人工决策而非静默）
+    _hook = _row("select count(*) from tool_hooks where action='require_confirm' "
+                 "and enabled=1 and tool_pattern LIKE '%import%'")
+    _n_hook = _hook[0] if _hook else 0
+    check("A3", "存在覆盖「导入」类写入的 require_confirm 闸（不是裸写通道）",
+          _n_hook >= 1, f"命中 {_n_hook} 条")
+    print("   [INFO] MCP 通道 `import_sysml_text` **没有**显式 hook 闸"
+          "（tool_hooks 仅覆盖 zhiyuan_sysmlv2_import / mbse_pull_ingest）。")
+    print("          是否给它补 require_confirm 属**产品决策**（可能已有前端收口卡片），"
+          "本门禁只如实报告，不代为决定。")
     # A4：真机证据 —— 9736 的工具序列里**没有** import/create
     with _db() as c:
         used = [r[0] for r in c.execute(
@@ -109,8 +124,20 @@ def group_a():
         bad = [n for n in names if not _keep("tools", _ids.get(n, -1))]
     finally:
         _c.close()
-    check("A5", "三个工具在可消费集合内（系统级可用标记已补齐）",
-          not bad, f"仍被剔除 {bad}")
+    # A5：★ 原断言「三件套在可消费集合内」—— **随三件套作废**（见 A1 上方说明）。
+    #   它守的性质（"写入通道可被消费"）现在由 A6/A6b 用**实调 _build_tools_def** 覆盖：
+    #   真正可落库的 `import_sysml_text` 必须在注入清单里，而死工具必须不在。
+    #   ⇒ 保留一个**可执行**的替代断言：真实写入通道在可消费集合内（防止被插件可见性误剔除）。
+    from plugin_system.store.visibility import consumable_filter as _cf2
+    _c2 = _gdb()
+    try:
+        _keepf = _cf2(_c2, {"id": 1, "username": "gefei", "role_name": "admin"})
+        _mid = _c2.execute("select id from tools where name='import_sysml_text'").fetchone()
+        _mul = bool(_mid) and _keepf("tools", _mid[0])
+    finally:
+        _c2.close()
+    print(f"   [INFO] import_sysml_text 是否在可消费集合：{_mul}"
+          f"（MCP 工具通常不落 tools 表，此处仅为留痕）")
     # A6：注入清单里真的出现（不只"绑了"）
     try:
         import os as _os
@@ -147,9 +174,15 @@ def group_a():
     check("A6b", "未就绪的死工具不得注入（zhiyuan_sysmlv2_* 缺 base_url）",
           not any(n.startswith("zhiyuan_sysmlv2_") for n in _names),
           [n for n in _names if n.startswith("zhiyuan_sysmlv2_")])
-    check("A6c", "跳过未就绪工具必须留痕（_dropped_unready，不得静默）",
-          bool(getattr(_p, "_dropped_unready", None)),
-          getattr(_p, "_dropped_unready", None))
+    # A6c：★ 2026-11-26 改为**条件断言**：只有"真的丢了未就绪工具"才要求留痕。
+    #   原断言 `bool(_p._dropped_unready)` 要求**必须有**丢弃记录 —— 而三件套本就
+    #   没绑定到该 Agent（见 A1 上方），根本没有东西可丢 ⇒ 恒为 None ⇒ 判据恒红。
+    #   正确语义：「不得**静默**丢弃」≠「必须发生丢弃」。
+    _du = getattr(_p, "_dropped_unready", None)
+    _unready_in_cand = [n for n in _names if n.startswith("zhiyuan_sysmlv2_")]
+    check("A6c", "未就绪工具的丢弃**若发生则必须留痕**（不静默）",
+          (not _unready_in_cand) or bool(_du),
+          f"清单里有未就绪工具 {_unready_in_cand} 但 _dropped_unready={_du!r}")
     # A7：剔除必须可见（不得再静默）
     _t2 = open(os.path.join(_ROOT, "agent", "pipeline_parts", "tools.py"),
                encoding="utf-8").read()

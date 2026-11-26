@@ -130,30 +130,39 @@ print("构成   : doc %d / graph %d / neg %d"
       % (evalset["counts"]["doc"], evalset["counts"]["graph"], evalset["counts"]["neg"]))
 
 # ── 纪律 1：语料指纹比对 ────────────────────────────────────────────────────
+# ★★ 2026-11-26 修「同一语义两处各算一份」（本文件头部自己写着"必须调用同一个函数"，
+#   但比对处**违反了它**）：
+#   原实现在这里**自拼装**了一份指纹：
+#       {"chunks": count(document_chunks),
+#        "entities_release": len(names where branch='release' and status!='deprecated'),
+#        "release_entity_names_sha1": sha1(同样的过滤)}
+#   而 `build_evalset.py` 写入的是 `fingerprint_gate.fingerprint()` 的结果，其 key 是
+#   **表名**（`documents`/`document_chunks`/`entities`/`relations`），且 hash 的过滤条件是
+#   `WHERE branch='release'`（**不带** `status!='deprecated'`）。
+#   ⇒ 两处 key 不同（`chunks` vs `document_chunks`、`entities_release` vs `entities`）、
+#     hash 的过滤条件也不同 ⇒ **比对恒判漂移** ⇒ 评测永远无法出分。
+#     （实测输出："chunks None → 7096 / release 实体名集合 77e0c396 → 04c1ac33"）
+#   ⇒ 改为调用**同一个** `fingerprint()`，逐 key 比对；`schema_version` 不同则整体要求重建。
+from fingerprint_gate import fingerprint as _corpus_fp       # noqa: E402
+
 conn0 = get_db()
 now_finger = {}
 try:
-    import hashlib
-    names_rel = sorted(r["name"] for r in conn0.execute(
-        "select name from entities where branch='release' and status!='deprecated'"))
-    now_finger = {
-        "chunks": conn0.execute("select count(*) from document_chunks").fetchone()[0],
-        "entities_release": len(names_rel),
-        "release_entity_names_sha1": hashlib.sha1(
-            "\n".join(names_rel).encode("utf-8")).hexdigest()[:16],
-    }
+    now_finger = _corpus_fp(conn0)
 finally:
     conn0.close()
 
-old = evalset["fingerprint"]
+old = evalset.get("fingerprint") or {}
 drift = []
-if old.get("chunks") != now_finger["chunks"]:
-    drift.append("chunks %s → %s" % (old.get("chunks"), now_finger["chunks"]))
-if old.get("release_entity_names_sha1") != now_finger["release_entity_names_sha1"]:
-    drift.append("release 实体名集合 %s → %s（图谱已被改写）"
-                 % (old.get("release_entity_names_sha1"), now_finger["release_entity_names_sha1"]))
-if old.get("entities_release") != now_finger["entities_release"]:
-    drift.append("release 实体数 %s → %s" % (old.get("entities_release"), now_finger["entities_release"]))
+if old.get("schema_version") != now_finger.get("schema_version"):
+    drift.append("指纹结构版本 %s → %s（结构变了须重建评测集）"
+                 % (old.get("schema_version"), now_finger.get("schema_version")))
+else:
+    # 逐 key 比（同源同 key，不再各自拼装）
+    for _k in ("documents", "document_chunks", "entities", "relations",
+               "release_entity_names_sha1", "chunk_sections_sha1"):
+        if old.get(_k) != now_finger.get(_k):
+            drift.append("%s %s → %s" % (_k, old.get(_k), now_finger.get(_k)))
 
 print()
 if drift:
@@ -170,8 +179,10 @@ if drift:
         print("     ⛔ 已终止打分：加 --allow-drift 可强行跑（仅用于排查，不作为结论依据）。")
         sys.exit(3)
 else:
-    print("✅ 语料指纹一致（chunks=%s, release 实体名 sha1=%s）"
-          % (now_finger["chunks"], now_finger["release_entity_names_sha1"]))
+    # 打印时也用**同一份**指纹的 key（`document_chunks` 而不是自造的 `chunks`）
+    print("✅ 语料指纹一致（document_chunks=%s, release 实体名 sha1=%s）"
+          % (now_finger.get("document_chunks"),
+             now_finger.get("release_entity_names_sha1")))
 
 cfg_rag = {}
 try:

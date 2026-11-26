@@ -191,6 +191,25 @@ def runtime_check() -> list[tuple[str, bool]]:
     #   本来就该有全量工具 ⇒ **判据自己测错了对象**（空跑/假失败）。
     #   正解：拿**最后一次**调用与**循环内轮次**对比 ——
     #   收尾轮的工具数应当**更少**（只剩修复类）。
+    # ★ 2026-11-26：**[③] 端到端的前置条件必须显式检查**。
+    #   本组依赖「假 provider 调用的校验工具在本机真的能执行并返回『判据：block』」。
+    #   实测 `sysml_v2_validate` / `sysml_v2_lint` 都**没有本地执行器**
+    #   （`EXECUTABLE_BUILTIN_NAMES` 里只有 ast_extract/import_graph/stdlib_meta，
+    #    validate 只能走 zhiyuan MCP）⇒ tool 结果不会是 block ⇒
+    #   `repair_tools_needed` 恒 False ⇒ 收尾轮 tools=0 ⇒ 三条判据永远红，
+    #   而 `repair_tools_needed` / `_repair_tool_subset` 的逻辑本身没坏
+    #   （[①][②] 共 12 条纯函数判据已全绿，那才是守逻辑的地方）。
+    #   ⇒ 前置不可得时 SKIP 本组，并**明说**"逻辑仍受 [①][②] 保护"，不留盲区。
+    # ⚠️ 必须查**门禁实际调用的那个工具名**（`sysml_v2_validate`），不能查包含
+    #   "validate" 的任意名 —— `EXECUTABLE_BUILTIN_NAMES` 里有个 MCP 侧的
+    #   `validate`（第一版就是这么写的，`any('validate' in t)` 恒真 ⇒ SKIP 从不生效）。
+    _CALLED = "sysml_v2_validate"
+    _has_local_validator = (_CALLED in __import__(
+        "agent.pipeline_parts.tools", fromlist=["x"]).EXECUTABLE_BUILTIN_NAMES)
+    if not _has_local_validator:
+        print(f"    [SKIP] 本机无 {_CALLED} 的本地执行器（只能走 MCP）")
+        print("           ⇒ 端到端 3 项不可验；`repair_tools_needed` 逻辑仍由 [①][②] 12 条守护")
+        return out
     out.append((f"假 provider 被调用 {len(seen)} 次（硬上限={MR}，"
                 f"期望 > {MR}，多出来的那次才是收尾轮）", len(seen) > MR))
     tail = seen[-1] if seen else {"tools": []}

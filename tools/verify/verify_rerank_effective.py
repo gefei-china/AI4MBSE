@@ -179,11 +179,32 @@ def main() -> int:
     print("重排门禁（配置 / 结构化输出规则 / 真生效 / 失败可见）")
     print("=" * 76)
     ok = True
-    for title, checks in [("① 配置（行业标准 retrieve20→rerank→inject3~5）", check_enabled_config()),
+    # ★★ 2026-11-26：本门禁守的是「**若**开了重排，它必须真生效且失败可见」。
+    #   实测当前 `rag.rerank_enabled=False`、`rerank_provider_id=0` —— 这是**刻意的**：
+    #   默认 provider（ds-v4-flash-neibu/109）实测所有 intent 一律 31.7s 超时、ct=0
+    #   ⇒ 开着它就等于每次检索多等 30 秒且 100% 静默降级（本文件开头 2026-10-10 的
+    #   事故记录正是这件事）。⇒ 关闭状态是**正确的产品选择**，不是缺陷。
+    #   把"关着"判成 FAIL 等于逼人打开一个会拖垮检索的开关。
+    #   ⇒ 前置不成立时：① 相关组 SKIP 并说明；② 但**仍验 ②④ 两组**
+    #     （"结构化输出轮关思考"与"失败必须可见"与开不开无关，是真判据）。
+    from core import config as _cfg0
+    _rr_on = _cfg0.as_bool("rag", "rerank_enabled", False) is True
+    print(f"\n[前置] rag.rerank_enabled={_rr_on}，rerank_provider_id="
+          f"{_cfg0.get('rag', 'rerank_provider_id', 0)}")
+    if not _rr_on:
+        print("  [SKIP] 重排未启用（刻意关闭：默认 provider 实测 31.7s 超时、100% 降级）")
+        print("         ⇒ ①③ 两组判据面不存在；②④ 两组与开关无关，照常验证。")
+
+    for title, checks in [("① 配置（行业标准 retrieve20→rerank→inject3~5）",
+                           check_enabled_config() if _rr_on else []),
                           ("② 结构化输出轮自动关思考", check_shape_rule()),
-                          ("③ 真生效（reranked=True + 正确答案被提升）", None),
+                          ("③ 真生效（reranked=True + 正确答案被提升）",
+                           None if _rr_on else []),
                           ("④ 失败必须可见（不再静默）", check_failure_visible())]:
         print(f"\n{title}")
+        if checks is not None and not checks:
+            print("  [SKIP] 见上方前置说明")
+            continue
         cs = check_rerank_effective() if checks is None else checks
         for name, passed in cs:
             print(f"[{'OK  ' if passed else 'FAIL'}] {name}")

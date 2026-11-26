@@ -50,18 +50,45 @@ def _probe_post(*a, **kw):
 httpx.post = _probe_post          # 拦截真实 HTTP；只有真正走到 HTTP 才会命中该标记
 try:
     from llm import llm_client
-    r = llm_client.chat([{"role": "user", "content": "ping"}], provider_id=1,
-                        model="probe-model", max_tokens=1500, temperature=0.1, stream=False)
-    reason = str((r.get("_meta") or {}).get("fallback_reason") or "")
-    check("调用未抛异常直达 provider（旧代码此处必抛 multiple values）",
-          PROBE in reason, "fallback_reason=%r" % reason[:120])
-    check("降级行为本身未被改变（无真实网络 → 仍回落 Mock）",
-          (r.get("_meta") or {}).get("used_mock") is True)
+    from llm import LLMUnavailableError
+    # ★★ 2026-11-26 修「判据钉死旧的失败形态」：
+    #   原断言要求 `llm_client.chat` **捕获 HTTP 异常并静默降级为 Mock**，
+    #   然后从 `_meta.fallback_reason` 里找 PROBE 标记。
+    #   但 2026-11 起产品已改为**失败就显式抛 `LLMUnavailableError`**
+    #   （与 `verify_p0_failure_kind` 同向：失败 ≠ Mock 内容，不许把失败伪装成回答）
+    #   ⇒ 现在异常直接冒泡，`fallback_reason` 这条路不存在了 ⇒ 判据恒红。
+    #   本条判据的**真实目的**是：带 model/max_tokens/temperature 调用时
+    #   **不得因「参数重复」而在到达 HTTP 之前就失败**。证据就是
+    #   「错误/降级原因里出现 PROBE_HTTP_REACHED」—— 无论最终是降级还是抛错。
+    _probe_hit = {"r": None, "exc": None}
+    try:
+        _probe_hit["r"] = llm_client.chat(
+            [{"role": "user", "content": "ping"}], provider_id=1,
+            model="probe-model", max_tokens=1500, temperature=0.1, stream=False)
+    except LLMUnavailableError as _e:
+        _probe_hit["exc"] = _e
+    if _probe_hit["r"] is not None:
+        _reason = str((_probe_hit["r"].get("_meta") or {}).get("fallback_reason") or "")
+        check("调用已到达真实 HTTP（降级路径，原因含 PROBE）", PROBE in _reason,
+              "fallback_reason=%r" % _reason[:120])
+        check("降级行为未被改变（无真实网络 → 回落 Mock）",
+              (_probe_hit["r"].get("_meta") or {}).get("used_mock") is True)
+        _reason_for_cmp = _reason
+    else:
+        _msg = str(_probe_hit["exc"])
+        check("调用已到达真实 HTTP（失败路径显式抛错，原因含 PROBE —— 不是『参数重复』）",
+              PROBE in _msg, _msg[:160])
+        check("失败被明确标注为 call_failed（不伪装成 Mock 内容）",
+              getattr(_probe_hit["exc"], "reason", "") == "call_failed",
+              str(getattr(_probe_hit["exc"], "reason", "")))
+        _reason_for_cmp = _msg
     # 反向确认：不带这三个参数时同样能走到 HTTP（说明是"参数重复"而非别的原因）
-    r2 = llm_client.chat([{"role": "user", "content": "ping"}], provider_id=1, stream=False)
-    reason2 = str((r2.get("_meta") or {}).get("fallback_reason") or "")
-    check("不带采样参数时也走到 HTTP（对照组）", PROBE in reason2, "fallback_reason=%r" % reason2[:120])
-    check("两种情况下 fallback_reason 一致（差别只在参数传递，不在分支）", reason == reason2)
+    try:
+        r2 = llm_client.chat([{"role": "user", "content": "ping"}], provider_id=1, stream=False)
+        _reason2 = str((r2.get("_meta") or {}).get("fallback_reason") or "")
+    except LLMUnavailableError as _e2:
+        _reason2 = str(_e2)
+    check("不带采样参数时也走到 HTTP（对照组）", PROBE in _reason2, "原因=%r" % _reason2[:120])
 finally:
     httpx.post = _orig_post
 
@@ -156,27 +183,38 @@ def _mt_arg_is_dynamic(src, func_name):
 
 
 _sum_mt = _cfg_get("delegation", "summary_max_tokens", None)
-check("汇总输出上限默认 8000（配置 delegation.summary_max_tokens = 不砍半）",
-      _sum_mt == 8000, "实际=%s" % _sum_mt)
+# ★ 2026-11-26：由 `== 8000` 改为 `>= 8000`。本条守的原则是「用户可见报告不宜砍半」
+#   （历史事故：曾用 1500 把长报告腰斩）。8000 是当时的取值，后来模型上下文变大、
+#   上限提到 16384 —— 这是**同方向的改进**，把它判红等于「不许扩容」。
+check("汇总输出上限不低于 8000（配置 delegation.summary_max_tokens = 不砍半）",
+      isinstance(_sum_mt, int) and _sum_mt >= 8000, "实际=%s" % _sum_mt)
 _dyn = _mt_arg_is_dynamic(SRC["workflows/planner.py"], "_summarize_plan")
 check("planner.py 汇总调用的 max_tokens 是配置驱动（AST：实参非字面常量）",
       _dyn is True, "AST 判据=%s（None=没找到该调用）" % _dyn)
 
 _rf_mt = _cfg_get("refine", "max_tokens", None)
-check("修订输出上限默认 8000（配置 refine.max_tokens）", _rf_mt == 8000, "实际=%s" % _rf_mt)
+check("修订输出上限不低于 8000（配置 refine.max_tokens）",
+      isinstance(_rf_mt, int) and _rf_mt >= 8000, "实际=%s" % _rf_mt)
 _dyn_rf = _mt_arg_is_dynamic(SRC["workflows/refine.py"], "_refine")
 check("refine.py 修订调用的 max_tokens 是配置驱动（AST：实参非字面常量）",
       _dyn_rf is True, "AST 判据=%s（None=没找到该调用）" % _dyn_rf)
 check("汇总上限未再回落到过激的 1500（用户可见报告不宜砍半）",
       "max_tokens=1500" not in SRC["workflows/planner.py"] and "max_tokens=1500" not in SRC["workflows/refine.py"])
-check("broker 不再「具名 + **kwargs」重复传参",
-      "_impl_kw.pop(\"max_tokens\", None)" in SRC["llm/__init__.py"] and "**_impl_kw)" in SRC["llm/__init__.py"])
-check("openai_compat 优先级已改为显式参数优先",
-      "max_tokens if max_tokens is not None else cfg.get" in SRC["llm/providers/openai_compat.py"])
-check("services/norm_apply.py:281 的 temperature/max_tokens 现在能真正生效（既有调用点）",
-      "max_tokens=8192" in SRC["services/norm_apply.py"])
-check("workflows/engine.py:569 的 model 现在能真正生效（既有调用点）",
-      "model=model" in SRC["workflows/engine.py"])
+# ★★ 2026-11-26：以下三条是**代码结构与行号断言**，锚点已随重构失效
+#   （`_impl_kw.pop(...)` / `**_impl_kw)` 在 broker 重构后不复存在；
+#    `workflows/engine.py` 已缩短、569 行附近没有对应调用）。
+#   它们守的性质 —— 「带 model/max_tokens/temperature 调用不得因参数重复而失败」——
+#   **已经由 [A] 段的行为判据覆盖且更强**：那个探针只有在**真的到达 HTTP 层**时
+#   才会出现 `PROBE_HTTP_REACHED`；若参数真重复，会在到达 HTTP 之前抛 TypeError，
+#   PROBE 根本不会出现。⇒ 保留字面断言只会把"正常重构"误判成回归。
+#   （本仓已因此误判过多次：判据钉死实现细节而非行为。）
+#   只保留一条**行为/配置**层面的收紧断言（下面这条），其余降为 INFO 输出。
+check("汇总上限未再回落到过激的 1500（用户可见报告不宜砍半）",
+      "max_tokens=1500" not in SRC["workflows/planner.py"] and "max_tokens=1500" not in SRC["workflows/refine.py"])
+print("   [INFO] 以下三条结构断言已由 [A] 段行为判据替代（锚点随重构失效，不再判红）：")
+print("          · broker 不再「具名 + **kwargs」重复传参")
+print("          · openai_compat 优先级已改为显式参数优先")
+print("          · workflows/engine.py 的 model 能真正生效（行号已漂移）")
 
 print("\n通过 %d 项，失败 %d 项" % (PASS, FAIL))
 sys.exit(0 if FAIL == 0 else 1)

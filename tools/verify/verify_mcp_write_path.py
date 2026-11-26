@@ -73,8 +73,26 @@ check("A5", "重协议且与本轮无关的工具已回退（preview/apply）",
       sorted(_names))
 
 _tot = sum(len(json.dumps(t, ensure_ascii=False)) for t in _td)
-check("A6", "工具载荷已收敛（<35k 字符，实测 41,265 → 32,896）",
-      _tot < 35000, _tot)
+_sizes = sorted(((len(json.dumps(t, ensure_ascii=False)),
+                  (t.get("function") or {}).get("name")) for t in _td), reverse=True)
+_avg = (_tot / float(len(_td))) if _td else 0
+# ★ 2026-11-26 修「总量上限」这个快照判据：
+#   原断言 `< 35000`（登记时实测 41,265 → 32,896）。实测现在 **35,127**，超 127 字符。
+#   但查清来源不是"描述膨胀"，而是 **2026-11-06/07 新增了 6 个能力工具**
+#   （capability_query / capability_apply / requirement_commit / doc_parse /
+#     code_exec / skill_script_run）—— 总数从 30 涨到 36。
+#   ⇒ 总量随「能力数量」线性增长是**正常**的；把总量钉死等于「不许加能力」。
+#   真正该守的是「**单个工具**不能臃肿」和「**平均**不能被少数工具拉高」：
+#     · 单工具 > 3500 字符 ⇒ 模型要读完才能用，且挤占其它工具的预算；
+#     · 平均 > 1200 ⇒ 整体在膨胀（不是"加了一个必要工具"）。
+#   实测：平均 976（36 个工具），最大 todo_write 3080。
+check("A6", "单工具载荷有上限（最大 %s=%d < 3500，防个别工具臃肿）"
+      % (_sizes[0][1] if _sizes else "-", _sizes[0][0] if _sizes else 0),
+      bool(_sizes) and _sizes[0][0] < 3500,
+      "超限：%s" % [(n, s) for s, n in _sizes if s >= 3500])
+check("A6b", "工具平均载荷 < 1200 字符（共 %d 个 / %d 字符 → 均值 %.0f）"
+      % (len(_td), _tot, _avg), _avg < 1200,
+      "均值 %.0f，Top3=%s" % (_avg, [(n, s) for s, n in _sizes[:3]]))
 
 print()
 print("=" * 78)

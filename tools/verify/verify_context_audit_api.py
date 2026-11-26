@@ -223,11 +223,32 @@ con = get_db()
 rep = ContextAuditRepo(con)
 sw = rep.switches(days=7)
 names2 = {m["metric"] for m in sw["metrics"]}
-check("[附] MCP online + 开关开 ⇒ role_manual_applied 指标可见",
-      "role_manual_applied" in names2, str(sorted(names2))[:160])
-check("[附] role_manual_dropped_chars > 0（确有裁剪）",
-      next((m["value"] for m in sw["metrics"]
-            if m["metric"] == "role_manual_dropped_chars"), 0) > 0)
+
+# ★ 2026-11-26 加**前置断言**（本仓反复踩的形态：判据面不存在却判红）：
+#   role_manual 归因只在 `mode ∈ {applied, nothing_to_drop, no_exposed}` 时才写；
+#   而 `mode=no_manual`（该 Agent 的 prompt 里**没有内嵌工具手册段**）时**正确地不写**
+#   —— 没裁任何东西，就没有"裁掉了多少"可归因。
+#   实测真库「智源对接agent」的 system_prompt 只剩 1281 字符（手册段已改为按需注入）
+#   ⇒ 前置不成立 ⇒ 下面三条判据永远红，而产品是对的。
+#   ⇒ 先测「这个样本能不能切出手册段」：能切 ⇒ 走真判据；切不出 ⇒ SKIP 并说明。
+from agent.role_manual_filter import (split_by_tool_names as _split_rm,  # noqa: E402
+                                      PROSE as _PROSE_RM)
+_a = con.execute("SELECT system_prompt FROM agents WHERE name='智源对接agent'").fetchone()
+_sp_probe = (_a["system_prompt"] if _a else "") or ""
+_manual_segs = [n for n, _t in _split_rm(_sp_probe, list(_NAMES or [])) if n != _PROSE_RM]
+print("  [前置] 被测 Agent prompt %d 字符，可切出手册段 %d 个 ⇒ mode=%s"
+      % (len(_sp_probe), len(_manual_segs),
+         "有手册段" if _manual_segs else "no_manual（该判据面不存在）"))
+
+if not _manual_segs:
+    print("  [SKIP] 「智源对接agent」的 prompt 无内嵌工具手册段 ⇒ 角色裁剪与归因均不触发；")
+    print("         这不是产品问题（手册已改为按需注入），而是本判据的样本已退役。")
+else:
+    check("[附] MCP online + 开关开 ⇒ role_manual_applied 指标可见",
+          "role_manual_applied" in names2, str(sorted(names2))[:160])
+    check("[附] role_manual_dropped_chars > 0（确有裁剪）",
+          next((m["value"] for m in sw["metrics"]
+                if m["metric"] == "role_manual_dropped_chars"), 0) > 0)
 for m in sw["metrics"][:10]:
     print(f"  {m['metric']:<30}{m['label']:<24}{m['value']:>8}")
 
@@ -240,9 +261,12 @@ check("[3c] switches 每项都带 kind/unit/samples 且取值符合语义", not 
       str(_sw_bad[:3]) if _sw_bad else f"{len(sw.get('metrics') or [])} 项")
 # 快照型真实样本：role_manual_dropped_chars 是"每轮裁掉多少字"，必须取均值不是求和
 _dc = next((m for m in sw["metrics"] if m["metric"] == "role_manual_dropped_chars"), None)
-check("[3c] 快照型 role_manual_dropped_chars 取均值（value==avg，不是 sum）",
-      bool(_dc) and _dc["kind"] == "gauge" and _dc["value"] == _dc["avg"],
-      f"kind={_dc and _dc['kind']} value={_dc and _dc['value']} avg={_dc and _dc['avg']}")
+if _dc is None:
+    print("  [SKIP] [3c] 无 role_manual_dropped_chars 样本（同上：手册段不存在）")
+else:
+    check("[3c] 快照型 role_manual_dropped_chars 取均值（value==avg，不是 sum）",
+          _dc["kind"] == "gauge" and _dc["value"] == _dc["avg"],
+          f"kind={_dc['kind']} value={_dc['value']} avg={_dc['avg']}")
 
 # ══════════════════════════════════════════════════════════════
 # [5] 会话明细的差额口径

@@ -67,8 +67,21 @@ def adapter_checks() -> list:
                 "否则开关静默失效）", ra._cfg("ragflow_dataset", "") is not None
                 and _group_ok()))
     # 同理：SDK 目录探测必须命中真实存在的路径
-    out.append((f"★ SDK 目录探测命中（ragflow-main/sdk/python 存在，"
-                f"sdk_available={ra.sdk_available()}）", ra.sdk_available()))
+    # ★ 2026-11-26：**SDK 不在本仓库，改为 SKIP 而不是 FAIL**。
+    #   本文件第一行自己就写着「RAGFlow SDK 不在本仓库内（需 ragflow-main/sdk/python）
+    #   ⇒ 接进来就是常红」，但代码仍把它当 FAIL 报 ⇒ 门禁永远红，
+    #   而"红"在这里不携带任何行动信息（既不是产品坏了，也不是配置错了，
+    #   是**这个能力在本仓不可用**）。
+    #   ⇒ 显式 SKIP 并把原因说清楚（含"要启用需做什么"），下面依赖 SDK 的判据同步跳过。
+    #   ⚠️ 保留「配置组名」那条判据为真判据 —— 它在本仓**可验**（读的是 CONFIG_SCHEMA），
+    #      而且它守的正是"开关静默失效"这个真实坑。
+    _sdk_ok = ra.sdk_available()
+    if _sdk_ok:
+        out.append((f"★ SDK 目录探测命中（sdk_available={_sdk_ok}）", True))
+    else:
+        print("  [SKIP] RAGFlow SDK 不在本仓库（需 ragflow-main/sdk/python）")
+        print("         ⇒ SDK 相关判据面不存在。要用该通道需把 RAGFlow SDK 放到仓库内，")
+        print("           并把 rag.ragflow_enabled 打开；当前 mode 恒为 skip（按设计降级）。")
 
     # ★ 假对象必须**严格按Go 版 SDK 的真实契约**造，否则门禁自己会判红：
     #   - upload_documents 收 {display_name, blob}，返回 **list[Document]对象**
@@ -109,11 +122,19 @@ def adapter_checks() -> list:
             return _FakeDs()
 
     # 打桩：SDK 加载、开关、连接参数三处
+    # ★ 2026-11-26：桩必须连 `sdk_available` 一起替换。
+    #   适配层 `chunk()` 先判 `is_enabled()`，再判 **模块级** `sdk_available()`
+    #   （不是 `_load_sdk`）⇒ 只替换 `_load_sdk` 的话，SDK 不在库时
+    #   `sdk_available()` 仍返回 False ⇒ mode 恒 skip ⇒
+    #   「打桩后能走通 ragflow 路径」必然红，而**适配层逻辑没坏**。
+    #   （这正是本文件头部注释里那句「SDK 目录探测命中但 sdk_available=False」的真因。）
     orig_load, orig_enabled = ra._load_sdk, ra.is_enabled
+    orig_avail = ra.sdk_available
     import core.config as cf
     _g = cf.get
     try:
         ra._load_sdk = lambda: _FakeClient
+        ra.sdk_available = lambda: True
         ra.is_enabled = lambda: True
         cf.get = lambda g, k, d=None: (
             {"ragflow_base_url": "http://127.0.0.1:1", "ragflow_api_key": "k",
@@ -125,6 +146,7 @@ def adapter_checks() -> list:
              "reason": f"{type(e).__name__}: {str(e)[:140]}"}
     finally:
         ra._load_sdk, ra.is_enabled = orig_load, orig_enabled
+        ra.sdk_available = orig_avail
         cf.get = _g
 
     out.append((f"★ 打桩后能走通 ragflow 路径（mode={r['mode']}, "

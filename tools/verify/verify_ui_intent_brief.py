@@ -1,6 +1,6 @@
 # CI-OPTIONAL: 2026-11-04 盘点实测：在干净库（init_db 新建，CI 等价口径）上 rc≠0，接线会让 CI 恒红、成为噪音。需先逐条定性（产品缺陷 vs 门禁口径过期）再接线。证据：tmp/backlog_probe.json 的 red 列表；方法见 docs/门禁盘点-20261104.md §4。
 # -*- coding: utf-8 -*-
-"""门禁：意图理解摘要 + 代码块默认展开 + 执行过程区限高（2026-10-27）
+"""门禁：意图理解摘要 + 代码块默认展开 + 执行过程区**不得**整区限高（2026-11-26 反转）
 
 ## 这三个断言对应的用户原话
 
@@ -32,6 +32,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
 import sys
@@ -182,21 +183,37 @@ def group_b():
         check(f"B3 {f} 的 .md-code 限高内滚",
               re.search(r"\.code-fold \.md-code\{[^}]*max-height:\d+px[^}]*overflow:auto", txt) is not None)
 
-    # B4 执行过程区整区限高 + 可滚（两个 css 都要，页面同时引了两份）
+    # ── B4 组：**已反转 + 职责移交**（2026-11-26）──────────────────────────
+    # 历史：B4/B4b/B4c/B4d 原守「.proc / .hist-proc 必须 max-height + overflow-y:auto」，
+    #   依据是 2026-10-27 的要求（「限制高度，可以滑动查看完整内容」）。
+    #   但 **2026-11-18 米爸改了口径**（原话）：
+    #     「输出内容被最外层的容器框着…建议把最外层的滚动条去掉」
+    #     「只针对思考过程这个节点进行容器化，现在是把整个执行过程都收到容器里」
+    #   ⇒ 撤销整区限高；只把**思考节点** `.proc-block.thinking .proc-body` 容器化 36vh。
+    #   ⇒ 本组判据与用户最新要求**方向相反**：它赢了，产品就回到用户投诉的状态。
+    #   现在两条门禁在这件事上**互相矛盾**（本组要限高、answer_no_inner_scroll 要不许限高），
+    #   而用户口径只有一个 ⇒ 保留更强的那个（B3 组还额外守「思考节点必须限高」），
+    #   本组改为**反向断言 + 承接方存在性断言**，而不是简单删掉：
+    #     · 反向断言：`.proc` / `.hist-proc.open .proc-timeline` 一旦被加回限高就翻红；
+    #     · 承接断言：`verify_answer_no_inner_scroll.py` 必须在册 —— 否则移交后
+    #       两边都不守，这个维度就彻底失去保护（"删掉即不再受保护"的反面教材）。
+    _ans_path = os.path.join(ROOT, "tools", "verify", "verify_answer_no_inner_scroll.py")
+    check("B4 职责已移交 verify_answer_no_inner_scroll.py（承接方必须存在）",
+          os.path.exists(_ans_path),
+          "承接方缺失 ⇒ 「执行过程区高度」这个维度将无人守护")
     for f, txt in (("static/css/chat.css", css_chat), ("static/css/app.css", css_app)):
         m = re.search(r"^\.proc\{([^}]*)\}", txt, re.M)
         body = m.group(1) if m else ""
-        check(f"B4 {f} 的 .proc 限高", "max-height:" in body, body[:60])
-        check(f"B4b {f} 的 .proc 可滚动查看完整内容", "overflow-y:auto" in body)
-
-    # B4c 历史回看路径（.hist-proc）也必须限高 —— 前端有**两条**执行过程渲染路径：
-    #     流式当时用 .proc（procRender），刷新/回看用 .hist-proc（procBlocksHtml）。
-    #     只改一条是"治了正在跑的那条，回看旧消息照旧被拉长"（本仓已多次踩到成对修改的坑）。
-    for f, txt in (("static/css/chat.css", css_chat), ("static/css/app.css", css_app)):
-        m2 = re.search(r"^\.hist-proc\.open \.proc-timeline\{([^}]*)\}", txt, re.M)
-        body2 = m2.group(1) if m2 else ""
-        check(f"B4c {f} 历史回看 .hist-proc 也限高", "max-height:" in body2, body2[:50].replace("\n", " "))
-        check(f"B4d {f} 历史回看可滚动", "overflow-y:auto" in body2)
+        # 注意：`.proc{...}` 在本仓有**两条**（一条是旧规则的残留、一条是后期覆盖的），
+        # 判据必须检查**所有**同名规则，只查第一条会漏掉真正生效的那条。
+        _all_proc = re.findall(r"^\.proc\{([^}]*)\}", txt, re.M)
+        _lim = [b for b in _all_proc if "max-height:" in b or "overflow-y:auto" in b]
+        check(f"B4 {f} 的 .proc **不得**整区限高内滚（2026-11-18 用户要求单层滚动）",
+              not _lim, f"发现限高规则：{_lim}" if _lim else f"{len(_all_proc)} 条 .proc 规则均未限高")
+        _all_hp = re.findall(r"^\.hist-proc\.open \.proc-timeline\{([^}]*)\}", txt, re.M)
+        _lim2 = [b for b in _all_hp if "max-height:" in b or "overflow-y:auto" in b]
+        check(f"B4c {f} 历史回看 .hist-proc **不得**限高（两条渲染路径同口径）",
+              not _lim2, f"发现限高：{_lim2}" if _lim2 else f"{len(_all_hp)} 条规则均未限高")
 
     # B5 正文不设限（B5-8 纪律：正文必须完整展开）—— 防止把限高误加到 .body
     for f, txt in (("static/css/chat.css", css_chat), ("static/css/app.css", css_app)):
@@ -248,14 +265,24 @@ def group_c():
                      probe_codefold_default, "代码块默认展开")
 
     def probe_proc_maxh():
-        txt = read("static/css/chat.css")
-        m = re.search(r"^\.proc\{([^}]*)\}", txt, re.M)
-        return bool(m) and "max-height:" in m.group(1)
+        """B4 **反向**判据：返回「判据是否通过」（= 没有任何一条 `.proc` 规则限高）。
 
+        ★ 2026-11-26：方向已反转（原为「必须限高」）。判据必须检查**全部**同名规则 ——
+          本仓 `.proc{...}` 有两条（旧残留 + 后期覆盖），只查第一条会漏掉真正生效的那条，
+          这正是原判据把「第二条没有限高」读成「第一条有限高」而假绿/假红的原因。
+        ⚠️ 返回值的**极性**要与 `mutate_and_check` 的约定一致（True=判据通过）：
+          第一版我写成「存在限高 → True」，结果变异成功时框架认为 `ok=True` ⇒
+          报「变异后仍然通过 = 断言空转」——**把成功的自证报成失败**。
+        """
+        txt = read("static/css/chat.css")
+        bodies = re.findall(r"^\.proc\{([^}]*)\}", txt, re.M)
+        return not any("max-height:" in b or "overflow-y:auto" in b for b in bodies)
+
+    # 变异：把限高**加回去**（回到 2026-11-18 之前的形态）⇒ 反向判据必须翻红
     mutate_and_check("static/css/chat.css",
-                     ".proc{max-height:44vh;overflow-y:auto;overscroll-behavior:contain;padding-right:2px;}",
-                     ".proc{padding-right:2px;}",
-                     probe_proc_maxh, "执行过程区限高")
+                     ".proc{overscroll-behavior:auto;padding-right:2px;}",
+                     ".proc{overscroll-behavior:auto;padding-right:2px;max-height:44vh;overflow-y:auto;}",
+                     probe_proc_maxh, "执行过程区限高（加回去必须被判红）")
 
     def probe_brief_used():
         return "'理解：' + _b.goal" in read("static/js/mods/11-pipeline.js")

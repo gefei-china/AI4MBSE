@@ -276,24 +276,73 @@ for _nm in ("智源平台管理", "sysml_view_generation_guide"):
     check("[D2] %s 的 frontmatter ≤ 400（注入不被腰斩）" % _nm,
           len(_r["frontmatter"] or "") <= 400, "长度 %d" % len(_r["frontmatter"] or ""))
 
-# ── [D3] Agent 735 绑定了 4 个本地 SysML 工具（视图 skill 正文点名要用）──
+# ── [D3] Agent 735 必须绑上「视图 skill 正文点名、且当前 active」的本地工具 ──
+# ★ 2026-11-26 修「钉死 6 个工具名」（同族：被测样本退役）：
+#   原判据硬编码 ("sysml_ast_extract","sysml_stdlib_meta","sysml_v2_lint",
+#   "sysml_v2_project_check","sysml_v2_validate","sysml_v2_autofix")，
+#   而实测 `sysml_stdlib_meta` / `sysml_v2_project_check` 的状态已是 **disabled**
+#   （标准库查询工具因口径调整停用；project_check 由 sysml_v2_lint/validate 承担）。
+#   要求把 Agent 绑定到一个**不能用的工具**上是没意义的：
+#   绑了也不会被注入（注入侧按 status 过滤），只会让判据永远红。
+#   ⇒ 改为**从真源推导**：
+#      ① 需求集 = 8 个视图技能正文里点名的 sysml_* 工具（本判据的原意就是"正文点名要用的"）
+#      ② 与 tools 表 **status='active'** 求交 ⇒ 才是"真的该绑"的集合
+#      ③ 断言 735 绑定了交集**全部**（不是"至少一个"——漏一个照样有视图跑不动）
+#   ⚠️ 必须留下界断言：若查询被改坏成空集，`set() <= _bind` 恒真 ⇒ 假绿。
+_view_skills = ("sysml_view_generation_requirement", "sysml_view_generation_structure",
+                "sysml_view_generation_usecase", "sysml_view_generation_activity",
+                "sysml_view_generation_ibd", "sysml_view_generation_sequence",
+                "sysml_view_generation_state", "sysml_view_generation_parameter")
+_named_tools = set()
+for _nm in _view_skills:
+    _r = con.execute("SELECT content FROM skills WHERE name=?", (_nm,)).fetchone()
+    if not _r:
+        continue
+    for _t in re.findall(r"\b(sysml_[a-z0-9_]+)\b", _r["content"] or ""):
+        _named_tools.add(_t)
+_active_all = {r["name"] for r in con.execute("SELECT name FROM tools WHERE status='active'")}
+_need_bind = sorted(_named_tools & _active_all)
+_disabled_named = sorted(_named_tools - _active_all)
 _bind = {r["tool_name"] for r in con.execute(
     "SELECT tool_name FROM agent_tools WHERE agent_id=735 AND tool_type='tool' AND enabled=1")}
-for _t in ("sysml_ast_extract", "sysml_stdlib_meta", "sysml_v2_lint", "sysml_v2_project_check",
-           "sysml_v2_validate", "sysml_v2_autofix"):
-    check("[D3] Agent 735 绑定本地工具 %s" % _t, _t in _bind)
+print("  [D3] 视图技能点名工具 %d 个；其中 active %d 个、已停用 %d 个 %s"
+      % (len(_named_tools), len(_need_bind), len(_disabled_named),
+         _disabled_named if _disabled_named else ""))
+check("[D3] 推导出的『该绑工具集』非空且有下界（防扫描器塌成空集后恒真）",
+      len(_need_bind) >= 3, "active 点名工具 %d 个：%s" % (len(_need_bind), _need_bind))
+_miss_bind = [t for t in _need_bind if t not in _bind]
+check("[D3] Agent 735 绑定了全部『视图正文点名且 active』的本地工具",
+      not _miss_bind, "缺 %s（已绑 %d 个）" % (_miss_bind, len(_bind)))
+# 反向护栏：不该绑已停用的工具（绑了也不会注入，只是噪音）
+_bound_disabled = sorted(_bind & set(_disabled_named))
+check("[D3b] Agent 735 未绑定已停用工具（绑了也不注入，纯噪音）",
+      not _bound_disabled, "误绑 %s" % _bound_disabled if _bound_disabled else "")
 
-# ── [D4] 视图 skill 的 allowed_tools 含正文点名的工具 ──
-for _nm in ("sysml_view_generation_requirement", "sysml_view_generation_structure",
-            "sysml_view_generation_usecase", "sysml_view_generation_activity",
-            "sysml_view_generation_ibd", "sysml_view_generation_sequence",
-            "sysml_view_generation_state", "sysml_view_generation_parameter"):
+# ── [D4] 视图 skill 的 allowed_tools 必须覆盖正文点名的 **active** 工具 ──
+# ★ 2026-11-26 修两处：
+#   ① **已停用工具不再要求覆盖**：正文里点了 `sysml_stdlib_meta`（已 disabled），
+#      要求把它写进 allowed_tools 没有意义 —— 注入侧按 status 过滤，写进去也不会下发。
+#      （这是"正文过时"的问题，属另一维度，下面单独 warn 出来，不混进本条判红。）
+#   ② 只把**技能自身名**排除是不够的：8 个视图技能的正文会互相提及对方的名字
+#      （如 activity 正文提到 ibd），那是**技能名**不是**工具名**。
+#      ⇒ 从 `_need_bind` 之外再显式剔除「在 skills 表里存在同名技能」的那些词。
+_skill_names = {r["name"] for r in con.execute("SELECT name FROM skills")}
+for _nm in _view_skills:
     _r = con.execute("SELECT allowed_tools, content FROM skills WHERE name=?", (_nm,)).fetchone()
+    if not _r:
+        continue
     _at = set(json.loads(_r["allowed_tools"] or "[]"))
     _named = set(re.findall(r"\b(sysml_[a-z0-9_]+|graph_retrieve)\b", _r["content"] or ""))
-    _named.discard(_nm)          # 技能**自身名字**会被正文提及，不是工具
-    check("[D4] %s 的 allowed_tools 覆盖正文点名的工具" % _nm,
-          not (_named - _at), "缺=%s" % sorted(_named - _at))
+    _named -= _skill_names            # 技能互相提及的名字不是工具
+    _named.discard(_nm)
+    _named_active = _named & _active_all
+    _named_dead = sorted(_named - _active_all)
+    check("[D4] %s 的 allowed_tools 覆盖正文点名的 active 工具" % _nm,
+          not (_named_active - _at), "缺=%s" % sorted(_named_active - _at))
+    if _named_dead:
+        # 不判红：正文提到已停用工具**不影响注入**（反正不会被下发），
+        # 但要让它在输出里可见 —— 否则"技能还在教模型调一个不存在的工具"永远没人发现。
+        print("  [WARN] %s 正文点名了已停用工具 %s（建议更新正文）" % (_nm, _named_dead))
 
 # ── [D5] 视图 skill 的白名单**不得排除** `sysml_v2_autofix`（收尾修复轮的工具来源）──
 #   ⚠️ 本条是被 `verify_p0_repair_round_tools` 抓出来的**真回归**（2026-10-27）：
@@ -310,6 +359,11 @@ for _nm in ("sysml_view_generation_requirement", "sysml_view_generation_structur
     _at = set(json.loads(_r["allowed_tools"] or "[]"))
     _named = set(re.findall(r"\b(sysml_[a-z0-9_]+|graph_retrieve)\b", _r["content"] or ""))
     _named.discard(_nm)
+    _named -= _skill_names            # 技能互提的名字不是工具（同 D4）
+    # ★ 2026-11-26：**已停用的工具不要求进白名单** —— 写进去也不会下发（注入侧按 status 过滤），
+    #   只会让判据永远红。实测正文里仍提到 `sysml_stdlib_meta`（已 disabled）。
+    #   ⚠️ 与 D4 同理：这条不放松「active 工具被排斥」的守护，只排除"注定注入不了"的。
+    _named &= _active_all
     _excluded = (_at - _named) if _at else set()      # 白名单多列的 = 正文没点名，但**需要**（如 autofix）
     # ⚠️ **空白名单 `[]` = 不限制 = 不排除任何工具** ⇒ 此时"正文点名但不在白名单"不是缺陷。
     _missing = (_named - _at) if _at else set()       # 非空白名单里正文点名却被排除 ⇒ 缺陷

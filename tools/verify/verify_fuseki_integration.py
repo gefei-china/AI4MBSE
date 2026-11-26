@@ -55,8 +55,20 @@ _OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
 
 def _req(url, data=None, method="GET", ctype="application/sparql-results+json",
-         timeout=20):
+         timeout=20, accept="application/sparql-results+json"):
+    """发请求并返回 (status, body)。
+
+    ★ 2026-11-26 修：**必须显式带 `Accept`**。
+      之前只设 `Content-Type`（且只在有 body 时设），GET 查询不设任何头
+      ⇒ Fuseki 按默认内容协商返回 **SPARQL XML**（`<?xml ...><sparql ...>`），
+      而 ④ 用 `json.loads` 解析 ⇒ `JSONDecodeError: Expecting value: line 1 column 1`。
+      实测同一 URL 不带 Accept 返回 XML、带 Accept 返回 JSON（两者都 HTTP 200）
+      ⇒ 这不是"Fuseki 不可达/坏了"，是**门禁自己没说要什么格式**。
+      校验内容为纯文本的两处（$/ping、$/datasets）各自传 accept=None 覆盖。
+    """
     r = urllib.request.Request(url, data=data, method=method)
+    if accept:
+        r.add_header("Accept", accept)
     if data is not None:
         r.add_header("Content-Type", ctype)
     with _OPENER.open(r, timeout=timeout) as resp:
@@ -130,13 +142,14 @@ def main() -> int:
                   "--mem --port 3030 /mbse")
             return 1
     try:
-        st, body = _req(f"{BASE}/$/ping", ctype="text/plain")
+        st, body = _req(f"{BASE}/$/ping", ctype="text/plain", accept=None)
         print(f"[OK  ] ping HTTP {st}")
     except Exception as e:
         print(f"[FAIL] 连不上：{type(e).__name__} {str(e)[:150]}")
         return 1
     try:
-        st, body = _req(f"{BASE}/$/datasets")
+        # admin 端点（$/datasets）返回的是管理 JSON，不是 SPARQL 结果集 ⇒ 不指定 Accept
+        st, body = _req(f"{BASE}/$/datasets", accept=None)
         names = [x.get("ds.name") for x in json.loads(body).get("datasets", [])]
         print(f"[OK  ] 数据集：{names}")
         if f"/{DS}" not in names:

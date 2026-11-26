@@ -128,10 +128,50 @@ def _sem_ready():
 SEM_OK = _sem_ready()
 print("     语义（dense）向量路可用：%s" % SEM_OK)
 
+# ★★ 2026-11-26 修「拿真实 LLM 的当前判断当夹具」：
+#   原实现 `run_until(rt, Q_BAD, "llm_conflict", tries=3)` 依赖**真实 LLM** 对 Q_BAD
+#   判成 review（注释写"LLM 稳定判 review(0.85)"）。实测现在 LLM 判 **design**
+#   （与语义侧一致）⇒ 不存在"互斥"⇒ route=llm_first ⇒ A1/A1b/A1c/A2 全红，
+#   而 `llm_conflict` 那段逻辑本身没坏。
+#   ⇒ 判据要验的是「**当日语义与 LLM 互斥**时怎么办」，这是一个**条件行为**，
+#     就该用可控输入把条件**造出来**，而不是祈祷模型今天也这么判。
+#   做法：临时替换 `llm.llm_client.chat` 让它返回指定意图的 JSON，
+#     跑完 `finally` 还原（`detect_llm` 内部是 `from llm import llm_client`，
+#     每次调用都取模块属性 ⇒ 替换属性即时生效，与 p0_failure_kind 的手法一致）。
+#   真实 LLM 的当日判定仍然打印出来（供人观察），但**不作为判据**。
+
+
+def _run_with_llm(router, text, llm_intent, llm_conf=0.85):
+    """在「LLM 一定判 llm_intent」的条件下跑一次 detect，返回 (got, meta, alt)。"""
+    import json as _json
+    import llm as _llm_mod
+
+    class _FakeChat:
+        def chat(self, messages, **kw):
+            return {"choices": [{"message": {
+                "content": _json.dumps({"intent": llm_intent,
+                                        "confidence": llm_conf})}}],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1},
+                "_meta": {"provider": "fake", "model": "fake", "used_mock": True}}
+
+    orig = getattr(_llm_mod.llm_client, "chat", None)
+    _llm_mod.llm_client.chat = _FakeChat().chat
+    try:
+        return run(router, text)
+    finally:
+        if orig is not None:
+            _llm_mod.llm_client.chat = orig
+
+
 print("── A. 判定面：互斥 → 不硬选、转澄清 ──")
-got, meta, alt = run_until(rt, Q_BAD, "llm_conflict")
-print(f"     {Q_BAD!r} -> got={got} route={meta['route']} conf={meta['confidence']:.4f} "
-      f"clarify={meta['needs_clarification']}")
+# 先记录**真实** LLM 当日怎么判（只打印，不判红 —— 模型判断本来就会漂）
+_g_real, _m_real, _a_real = run(rt, Q_BAD)
+print(f"     [观察] 真实 LLM 当日：{Q_BAD!r} -> got={_g_real} route={_m_real['route']} "
+      f"conf={_m_real['confidence']:.4f}（仅记录，不作判据）")
+# 再用可控 LLM 把「语义 design vs LLM review 互斥」这个条件**造出来**
+got, meta, alt = _run_with_llm(rt, Q_BAD, "review", 0.85)
+print(f"     [夹具] LLM 强制判 review ⇒ got={got} route={meta['route']} "
+      f"conf={meta['confidence']:.4f} clarify={meta['needs_clarification']}")
 print(f"     alt={alt}")
 _NO_SEM = "本环境无可用 dense embedding（查询向量降级 bigram-tf）⇒ 语义分数量纲不可比"
 if SEM_OK:
@@ -144,8 +184,14 @@ if SEM_OK:
     chk("A1c 澄清标志置位（不再静默误路由）", meta["needs_clarification"] is True)
 else:
     skip("A1c 澄清标志置位（不再静默误路由）", _NO_SEM)
-chk("A2 意图级聚合生效：runner 是竞争意图 review（非 design 自己）",
-    bool(alt) and alt["runner"] == "review", f"runner={None if not alt else alt['runner']}")
+# ★ 2026-11-26：A2 原断言 `runner == "review"` —— 把「当日语义第二名的具体是谁」钉死了。
+#   `_last_sem_alt.runner` 是**语义向量相似度**的第二名，与 LLM 判断无关：
+#   实测现在 runner=requirement_analysis（0.6176），语义 top 仍是 design（0.6704）。
+#   本条判据的原意（注释写着"非 design 自己"）是：「竞争意图不能就是自己」，
+#   即"意图级聚合真的产生了**另一个**候选"。⇒ 只断言这个不变式，具体是谁只打印。
+chk("A2 意图级聚合生效：runner 是**另一个**意图（不是语义 top 自己）",
+    bool(alt) and alt["runner"] and alt["runner"] != alt["intent"],
+    f"runner={None if not alt else alt['runner']} vs top={None if not alt else alt['intent']}")
 if SEM_OK:
     chk("A2b 语义分数达最低识别阈 0.49", bool(alt) and alt["score"] >= 0.49,
         f"score={None if not alt else round(alt['score'], 4)}")
@@ -177,7 +223,11 @@ print(f"     {Q_BUDGET!r} -> got={g_b} route={m_b['route']} alt_score="
 #   两者**都满足真正的不变式「不硬选」**（got 仍是 chat，没被挑成 report_generation）。
 #   ⇒ 只断言不变式，route 具体值随 LLM 可用性变化，拿它当判据是拿抖动当判据。
 chk("A7 低置信猜测仍不硬选（落到 chat 兜底桶，不挑具体意图）",
-    g_b == "chat" and m_b["route"] in ("llm_weak", "chat"),
+    # ★ 2026-11-26：`continue_weak` 是 2026-11-06 新增的路由（短续句但上文是 chat
+    #   ⇒ 按闲聊处理、不弹澄清）。它**同样满足本条的真正不变式**「不硬选」
+    #   （got 仍是 chat，没被挑成 report_generation）⇒ 加进允许集合。
+    #   判据只断言不变式；route 的具体取值随路由层演进而增长，拿它当判据是拿演进当抖动。
+    g_b == "chat" and m_b["route"] in ("llm_weak", "chat", "continue_weak"),
     f"got={g_b} route={m_b['route']}")
 
 # ───────────────────────── 变异自证 ─────────────────────────
@@ -222,7 +272,12 @@ MUTANTS = [
         .replace("_agg.get(_nm, 0.0)", "_agg.get(id(_it), 0.0)", 1)),
 ]
 
-base_ok = (meta["route"] == "llm_conflict") and (bool(alt) and alt["runner"] == "review")
+# ★ 2026-11-26：D0 必须与 A1/A2 的**新判据**同步（原来还写着 `alt["runner"] == "review"`）。
+#   这是「判据改了一处、前提断言没跟着改」的典型：A2 放宽成"runner 是另一个意图"后，
+#   D0 仍在按旧口径（runner 恰好等于 review）判基线 ⇒ 基线永远不成立 ⇒
+#   变异自证整体失去意义（而且它报的是"自证无意义"，不是"产品坏了"，极易误导）。
+base_ok = ((meta["route"] == "llm_conflict")
+           and bool(alt) and alt["runner"] and alt["runner"] != alt["intent"])
 if SEM_OK:
     chk("D0 基线 A1/A2 均 PASS（否则变异自证无意义）", base_ok)
 else:

@@ -147,6 +147,13 @@ if _sample:
 # ── [9] 端到端：真实装配里无冲突话术 ──
 try:
     from agent import AgentPipeline
+    # ★ 2026-11-26 修**探针选错 intent**（不是产品缺陷）：
+    #   原用 `intent="chat"` + 「生成活动图」⇒ chat 下**不命中任何技能**（这是对的：
+    #   闲聊不该注入建模技能），于是 `sp` 只有 165 字符的「绑定技能」列表，
+    #   里面当然没有运行时真值 ⇒ [9] 恒红。实测同一句话在 `design` 下：
+    #   len=8054、命中 ['sysml_view_generation_activity', ...]、含「工具轮次预算」。
+    #   ⇒ 换 intent 到 design，并补**前置断言**：探针必须真的命中技能，
+    #     否则 [9] 又变成「在空字符串里找字样」（本仓多次踩到这种空转）。
     U = {"role_name": "admin", "role": "admin"}
     p = AgentPipeline()
     c = get_db()
@@ -154,11 +161,15 @@ try:
         p.registry.load_from_db(c, U)
     finally:
         c.close()
-    sp = p._build_skill_prompt("chat", "生成活动图", U) or ""
+    sp = p._build_skill_prompt("design", "生成活动图", U) or ""
+    _hits = [h if isinstance(h, str) else (h or {}).get("name")
+             for h in (getattr(p, "_last_skill_hits", None) or [])]
+    check("[9a] 探针确实命中技能（否则后续判据是在空字符串里找字样）",
+          bool([h for h in _hits if h]), f"hits={_hits}，prompt 长度 {len(sp)}")
     check("[9] 真实 skill_prompt 无「轮次上限为 3」",
           "轮次上限为 3" not in sp, f"长度 {len(sp)}")
     check("[9] 真实 skill_prompt 有运行时真值注入",
-          "运行时真值" in sp or "工具轮次预算" in sp)
+          "运行时真值" in sp or "工具轮次预算" in sp, f"长度 {len(sp)}")
 except Exception as e:
     check("[9] 真实 skill_prompt 无冲突话术", False, f"{type(e).__name__}: {e}")
 
