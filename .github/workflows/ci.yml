@@ -2070,6 +2070,28 @@ jobs:
         if: ${{ !cancelled() }}
         run: python tools/verify/verify_ingest_tx.py
 
+      # 2026-11-26 双环境实测定层（真库+空库均绿）：四条由 backlog 升 pr。
+      - name: Guard conv_llm_scoped
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_conv_llm_scoped.py
+
+      - name: Guard intent_routing_baseline
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_intent_routing_baseline.py
+
+      - name: Guard partial_persist_on_failure
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_partial_persist_on_failure.py
+
+      - name: Guard trace_quality_gate
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_trace_quality_gate.py
+
+      # 2026-11-26 新增：守住「建模」误列复合信号导致需求条目被 design 抢走（19 断言 + 变异自证）。
+      - name: Guard intent_composite_guard
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_intent_composite_guard.py
+
       # 2026-11-26：由 broken 上调 pr（空库实测绿且 ≤15s）。
       # 此前长期挂在 broken（不进 CI）⇒ 修好也没人守，坏了也没人知。
       - name: Guard intent_db_kw

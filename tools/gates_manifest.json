@@ -1,10 +1,10 @@
 {
  "version": 1,
- "generated_at": "2026-11-26 09:45:00",
+ "generated_at": "2026-11-26 17:20:00",
  "doc": "门禁清单唯一真源。由 tools/gate_runner.py 执行、tools/verify/verify_gate_manifest.py 守卫。分层依据：工具 2026-11-04 的双环境实测（真库 + 干净库）。",
  "budget": {
   "broken": 0,
-  "backlog": 31,
+  "backlog": 1,
   "tolerated_steps": 39
  },
  "tiers": {
@@ -236,9 +236,9 @@
   },
   {
    "script": "verify_alternatives_platform.py",
-   "tier": "backlog",
+   "tier": "local",
    "timeout": 180,
-   "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+   "reason": "真库 1.3s 绿 / 空库 1.1s 红（断言「技能已发布/生成规则已配置」依赖生产资产）。降 local，理由=生产真库金标，CI 空库跑不了。"
   },
   {
    "script": "verify_alternatives_select.py",
@@ -279,7 +279,7 @@
    "reason": "守「分派留痕真的落到 agent_tasks 的列上」。2026-11-26 真机验证查出：接线只把分数写进 config（367/642 行有值），而 create_plan 的 INSERT 根本没有 assign_score/load_snapshot 两列 ⇒ 全表 642 行恒为建表默认值 0.0 / '{}'，看板读列永远拿不到分，「为什么派给它」在生产数据上无法回答。已修 INSERT + config 二次编码；本门禁串起「接线→落库→查列」并配 3 变异（M1 删列 / M2 写死 0 / M3 二次编码）"
   },
   {
-"script": "verify_assign_trace_browser.js",
+   "script": "verify_assign_trace_browser.js",
    "tier": "local",
    "timeout": 180,
    "reason": "真实浏览器验收「看板区分未留痕与真 0 分」（2026-11-26）。为什么必须浏览器级：JS 里 0 与 null 都是 falsy —— 只要渲染写成 `(it.assign_score||0).toFixed(3)`，未留痕就会显示成 0.000，语义与「打分器算出 0 分」完全相反，而**接口判据永远抓不到这种缺陷**。判据 A3（未留痕不出现任何分数）/ A4（真 0 分必须显示 0.000 而不是「未留痕」）必须同时成立，否则「一律显示未留痕」也能骗过 A3。归 local：需本机 Chrome/Edge + 8000 真服务（CDP 范式，spawn 用 stdio:'ignore' 绕开 agent-browser 守护进程管 stdio 导致 spawnSync 卡死的坑）。实测 9 项全绿"
@@ -329,9 +329,9 @@
   },
   {
    "script": "verify_autonomy_and_clarify.py",
-   "tier": "backlog",
+   "tier": "local",
    "timeout": 180,
-   "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+   "reason": "真库 13s 绿 / 空库 4.3s 红（需要真库里连续重复短句的会话样本）。降 local，理由=生产真库金标。"
   },
   {
    "script": "verify_b1_runtime_smoke.py",
@@ -454,9 +454,9 @@
   },
   {
    "script": "verify_chat_clarify_partial.py",
-   "tier": "backlog",
+   "tier": "local",
    "timeout": 180,
-   "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+   "reason": "需服务 + 脚本与服务的 DB 必须同库：批跑误设 MBSE_DB_PATH=快照 ⇒ 脚本写快照、服务写真库，5 项假红；同库夹具复跑 14/0 全绿。降 local，理由=活服务 + 同库约束。"
   },
   {
    "script": "verify_chat_contract_e2e.py",
@@ -489,9 +489,9 @@
   },
   {
    "script": "verify_chat_task_intent.py",
-   "tier": "backlog",
+   "tier": "local",
    "timeout": 180,
-   "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+   "reason": "真库 10.8s 绿 / 空库 4.2s 红（mock 通道无真实 provider 与会话样本）。降 local，理由=真实 provider 配置。"
   },
   {
    "script": "verify_chat_track_width.py",
@@ -546,9 +546,9 @@
   },
   {
    "script": "verify_clarify_single_turn.py",
-   "tier": "backlog",
+   "tier": "local",
    "timeout": 180,
-   "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+   "reason": "需服务 + 同库夹具：批跑错配假红；同库复跑 26/0 全绿。降 local，理由=活服务 + 真库写入。"
   },
   {
    "script": "verify_clarify_stepper_mutate.js",
@@ -695,21 +695,21 @@
   },
   {
    "script": "verify_conv_llm_scoped.py",
-   "tier": "backlog",
+   "tier": "pr",
    "timeout": 180,
-   "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+   "reason": "2026-11-26 双环境实测定层：真库 4.1s / 空库 4.1s 全绿，纯本地库不依赖服务。11-04 的「干净库 rc≠0」已过期（当时的夹具/判据已修）。升 pr 进 CI 守护。"
   },
   {
    "script": "verify_conv_model_e2e.py",
-   "tier": "backlog",
+   "tier": "local",
    "timeout": 180,
-   "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+   "reason": "真库 12.1s 绿 / 空库 4.8s 红（需真会话模型覆盖样本）。降 local，理由=生产真库金标。"
   },
   {
    "script": "verify_conv_model_scoped.py",
-   "tier": "backlog",
+   "tier": "local",
    "timeout": 180,
-   "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+   "reason": "真库 5.7s 绿 / 空库 4.6s 红（8/12，缺真实会话样本）。降 local，理由=生产真库金标。"
   },
   {
    "script": "verify_conv_scope_guard.py",
@@ -719,9 +719,9 @@
   },
   {
    "script": "verify_conv_summary_api.py",
-   "tier": "backlog",
+   "tier": "local",
    "timeout": 180,
-   "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+   "reason": "需服务在跑（脚本自声明，停服务 rc=1）。真库 9.8s / 空库 1.0s 的绿都借了服务。降 local。"
   },
   {
    "script": "verify_conv_summary_fallback.py",
@@ -783,9 +783,9 @@
   },
   {
    "script": "verify_e2e_chat.py",
-   "tier": "backlog",
+   "tier": "local",
    "timeout": 180,
-   "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+   "reason": "2026-11-26 修判据后串行真跑全绿（8 个问题 × 真实 LLM）：语料缺失的两条改为「诚实拒答且不臆造」对称判据 + 语料存在的仍要求有依据；含纯函数变异自证。降 local，理由=真实 LLM + 生产语料。"
   },
   {
    "script": "verify_embed_unavail_breaker.py",
@@ -914,9 +914,9 @@
   },
   {
    "script": "verify_frontend_modeling_e2e.py",
-   "tier": "backlog",
+   "tier": "local",
    "timeout": 180,
-   "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+   "reason": "2026-11-26 修端口过期（8012→8000）+ --route-only 未登记 argparse + DB 补词；独立会话真机 4/4 命中节点（报告进新 CI 门禁）。同会话连续 4 条出现意图粘滞（后 3 条被上一轮带走），属另一议题未改。降 local，理由=真实 LLM + 服务。"
   },
   {
    "script": "verify_fs_guard.py",
@@ -937,9 +937,9 @@
   },
   {
    "script": "verify_fuseki_readwrite.py",
-   "tier": "backlog",
+   "tier": "local",
    "timeout": 180,
-   "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+   "reason": "空库/真库均绿，但依赖运行中的 Fuseki SPARQL（脚本自声明）。降 local，理由=外部服务。"
   },
   {
    "script": "verify_gate_manifest.py",
@@ -1162,9 +1162,9 @@
   },
   {
    "script": "verify_intent_routing_baseline.py",
-   "tier": "backlog",
+   "tier": "pr",
    "timeout": 300,
-   "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+   "reason": "2026-11-26 双环境实测：真库 54.5s / 空库 13.2s 全绿，无服务依赖。此前 backlog 只是从未定性，不是红。升 pr。"
   },
   {
    "script": "verify_intent_sample_tiers.py",
@@ -1200,9 +1200,9 @@
   },
   {
    "script": "verify_job_handpoints_live.py",
-   "tier": "backlog",
+   "tier": "local",
    "timeout": 180,
-   "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+   "reason": "自起服务 + 真 embedding + 写真库，实测 >180s 超时（脚本自声明约 3 分钟）。降 local，理由=外部服务 + 耗时。"
   },
   {
    "script": "verify_job_queue.py",
@@ -1311,9 +1311,9 @@
   },
   {
    "script": "verify_main_agent_persistence.py",
-   "tier": "backlog",
+   "tier": "local",
    "timeout": 180,
-   "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+   "reason": "实测 >180s 超时，需真服务与长会话。降 local，理由=耗时 + 活服务。"
   },
   {
    "script": "verify_mcp_adapt.py",
@@ -1359,9 +1359,9 @@
   },
   {
    "script": "verify_mcp_tool_meta.py",
-   "tier": "backlog",
+   "tier": "local",
    "timeout": 180,
-   "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+   "reason": "需智源平台外部依赖（脚本自声明）。降 local。"
   },
   {
    "script": "verify_mcp_whitelist_exempt.py",
@@ -1478,25 +1478,25 @@
    "script": "verify_n2_skeleton.py",
    "tier": "backlog",
    "timeout": 180,
-   "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+   "reason": "2026-11-26 实测红因：**判据抽错代码块** —— 从 messages.content 抽到 26 字符的「（附：本轮已校验的 SysML v2 模型代码）」说明文字送 checker，报 16 条词法错；真代码走工具参数（已有 _sysml_last_pass_code 通道）。属门禁判据过期，不是产品坏了。保留 backlog，待改用工具层 pass-code 通道后再定层。"
   },
   {
    "script": "verify_n3_e2e_real.py",
-   "tier": "backlog",
+   "tier": "local",
    "timeout": 180,
-   "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+   "reason": "8 视图真 LLM + checker.jar，实测 >180s 超时。降 local，理由=真 LLM + 耗时。"
   },
   {
    "script": "verify_n3_stability.py",
-   "tier": "backlog",
+   "tier": "local",
    "timeout": 180,
-   "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+   "reason": "8 视图 × N 轮真 LLM 稳定性统计（脚本自声明约 40 分钟 + 费用），实测 >180s 超时。降 local。"
   },
   {
    "script": "verify_n3_view_expansion.py",
-   "tier": "backlog",
+   "tier": "local",
    "timeout": 180,
-   "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+   "reason": "8 视图真 LLM + checker.jar，实测 >180s 超时。降 local，理由=真 LLM + 耗时。"
   },
   {
    "script": "verify_negative_examples_ab.py",
@@ -1548,9 +1548,9 @@
   },
   {
    "script": "verify_ontology_dom_range.py",
-   "tier": "backlog",
+   "tier": "local",
    "timeout": 180,
-   "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+   "reason": "真库金标门禁（O20~O29/O52~O53/O62~O67 断言真库具体值），空库 5.1s 红属预期。降 local，理由=生产真库金标。"
   },
   {
    "script": "verify_ontology_profile_derive.py",
@@ -1747,9 +1747,9 @@
   },
   {
    "script": "verify_partial_persist_on_failure.py",
-   "tier": "backlog",
+   "tier": "pr",
    "timeout": 180,
-   "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+   "reason": "2026-11-26 双环境实测：真库 11.3s / 空库 6.6s 全绿，含 3 组变异自证。11-04 的干净库红已过期。升 pr。"
   },
   {
    "script": "verify_partial_policy.py",
@@ -1840,9 +1840,9 @@
   },
   {
    "script": "verify_projects_nav.py",
-   "tier": "backlog",
+   "tier": "local",
    "timeout": 180,
-   "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+   "reason": "需服务在跑（脚本自声明）。降 local。"
   },
   {
    "script": "verify_prompt_blocks.py",
@@ -1851,9 +1851,9 @@
   },
   {
    "script": "verify_prompt_cache_order.py",
-   "tier": "backlog",
+   "tier": "local",
    "timeout": 180,
-   "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+   "reason": "真库 19s 绿 / 空库 4.8s 红（需真实 llm_usage_stats 缓存命中样本）。降 local，理由=生产真库金标。"
   },
   {
    "script": "verify_prompt_layering.py",
@@ -1873,9 +1873,9 @@
   },
   {
    "script": "verify_q1_q2_q3.py",
-   "tier": "backlog",
+   "tier": "local",
    "timeout": 180,
-   "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+   "reason": "需服务 + 真库主 Agent 金标 + 智源 MCP 绑定，实测 >180s 超时。降 local。"
   },
   {
    "script": "verify_quality_review_wiring.py",
@@ -2032,9 +2032,9 @@
   },
   {
    "script": "verify_retrieval_low_conf.py",
-   "tier": "backlog",
+   "tier": "local",
    "timeout": 180,
-   "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+   "reason": "真库 26.8s 绿 / 空库 2.4s 红（空库无 embedding 命中样本，L4 判据依赖真向量）。降 local，理由=生产真库金标。"
   },
   {
    "script": "verify_retrieval_observation.py",
@@ -2043,9 +2043,9 @@
   },
   {
    "script": "verify_retrieval_relevance.py",
-   "tier": "backlog",
+   "tier": "local",
    "timeout": 180,
-   "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+   "reason": "真库 19.9s 绿 / 空库 3.3s 红（空库检索 0 命中）。降 local，理由=生产真库语料。"
   },
   {
    "script": "verify_retry_fallback_stats.py",
@@ -2105,9 +2105,9 @@
   },
   {
    "script": "verify_s3_e2e.py",
-   "tier": "backlog",
+   "tier": "local",
    "timeout": 180,
-   "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+   "reason": "需服务在跑（脚本自声明，停服务 rc=1）。降 local。"
   },
   {
    "script": "verify_s4_calls.py",
@@ -2201,9 +2201,9 @@
   },
   {
    "script": "verify_skill_prompt_budget.py",
-   "tier": "backlog",
+   "tier": "local",
    "timeout": 180,
-   "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+   "reason": "真库 1.9s 绿 / 空库 1.8s 红（技能注入依赖真库资产）。降 local，理由=生产真库资产。"
   },
   {
    "script": "verify_skill_script_live.py",
@@ -2445,9 +2445,9 @@
   },
   {
    "script": "verify_trace_quality_gate.py",
-   "tier": "backlog",
+   "tier": "pr",
    "timeout": 180,
-   "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+   "reason": "2026-11-26 双环境实测：真库 0.6s / 空库 0.7s 全绿，含 M7~M10 变异自证。升 pr。"
   },
   {
    "script": "verify_trace_raw_query.py",
@@ -2490,9 +2490,9 @@
   },
   {
    "script": "verify_ui_render_live.py",
-   "tier": "backlog",
+   "tier": "local",
    "timeout": 180,
-   "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+   "reason": "需本机服务 + 浏览器自动化（脚本自声明）。降 local。"
   },
   {
    "script": "verify_uninstall_flow.py",
@@ -3124,6 +3124,12 @@
    "tier": "pr",
    "timeout": 300,
    "reason": "2026-11-26：澄清准确度根治项 —— 延续型输入（LLM 弱采纳且意图==上一轮）不得白弹澄清卡；含 P3/P4 两条红线（冲突/无上文仍须弹）与 M1 变异。"
+  },
+  {
+   "script": "verify_intent_composite_guard.py",
+   "tier": "pr",
+   "timeout": 120,
+   "reason": "2026-11-26 新增：守住「建模」误列为复合任务信号导致「建模需求条目」被 design 抢走的回归；16 断言 + 2 组变异自证，确定性层不调 LLM，空库/真库均可跑。"
   }
  ]
 }

@@ -91,7 +91,12 @@ def wait_service(base: str, tries: int = 20) -> bool:
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--base", default=os.environ.get("BASE", "http://127.0.0.1:8012"))
+    # 2026-11-26：8012 是历史口径（智源平台对接端口）；本仓服务自 2026-09 起固定 8000
+    # （core.config app.port）。门禁默认地址过期会表现为"服务不可达"，与产品无关。
+    ap.add_argument("--base", default=os.environ.get("BASE", "http://127.0.0.1:8000"))
+    # 2026-11-26：ROUTE_ONLY 由模块级 sys.argv 检测，argparse 原先未登记此开关
+    # ⇒ 传 --route-only 直接 usage 退出（rc=2），"只验意图"的快速档实际不可用。
+    ap.add_argument("--route-only", action="store_true", help="只验意图路由，跳过产出校验")
     args = ap.parse_args()
     base = args.base.rstrip("/")
 

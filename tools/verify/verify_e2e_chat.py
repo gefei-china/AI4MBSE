@@ -39,19 +39,53 @@ import httpx
 
 BASE = "http://127.0.0.1:8000"
 
-# (类别, 问题, 答案要点候选, 说明)
+# (类别, 问题, 答案要点候选, 说明, 语料主题词)
+#
+# ★ 2026-11-26：新增第 5 项 **语料主题词** —— 判据按真库事实分流：
+#   语料含主题词 ⇒ 要求"有依据答对"；语料不含 ⇒ 要求"诚实说查不到且不臆造"。
+#   起因：前两条切题用例（全年可用性 / 自主可控）的真库实测 0 命中
+#   （`全年可用性`/`自主可控`/`公有服务器` 全 0 chunk，99.9 的 2 条命中是无关数字），
+#   模型如实回答"知识库里没有"却被判红 —— **旧判据在奖励编造**。
+#   这不是"放宽判据"：两种语料状态各有一条对称的硬判据，且语料补齐后自动切回有依据模式。
 CASES = [
     # A 域外：必须拒答
-    ("域外", "今天北京天气怎么样", None, "与知识库无关"),
-    ("域外", "红烧肉要炖多久", None, "常识类，库里无"),
-    ("域外", "推荐几部好看的科幻电影", None, "完全无关"),
-    # B 切题：必须有依据
-    ("切题", "技术要求书要求的全年可用性是多少", ["99.9"], "单点数据"),
-    ("切题", "自主可控要求对组件部署有什么限制", ["公有服务器"], "定性条款"),
-    ("切题", "座舱空气调节仿真需要考虑哪些负荷", ["显热负荷", "太阳得热"], "场景知识库"),
-    ("切题", "ISO 29148 对需求标识符的唯一性有什么规定", ["唯一", "标识"], "英文文档（曾降级）"),
-    ("切题", "空调系统里'流与消息'的写法规则是什么", ["flow", "from"], "SysML 语法"),
+    ("域外", "今天北京天气怎么样", None, "与知识库无关", None),
+    ("域外", "红烧肉要炖多久", None, "常识类，库里无", None),
+    ("域外", "推荐几部好看的科幻电影", None, "完全无关", None),
+    # B 切题：语料有 → 有依据答对；语料无 → 诚实缺口
+    ("切题", "技术要求书要求的全年可用性是多少", ["99.9"], "单点数据", "全年可用性"),
+    ("切题", "自主可控要求对组件部署有什么限制", ["公有服务器"], "定性条款", "自主可控"),
+    ("切题", "座舱空气调节仿真需要考虑哪些负荷", ["显热负荷", "太阳得热"], "场景知识库", "座舱"),
+    # 语料里的写法是 ISO/IEC/IEEE 29148 等变体，字面 "ISO 29148" 在 chunk content 里 0 命中
+    # ⇒ 探测锚点用数字 29148（2026-11-26 实测：改用后有依据分支正确生效）。
+    ("切题", "ISO 29148 对需求标识符的唯一性有什么规定", ["唯一", "标识"], "英文文档（曾降级）", "29148"),
+    ("切题", "空调系统里'流与消息'的写法规则是什么", ["flow", "from"], "SysML 语法", "flow"),
 ]
+
+
+def _corpus_has(term):
+    """只读真库：**主题词**是否存在于 document_chunks（不是答案要点字面）。"""
+    if not term:
+        return True
+    import sqlite3
+    db = os.path.join(_ROOT, "mbse.db")
+    try:
+        c = sqlite3.connect("file:%s?mode=ro" % db, uri=True)
+        try:
+            return bool(c.execute(
+                "SELECT 1 FROM document_chunks WHERE content LIKE ? LIMIT 1",
+                ("%" + term + "%",)).fetchone())
+        finally:
+            c.close()
+    except Exception:                       # noqa: BLE001
+        return True                         # 库不可读时退回原判据，不静默放宽
+
+
+def _gap_judge(answer, keys):
+    """语料缺失时的对称判据：诚实承认 + 不臆造门禁要点（纯函数，供变异自证）。"""
+    admitted = bool(REFUSAL_PAT.search(answer or ""))
+    fabricated = [k for k in (keys or []) if k.lower() in (answer or "").lower()]
+    return admitted and not fabricated
 
 REFUSAL_PAT = re.compile(
     r"(没有(?:相关|找到|检索到|提及|包含|收录)|未(?:找到|提及|检索到|包含)|"
@@ -99,7 +133,7 @@ def main():
     print("=" * 88)
 
     with _client() as c:
-        for cat, q, keys, note in CASES:
+        for cat, q, keys, note, corpus_key in CASES:
             print("\n[%s] %s" % (cat, q))
             print("     （%s）" % note)
             try:
@@ -142,21 +176,45 @@ def main():
                 else:
                     print("        正文摘要：%s" % ans[:110].replace("\n", " "))
             else:
-                # B 有依据：答案要点命中 + 依据片段里也有该要点
-                hit_keys = [k for k in (keys or []) if k.lower() in ans.lower()]
-                key_in_ctx = [k for k in (keys or []) if k.lower() in ctx.lower()]
-                grounded = bool(hit_keys) and bool(key_in_ctx)
-                # C 引用对齐
+                # C 引用对齐（两种语料状态共用）
                 align_ok = (not marks) or (max(marks) <= n_cit)
-                print("     B 有依据：答中要点=%s | 依据含要点=%s → %s"
-                      % (hit_keys or "无", key_in_ctx or "无", "✅" if grounded else "❌"))
+                has_corpus = _corpus_has(corpus_key)
+                if not has_corpus:
+                    # B-gap 语料根本没有该事实：必须诚实说查不到，且**不得臆造**门禁要点。
+                    # 对称判据：语料补齐后自动切回下面的 B 有依据模式。
+                    fabricated = [k for k in (keys or []) if k.lower() in ans.lower()]
+                    admitted = bool(REFUSAL_PAT.search(ans))
+                    grounded = _gap_judge(ans, keys)
+                    print("     B-gap 语料无「%s」：承认缺失=%s 臆造要点=%s → %s"
+                          % (corpus_key, admitted, fabricated or "无",
+                             "✅" if grounded else "❌"))
+                    if not grounded:
+                        fails.append((cat, q, "语料缺失却未诚实拒答/或臆造要点"))
+                else:
+                    # B 有依据：答案要点命中 + 依据片段里也有该要点
+                    hit_keys = [k for k in (keys or []) if k.lower() in ans.lower()]
+                    key_in_ctx = [k for k in (keys or []) if k.lower() in ctx.lower()]
+                    grounded = bool(hit_keys) and bool(key_in_ctx)
+                    print("     B 有依据：答中要点=%s | 依据含要点=%s → %s"
+                          % (hit_keys or "无", key_in_ctx or "无", "✅" if grounded else "❌"))
+                    if not grounded:
+                        fails.append((cat, q, "无依据/未答中"))
                 print("     C 引用对齐：正文编号=%s citations=%d → %s"
                       % (marks or "无", n_cit, "✅" if align_ok else "❌"))
-                if not grounded:
-                    fails.append((cat, q, "无依据/未答中"))
                 if not align_ok:
                     fails.append((cat, q, "引用越界"))
                 print("        正文摘要：%s" % ans[:150].replace("\n", " "))
+
+    # ── 判据自身变异自证：证明 B-gap 不是"一律放行" ──
+    print("\n判据自证（纯函数，不调 LLM）：")
+    _honest = "知识库里没有这条要求，我查不到相关数值。"
+    _cheat = "全年可用性不低于 99.9%，依据充分。"
+    _ok_honest = _gap_judge(_honest, ["99.9"])
+    _ok_cheat = not _gap_judge(_cheat, ["99.9"])
+    print("  [%s] 诚实承认缺口 → 通过" % ("PASS" if _ok_honest else "FAIL"))
+    print("  [%s] 臆造门禁要点 99.9 → 必须翻红" % ("PASS" if _ok_cheat else "FAIL"))
+    if not (_ok_honest and _ok_cheat):
+        fails.append(("判据自证", "B-gap 判据空转", ""))
 
     print("\n" + "=" * 88)
     if fails:
