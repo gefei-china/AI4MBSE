@@ -12,6 +12,7 @@
 """
 import json
 import os
+import re
 import sqlite3
 import sys
 import tempfile
@@ -226,9 +227,21 @@ chk("B5 保存时带上 description", "description: desc" in sbody)
 chk("B6 ★ 编辑态不再提交 tools:[]（会把已发现清单清空）",
     "tools: [], args: [], env: {}" not in sbody,
     "仍存在硬编码 tools:[]")
+# ★ 2026-11-26 修（判据钉死变量名与排版 ⇒ 假红）：
+#   原判据要求 `"if(k && v) headers[k] = v;" in hbody`，而产品当前写法是
+#   `if (key && val) { headers[key] = val; return; }`
+#   （`static/js/mods/30-agents.js:1932`，变量名 k/v → key/val、带大括号与 return）
+#   ⇒ 字符串比对失败 ⇒ B7 判红，但**语义完全正确**（key 与 val 都有值才收集）。
+#   **纪律：验"逻辑关系"而不是"代码字面"** —— 否则任何重命名/加括号都会假红。
+#   新判据更强：要求**同一个变量既出现在条件里、又作为赋值下标**，
+#   并且**赋的值是条件里的第二个变量** ⇒ 才真正等于"key 和 val 都非空才收"。
+_B7_RE = re.compile(
+    r"if\s*\(\s*(\w+)\s*&&\s*(\w+)\s*\)\s*\{?\s*headers\[\1\]\s*=\s*\2\b")
+_B7_M = _B7_RE.search(hbody)
 chk("B7 headers 值留空的键不进 payload（留空=保持原值）",
-    "if(k && v) headers[k] = v;" in hbody,
-    "仍在收集空值 → 会把凭据清成空串")
+    bool(_B7_M),
+    "未找到「key 与 val 都非空才收集」的判断；实得片段=%r"
+    % (hbody[:160] if not _B7_M else _B7_M.group(0)))
 chk("B8 保存失败时不静默关窗", "_r && _r.error" in sbody)
 
 # toggleToolType：容错框只对 HTTP
@@ -245,9 +258,15 @@ M2 = ("f-tool-desc').value = s.description" in body) and \
 chk("M2 变异（desc 退回硬编码空串）被 B1 抓住", M2)
 
 # ── 变异 M3：headers 收集退回「空值也收」 ──
-_mut_h = hbody.replace("if(k && v) headers[k] = v;", "if(k) headers[k] = hdrVals[i].value;")
-M3 = ("if(k && v) headers[k] = v;" in hbody) and ("if(k && v) headers[k] = v;" not in _mut_h)
-chk("M3 变异（空值也收集）被 B7 抓住", M3)
+# ★ 2026-11-26：随 B7 一起改。原实现用 `hbody.replace("if(k && v) headers[k] = v;", ...)`，
+#   原文不存在时 replace 无效 ⇒ `_mut_h == hbody` ⇒ M3 恒 False（**变异自身失效**，
+#   不是"产品没被抓住"）。⇒ 改用与 B7 同一个正则做替换：
+#   把 `if(a && b) headers[a]=b` 改成 `if(a) headers[a]=b`（只判 key ⇒ 空值也收）。
+_mut_h = _B7_RE.sub(lambda m: "if(%s) headers[%s] = %s;" % (m.group(1), m.group(1), m.group(2)),
+                    hbody, count=1) if _B7_M else hbody
+M3 = bool(_B7_M) and (_mut_h != hbody) and (not _B7_RE.search(_mut_h))
+chk("M3 变异（空值也收集）被 B7 抓住", M3,
+    "变异后仍含双变量判断=%s（应为 False）" % bool(_B7_RE.search(_mut_h)))
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -389,14 +408,29 @@ M5 = ("_own_run(conn, run_id, user)" in osrc) and ("_own_run(conn, run_id, user)
 chk("M5 变异（resume 去掉归属门）被 C3 抓住", M5)
 
 # ── 变异 M6：把权限门改回「接返回值判真假」（即改前那个恒 403 的写法）──
-_mut_o3 = osrc.replace(
-    'require_permission("ai_chat", "generate")(user=user)',
-    '_err = require_permission("ai_chat", "generate")(user=user)\n    if _err:\n        return JSONResponse({"error": "无权限"}, 403)', 1)
+# ★ 2026-11-26 修（变异替换错目标 ⇒ 变异形同没生效）：
+#   原实现 `osrc.replace(锚点, ..., 1)` —— 但该锚点在 orchestration.py 里出现 **4 次**
+#   （多个端点都挂同一权限门），`.replace(...,1)` 只改**第一处**（不在 resume_run 里）
+#   ⇒ resume_run 段完全没变 ⇒ `_m6code` 不含 `if _err:` ⇒ M6 恒 False。
+#   这不是"产品没被抓住"，是**变异自身没落到目标上**（假红）。
+#   ⇒ 先切出 resume_run 段，再在**段内**替换，保证改的就是被验的那个函数。
+_A_M6 = 'require_permission("ai_chat", "generate")(user=user)'
+_i_rs = osrc.find("def resume_run(")
+if _i_rs > 0 and osrc.count(_A_M6) > 0:
+    _seg_rs = osrc[_i_rs:]
+    _seg_mut = _seg_rs.replace(
+        _A_M6,
+        '_err = require_permission("ai_chat", "generate")(user=user)\n'
+        '    if _err:\n        return JSONResponse({"error": "无权限"}, 403)', 1)
+    _mut_o3 = osrc[:_i_rs] + _seg_mut
+else:
+    _mut_o3 = osrc
 _m6 = _mut_o3.replace("    # ⚠️⚠️ **不要写成", "    # XNOTE**不要写成", 1)  # 同时排除注释干扰
 _m6code = "\n".join(ln for ln in (_m6[_m6.find("def resume_run("):]).splitlines()
                  if not ln.lstrip().startswith("#"))
 M6 = ("if _err:" not in _rcode) and ("if _err:" in _m6code)
-chk("M6 变异（接返回值判真假）被 C9 抓住", M6)
+chk("M6 变异（接返回值判真假）被 C9 抓住", M6,
+    "变异后 resume_run 段含 if _err: = %s（应为 True）" % ("if _err:" in _m6code))
 
 
 # ══════════════════════════════════════════════════════════════════

@@ -1891,6 +1891,102 @@ jobs:
         if: ${{ !cancelled() }}
         run: python tools/verify/verify_intent_continue_silent.py
 
+      # 2026-11-26：由 broken 上调 pr（空库实测绿且 ≤15s）。
+      # 此前长期挂在 broken（不进 CI）⇒ 修好也没人守，坏了也没人知。
+      - name: Guard attribution
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_attribution.py
+
+      # 2026-11-26：由 broken 上调 pr（空库实测绿且 ≤15s）。
+      # 此前长期挂在 broken（不进 CI）⇒ 修好也没人守，坏了也没人知。
+      - name: Guard capability_registry
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_capability_registry.py
+
+      # 2026-11-26：由 broken 上调 pr（空库实测绿且 ≤15s）。
+      # 此前长期挂在 broken（不进 CI）⇒ 修好也没人守，坏了也没人知。
+      - name: Guard conv_scope_guard
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_conv_scope_guard.py
+
+      # 2026-11-26：由 broken 上调 pr（空库实测绿且 ≤15s）。
+      # 此前长期挂在 broken（不进 CI）⇒ 修好也没人守，坏了也没人知。
+      - name: Guard failure_class
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_failure_class.py
+
+      # 2026-11-26：由 broken 上调 pr（空库实测绿且 ≤15s）。
+      # 此前长期挂在 broken（不进 CI）⇒ 修好也没人守，坏了也没人知。
+      - name: Guard ingest_tx
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_ingest_tx.py
+
+      # 2026-11-26：由 broken 上调 pr（空库实测绿且 ≤15s）。
+      # 此前长期挂在 broken（不进 CI）⇒ 修好也没人守，坏了也没人知。
+      - name: Guard intent_db_kw
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_intent_db_kw.py
+
+      # 2026-11-26：由 broken 上调 pr（空库实测绿且 ≤15s）。
+      # 此前长期挂在 broken（不进 CI）⇒ 修好也没人守，坏了也没人知。
+      - name: Guard intent_history
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_intent_history.py
+
+      # 2026-11-26：由 broken 上调 pr（空库实测绿且 ≤15s）。
+      # 此前长期挂在 broken（不进 CI）⇒ 修好也没人守，坏了也没人知。
+      - name: Guard intent_kw_layers
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_intent_kw_layers.py
+
+      # 2026-11-26：由 broken 上调 pr（空库实测绿且 ≤15s）。
+      # 此前长期挂在 broken（不进 CI）⇒ 修好也没人守，坏了也没人知。
+      - name: Guard llm_context_guard_mutate
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_llm_context_guard_mutate.py
+
+      # 2026-11-26：由 broken 上调 pr（空库实测绿且 ≤15s）。
+      # 此前长期挂在 broken（不进 CI）⇒ 修好也没人守，坏了也没人知。
+      - name: Guard orphan_agent_ref
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_orphan_agent_ref.py
+
+      # 2026-11-26：由 broken 上调 pr（空库实测绿且 ≤15s）。
+      # 此前长期挂在 broken（不进 CI）⇒ 修好也没人守，坏了也没人知。
+      - name: Guard plan_cycle_guard
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_plan_cycle_guard.py
+
+      # 2026-11-26：由 broken 上调 pr（空库实测绿且 ≤15s）。
+      # 此前长期挂在 broken（不进 CI）⇒ 修好也没人守，坏了也没人知。
+      - name: Guard quality_review_wiring
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_quality_review_wiring.py
+
+      # 2026-11-26：由 broken 上调 pr（空库实测绿且 ≤15s）。
+      # 此前长期挂在 broken（不进 CI）⇒ 修好也没人守，坏了也没人知。
+      - name: Guard request_state_reset
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_request_state_reset.py
+
+      # 2026-11-26：由 broken 上调 pr（空库实测绿且 ≤15s）。
+      # 此前长期挂在 broken（不进 CI）⇒ 修好也没人守，坏了也没人知。
+      - name: Guard statemachine
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_statemachine.py
+
+      # 2026-11-26：由 broken 上调 pr（空库实测绿且 ≤15s）。
+      # 此前长期挂在 broken（不进 CI）⇒ 修好也没人守，坏了也没人知。
+      - name: Guard typography_scale
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_typography_scale.py
+
+      # 2026-11-26：由 broken 上调 pr（空库实测绿且 ≤15s）。
+      # 此前长期挂在 broken（不进 CI）⇒ 修好也没人守，坏了也没人知。
+      - name: Guard mcp_edit_and_resume_gate
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_mcp_edit_and_resume_gate.py
+
       - name: Guard evalset fingerprint
         if: ${{ !cancelled() }}
         run: python tools/verify/verify_evalset_fingerprint.py

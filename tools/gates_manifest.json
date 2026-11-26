@@ -1,10 +1,10 @@
 {
  "version": 1,
- "generated_at": "2026-11-25 14:55:58",
+ "generated_at": "2026-11-26 09:45:00",
  "doc": "门禁清单唯一真源。由 tools/gate_runner.py 执行、tools/verify/verify_gate_manifest.py 守卫。分层依据：工具 2026-11-04 的双环境实测（真库 + 干净库）。",
  "budget": {
-  "broken": 37,
-  "backlog": 65,
+  "broken": 10,
+  "backlog": 64,
   "tolerated_steps": 39
  },
  "tiers": {
@@ -301,9 +301,9 @@
   },
   {
    "script": "verify_attribution.py",
-   "tier": "broken",
-   "timeout": 240,
-   "reason": "两库都红 [FAIL] [FAIL] D1 ★引擎计数 == 裸 SQL 对账（total/bad/good 三通道 + 首坏+级联=坏）  ← engine={'total': 25, 'good': 15, 'bad': 10, 'bad_"
+   "tier": "pr",
+   "timeout": 120,
+   "reason": "★ 2026-11-26 上调（原 broken）：空库实测绿且 9.3s ⇒ 归 pr。此前一直挂在 broken（'已知红、不进 CI'），但根因多为**判据过期/夹具缺列**而非产品缺陷；修好后未上调 ⇒ CI 不守护它，随时可能重新坏掉而无人察觉。定层依据 = 空库（init_db 后）实跑耗时，非估算。"
   },
   {
    "script": "verify_audit_p0.py",
@@ -419,9 +419,9 @@
   },
   {
    "script": "verify_capability_registry.py",
-   "tier": "broken",
-   "timeout": 240,
-   "reason": "两库都红 [FAIL] [FAIL] B1 删 skills 源行 ⇒ 其投影随之删除  ← got 29（应只剩 A 段夹具 1 行）"
+   "tier": "pr",
+   "timeout": 120,
+   "reason": "★ 2026-11-26 上调（原 broken）：空库实测绿且 1.8s ⇒ 归 pr。此前一直挂在 broken（'已知红、不进 CI'），但根因多为**判据过期/夹具缺列**而非产品缺陷；修好后未上调 ⇒ CI 不守护它，随时可能重新坏掉而无人察觉。定层依据 = 空库（init_db 后）实跑耗时，非估算。"
   },
   {
    "script": "verify_capability_selfextend.py",
@@ -702,9 +702,9 @@
   },
   {
    "script": "verify_conv_scope_guard.py",
-   "tier": "broken",
-   "timeout": 240,
-   "reason": "两库都红 [FAIL] [FAIL] B3 匿名不加 user 条件（口径②）"
+   "tier": "pr",
+   "timeout": 120,
+   "reason": "★ 2026-11-26 上调（原 broken）：空库实测绿且 1.2s ⇒ 归 pr。此前一直挂在 broken（'已知红、不进 CI'），但根因多为**判据过期/夹具缺列**而非产品缺陷；修好后未上调 ⇒ CI 不守护它，随时可能重新坏掉而无人察觉。定层依据 = 空库（init_db 后）实跑耗时，非估算。"
   },
   {
    "script": "verify_conv_summary_api.py",
@@ -881,9 +881,9 @@
   },
   {
    "script": "verify_failure_class.py",
-   "tier": "broken",
-   "timeout": 240,
-   "reason": "两库都红 [FAIL] [FAIL] F1 存量全覆盖（无 internal 兜底）  以下 error 落到兜底未归类：['子任务未产生输出']"
+   "tier": "pr",
+   "timeout": 120,
+   "reason": "★ 2026-11-26 上调（原 broken）：空库实测绿且 0.7s ⇒ 归 pr。此前一直挂在 broken（'已知红、不进 CI'），但根因多为**判据过期/夹具缺列**而非产品缺陷；修好后未上调 ⇒ CI 不守护它，随时可能重新坏掉而无人察觉。定层依据 = 空库（init_db 后）实跑耗时，非估算。"
   },
   {
    "script": "verify_failure_kind.py",
@@ -1074,9 +1074,9 @@
   },
   {
    "script": "verify_ingest_tx.py",
-   "tier": "broken",
-   "timeout": 240,
-   "reason": "两库都红 [FAIL] [FAIL] T1d commit 在 chunks INSERT 之后（锁已释放）  ← insert@17404 commit@12993"
+   "tier": "pr",
+   "timeout": 120,
+   "reason": "★ 2026-11-26 上调（原 broken）：空库实测绿且 0.5s ⇒ 归 pr。此前一直挂在 broken（'已知红、不进 CI'），但根因多为**判据过期/夹具缺列**而非产品缺陷；修好后未上调 ⇒ CI 不守护它，随时可能重新坏掉而无人察觉。定层依据 = 空库（init_db 后）实跑耗时，非估算。"
   },
   {
    "script": "verify_inline_tool_call_salvage.py",
@@ -1105,9 +1105,9 @@
   },
   {
    "script": "verify_intent_db_kw.py",
-   "tier": "broken",
-   "timeout": 240,
-   "reason": "两库都红 [FAIL] FAIL T2 真库各 Agent 在纯净 db 层下自认领成功  <- 异常=[('methodology_resolver', '方法论解析', 'knowledge_qa')]"
+   "tier": "pr",
+   "timeout": 120,
+   "reason": "★ 2026-11-26 上调（原 broken）：空库实测绿且 3.7s ⇒ 归 pr。此前一直挂在 broken（'已知红、不进 CI'），但根因多为**判据过期/夹具缺列**而非产品缺陷；修好后未上调 ⇒ CI 不守护它，随时可能重新坏掉而无人察觉。定层依据 = 空库（init_db 后）实跑耗时，非估算。"
   },
   {
    "script": "verify_intent_eval_ci.py",
@@ -1116,15 +1116,15 @@
   },
   {
    "script": "verify_intent_history.py",
-   "tier": "broken",
-   "timeout": 240,
-   "reason": "两库都红 [FAIL] [FAIL] C7 与 prev 一致 + 弱置信(0.70) → 采纳为 llm_history  <- 实得=llm_first_weak"
+   "tier": "pr",
+   "timeout": 120,
+   "reason": "★ 2026-11-26 上调（原 broken）：空库实测绿且 3.4s ⇒ 归 pr。此前一直挂在 broken（'已知红、不进 CI'），但根因多为**判据过期/夹具缺列**而非产品缺陷；修好后未上调 ⇒ CI 不守护它，随时可能重新坏掉而无人察觉。定层依据 = 空库（init_db 后）实跑耗时，非估算。"
   },
   {
    "script": "verify_intent_kw_layers.py",
-   "tier": "broken",
-   "timeout": 240,
-   "reason": "两库都红 [FAIL] FAIL F4 内置意图完整性：9 个系统级意图名都在 db 层  <- 缺失={'system_mgmt'}"
+   "tier": "pr",
+   "timeout": 120,
+   "reason": "★ 2026-11-26 上调（原 broken）：空库实测绿且 1.4s ⇒ 归 pr。此前一直挂在 broken（'已知红、不进 CI'），但根因多为**判据过期/夹具缺列**而非产品缺陷；修好后未上调 ⇒ CI 不守护它，随时可能重新坏掉而无人察觉。定层依据 = 空库（init_db 后）实跑耗时，非估算。"
   },
   {
    "script": "verify_intent_llm_fusion.py",
@@ -1249,9 +1249,9 @@
   },
   {
    "script": "verify_llm_context_guard_mutate.py",
-   "tier": "broken",
-   "timeout": 240,
-   "reason": "两库都红 [FAIL] FAIL 1.3 guard=warn → **不截断**（放开假天花板）  | 实收=8192"
+   "tier": "pr",
+   "timeout": 120,
+   "reason": "★ 2026-11-26 上调（原 broken）：空库实测绿且 12.3s ⇒ 归 pr。此前一直挂在 broken（'已知红、不进 CI'），但根因多为**判据过期/夹具缺列**而非产品缺陷；修好后未上调 ⇒ CI 不守护它，随时可能重新坏掉而无人察觉。定层依据 = 空库（init_db 后）实跑耗时，非估算。"
   },
   {
    "script": "verify_llm_cost_cache.py",
@@ -1324,9 +1324,9 @@
   },
   {
    "script": "verify_mcp_edit_and_resume_gate.py",
-   "tier": "broken",
-   "timeout": 240,
-   "reason": "两库都红 [FAIL] [FAIL] M6 变异（接返回值判真假）被 C9 抓住"
+   "tier": "pr",
+   "timeout": 120,
+   "reason": "★ 2026-11-26 上调（原 broken）：空库实测绿且 2.0s ⇒ 归 pr。此前一直挂在 broken（'已知红、不进 CI'），但根因多为**判据过期/夹具缺列**而非产品缺陷；修好后未上调 ⇒ CI 不守护它，随时可能重新坏掉而无人察觉。定层依据 = 空库（init_db 后）实跑耗时，非估算。"
   },
   {
    "script": "verify_mcp_form_ux.js",
@@ -1642,9 +1642,9 @@
   },
   {
    "script": "verify_orphan_agent_ref.py",
-   "tier": "broken",
-   "timeout": 240,
-   "reason": "两库都红 [FAIL] [FAIL] B1 INSERT 语句含 agent_name_snapshot"
+   "tier": "pr",
+   "timeout": 120,
+   "reason": "★ 2026-11-26 上调（原 broken）：空库实测绿且 0.9s ⇒ 归 pr。此前一直挂在 broken（'已知红、不进 CI'），但根因多为**判据过期/夹具缺列**而非产品缺陷；修好后未上调 ⇒ CI 不守护它，随时可能重新坏掉而无人察觉。定层依据 = 空库（init_db 后）实跑耗时，非估算。"
   },
   {
    "script": "verify_orphan_reap.py",
@@ -1780,9 +1780,9 @@
   },
   {
    "script": "verify_plan_cycle_guard.py",
-   "tier": "broken",
-   "timeout": 240,
-   "reason": "两库都红 [FAIL] ...<3 lines>... | \"请改用当前在役的 Agent 名后重试。\" % \"、\".join(_unresolved)) | ValueError: 计划引用了无法解析的 Agent：design（不在 age"
+   "tier": "pr",
+   "timeout": 120,
+   "reason": "★ 2026-11-26 上调（原 broken）：空库实测绿且 1.0s ⇒ 归 pr。此前一直挂在 broken（'已知红、不进 CI'），但根因多为**判据过期/夹具缺列**而非产品缺陷；修好后未上调 ⇒ CI 不守护它，随时可能重新坏掉而无人察觉。定层依据 = 空库（init_db 后）实跑耗时，非估算。"
   },
   {
    "script": "verify_plan_guard.py",
@@ -1867,9 +1867,9 @@
   },
   {
    "script": "verify_quality_review_wiring.py",
-   "tier": "broken",
-   "timeout": 240,
-   "reason": "两库都红 [FAIL] [FAIL] B4 ★ 标注上线后 reflection 与 plan_eval 双留痕一致（每轮评审恰好一次 eval）  ← 缺归属：{9779: (10, 4), 9999: (3, 0), 10012: (1, "
+   "tier": "pr",
+   "timeout": 120,
+   "reason": "★ 2026-11-26 上调（原 broken）：空库实测绿且 0.6s ⇒ 归 pr。此前一直挂在 broken（'已知红、不进 CI'），但根因多为**判据过期/夹具缺列**而非产品缺陷；修好后未上调 ⇒ CI 不守护它，随时可能重新坏掉而无人察觉。定层依据 = 空库（init_db 后）实跑耗时，非估算。"
   },
   {
    "script": "verify_rag_config.py",
@@ -1953,9 +1953,9 @@
   },
   {
    "script": "verify_request_state_reset.py",
-   "tier": "broken",
-   "timeout": 240,
-   "reason": "两库都红 [FAIL] [FAIL] A2 有 1 个 `self._xxx` 赋值字段未在reset_request_state 中登记（跨请求会残留）：['_llm_overrides_effective']"
+   "tier": "pr",
+   "timeout": 120,
+   "reason": "★ 2026-11-26 上调（原 broken）：空库实测绿且 2.2s ⇒ 归 pr。此前一直挂在 broken（'已知红、不进 CI'），但根因多为**判据过期/夹具缺列**而非产品缺陷；修好后未上调 ⇒ CI 不守护它，随时可能重新坏掉而无人察觉。定层依据 = 空库（init_db 后）实跑耗时，非估算。"
   },
   {
    "script": "verify_requirement_chat_e2e.py",
@@ -1993,9 +1993,9 @@
   },
   {
    "script": "verify_rerank_logging_fmt.py",
-   "tier": "broken",
-   "timeout": 240,
-   "reason": "两库都红 [FAIL] [FAIL] B2 解析失败告警：真的写出了内容"
+   "tier": "nightly",
+   "timeout": 209,
+   "reason": "★ 2026-11-26 上调（原 broken）：空库实测绿且 52.4s ⇒ 归 nightly。此前一直挂在 broken（'已知红、不进 CI'），但根因多为**判据过期/夹具缺列**而非产品缺陷；修好后未上调 ⇒ CI 不守护它，随时可能重新坏掉而无人察觉。定层依据 = 空库（init_db 后）实跑耗时，非估算。"
   },
   {
    "script": "verify_rerun_gain.py",
@@ -2155,9 +2155,9 @@
   },
   {
    "script": "verify_settings_data_audit.py",
-   "tier": "broken",
-   "timeout": 240,
-   "reason": "两库都红 [TIMEOUT] "
+   "tier": "nightly",
+   "timeout": 1443,
+   "reason": "★ 2026-11-26 上调（原 broken）：空库实测绿且 360.9s ⇒ 归 nightly。此前一直挂在 broken（'已知红、不进 CI'），但根因多为**判据过期/夹具缺列**而非产品缺陷；修好后未上调 ⇒ CI 不守护它，随时可能重新坏掉而无人察觉。定层依据 = 空库（init_db 后）实跑耗时，非估算。"
   },
   {
    "script": "verify_skill_binding_semantics.py",
@@ -2247,9 +2247,9 @@
   },
   {
    "script": "verify_statemachine.py",
-   "tier": "broken",
-   "timeout": 240,
-   "reason": "两库都红 [FAIL] [FAIL] D hil_confirmations.status ∈ hil_confirmation 状态域  ← 越界值 {'executed': 1}；实测分布 {'executed': 1, 'pending'"
+   "tier": "pr",
+   "timeout": 120,
+   "reason": "★ 2026-11-26 上调（原 broken）：空库实测绿且 6.2s ⇒ 归 pr。此前一直挂在 broken（'已知红、不进 CI'），但根因多为**判据过期/夹具缺列**而非产品缺陷；修好后未上调 ⇒ CI 不守护它，随时可能重新坏掉而无人察觉。定层依据 = 空库（init_db 后）实跑耗时，非估算。"
   },
   {
    "script": "verify_stdlib_index_coverage.py",
@@ -2466,9 +2466,9 @@
   },
   {
    "script": "verify_typography_scale.py",
-   "tier": "broken",
-   "timeout": 240,
-   "reason": "两库都红 [FAIL] [FAIL] F1 字号档位 ⊆ 标准集合（25 档）  ← 越界档位：[10.5, 11.0, 13.0]（示例：['chat.css:32', 'alternatives.css:33', 'alternatives"
+   "tier": "pr",
+   "timeout": 120,
+   "reason": "★ 2026-11-26 上调（原 broken）：空库实测绿且 4.6s ⇒ 归 pr。此前一直挂在 broken（'已知红、不进 CI'），但根因多为**判据过期/夹具缺列**而非产品缺陷；修好后未上调 ⇒ CI 不守护它，随时可能重新坏掉而无人察觉。定层依据 = 空库（init_db 后）实跑耗时，非估算。"
   },
   {
    "script": "verify_ui_intent_brief.py",
