@@ -2326,6 +2326,11 @@ jobs:
         if: ${{ !cancelled() }}
         run: python tools/verify/verify_semantic_cache_stream.py
 
+      # 能力中心四环节链路 + trace_id 贯通（56 项含 13 处变异，实测 38s ⇒ nightly）
+      - name: Guard 能力中心链路与 trace 贯通（56 项）
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_capability_chain.py
+
       # ── embedding 不可用熔断 ──
       # 锁的是 P0-2 的教训：embedding 配额耗尽**静默**降级 ⇒ 词面向量污染检索。
       # 本门禁验「不可用必须显式熔断，不静默给脏结果」。

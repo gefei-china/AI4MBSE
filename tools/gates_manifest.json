@@ -4,7 +4,7 @@
  "doc": "门禁清单唯一真源。由 tools/gate_runner.py 执行、tools/verify/verify_gate_manifest.py 守卫。分层依据：工具 2026-11-04 的双环境实测（真库 + 干净库）。",
  "budget": {
   "broken": 0,
-  "backlog": 56,
+  "backlog": 55,
   "tolerated_steps": 39
  },
  "tiers": {
@@ -403,9 +403,9 @@
   },
   {
    "script": "verify_capability_chain.py",
-   "tier": "backlog",
+   "tier": "nightly",
    "timeout": 180,
-   "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+   "reason": "能力中心四环节链路（能力注册→绑定→注入→归因）+ trace_id 贯通。2026-11-26 修 F10：原用**文本正则**扫 `INSERT INTO tool_call_logs`，把 `core/probe_mark.py` 模块 docstring 里的**用法示例**当成真实写入点 ⇒ 判该文件缺 trace_id，而那个文件里根本没有真实写入（只有字符串）。改用 **AST**：只认 `X.execute(...)` 实参里的字符串常量，文档/注释不再被误算；并补跳过 `tests/`（测试造夹具的最小 INSERT 不是产品写入点）。56 项含 13 处变异自证（MUT-MISS 0）。实测 38s ⇒ 归 nightly"
   },
   {
    "script": "verify_capability_clusters.py",

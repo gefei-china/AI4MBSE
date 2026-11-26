@@ -29,6 +29,7 @@ if _svroot and _svroot not in _svsys.path:
     _svsys.path.insert(0, _svroot)
 from tools.stream_source import read_stream_source
 from tools.module_source import read_module_source  # noqa: E402  # noqa: E402
+import glob
 import io
 import json
 import os
@@ -361,14 +362,26 @@ except Exception as e:
 check("F9 run_id 变量收口（_tool_run_ctx 存在，避免各写入点自造批次号）",
       "_tool_run_ctx" in _src_tools)
 
-# ★ F10 是本条最容易被漏掉的一条：`tool_call_logs` 有 **6 个**写入点，
+# ★ F10 是本条最容易被漏掉的一条：`tool_call_logs` 有多个写入点，
 #   只补主链路会让"同一轮里一半行有 trace、一半没有"——追溯链从中间断掉
 #   （实测会话 9623：工具行有 trace，技能行 3 条全空）。故按 INSERT 语句扫全仓。
-import glob  # noqa: E402
+#
+# ★ 2026-11-26 修「把文档当代码」（本仓第九例）：原实现用**文本正则**扫
+#   `INSERT INTO tool_call_logs ... VALUES`，于是 `core/probe_mark.py` 的
+#   **模块 docstring 示例**（`conn.execute("INSERT INTO tool_call_logs (..., is_probe) VALUES ...")`
+#   写在 ```python 代码块里教人怎么用）被当成真实写入点 ⇒ 判"该文件缺 trace_id"。
+#   实测那个文件里根本没有真实写入（只有字符串），是**判据射程把文档算进了实现**。
+#   ⇒ 改用 AST：只认「`X.execute(...)` 调用**实参**里的字符串常量」——
+#     文档字符串、注释、日志文案都不会被当成写入点。
+import ast as _ast  # noqa: E402
+
 _inserts, _missing = 0, []
 for _f in glob.glob(os.path.join(ROOT, "**", "*.py"), recursive=True):
+    # ★ 2026-11-26：补跳过 `tests` —— 测试里为了造夹具会写**最小 INSERT**（只填必要列），
+    #   那些不是产品写入点，要求它们也带 trace_id 属于射程过宽。
+    #   判据要守的是「**产品代码**的每一处写入都带 trace」，因为只有产品行会进看板/追溯链。
     if any(x in _f for x in (os.sep + ".venv", os.sep + "backups", os.sep + "tmp",
-                             os.sep + "tools" + os.sep + "verify")):
+                             os.sep + "tests", os.sep + "tools" + os.sep + "verify")):
         continue
     try:
         _s = io.open(_f, encoding="utf-8").read()
@@ -376,13 +389,35 @@ for _f in glob.glob(os.path.join(ROOT, "**", "*.py"), recursive=True):
         continue
     if "INSERT INTO tool_call_logs" not in _s:
         continue
-    for _m in re.finditer(r"INSERT INTO tool_call_logs\s*\(([^)]*)\)\s*\"?\s*\n?\s*\"?VALUES",
-                          _s):
+    try:
+        _tree = _ast.parse(_s)
+    except SyntaxError:
+        continue
+    for _node in _ast.walk(_tree):
+        if not (isinstance(_node, _ast.Call) and isinstance(_node.func, _ast.Attribute)
+                and _node.func.attr in ("execute", "executemany", "execute_insert")):
+            continue
+        # 第一个实参（或其 Concat 片段）必须是含 INSERT INTO tool_call_logs 的字符串常量
+        _arg = _node.args[0] if _node.args else None
+        _txt = ""
+        if isinstance(_arg, _ast.Constant) and isinstance(_arg.value, str):
+            _txt = _arg.value
+        elif isinstance(_arg, _ast.JoinedStr):      # f-string 里拼的（少见，尽量取常量段）
+            _txt = "".join(v.value for v in _arg.values
+                           if isinstance(v, _ast.Constant) and isinstance(v.value, str))
+        if "INSERT INTO tool_call_logs" not in _txt:
+            continue
         _inserts += 1
-        if "trace_id" not in _m.group(1):
-            _missing.append(os.path.relpath(_f, ROOT))
-check("F10 全部 6 个 tool_call_logs 写入点都带 trace_id（漏一个就断链）",
-      _inserts >= 6 and not _missing, "共 %d 处，缺 trace 的文件=%s" % (_inserts, _missing))
+        # 列清单 = INSERT 与 VALUES 之间那段（实际代码里常是多段字符串拼接后成一条语句）
+        _cols = _txt.split("INSERT INTO tool_call_logs", 1)[1].split("VALUES", 1)[0]
+        if "trace_id" not in _cols:
+            _missing.append("%s:%d" % (os.path.relpath(_f, ROOT), _node.lineno))
+# ⚠️ 下界仍要留（`_inserts >= 6`）：若哪天扫描器被改坏成"扫不到任何写入点"，
+#   空集合会让 `not _missing` 恒真 ⇒ 假绿。数字不再钉死"恰好 6"（实测已 8 处），
+#   但"至少 6"保留了"写入点数量不许塌缩"的保护。
+check("F10 全部 tool_call_logs 写入点（产品代码）都带 trace_id（漏一个就断链）",
+      _inserts >= 6 and not _missing,
+      "共 %d 处，缺 trace 的位置=%s" % (_inserts, _missing))
 check("F11 取值口径收口到 core.audit.current_trace_id（不在各处自己猜）",
       "def current_trace_id" in _read("core/audit.py"))
 
