@@ -932,6 +932,40 @@ def reset_request_state(pipe) -> None:
     pipe._skill_budget_limit = 0
     pipe._skill_budget_trimmed = []
 
+    # ★★ 2026-11-26（P0 跨请求状态残留，门禁 A2 检出 10 项）——
+    #   Pipeline 是**模块级单例**（见本函数 docstring），下列字段只要不清零就会
+    #   被下一个请求（甚至**另一个用户**的请求）读到。逐个说明危害方向：
+    #
+    #   · `_val_stall_confirmed` —— **最危险**。它一旦为 True，`execute.py:815` 的
+    #     `elif getattr(self, "_val_stall_confirmed", False)` 会让**下一轮的所有校验
+    #     在执行前被直接拦下**（"校验停滞"的分支）。用户看到的是"这轮没校验"，而
+    #     根因在上一轮。残留窗口是整个进程生命周期。
+    #   · `_orch_readonly` —— 残留 True 时 `tools.py:2275` 会把本轮当成只读请求
+    #     ⇒ 写工具被整类滤掉 ⇒ 用户"明明说了要保存，AI 却说没有写权限"。
+    #     （该字段只在子管道上赋值，主流程靠 getattr 默认 False，故清零值 False。）
+    #   · `_citation_registry` —— 引用登记表。不清 ⇒ 上一轮（可能是别的用户）的
+    #     引用条目混进本轮的【来源n】编号 ⇒ **引用指向错误的文档**（比不显示更糟）。
+    #   · `_effective_kb_scope` —— 本轮生效的知识库范围。不清 ⇒ 用户 A 的范围
+    #     套到用户 B 的检索上 = **跨用户知识库越权读取**（安全红线）。
+    #   · `_llm_overrides_effective` —— 本轮 LLM 参数覆盖。不清 ⇒ 上一轮的温度/
+    #     max_tokens 静默作用到本轮（行为不可解释，且无法从本轮请求复现）。
+    #   · `_wr_verdict` / `_clarify_suppressed` —— 写意图裁决与"已抑制澄清"标记。
+    #     不清 ⇒ 上一轮判成"不要写"会让本轮子管道变只读；上一轮抑制过澄清会让
+    #     本轮该澄清时不澄清（用户遇到的是"该问的不问了"）。
+    #   · `_dropped_by_type` / `_dropped_disabled` / `_dropped_no_executor` ——
+    #     工具被剔除的三类留痕。不清 ⇒ 排障时把**别人会话**的剔除原因当成本轮的，
+    #     与 `_skill_budget_trimmed` 同一个坑（归因必然跑偏）。
+    pipe._val_stall_confirmed = False
+    pipe._orch_readonly = False
+    pipe._citation_registry = []
+    pipe._effective_kb_scope = {}
+    pipe._llm_overrides_effective = {}
+    pipe._wr_verdict = "unknown"
+    pipe._clarify_suppressed = False
+    pipe._dropped_by_type = []
+    pipe._dropped_disabled = []
+    pipe._dropped_no_executor = []
+
 
 def reset_skill_state(pipe, skill_name) -> None:
     """显式技能注入的**状态起点**（两路径统一调用，且必须在任何分支之前）。

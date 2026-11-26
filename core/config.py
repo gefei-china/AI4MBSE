@@ -489,6 +489,11 @@ DEFAULT_CONFIG = {
         #   用户改不了（只能改代码），门禁 verify_config_switches 的 [1] 恒红。
         #   默认 True = 护栏生效；False 逐字节回到旧行为（把任务书小节当多阶段指令切分）。
         "multi_spec_guard": True,           # 长任务书/【】小节不当作多阶段指令去切分
+        # ★ 2026-11-26：澄清准确度根治项 —— LLM 弱采纳但**与上一轮意图一致**时免弹卡。
+        #   原先这类一律弹卡（llm_first_weak），实测 45% 是"同一话题续做"的白弹。
+        #   判据要求意图恒等于 inherit 会给的那个 ⇒ **不可能改变路由方向**，只省一次打断。
+        #   False = 逐字节回到旧行为（延续型也会弹卡）。
+        "llm_continue_silent": True,        # 与上轮意图一致的弱采纳不弹澄清卡
         "platform_read_route": True,        # 平台读取类请求是否前置到读路由
         "speech_act_de": True,              # 名词化判据是否容忍「动词+的+后缀」（False=严格紧邻）
         "inherit_silent": True,             # 承接上文的短句是否免澄清（False=回到旧行为）
@@ -2077,6 +2082,7 @@ CONFIG_SCHEMA = {
         "generic_clarify":         {"type": "bool", "desc": "仅命中泛词时是否出澄清候选（False=回到静默兜底）"},
         "multi_intent_clarify":    {"type": "bool", "desc": "多意图(≥2 段)时是否出澄清候选（False=不澄清直接选一个）"},
         "multi_spec_guard":        {"type": "bool", "desc": "结构化任务书护栏（长输入/【】小节不切分成多阶段）。False=逐字节回到旧行为，把任务书小节当「多阶段指令」强制编排"},
+        "llm_continue_silent":     {"type": "bool", "desc": "澄清准确度：LLM 弱采纳（0.50~0.75）但意图与上一轮一致时**免弹澄清卡**（意图恒等于 inherit 的结果，不改判方向）。False=回到旧行为，延续型输入也会弹卡"},
         "platform_read_route":     {"type": "bool", "desc": "平台读取类请求是否前置到读路由（False=逐字节回退）"},
         "speech_act_de":           {"type": "bool", "desc": "名词化判据是否容忍「动词+的+后缀」（True=修好「分析的用途」类；False=严格紧邻、逐字节回退）"},
         "inherit_silent":          {"type": "bool", "desc": "承接上文的短句是否免于澄清（True=不打断；False=逐字节回到旧行为）"},

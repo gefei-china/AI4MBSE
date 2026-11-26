@@ -182,8 +182,19 @@ def t_t3(src):
     last_commit = before_inv.rfind("conn.commit()")
     ok &= _rec("T3c invalidate 之前已有 commit（已放锁）", last_commit > 0)
     # 反证：import + 调用必须在 commit 之后成对出现
-    imp = body.rfind("from vector_index import ChunkVectorIndex", 0, i_inv)
-    ok &= _rec("T3d invalidate 的 import 也在 commit 之后", imp > last_commit)
+    # ★ 2026-11-26 修（判据钉死 import 路径 ⇒ 恒红）：原来写死
+    #   `from vector_index import ChunkVectorIndex`，而 2026-11-25 的 P1 分层归位把
+    #   该模块搬进了 `adapters/`，实际 import 是 `from adapters.vector_index import ...`
+    #   ⇒ `rfind` 返回 -1 ⇒ `-1 > last_commit` 恒假 ⇒ T3d 恒红（红因是模块搬迁，与事务无关）。
+    #   **纪律：判据认"从哪个模块导入"这个语义，不认路径字面**（包路径会随归位变）。
+    #   → 用正则允许任意前缀包，`adapters.vector_index` / `vector_index` 都算。
+    _imp_re = r"(?:from\s+(?:[\w]+\.)*vector_index\s+import\s+ChunkVectorIndex" \
+              r"|import\s+(?:[\w]+\.)*vector_index)"
+    _imps = [mm.start() for mm in re.finditer(_imp_re, before_inv)]
+    imp = _imps[-1] if _imps else -1
+    ok &= _rec("T3d invalidate 的 import 也在 commit 之后", imp > last_commit,
+               "import@%s commit@%s（import 须在放锁之后，否则长事务里又拉起一次导入）"
+               % (imp, last_commit))
     return ok
 
 
@@ -202,6 +213,89 @@ def t_t4(src):
 
 
 # ══════════════════════════════════════════════════════════════════
+def _drop_commit_before_summary(src):
+    """M1 的实现：删掉 `_gen_llm_summary(` **之前**的最后一个 `conn.commit()`。
+
+    ★ 2026-11-26（变异改为**结构化定位**）：原实现用长字符串锚点，里面含
+      `from vector_index import ChunkVectorIndex` —— 而 P1 分层归位后实际路径是
+      `from adapters.vector_index import ...` ⇒ 锚点未命中 ⇒ 变异失效（M1/M2 恒红）。
+      **纪律：变异也必须能承受重构**。这里只依赖"函数体 + commit 位置"两个结构事实，
+      不含任何 import 路径/注释文案 ⇒ 目录再搬、注释再改都不影响。
+    """
+    s, e = _js_like_fn_pos(src, "ingest_document")
+    if s is None:
+        return src
+    body = src[s:e]
+    i_sum = body.find("_gen_llm_summary(")
+    if i_sum < 0:
+        return src
+    head = body[:i_sum]
+    k = head.rfind("conn.commit()")
+    if k < 0:
+        return src
+    ls = head.rfind("\n", 0, k) + 1          # 该行行首
+    le = head.find("\n", k)                  # 该行行尾
+    if le < 0:
+        le = len(head)
+    return src[:s] + (body[:ls] + body[le + 1:]).rstrip("\n") + body[len(body):] + src[e:] \
+        if False else src[:s] + body[:ls] + body[le + 1:] + src[e:]
+
+
+def _move_commit_after_summary(src):
+    """M2 的实现：把摘要前的 commit 删掉，改插到摘要 UPDATE 之后（事务仍跨 LLM）。"""
+    s, e = _js_like_fn_pos(src, "ingest_document")
+    if s is None:
+        return src
+    body = src[s:e]
+    i_sum = body.find("_gen_llm_summary(")
+    if i_sum < 0:
+        return src
+    head = body[:i_sum]
+    k = head.rfind("conn.commit()")
+    if k < 0:
+        return src
+    ls = head.rfind("\n", 0, k) + 1
+    le = head.find("\n", k)
+    if le < 0:
+        le = len(head)
+    new_body = body[:ls] + body[le + 1:]
+    # 在摘要 UPDATE 行之后插回 commit（仍在同一长事务里）
+    i_upd = new_body.find("UPDATE documents SET summary=", i_sum)
+    if i_upd < 0:
+        return src
+    le2 = new_body.find("\n", i_upd)
+    if le2 < 0:
+        le2 = len(new_body)
+    new_body = new_body[:le2 + 1] + "        conn.commit()\n" + new_body[le2 + 1:]
+    return src[:s] + new_body + src[e:]
+
+
+def _invalidate_before_commit(src):
+    """M3 的实现：把 `invalidate()` 插回**长事务内**（commit 之前）。
+
+    结构定位：找 `INSERT INTO document_chunks` 之后、`_gen_llm_summary` 之前的第一处
+    `conn.commit()`，在它**之前**插入 invalidate。不依赖任何 import 路径与注释文案。
+    """
+    s, e = _js_like_fn_pos(src, "ingest_document")
+    if s is None:
+        return src
+    body = src[s:e]
+    i_ins = body.find("INSERT INTO document_chunks")
+    if i_ins < 0:
+        return src
+    i_sum = body.find("_gen_llm_summary(", i_ins)
+    k = body.find("conn.commit()", i_ins, i_sum if i_sum > 0 else len(body))
+    if k < 0:
+        return src
+    ls = body.rfind("\n", 0, k) + 1
+    stub = ("        try:\n"
+            "            from adapters.vector_index import ChunkVectorIndex\n"
+            "            ChunkVectorIndex.invalidate()\n"
+            "        except Exception as e:\n"
+            "            logger.warning(\"x: %s\", e)\n")
+    return src[:s] + body[:ls] + stub + body[ls:] + src[e:]
+
+
 def run_mutations():
     print("\n=== 变异自证 ===")
     src = _src()
@@ -209,14 +303,9 @@ def run_mutations():
     # M1：删掉摘要前的 commit（还原成修复前的样子）
     _IN_MUT[0] = True
     try:
-        old = """        conn.commit()
-        try:
-            from vector_index import ChunkVectorIndex
-            ChunkVectorIndex.invalidate()   # 放锁后再标脏，避免与检索重建抢写锁"""
-        assert old in src, "M1 锚点未命中"
-        mutated = src.replace(old, """        try:
-            from vector_index import ChunkVectorIndex
-            ChunkVectorIndex.invalidate()""", 1)
+        mutated = _drop_commit_before_summary(src)
+        assert mutated != src, "M1 锚点未命中（函数体里找不到摘要前的 conn.commit()）"
+        _rec("M1 锚点命中", True, "已删除摘要前的 commit")
         hit = (not t_t1(mutated)) and (not t_t2(mutated))
     except AssertionError as ex:
         _rec("M1 锚点命中", False, str(ex)[:100]); hit = False
@@ -226,41 +315,21 @@ def run_mutations():
     # M2：把 commit 移到摘要之后（事务仍跨越 LLM，语义更隐蔽）
     _IN_MUT[0] = True
     try:
-        old2 = """        conn.commit()
-        try:
-            from vector_index import ChunkVectorIndex
-            ChunkVectorIndex.invalidate()   # 放锁后再标脏，避免与检索重建抢写锁
-        except Exception as e:
-            logger.warning("向量索引失效标记失败（不阻断）: %s", e)
-
-        # 7) LLM 真摘要"""
-        assert old2 in src, "M2 锚点未命中"
-        mutated2 = src.replace(old2, """        try:
-            from vector_index import ChunkVectorIndex
-            ChunkVectorIndex.invalidate()
-        except Exception as e:
-            logger.warning("向量索引失效标记失败（不阻断）: %s", e)
-
-        # 7) LLM 真摘要""", 1)
+        mutated2 = _move_commit_after_summary(src)
+        assert mutated2 != src, "M2 锚点未命中（找不到摘要前的 commit 或摘要 UPDATE）"
+        _rec("M2 锚点命中", True, "commit 已后移到摘要 UPDATE 之后")
         hit = (not t_t1(mutated2)) or (not t_t2(mutated2))
     except AssertionError as ex:
         _rec("M2 锚点命中", False, str(ex)[:100]); hit = False
     _rec("M2 commit 后移（事务仍跨 LLM）=> T1/T2 判红", hit)
     _IN_MUT[0] = False
 
-    # M3：把 invalidate 放回长事务内
+    # M3：把 invalidate 放回长事务内（结构定位：插到 chunks INSERT 之后、commit 之前）
     _IN_MUT[0] = True
     try:
-        old3 = """                 json.dumps(normalize_vector(_hyde_vecs[i]), ensure_ascii=False) if _hyde_vecs[i] else "[]"))
-        # ⚠️ 2026-10-04（P0-1）"""
-        assert old3 in src, "M3 锚点未命中"
-        mutated3 = src.replace(old3, """                 json.dumps(normalize_vector(_hyde_vecs[i]), ensure_ascii=False) if _hyde_vecs[i] else "[]"))
-        try:
-            from vector_index import ChunkVectorIndex
-            ChunkVectorIndex.invalidate()
-        except Exception as e:
-            logger.warning("x: %s", e)
-        # ⚠️ 2026-10-04（P0-1）""", 1)
+        mutated3 = _invalidate_before_commit(src)
+        assert mutated3 != src, "M3 锚点未命中（找不到 INSERT 之后、commit 之前的位置）"
+        _rec("M3 锚点命中", True, "invalidate 已插回长事务内")
         hit = (not t_t3(mutated3))
     except AssertionError as ex:
         _rec("M3 锚点命中", False, str(ex)[:100]); hit = False

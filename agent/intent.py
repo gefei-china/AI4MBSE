@@ -1205,10 +1205,76 @@ class IntentRouter:
                         return self._done(llm_intent, "llm_conflict", min(llm_conf, 0.6),
                                           text, fp, cacheable=not _hist_ctx,
                                           used_history=bool(_hist_ctx))
+                    # ★★ 2026-11-26：**澄清准确度的另一半 —— 与上文冲突时必须让用户看见**。
+                    #   原先这里无条件静默采纳 LLM 结论。于是「上一轮在写报告、
+                    #   这一轮其实是想改方向」这种**真实的方向切换**，被静默判成
+                    #   另一个意图且**不给任何提示** ⇒ 用户只看到"AI 突然跑偏了"。
+                    #   这是"该说的没说"，与"白弹卡"是同一枚硬币的两面。
+                    #   ⇒ 冲突且高置信：**仍采纳 LLM 结论（不拦停、不打断），
+                    #     但记 `llm_history` + `confirmed=False`** —— 于是 `_done`
+                    #     的 `_clarify_routes` 含 llm_history ⇒ `needs_clarification=True`
+                    #     ⇒ 前端出**「可改选」细条**（不阻断执行，用户一眼能否掉）。
+                    #   为什么不是弹阻断卡：高置信往往意味着"用户确实换话题了"，
+                    #   而 prev_intent 已过时 —— 拦停会把正常的话题切换堵死。
+                    #   细条是这两种判断之间唯一"不损失任何一方"的形态。
+                    #
+                    #   ★ 对称的另一侧（一致）：高置信 + 与 prev 一致 ⇒ 记 `llm_history`
+                    #      + `confirmed=True` ⇒ `used_history` 如实为真、且**不出细条**
+                    #      （`_silent_ok` 生效）。这与中置信段的处理口径完全一致：
+                    #      同一件事（"用上文确认"）在任何置信档都该有同一个 route 名与语义。
+                    if (bool(self._cfg_get("llm_continue_silent", True))
+                            and _hist_ctx and prev_intent
+                            and prev_intent in self._db_intents):
+                        return self._done(llm_intent, "llm_history", llm_conf, text, fp,
+                                          cacheable=False, used_history=True,
+                                          confirmed=(llm_intent == prev_intent))
                     return self._done(llm_intent, "llm_first", llm_conf, text, fp,
                                       cacheable=not _hist_ctx,
                                       used_history=bool(_hist_ctx))
                 if float(llm_conf) >= _tweak:
+                    # ★★ 2026-11-26（用户诉求：从根本优化澄清准确度）─────────────────
+                    # **根本病灶**：澄清判定只看"这一句本身的置信度"，**完全不看这一句
+                    # 是不是上一轮任务的延续**。于是「在X包新增测试包」被正确执行后，
+                    # 「在X包新增测试包A / 测试包B / 测试包C…」每一句都被判 0.62~0.72
+                    # ⇒ 一律落进 `llm_first_weak` ⇒ 一律弹卡。
+                    # 实测真库（intent_samples, n=612）：`llm_first_weak` 22 次，
+                    # 逐条读文本后约 **10 次（45%）** 属"同一话题续做/重复问"，
+                    # 而同期 HIL 确认卡 46 张里 **21 张过期未处理（46%）** ——
+                    # 卡越多越没人看，真正该看的卡也被淹掉（HIL 失效的经典路径）。
+                    #
+                    # **为什么落点是这里，而不是"把下面 llm_history 段提前"**：
+                    #   下面那段是**独立分支**且有自己的地板值/条件，提前会改变
+                    #   `llm_first` 的全部行为面（含 >=0.75 的高置信路径）。而高置信路径
+                    #   本来就不弹卡 ⇒ 改它**只有风险没有收益**。
+                    #   故只在**这个原本必弹卡的中置信段**前置一条判定，影响面最小。
+                    #   ⚠️ 但**复用 `llm_history` 这个 route 名**（不新造名字）：
+                    #   二者语义完全相同（"用上文**确认**，不改判方向"），一个概念只该有
+                    #   一个名字。门槛也沿用它的地板值 `history_llm_min`（0.55，**不是**
+                    #   弱线 0.50）—— 0.55 的取法是"不低于 inherit 自身的置信度"，
+                    #   用 0.50 会让"确认"反而**拉低**置信度（与那段的设计意图矛盾）。
+                    #
+                    # **为什么零改判风险**：判据要求 `llm_intent == prev_intent`
+                    # 且 `prev_intent in _db_intents` —— 即"采纳的意图恒等于 `inherit`
+                    # 分支本来会给出的那个"（同口径）。本改动**不可能改变路由方向**，
+                    # 只是把"弹卡问一句"换成"直接执行同一个意图"：
+                    #   · `confirmed=True` 让 `_done` 置 `_silent_ok` ⇒ 连"可改选"
+                    #     细条也不再出（否则等于换个形式继续打断）。
+                    #   · 不一致 / 无上文 / 低于地板值 ⇒ 全部照旧弹卡（红线不动）。
+                    _cont_min = float(self._cfg_get("history_llm_min", 0.55))
+                    if (bool(self._cfg_get("llm_continue_silent", True))
+                            and _hist_ctx and prev_intent
+                            and prev_intent in self._db_intents
+                            and llm_intent == prev_intent):
+                        if float(llm_conf) >= _cont_min:
+                            return self._done(llm_intent, "llm_history", llm_conf, text, fp,
+                                              cacheable=False, used_history=True, confirmed=True)
+                        # ★ 与上文一致、但 LLM 自身没到地板值（0.50~0.55）：
+                        #   此时**用上文结论（inherit，置信度 0.55）比弹卡更好** ——
+                        #   弹卡只会问出一句"就是上一轮那个"，还附带把置信度拉低到 <0.55。
+                        #   这正是 `history_llm_min` 注释里"不低于 inherit 自身置信度"
+                        #   那条设计的自然推论：既然**有**上文可依，就不该比单独 inherit 更差。
+                        return self._done(prev_intent, "inherit", 0.55, text, fp,
+                                          used_history=True)
                     # 弱采纳不硬选：needs_clarify 由 _done 的低置信白名单之外 —— 这里显式声明
                     return self._done(llm_intent, "llm_first_weak", llm_conf, text, fp,
                                       cacheable=False, used_history=bool(_hist_ctx))

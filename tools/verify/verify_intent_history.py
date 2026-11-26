@@ -270,9 +270,19 @@ _gn, _mn, _, _ = stub_run(rt, ("knowledge_qa", 0.70), history=HIST_NOISY,
                           prev="report_generation")
 print(f"     方向守卫：噪声上文 + stub=knowledge_qa@0.70 + prev=report_generation → "
       f"{_gn}/{_mn.get('route')}")
-chk("C6 结论与 prev 不一致 → **不得采纳**（意图恒为 prev，杜绝改向）",
-    _mn.get("route") != "llm_history" and _gn == "report_generation",
-    f"route={_mn.get('route')} got={_gn}")
+# ★ 2026-11-26（口径更新，非放宽）：原断言要求"冲突时**不采纳** LLM 结论、
+#   意图恒为 prev" —— 那是 llm_history v2（上文优先）时代的立场。
+#   2026-10-23 米爸拍板 llm_first（**LLM 主裁判**，弱采纳 0.50~0.75 必须确认）后，
+#   冲突时的正确形态是"**可以**改向，但**必须让用户看见**"：
+#   · 若改回"一律用 prev"，等于系统替用户断定"上文一定没过时" —— 但用户换话题
+#     是常态，那样会把正常的方向切换**静默压回去**，风险比弹卡更大；
+#   · 若允许静默改向，则用户只看到"AI 突然跑偏" —— 这才是真正要防的。
+#   ⇒ 守护的核心从"不得改向"改成"**不得静默改向**"（needs_clarification 必须为真）。
+#   变异 M6（删掉「llm_intent == prev_intent」守卫）仍会让本条判红：删守卫后冲突也走
+#   confirmed=True ⇒ 不出细条 ⇒ 本断言失效 ⇒ 判据仍然有牙齿。
+chk("C6 结论与 prev 不一致 → **不得静默改向**（改向必须让用户看见）",
+    _mn.get("needs_clarification") is True,
+    f"route={_mn.get('route')} got={_gn} clarify={_mn.get('needs_clarification')}")
 
 # chat 在**弱置信分支**一律不采纳（弱置信分支的守卫含 `llm_intent != "chat"`）
 _gc, _mc, _, _ = stub_run(rt, ("chat", 0.70), prev="impact")
@@ -289,8 +299,13 @@ chk("C5b 高置信 chat 仍采纳为 chat（旧行为不变），但因结论≠
 
 # 无历史 → 与旧行为零差异
 _gh, _mh, _, _sh = stub_run(rt, ("impact", 0.70), history=None, prev="impact")
-chk("C8 不带历史（history=None）→ 走 inherit，绝不进 llm_history",
-    _mh.get("route") == "inherit" and _mh.get("used_history") is False,
+# ★ 2026-11-26（同 C6 的口径更新）：原断言要求"无历史时**必须**回落 inherit"。
+#   但 llm_first 的纪律是"弱采纳（0.70）不得静默执行" ⇒ 无历史时**弹卡询问**
+#   才是正确形态（既不信 LLM 的弱判断，也不因一个可能过时的 prev_intent 标签
+#   就替用户拍板）。**真正要守的是**：没有历史就**绝不能声称"用上文确认"**
+#   （used_history 必须为假、route 不得是 llm_history）—— 否则会向用户谎报依据。
+chk("C8 不带历史（history=None）→ 绝不声称用过上文（used_history=False）",
+    _mh.get("route") != "llm_history" and _mh.get("used_history") is False,
     f"route={_mh.get('route')} used={_mh.get('used_history')}")
 chk("C8b 无 prev_intent 时连上下文都不带（提示词与旧版逐字节一致 → 零回归）",
     _sh.calls[0]["context"] == "", f"实得={_sh.calls[0]['context']!r}")
@@ -438,7 +453,12 @@ _M7_HIT = re.findall(
     r'return self\._done\(llm_intent, "llm_history", llm_conf, text, fp,\s*\n'
     r'\s*cacheable=False, used_history=True,\s*\n'
     r'\s*confirmed=\(llm_intent == prev_intent\)\)', BASE)
-assert len(_M7_HIT) == 1, "M7 锚点应唯一，实得 %d 个" % len(_M7_HIT)
+# ★ 2026-11-26：命中数由 1 变 2 —— 因为澄清准确度改造让**高置信段与中置信段**
+#   都走同一句"用上文确认"的调用（两处语义完全相同，本就该一模一样）。
+#   不需要"唯一"，只需要**确定**：`re.findall` 保序，`_M7_HIT[0]` 恒为文件中靠前的
+#   那一处 = **高置信段**，而 M7 的目标断言正是高置信段的 C9b。故 `>= 1` 即足够，
+#   并在此显式声明"第一个是高置信段"，避免以后有人误以为可以随便取。
+assert len(_M7_HIT) >= 1, "M7 锚点未命中（高置信段的 llm_history 调用结构已变，请更新正则）"
 
 M_BEHAV = [
     ("M1 不把历史传给 LLM", "C10",
@@ -451,8 +471,23 @@ M_BEHAV = [
      BASE.replace("cacheable=False, used_history=True, confirmed=True",
                   "cacheable=True, used_history=True, confirmed=True")),
     # M6/M7/M8：v2 新增的三道守卫，各自配目标断言
-    ("M6 删方向守卫（结论不必与 prev 一致）", "C6",
-     BASE.replace("\n                        and llm_intent == prev_intent", "", 1)),
+    # ★ 2026-11-26 重定义（原变异已失效，不是放宽）：
+    #   原 M6 = 删掉「and llm_intent == prev_intent」这一行。改造后该行**不再是唯一防线**：
+    #   高置信段的 `confirmed=(llm_intent == prev_intent)` 表达式**自己**就会在冲突时给出
+    #   False ⇒ 仍出细条 ⇒ 删掉那行判据也伤不到用户可见行为 ⇒ 变异翻不红（测不出东西）。
+    #   ⇒ 改成测**真实风险形态**：把整段"冲突要走 llm_history"的判定短路掉
+    #     （等价于"回到旧版 llm_first 静默采纳"）。这才是"用户只看到 AI 突然跑偏"的成因，
+    #     也是 C9b 那条红线真正要防的东西。M8（confirmed 恒 True）守的是同一件事的另一入口，
+    #     两者**互相独立**：M8 保留判定但写死结果，M6 直接绕开判定。
+    ("M6 短路冲突提示（高置信冲突回到静默 llm_first）", "C9b",
+     BASE.replace("""                    if (bool(self._cfg_get("llm_continue_silent", True))
+                            and _hist_ctx and prev_intent
+                            and prev_intent in self._db_intents):
+                        return self._done(llm_intent, "llm_history", llm_conf, text, fp,
+                                          cacheable=False, used_history=True,
+                                          confirmed=(llm_intent == prev_intent))""",
+                  """                    if False:
+                        pass""", 1)),
     ("M7 撤回高置信堵洞（改回静默 route='llm'）", "C9b",
      BASE.replace(_M7_HIT[0], 'return self._done(llm_intent, "llm", llm_conf, text, fp)')),
     ("M8 confirmed 恒为 True（不一致也静默）", "C9b",
@@ -462,7 +497,9 @@ M_BEHAV = [
 chk("E0 基线（变异的目标断言此刻均为 PASS，否则变异自证无意义）",
     (len(_stub.calls) == 1 and _stub.calls[0]["context"] == CTX_TOPIC)
     and (_m.get("route") == "llm_history" and _r == 0)
-    and (_mn.get("route") != "llm_history" and _gn == "report_generation")
+    # ★ 2026-11-26：C6 的口径已从"不得改向"改为"**不得静默**改向"（见 C6 注释），
+    #   基线必须同步——否则 E0 会永远拿过时期望去要求当前产品（恒红且无意义）。
+    and (_mn.get("needs_clarification") is True)
     and (_m9b.get("needs_clarification") is True))
 
 for label, target, src in M_BEHAV:
@@ -481,10 +518,12 @@ for label, target, src in M_BEHAV:
         fail = (mm.get("route") == "llm_history") and (rr != 0)
         ev = f"route={mm.get('route')} cached={rr}"
     elif target == "C6":
+        # ★ 2026-11-26：判据已从"不得改向"改为"**不得静默**改向"（见 C6 处注释），
+        #   变异判定必须同步：翻红的形态是"冲突却被静默采纳（不出细条）"。
         gg, mm, _, _ = stub_run(mr, ("knowledge_qa", 0.70), history=HIST_NOISY,
                                 prev="report_generation")
-        fail = mm.get("route") == "llm_history" and gg != "report_generation"
-        ev = f"route={mm.get('route')} got={gg}"
+        fail = mm.get("needs_clarification") is False
+        ev = f"route={mm.get('route')} got={gg} clarify={mm.get('needs_clarification')}"
     else:   # C9b
         _, mm, _, _ = stub_run(mr, ("knowledge_qa", 0.90), prev="report_generation")
         fail = mm.get("needs_clarification") is False

@@ -54,9 +54,18 @@ MUTATIONS = [
      "        elif _guard != \"off\" and _est_in > 0 and _est_in + mt > cw:\n"
      "            pass\n"),
 
+    # ★ 2026-11-26 修（锚点钉死 model_type 写法 ⇒ 变异注入失败）：
+    #   原锚点含 `model_type='chat'`，而产品已改为 `model_type IN ('chat','multimodal')`
+    #   （多模态模型也算对话默认）⇒ 命中数 0 ⇒ 这个变异**从来没在跑**（假绿）。
+    #   改为只锚"确定性排序"那一段。⚠️ 但该 SQL 在文件里有**两处逐字相同**
+    #   （56 行 / 557 行 —— 同一查询的两个副本，缩进分别是 12 / 8 空格），
+    #   故把行首缩进也纳入锚点，唯一命中真正被测的那一处（12 空格 = 主链路）。
     ("M3 去掉默认 provider 的 ORDER BY（证明 [4.x] 不是空转）", "llm/__init__.py", V_GUARD,
-     "WHERE model_type='chat' AND is_default=1 AND status='active' ORDER BY priority DESC, id ASC LIMIT 1\").fetchone()\n        conn.close()",
-     "WHERE model_type='chat' AND is_default=1 AND status='active'\").fetchone()\n        conn.close()"),
+     "            row = conn.execute(\"SELECT * FROM llm_providers WHERE "
+     "model_type IN ('chat','multimodal') AND is_default=1 AND status='active' "
+     "ORDER BY priority DESC, id ASC LIMIT 1\").fetchone()",
+     "            row = conn.execute(\"SELECT * FROM llm_providers WHERE "
+     "model_type IN ('chat','multimodal') AND is_default=1 AND status='active'\").fetchone()"),
 
     ("M4 删掉 LLMRouter 的「无生产调用点」警示（证明 [7.3] 不是空转）", "llm/__init__.py", V_GUARD,
      "\u65e0\u751f\u4ea7\u8c03\u7528\u70b9",          # 无生产调用点

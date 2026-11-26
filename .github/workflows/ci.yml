@@ -1885,6 +1885,12 @@ jobs:
         if: ${{ !cancelled() }}
         run: python tools/verify/verify_norm_summary.py
 
+      # 2026-11-26：澄清准确度 —— 延续型输入不得白弹澄清卡（真库实证 45% 属白弹）。
+      # 红线断言：与上文**冲突**或**无上文**时仍必须弹（不得把该问的静默掉）。
+      - name: Guard intent continue silent
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_intent_continue_silent.py
+
       - name: Guard evalset fingerprint
         if: ${{ !cancelled() }}
         run: python tools/verify/verify_evalset_fingerprint.py
