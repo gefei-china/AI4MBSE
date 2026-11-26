@@ -4,7 +4,7 @@
  "doc": "门禁清单唯一真源。由 tools/gate_runner.py 执行、tools/verify/verify_gate_manifest.py 守卫。分层依据：工具 2026-11-04 的双环境实测（真库 + 干净库）。",
  "budget": {
   "broken": 0,
-  "backlog": 55,
+  "backlog": 31,
   "tolerated_steps": 39
  },
  "tiers": {
