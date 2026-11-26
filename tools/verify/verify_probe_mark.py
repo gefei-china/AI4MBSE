@@ -22,6 +22,7 @@
 """
 from __future__ import annotations
 
+import ast as _ast
 import os
 import sqlite3
 import sys
@@ -175,9 +176,124 @@ def main() -> int:
         chk(f"M {rel} 调用了 is_probe_tool", "is_probe_tool" in s)
     # llm 侧：唯一生产写入点
     lsrc = open(os.path.join(root, "llm", "__init__.py"), encoding="utf-8").read()
-    chk("M llm/__init__.py 的 llm_usage_stats 写入带 is_probe",
-        "is_probe) " in lsrc or "failure_msg, is_probe)" in lsrc)
+    # ★ 2026-11-26 修「判据钉死字面」（本仓第七例）：
+    #   原判据 `"is_probe) " in lsrc or "failure_msg, is_probe)" in lsrc`
+    #   —— 两个分支都要求 `is_probe` **紧跟右括号**（即它是最后一列）。
+    #   而 2026-10-30 的 P1-5 在它后面追加了 `context_window` 列
+    #   ⇒ 实际文本是 `"call_failed, failure_kind, failure_msg, is_probe, "` + `"context_window) "`
+    #   ⇒ 判据红，而产品代码是**对的**。
+    #   改为**结构性判据**（更强，不只是放宽）：
+    #     ① `is_probe` 出现在 INSERT 的**列清单**里（不看它排第几）；
+    #     ② **占位符个数 == 列数** —— 这才是"加列"时真正会踩的坑
+    #        （忘了加 `?` ⇒ 运行时 binding 数量不匹配 ⇒ 整条记账失败）。
+    import re as _re2
+    _cols_ok = _ph_ok = False
+    _detail = ""
+    try:
+        _i = lsrc.index("INSERT INTO llm_usage_stats (")
+        _j = lsrc.index(")", _i)
+        _cols = lsrc[_i:_j]
+        _ncols = _cols.count(",") + 1
+        _cols_ok = "is_probe" in _cols
+        _k = lsrc.index("VALUES (", _j)
+        _l = lsrc.index(")", _k)
+        _nph = lsrc[_k:_l].count("?")
+        _ph_ok = (_nph == _ncols)
+        _detail = "列 %d 个 / 占位符 %d 个" % (_ncols, _nph)
+    except ValueError as _e:
+        _detail = "解析 INSERT 失败: %s" % _e
+    chk("M llm/__init__.py 的 llm_usage_stats 写入带 is_probe", _cols_ok, _detail)
+    chk("M llm/__init__.py 的列数与占位符数一致（加列忘加 ? 会让整条记账失败）",
+        _ph_ok, _detail)
     chk("M llm/__init__.py 调用 is_probe_intent", "is_probe_intent" in lsrc)
+
+    # ── N. 记账失败**不得静默**（★ 2026-11-26 新增，同轮修掉的真缺陷）──
+    #   `_record_usage` 是 `llm_usage_stats` 的**唯一写入点**，也就是成本/用量看板的
+    #   唯一数据源。它此前是 `except Exception: pass` —— 失败被吞 ⇒ 看板数字偏小
+    #   但**看起来完全正常**（没有缺口标记）⇒「成本优化了多少」建立在残分母上。
+    #   判据两层：
+    #     ① 该函数体里不得出现**裸** `except Exception:\n  pass`（必须留痕）；
+    #     ② 留痕必须**每进程一次**（旁路噪声不能刷屏 —— 与 vector_index 的
+    #        `_note_save_fail` 同一手法；重复 warn 会把真问题淹掉）。
+    #   ⚠️ 只断言①不够：把 pass 改成 `print` 也能过①，但会每调用一次刷一行。
+    #   ⚠️ **射程要精确**：`_record_usage` 内另有 3 处裸 pass，都不该被判红 ——
+    #      ① 上下文占用告警写库失败（403 行）、② 思考超限告警写库失败（475 行）：
+    #         它们是**次级观测**（告警留痕），失败不影响账本完整性；
+    #      ③ `self.stats[...] = ...`（481 行）：内存 dict 赋值，纯防御，不会真失败。
+    #      判据射程若覆盖整函数，会逼人给这三处也加 warning ⇒ 噪声换噪声。
+    #   ⇒ 只锚「**账本写入**（INSERT INTO llm_usage_stats）之后紧跟的异常处理」，
+    #     那才是"数字会错"的地方。
+    try:
+        _i_ru = lsrc.index("def _record_usage(")
+        _i_next = lsrc.find("\n    def ", _i_ru + 10)
+        _body_ru = lsrc[_i_ru:_i_next if _i_next > 0 else len(lsrc)]
+    except ValueError:
+        _body_ru = ""
+    _bare_pass = False
+    _detail_n1 = "未找到含 INSERT INTO llm_usage_stats 的 try 块"
+
+    def _n1_bare_handlers(src_text):
+        """统计「body 含账本 INSERT 的 try」里**裸 pass** 的 handler 个数。
+
+        返回 (n_try_blocks, n_bare_handlers)；解析失败返回 (-1, -1)。
+        抽成函数是为了能用**最小样本**做判据单元测试（见下面的 X0/X1 对照）——
+        改产品文件做变异太脆：文本替换很容易造出语法错，那样的"变红"是假的
+        （本轮实测踩过：替换 finally 定位错 ⇒ 语法错 ⇒ 判据报"未找到"而非"发现裸 pass"）。
+        """
+        try:
+            _t = _ast.parse(src_text)
+        except SyntaxError:
+            return -1, -1
+        n_try = n_bare = 0
+        for _node in _ast.walk(_t):
+            if not isinstance(_node, _ast.Try):
+                continue
+            _has_ins = any(
+                isinstance(_s, _ast.Constant) and isinstance(_s.value, str)
+                and "INSERT INTO llm_usage_stats" in _s.value
+                for _s in _ast.walk(_ast.Module(body=_node.body, type_ignores=[])))
+            if not _has_ins:
+                continue
+            n_try += 1
+            for _h in _node.handlers:
+                if len(_h.body) == 1 and isinstance(_h.body[0], _ast.Pass):
+                    n_bare += 1
+        return n_try, n_bare
+
+    _n_try, _n_bare = _n1_bare_handlers(lsrc)
+    _detail_n1 = "含账本 INSERT 的 try 块 %d 个，其中裸 pass handler %d 个" % (_n_try, _n_bare)
+    chk("N1 ★_record_usage 的**账本写入**失败不留裸 pass（成本看板唯一数据源）",
+        _n_try > 0 and _n_bare == 0, _detail_n1)
+
+    # ── X. 判据单元测试：**证明 N1 不是恒真**（最小样本对照）──
+    #   为什么用样本而不是改产品文件：文本级变异极易造出语法错，
+    #   那样"变红"是假证据（本轮实测：替换位置算错 ⇒ 语法错 ⇒ 报"未找到"）。
+    #   样本法直接验「同一套检查逻辑对两种写法给出不同结论」，这才证明判据有分辨力。
+    _BAD = (
+        "def f(conn):\n"
+        "    try:\n"
+        "        conn.execute('INSERT INTO llm_usage_stats (a, is_probe) VALUES (?,?)', (1, 0))\n"
+        "    except Exception:\n"
+        "        pass\n"
+    )
+    _GOOD = (
+        "def f(conn):\n"
+        "    try:\n"
+        "        conn.execute('INSERT INTO llm_usage_stats (a, is_probe) VALUES (?,?)', (1, 0))\n"
+        "    except Exception as e:\n"
+        "        _log.warning('记账失败 %s', e)\n"
+    )
+    _t_bad, _b_bad = _n1_bare_handlers(_BAD)
+    _t_good, _b_good = _n1_bare_handlers(_GOOD)
+    chk("X1 判据对『裸 pass』判定为违规（否则 N1 恒真）",
+        _t_bad == 1 and _b_bad == 1, "try=%d bare=%d" % (_t_bad, _b_bad))
+    chk("X2 判据对『有留痕』判定为合规（不误杀正确写法）",
+        _t_good == 1 and _b_good == 0, "try=%d bare=%d" % (_t_good, _b_good))
+    chk("X3 判据对语法错输入返回 -1（不会把「解析失败」当成「没问题」）",
+        _n1_bare_handlers("def f(:\n")[0] == -1)
+    chk("N2 ★记账失败留痕每进程只报一次（旁路噪声不得刷屏）",
+        "_ACC_FAIL_ONCE" in lsrc and "_ACC_FAIL_ONCE" in _body_ru,
+        "缺 _ACC_FAIL_ONCE 门控 ⇒ 每次调用失败都打一行，真问题被淹")
 
     con.close()
     return _report()

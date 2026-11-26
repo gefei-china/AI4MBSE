@@ -42,10 +42,11 @@ _ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__
 sys.path.insert(0, _ROOT)
 
 _TMP = os.path.join(tempfile.gettempdir(), "verify_wl_exempt.db")
-for _p in (_TMP, _TMP + "-wal", _TMP + "-shm"):
-    if os.path.exists(_p):
-        os.remove(_p)
-shutil.copy2(os.path.join(_ROOT, "backups", "t-prod-20261026-122709.db"), _TMP)
+# ★ 2026-11-26：原为硬编码 `backups/t-prod-20261026-122709.db`（已被清理 ⇒ import 期崩）。
+#   改走 `_fixture_db` 三层回退（历史备份 → 当前库 → SKIP 不崩）。
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from _fixture_db import require_or_skip  # noqa: E402
+print("  夹具来源：%s" % require_or_skip(_TMP, start=__file__, label="MCP 白名单豁免夹具库"))
 os.environ["MBSE_DB_PATH"] = _TMP
 os.environ["MBSE_LLM_FORCE_MOCK"] = "1"
 
@@ -108,26 +109,54 @@ def build(query, exempt, forced_skill=False):
         sec["mcp_exempt_skill_whitelist"] = _old
 
 
-# ── [1] 豁免开 ⇒ MCP 仍在 ──
+# ── [2] 豁免关 ⇒ 只保留**白名单显式授权**的 MCP 工具 ──
+# ★ 2026-11-26 修判据假设：原判据 `len(mcp_off) == 0`（"关豁免即归零"）。
+#   实测白名单 32 项里**有 30 项本身就是 MCP 工具名**（技能「智源平台管理」的
+#   allowed_tools 显式列了它们）⇒ 关豁免后这 30 个仍合法进入，`mcp_off=30`。
+#   这不是缺陷，是"白名单显式授权"与"豁免兜底"两条正当路径并存。
+#   判据改为**关系式**（这也正是本文件 docstring 第 1 条设计原则：
+#   「断言关系而非具体数值」）：
+#     ① 豁免开 ⇒ 注入数 ≥ 豁免关（豁免只会加、不会减）；
+#     ② 豁免关时仍在的 MCP 工具 **必须全部在白名单里**（没有豁免就不能"偷渡"）。
 n_on, mcp_on, wl = build("查询智源工程列表", True)
 check("[1] 技能白名单命中（前置条件成立，否则本门禁无意义）", bool(wl), f"白名单 {len(wl)} 项")
 check("[1] 豁免开 ⇒ MCP 工具仍然注入", len(mcp_on) > 0, f"{len(mcp_on)} 个：{mcp_on[:4]}")
 
-# ── [2] 豁免关 ⇒ 退回改动前（MCP 被裁成 0）──
+# ── [2] 豁免关 ⇒ 退回"只有白名单授权"──
 n_off, mcp_off, _ = build("查询智源工程列表", False)
-check("[2] 豁免关 ⇒ MCP 被白名单裁成 0（改动前行为）", len(mcp_off) == 0,
-      f"实得 {len(mcp_off)}")
-check("[2] 豁免开比关注入更多工具", len(n_on) > len(n_off), f"{len(n_off)} → {len(n_on)}")
+_wlset0 = set(wl)
+_stowaway = [n for n in mcp_off if n not in _wlset0]
+check("[2] 豁免关 ⇒ 注入的 MCP 工具全部来自白名单（无豁免不能偷渡）",
+      not _stowaway, "白名单外却被注入：%s" % _stowaway[:6])
+check("[2] 豁免开比关注入更多工具（豁免确实放行了额外工具）",
+      len(n_on) > len(n_off), f"{len(n_off)} → {len(n_on)}（MCP {len(mcp_off)} → {len(mcp_on)}）")
 
 # ── [3] 只豁免 MCP：内置/DB 工具仍受白名单约束 ──
 #   取一个明确不在白名单里的内置工具（如 graph_retrieve），两种模式下都不该出现
 check("[3] 白名单外的内置工具仍被裁（最小权限未放松）",
       "graph_retrieve" not in n_on and "graph_retrieve" not in n_off,
       f"on含={('graph_retrieve' in n_on)} off含={('graph_retrieve' in n_off)}")
+# ── 强制注入集（从代码/配置推导，**不硬编码名单**）────────────────────────
+# ★ 2026-11-26：原判据把例外写成 `n != "ask_user"` 一个字面量。
+#   实测 `memory_fetch`（2026-11-11 起**常驻注入**，`tools.py:1324`「只读、无副作用，
+#   不按本轮有无记忆命中做条件注入」）与 `todo_write`（受 config `agent.todo_enabled`
+#   控制，`tools.py:1296`）也会出现在非白名单工具里 ⇒ 判据红而产品正确。
+#   改为**从真源推导**：常驻的那两个写进集合，开关型按 config 现值附加
+#   ⇒ 将来开关一开一关，判据自动跟随；若又新增强制注入，判据会红并打印名字
+#   （这是**应该人审**的决定：强制注入 = 放松最小权限，不能悄悄加）。
+_FORCED_ALWAYS = {"ask_user", "memory_fetch"}
+try:
+    _todo_on = bool(cfg.get("agent", "todo_enabled", False))
+except Exception:
+    _todo_on = False
+_FORCED = set(_FORCED_ALWAYS) | ({"todo_write"} if _todo_on else set())
+print("  强制注入集（推导）：%s（todo_enabled=%s）" % (sorted(_FORCED), _todo_on))
+
 _wlset = set(wl)
-_non_mcp_outside = [n for n in n_on if n not in NAMES and n not in _wlset and n != "ask_user"]
-check("[3] 非 MCP 候选里没有白名单外的工具（除强制注入的 ask_user）",
-      not _non_mcp_outside, str(_non_mcp_outside[:6]))
+_non_mcp_outside = [n for n in n_on if n not in NAMES and n not in _wlset and n not in _FORCED]
+check("[3] 非 MCP 候选里没有白名单外的工具（除已知强制注入集）",
+      not _non_mcp_outside, "多出未登记的工具：%s（若是新加强制注入，请在此登记并说明理由）"
+      % str(_non_mcp_outside[:6]))
 
 # ── [4] 委派白名单语义不变（非 MCP 仍严格受限）──
 p = AgentPipeline()
@@ -139,8 +168,12 @@ finally:
 p._tool_whitelist = ["file_read"]
 td4 = p._build_tools_def(_AGENT, "读取文件内容", _USER)
 names4 = [t["function"]["name"] for t in td4]
-check("[4] 纯委派白名单（非技能）⇒ 只剩白名单工具 + MCP 豁免 + ask_user",
-      all(n in ("file_read", "ask_user") or n in NAMES for n in names4), str(names4[:8]))
+# ★ 2026-11-26：原判据 `all(n in ("file_read","ask_user") or n in NAMES)` ——
+#   漏了 memory_fetch / todo_write（理由同 [3]）。
+check("[4] 纯委派白名单（非技能）⇒ 只剩白名单工具 + MCP + 已知强制注入",
+      all(n in ("file_read",) or n in NAMES or n in _FORCED for n in names4),
+      "越界项：%s" % [n for n in names4 if n not in ("file_read",) and n not in NAMES
+                     and n not in _FORCED][:8])
 check("[4] 委派白名单下 MCP 也被视作显式授权（豁免同效）", bool([n for n in names4 if n in NAMES]))
 
 # ── [7] 回归锁：注入的 MCP 名必须都来自 bound ──
@@ -171,9 +204,9 @@ check("[8] 变异自证：豁免代码存在于源码（删掉即等于退回 [2
       "若此判据失败说明豁免实现被移除，[1] 将失去保护")
 # 直接模拟"豁免失效"：用 exempt=False 构建，断言 MCP 归零（即 [1] 的对立面）
 _n_mut, _mcp_mut, _ = build("查询智源工程列表", False)
-check("[8] 变异自证：关闭豁免 ⇒ MCP 归零（证明 [1] 的差异确实由豁免带来）",
-      len(_mcp_mut) == 0 and len(mcp_on) > 0,
-      f"开={len(mcp_on)} 关={len(_mcp_mut)}")
+check("[8] 变异自证：关闭豁免 ⇒ MCP 注入数**下降**（证明 [1] 的差异确实由豁免带来）",
+      len(_mcp_mut) < len(mcp_on) and len(mcp_on) > 0,
+      f"开={len(mcp_on)} 关={len(_mcp_mut)} ⇒ 若相等，说明豁免路径没起作用（[1] 是空转）")
 
 for _p in (_TMP, _TMP + "-wal", _TMP + "-shm"):
     try:

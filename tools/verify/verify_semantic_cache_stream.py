@@ -40,10 +40,11 @@ _ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__
 sys.path.insert(0, _ROOT)
 
 _TMP = os.path.join(tempfile.gettempdir(), "verify_sc_stream.db")
-for _p in (_TMP, _TMP + "-wal", _TMP + "-shm"):
-    if os.path.exists(_p):
-        os.remove(_p)
-shutil.copy2(os.path.join(_ROOT, "backups", "t-prod-20261026-122709.db"), _TMP)
+# ★ 2026-11-26：原为硬编码 `backups/t-prod-20261026-122709.db`（已被清理 ⇒ import 期崩）。
+#   改走 `_fixture_db` 三层回退（历史备份 → 当前库 → SKIP 不崩）。
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from _fixture_db import require_or_skip  # noqa: E402
+print("  夹具来源：%s" % require_or_skip(_TMP, start=__file__, label="语义缓存流式夹具库"))
 os.environ["MBSE_DB_PATH"] = _TMP
 os.environ["MBSE_LLM_FORCE_MOCK"] = "1"
 

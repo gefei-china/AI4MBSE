@@ -837,6 +837,35 @@ jobs:
         if: ${{ !cancelled() }}
         run: python tools/verify/verify_assign_trace_persisted.py
 
+      # ══ 2026-11-26（二）：backlog 60→56 —— 4 条一次性修到 pr ══════════════════
+      # 这 4 条的**共同根因只有两个**，各修一次就批量转绿：
+      # ① **硬编码夹具来源已消失**：3 个脚本都写了
+      #    `backups/t-prod-20261026-122709.db`，而该文件已被清理
+      #    ⇒ import 期 `shutil.copy2` FileNotFoundError 崩掉（0.6~2.7s 就死）。
+      #    真因不是"环境缺文件"，是**门禁把一次性手工备份当成永久夹具**
+      #    （备份是运维临时产物，会被清理；门禁要长期存在 —— 生命周期不匹配）。
+      #    修法：`tools/verify/_fixture_db.py` 三层回退（历史备份→当前库→SKIP），
+      #    且用 SQLite **backup API** 而非 copyfile（服务在写 WAL 时 copyfile 会拿到
+      #    不一致快照，实测子进程报 `malformed database schema`）。
+      # ② **判据钉死"某时刻的字面/数量"**：见各步注释。
+      # 另修出 1 个真缺陷：`llm/__init__.py` 的用量记账失败是裸 `except: pass`
+      #   ⇒ 成本看板数字静默偏小而无任何缺口标记（N 组 + X 组守住）。
+
+      # 度量地基：探测噪声与业务统计分家（59 项，含 N/X 判据单元测试）
+      - name: Guard 探测标记与记账留痕（59 项）
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_probe_mark.py
+
+      # role 块工具手册按暴露集裁剪（含一个如实记录的已知局限）
+      - name: Guard role 工具手册裁剪（含已知局限记录）
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_role_manual_filter.py
+
+      # MCP 绑定工具豁免技能白名单（强制注入集从真源推导）
+      - name: Guard MCP 白名单豁免（豁免/回滚/最小权限/归因）
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_mcp_whitelist_exempt.py
+
       # ══ 2026-11-26：broken 层清零（6 条全数上调，budget.broken 6→0）══════════
       # 这一批的共同点：**没有一条是"产品完全坏了"**，红因分四类，修法各不相同 ——
       # 正是"broken 层不能只按颜色归类"的证据：
@@ -2288,6 +2317,14 @@ jobs:
       - name: Guard 失败轮预算
         if: ${{ !cancelled() }}
         run: python tools/verify/verify_failed_round_budget.py
+
+      # ── 2026-11-26（二）：语义缓存流式路径 ────────────────────────────────
+      # 守「缓存命中不得谎报」「不回写」「闸门/回滚」。
+      # ★ 归 nightly 而不是 pr：实测**单次 150s**（566MB 夹具快照 + 真实流式链路），
+      #   放 pr 会拖慢每次提交；它守的是质量属性，夜间跑够用。
+      - name: Guard 语义缓存流式路径
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_semantic_cache_stream.py
 
       # ── embedding 不可用熔断 ──
       # 锁的是 P0-2 的教训：embedding 配额耗尽**静默**降级 ⇒ 词面向量污染检索。

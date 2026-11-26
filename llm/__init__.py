@@ -23,6 +23,11 @@ from .providers import (  # noqa: F401  （注册副作用）
 #: LLM 层日志器（思考超限告警用；与 provider 层 `mbse.llm` 同族）
 _log = logging.getLogger("mbse.llm")
 
+#: 用量记账失败是否已报过（**每进程只报一次**，见 `_record_usage` 的 except）。
+#: 为什么要这个标志：记账是**旁路**，重复 warn 只会把真正的问题淹掉；
+#: 但一次都不报则会让"成本看板数字静默偏小"完全不可见（2026-11-26 修）。
+_ACC_FAIL_ONCE = False
+
 # P1-5：上下文占用告警去重（(窗口, 10% 分桶) → 同一档只报一次）
 _CTX_UTIL_WARNED = set()
 
@@ -529,8 +534,26 @@ class LLMClient:
                             "estimated_cost, latency_ms) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", _vals)
                     else:
                         raise
-        except Exception:
-            pass
+        except Exception as _acc_err:
+            # ★ 2026-11-26：记账失败**不得静默**（此前是裸 `pass`）。
+            #
+            #   危害链：本函数负责把每次 LLM 调用的用量/成本写进 `llm_usage_stats`。
+            #   它是"成本与用量看板"的**唯一数据源**。失败被 `pass` 吞掉 ⇒
+            #     ① 看板数字偏小，但看起来完全正常（没有缺口标记）；
+            #     ② 「成本优化了多少」这类结论建立在**不完整的分母**上；
+            #     ③ 上面那个"降级写 17 列"的分支失败时更糟 —— 连用量都丢了。
+            #   实测触发面：目标表迁移未跑到（缺列）、磁盘满、库被独占锁、
+            #   占位符与列数不匹配（加列忘了加 `?`，见 verify_probe_mark 的 M 组）。
+            #   修法：**每进程只报一次**（记账是旁路，重复 warn 会把真问题淹掉 ——
+            #   与 adapters/vector_index.py 的 `_note_save_fail` 同一手法），
+            #   但一次都不报就等于"记账静默消失且无人知晓"。
+            global _ACC_FAIL_ONCE
+            if not _ACC_FAIL_ONCE:
+                _ACC_FAIL_ONCE = True
+                _log.warning(
+                    "[llm_usage] 用量/成本记账失败，本条及后续同类失败**不再逐条报**："
+                    "%s: %s（看板数字会偏小；请查 llm_usage_stats 表结构与磁盘）",
+                    type(_acc_err).__name__, str(_acc_err)[:160])
         finally:
             # P0-b M5：闭 llm span——放 **finally** 而非 try 尾：记账成败
             # （DB 插入被上面 except 吞掉）与 span 生命周期解耦，否则 flush

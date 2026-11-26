@@ -4,7 +4,7 @@
  "doc": "门禁清单唯一真源。由 tools/gate_runner.py 执行、tools/verify/verify_gate_manifest.py 守卫。分层依据：工具 2026-11-04 的双环境实测（真库 + 干净库）。",
  "budget": {
   "broken": 0,
-  "backlog": 60,
+  "backlog": 56,
   "tolerated_steps": 39
  },
  "tiers": {
@@ -1365,9 +1365,9 @@
   },
   {
    "script": "verify_mcp_whitelist_exempt.py",
-   "tier": "backlog",
-   "timeout": 180,
-   "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+   "tier": "pr",
+   "timeout": 120,
+   "reason": "MCP 绑定工具豁免技能白名单。2026-11-26 修五处：① 同一硬编码备份崩溃；② [2] 原断言『关豁免 ⇒ MCP 归零』，而白名单 32 项里**有 30 项本身就是 MCP 工具名**（技能显式授权）⇒ 关豁免仍注入 30 个属正确，改为关系式判据（关豁免时注入的 MCP 必须全在白名单里）；③ [3]/[4] 例外名单硬编码只认 ask_user，而 memory_fetch 常驻注入、todo_write 受配置控制，改为**从真源推导强制注入集**（将来新增强制注入会红并打印名字，属应人审的放松决策）；④ [8] 变异自证同步改为『注入数下降』。ALL PASS"
   },
   {
    "script": "verify_mcp_write_path.py",
@@ -1827,9 +1827,9 @@
   },
   {
    "script": "verify_probe_mark.py",
-   "tier": "backlog",
-   "timeout": 180,
-   "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+   "tier": "pr",
+   "timeout": 120,
+   "reason": "度量地基：探测/验证噪声必须与业务统计分家（tool_call_logs / llm_usage_stats 的 is_probe）。2026-11-26 修两处：① M 组判据原要求 is_probe **紧跟右括号**（即它是最后一列），而 2026-10-30 追加 context_window 后它不再是最后一列 ⇒ 判据红而产品对；改为结构性判据（is_probe 在列清单里 + **列数==占位符数**，后者才是加列时真会踩的坑）。② 新增 N 组 + X 组：`_record_usage` 的**账本写入**失败不得裸 pass（同轮修掉的真缺陷：原先 `except Exception: pass` ⇒ 成本看板数字静默偏小），并用最小样本做判据单元测试（X1 裸 pass 判违规 / X2 有留痕判合规 / X3 语法错不误判）证明 N1 非恒真。59 项"
   },
   {
    "script": "verify_progress_guard.py",
@@ -2059,9 +2059,9 @@
   },
   {
    "script": "verify_role_manual_filter.py",
-   "tier": "backlog",
-   "timeout": 180,
-   "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+   "tier": "pr",
+   "timeout": 120,
+   "reason": "role 块工具手册按暴露集裁剪（P0-7）。2026-11-26 修三处：① 硬编码 `backups/t-prod-*.db` 已被清理 ⇒ import 期 FileNotFoundError 崩掉，改走 `_fixture_db` 三层回退；② [10]/[13] 原依赖真库 Agent 内嵌手册段，而该段已改为按需注入（prompt 只剩 1281 字符，mode=no_manual）⇒ 改夹具驱动；③ [12] 归因仅在 mode∈{applied,nothing_to_drop,no_exposed} 时写，真库 no_manual ⇒ 正确不写，改为条件 SKIP。另**如实记录一个已知局限**（[10e]）：切分按工具名分段、段尾延伸到文末 ⇒ 手册段之后的叙述会被一并裁掉"
   },
   {
    "script": "verify_router_calibration.py",
@@ -2149,9 +2149,9 @@
   },
   {
    "script": "verify_semantic_cache_stream.py",
-   "tier": "backlog",
-   "timeout": 180,
-   "reason": "未接线（2026-11-04 盘点未覆盖，待逐个定性）"
+   "tier": "nightly",
+   "timeout": 300,
+   "reason": "语义缓存接入流式路径（命中/流式/不谎报/不回写/闸门/回滚）。2026-11-26 修：同一硬编码备份 `backups/t-prod-20261026-122709.db` 已被清理 ⇒ import 期崩，改走 `_fixture_db` 三层回退（历史备份→当前库→SKIP）。★ 归 nightly 而非 pr：实测**单次 150s**（566MB 夹具快照 + 真实流式链路），放 pr 会拖慢每次提交；它守的是「命中不谎报」这类质量属性，夜间跑够用"
   },
   {
    "script": "verify_session_monitor.py",

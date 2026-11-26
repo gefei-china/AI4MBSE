@@ -18,12 +18,17 @@ import tempfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, ROOT)
-PROD = os.path.join(ROOT, "backups", "t-prod-20261026-122709.db")
+# ★ 2026-11-26：原为 `PROD = ROOT/backups/t-prod-20261026-122709.db` 硬编码 ——
+#   那个备份**已被清理**（backups/ 现存 137 个文件无 t-prod-*）⇒ 本脚本 import 期就
+#   FileNotFoundError 崩掉（Traceback 指向 shutil.copy2），看起来像"环境缺文件"，
+#   真因是"门禁把一次性手工备份当成了永久夹具"（两者生命周期不匹配）。
+#   改为 `_fixture_db` 三层回退：历史备份（若还在）→ 当前库 → 都没有则 SKIP（不崩）。
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from _fixture_db import require_or_skip  # noqa: E402
+
 T = os.path.join(tempfile.gettempdir(), "role_filter.db")
-for p in (T, T + "-wal", T + "-shm"):
-    if os.path.exists(p):
-        os.remove(p)
-shutil.copy2(PROD, T)
+PROD = require_or_skip(T, start=__file__, label="role 手册过滤夹具库")
+print("  夹具来源：%s" % PROD)
 os.environ["MBSE_DB_PATH"] = T
 os.environ["MBSE_LLM_FORCE_MOCK"] = "1"
 
@@ -120,7 +125,68 @@ _r_offline = role_of("智源对接agent")
 check("[9] MCP offline ⇒ role 逐字节不变（保守，不把'没暴露'当'全删'）",
       _r_offline == _r_off, f"{len(_r_offline)} vs {len(_r_off)}")
 
-# ── [10] 开关开启 + MCP online + tool_meta ⇒ 大幅缩短 ──
+# ── [10] 裁剪行为：**夹具驱动**（★ 2026-11-26 重写）────────────────────────
+#   原判据用真库 `智源对接agent` 的 role 文本，要求"开关开 ⇒ 显著缩短 ≥50%"。
+#   实测该 Agent 的 system_prompt 只有 1281 字符且**不含工具手册段**
+#   （没有"工具名独占一行"的清单；`filter_role_manual` 返回 mode='no_manual'）
+#   ⇒ 没有可裁的东西 ⇒ 判据恒红。
+#   这是「被测样本退役」的第八例：工具手册段已从 prompt 移走（改成按需注入），
+#   而门禁仍假设它内嵌在 role 里。
+#   ⇒ 改为**门禁自带夹具**：判据测的是 `filter_role_manual` 的裁剪语义，
+#     与"库里恰好有没有那段文本"无关（与 verify_role_block_sections 同一做法）。
+_MANUAL_FIXTURE = "\n".join([
+    "你是智源对接 agent，负责平台建模操作。",
+    "坐标先行：所有操作都要先取 projectId。",     # ← prose 在手册段**之前**
+    "",
+    "## 可用工具（按名查阅）",
+    "query_projects",
+    "  查询项目列表：返回 项目名称/类型/状态。参数：无。",
+    "query_branches",
+    "  查询分支列表：返回 分支名/基线/当前提交。参数：projectId。",
+    "export_sysml_v2",
+    "  导出模型为 SysML v2 源文件。参数：projectId, branch。",
+])
+_FIX_NAMES = ["query_projects", "query_branches", "export_sysml_v2"]
+_out10, _st10 = filter_role_manual(_MANUAL_FIXTURE, _FIX_NAMES, {"query_projects"})
+print(f"  夹具裁剪：{len(_MANUAL_FIXTURE)} → {len(_out10)} 字符，stats={_st10}")
+check("[10] 夹具含手册段 ⇒ mode=applied（判据面成立，否则后面几条空转）",
+      _st10.get("mode") == "applied", str(_st10))
+check("[10] 暴露 1/3 工具 ⇒ 字符数显著缩短（≥50%）",
+      len(_out10) < len(_MANUAL_FIXTURE) * 0.5,
+      f"{len(_MANUAL_FIXTURE)} → {len(_out10)}")
+check("[10] 被裁掉的都是**未暴露**工具的段（留 query_projects，去另两个）",
+      "query_projects" in _out10 and "query_branches" not in _out10
+      and "export_sysml_v2" not in _out10)
+check("[10] 手册段**之前**的叙述仍保留",
+      "坐标先行：所有操作都要先取 projectId" in _out10)
+
+# ── [10e] **已知局限**（如实记录，不判红）：手册段**之后**的叙述会被一并裁掉 ──
+#   原因：`split_by_tool_names` 的段边界是「下一个工具名」，**最后一段延伸到文末**
+#   ⇒ 若最后一个工具段后面还有散文，它属于该段，裁掉该段时一并消失。
+#   为什么记录而不修：这是"按工具名切分"这一设计的内生边界（要精确判断"段结束"
+#   需要额外语法约定，而 role 文本是自由格式）。真实 prompt 里工具清单通常在末尾，
+#   影响面小；但**若将来把工具清单挪到中间，这条就要重新评估**。
+#   ⇒ 写成可执行判据（而不是注释），让这个局限**一直被看得见**。
+_TAIL = _MANUAL_FIXTURE + "\n## 操作纪律\n不得越权写库。\n"
+_out_tail, _st_tail = filter_role_manual(_TAIL, _FIX_NAMES, {"query_projects"})
+_tail_lost = "不得越权写库" not in _out_tail
+print("  [已知局限] 手册段之后的叙述会被一并裁掉：%s"
+      % ("**是**（符合当前设计边界）" if _tail_lost else "否（切分规则已能识别段尾）"))
+check("[10e] 已知局限已如实记录（切分按工具名分段，段尾延伸到文末）", True,
+      "此条恒过，仅用于把局限摆到报告里；若哪天变了会从打印行看出来")
+
+# ── [10b] 豁免的边界：暴露集为空 ⇒ 不裁（保守）──
+_out10b, _st10b = filter_role_manual(_MANUAL_FIXTURE, _FIX_NAMES, set())
+check("[10b] 暴露集为空 ⇒ 不裁（无法判断'真的没暴露'还是'没算出来'）",
+      _out10b == _MANUAL_FIXTURE and _st10b.get("mode") == "no_exposed", str(_st10b))
+
+# ── [10c] 真库现状如实报告（不判红 —— 样本可能已退役）──
+_real_has_manual = bool(_r_off) and filter_role_manual(
+    _r_off, _FIX_NAMES + ["zhiyuan_sysmlv2_gen"], {"query_projects"})[1].get("manual", 0) > 0
+print("  真库 `智源对接agent` %s手册段 ⇒ %s"
+      % ("含" if _real_has_manual else "**不含**",
+         "已覆盖端到端" if _real_has_manual else
+         "端到端无效（工具手册已改为按需注入），本组靠夹具覆盖"))
 con = get_db()
 _srv = con.execute("SELECT tools FROM mcp_servers WHERE name='zhiyuan-dev-mcp'").fetchone()
 _N = json.loads(_srv["tools"] or "[]")
@@ -136,17 +202,15 @@ con.commit()
 con.close()
 _r_on = role_of("智源对接agent")
 print(f"  开关开：智源对接agent role = {len(_r_on)} 字符 / {count_tokens(_r_on)} tok")
-_tk_off, _tk_on = count_tokens(_r_off), count_tokens(_r_on)
-print(f"  ⇒ 字符 {len(_r_off)} → {len(_r_on)}（−{(1-len(_r_on)/len(_r_off))*100:.1f}%）"
-      f"；token {_tk_off} → {_tk_on}（−{(1-_tk_on/max(1,_tk_off))*100:.1f}%）")
-check("[10] 开关开 + MCP online ⇒ role 显著缩短（≥50%）",
-      len(_r_on) < len(_r_off) * 0.5, f"{len(_r_off)} → {len(_r_on)}")
-check("[10] 被裁掉的都是**未暴露**工具的段",
-      "query_projects" in _r_on and "layout_model_view" not in _r_on,
-      f"query_projects 保留={'query_projects' in _r_on}, "
-      f"layout_model_view 移除={'layout_model_view' not in _r_on}")
-check("[10] 非工具叙述仍保留（若原文有）",
-      True if len(_r_off) - 14531 <= 7 else "见下")
+# ★ 2026-11-26：原三条 [10] 判据（"显著缩短 ≥50%" / "未暴露段被移除" / "prose 保留"）
+#   已改为上面的**夹具驱动**版本。这里只保留一条**端到端一致性**判据：
+#   真库 role 若含手册段，则开关开必须真的更短；不含则这一条不判红（样本已退役，
+#   由 [10c] 如实报告，避免把"没东西可裁"记成"裁剪失效"）。
+if _real_has_manual:
+    check("[10d] 真库含手册段时，开关开 ⇒ role 确实更短",
+          len(_r_on) < len(_r_off), f"{len(_r_off)} → {len(_r_on)}")
+else:
+    print("  [SKIP] [10d] 真库无手册段 ⇒ 端到端短化无从验证（夹具已在 [10] 覆盖）")
 
 # ── [11] 非 MCP Agent ⇒ 开关开关都无变化 ──
 _r_chat_off = role_of("chat")
@@ -160,31 +224,47 @@ check("[11] 非 MCP Agent（chat）开关开关逐字节一致",
 # ── [12] 归因落库 ──
 # ⚠️ `record_blocks` 只写内存 buffer，必须显式 `flush()` 才落库 ——
 #   生产由 SSE 入口的 `finally` 收口 flush（routers/conversations.py）。
+# ★ 2026-11-26：生产侧只在 mode ∈ {applied, nothing_to_drop, no_exposed} 时写归因
+#   （见 prompt.py 的 `_apply_role_manual_filter`）。真库当前 `mode=no_manual`
+#   （无手册段）⇒ **不写归因**是正确行为 ⇒ 原判据恒红。
+#   ⇒ 有手册段时测真库；无手册段时 SKIP（并说清"为什么这条现在测不了"），
+#     不把它记成失败 —— 否则等于要求"没东西可裁时也必须写一条裁剪归因"。
 from agent.context_audit import flush as _audit_flush          # noqa: E402
 _audit_flush(force=True)
 con = get_db()
 _aud = con.execute("SELECT COUNT(*) c FROM context_audit_summary WHERE phase='role_manual'"
                    ).fetchone()["c"]
-check("[12] 归因落库（phase=role_manual）", _aud > 0, f"{_aud} 行")
-if _aud:
-    _m = con.execute("SELECT metrics FROM context_audit_summary WHERE phase='role_manual' "
-                     "ORDER BY id DESC LIMIT 1").fetchone()["metrics"]
-    print(f"  最近一次归因：{_m}")
-    _d = json.loads(_m or "{}")
-    check("[12] 归因含 dropped_chars 且 > 0", int(_d.get("role_manual_dropped_chars") or 0) > 0,
-          str(_d.get("role_manual_dropped_chars")))
-    # extra 只支持数值（字符串会被记成 1）⇒ mode 必须用 `role_manual_applied: 1` 编码
-    check("[12] 归因标注 mode（role_manual_applied=1）", _d.get("role_manual_applied") == 1, str(_d))
+if not _real_has_manual:
+    print("  [SKIP] [12] 真库无手册段（mode=no_manual）⇒ 生产不写裁剪归因，属正确行为")
+    print("         （归因口径已由 prompt.py 单点决定；夹具侧裁剪语义见 [10]/[13]）")
+else:
+    check("[12] 归因落库（phase=role_manual）", _aud > 0, f"{_aud} 行")
+    if _aud:
+        _m = con.execute("SELECT metrics FROM context_audit_summary WHERE phase='role_manual' "
+                         "ORDER BY id DESC LIMIT 1").fetchone()["metrics"]
+        print(f"  最近一次归因：{_m}")
+        _d = json.loads(_m or "{}")
+        check("[12] 归因含 dropped_chars 且 > 0",
+              int(_d.get("role_manual_dropped_chars") or 0) > 0,
+              str(_d.get("role_manual_dropped_chars")))
+        check("[12] 归因标注 mode（role_manual_applied=1）", _d.get("role_manual_applied") == 1, str(_d))
 con.close()
 
-# ── [13] 无损性：被裁后的 role 必须是原文的子序列拼接（不引入/不改字）──
-_exp = set(["query_projects", "query_branches", "query_model_versions", "query_data_tree",
-            "apply_model_changes", "get_model_operation", "undo_model_operation",
-            "get_model_features"])
-_out13, _st13 = filter_role_manual(_r_off, set(_N), _exp)
-check("[13] 裁后内容全部来自原文（无新增字符）",
-      all(ch in _r_off for ch in _out13) and len(_out13) < len(_r_off),
-      f"{len(_r_off)} → {len(_out13)}")
+# ── [13] 无损性：被裁后的文本必须是原文的**子序列**（不引入/不改字）──
+# ★ 2026-11-26：原用真库 `_r_off`，但真库无手册段 ⇒ `len(_out13) < len(_r_off)` 恒假
+#   （`1282 → 1282`）。改为在**夹具**上验无损性（这是本条的语义：切分不得吃字符/造字符）。
+#   无损性的正确判法：裁后字符串必须能由原文的**连续片段按序拼接**得到，
+#   且每一段都在原文里 —— 用"逐段 in 原文"比"逐字符 in 原文"更强（后者对重复字符会误判）。
+_segs13 = split_by_tool_names(_MANUAL_FIXTURE, _FIX_NAMES)
+_out13, _st13 = filter_role_manual(_MANUAL_FIXTURE, _FIX_NAMES, {"query_projects"})
+_segs_kept = split_by_tool_names(_out13, _FIX_NAMES)
+_ok_sub = all(seg in _MANUAL_FIXTURE for _n, seg in _segs_kept) and "".join(
+    seg for _n, seg in _segs13) == _MANUAL_FIXTURE
+check("[13] 切分无损（各段拼回 == 原文，不吞字符）", _ok_sub,
+      "%d 段 → 拼回%s" % (len(_segs13), "一致" if _ok_sub else "**不一致**"))
+check("[13] 裁后每一段都来自原文（不新增字符）",
+      all(seg in _MANUAL_FIXTURE for _n, seg in _segs_kept) and len(_out13) < len(_MANUAL_FIXTURE),
+      f"{len(_MANUAL_FIXTURE)} → {len(_out13)}")
 
 _sec["role_manual_filter"] = _old
 
