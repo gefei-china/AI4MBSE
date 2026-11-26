@@ -54,9 +54,22 @@ if os.path.exists(_CLEAN_DB):
     os.remove(_CLEAN_DB)
 os.environ["MBSE_DB_PATH"] = _CLEAN_DB
 
-# 固定判定时刻：种子时间戳全部相对它推导 ⇒ 门禁在任何日期跑结果一致（不随日历漂移）
-NOW_STR = "2026-10-18 12:00:00"
-NOW = __import__("datetime").datetime(2026, 10, 18, 12, 0, 0)
+# 判定时刻 —— ★ 2026-11-26 改用**真实当前时间**（原来写死 2026-10-18）。
+#
+#   为什么原来写死：怕"随日历漂移"（种子时间戳都相对它推导，理应恒定）。
+#   实测发现这个做法制造了**两条路径不同源**的口径错位：
+#     · C1~C9 用 `analyze(conn, now=NOW)`  ← 固定时钟 2026-10-18
+#     · C10~C13 用 `monitor_lifecycle(conn)` → 内部 `analyze(conn)`  ← **真实时钟**
+#   两者差 39 天 ⇒ 同一个种子在两处档位不同：
+#     种子 `lc-a1-keep`（3 用/5 天前建）在固定时钟下 keep，
+#     在真实时钟下变成「39 天没用过」⇒ retire_candidate。
+#   症状：C3/C4 绿（retire=3）而 C12 红（retire=6 个）——**同一个库、同一条规则，两个答案**。
+#   这不是"日期漂移"，是**同一语义在两个入口用了两个时钟**（本仓反复踩的形态）。
+#   ⇒ 修法：统一用真实时间。种子时间戳本身就是**相对量**（`_days_ago(n)`），
+#     只要"断言侧"和"端点侧"用同一个 now，结果就与执行日期无关 —— 恒定性的原目标不变。
+#   ⚠️ 断言里**不要**出现绝对日期（`NOW_STR` 已改为仅用于日志展示）。
+NOW = __import__("datetime").datetime.now().replace(microsecond=0)
+NOW_STR = NOW.strftime("%Y-%m-%d %H:%M:%S")
 
 
 def _days_ago(n: int) -> str:
@@ -241,9 +254,19 @@ def main():
           all(it["kind"] == "agent" for it in _api_agent.get("items") or [])
           and sum(1 for it in _api_agent["items"] if str(it.get("name", "")).startswith("lc-")) == 6)
     _api_ret = monitor_lifecycle(kind="all", verdict="retire_candidate", limit=200, conn=conn)
+    # ★ 2026-11-26：C12 红时需要**实际档位分布**才能定位（只报"不是 3 个"没法查）。
+    #   三种病因看起来一样：① 种子档位漂移（阈值/规则变了）② 过滤条件失效
+    #   ③ 真库数据混进来（不在夹具库时）。
+    _lc_vd = [(str(it.get("name", "")), it.get("verdict"))
+              for it in (_api_all.get("items") or []) if str(it.get("name", "")).startswith("lc-")]
+    print("    种子档位分布：%s" % _lc_vd)
+    print("    retire_candidate 过滤后：%s"
+          % [(str(it.get("name", "")), it.get("kind")) for it in (_api_ret.get("items") or [])][:8])
     check("C12 verdict=retire_candidate 过滤只返待评估退役（lc 3 项）",
           all(it["verdict"] == "retire_candidate" for it in _api_ret.get("items") or [])
-          and sum(1 for it in _api_ret["items"] if str(it.get("name", "")).startswith("lc-")) == 3)
+          and sum(1 for it in _api_ret["items"] if str(it.get("name", "")).startswith("lc-")) == 3,
+          "retire 里 lc- 项 %d 个（期望 3）；档位分布见上"
+          % sum(1 for it in _api_ret["items"] if str(it.get("name", "")).startswith("lc-")))
     _api_unknown = monitor_lifecycle(kind="no_such_kind", verdict="", limit=200, conn=conn)
     check("C13 未注册 kind 不炸（返空而非 500，扩展安全性）",
           _api_unknown.get("ok") and _api_unknown.get("items") == [],
@@ -264,12 +287,27 @@ def main():
 
     # ── D. 真库只读 smoke（开发机；CI 无库 ⇒ 整体 SKIP）────────────────
     print("\n== D. 真库只读 smoke（file:...?mode=ro，不写不迁移）==")
-    _prod = (os.environ.get("MBSE_DB_PATH") or os.path.join(ROOT, "mbse.db"))
+    # ★★ 2026-11-26 修「D 段一直在对空库自证」（本门禁最严重的一处）：
+    #   原实现 `_prod = os.environ.get("MBSE_DB_PATH") or ROOT/mbse.db`
+    #   —— 而本文件第 55 行**无条件**把 `MBSE_DB_PATH` 设成了干净夹具库
+    #   ⇒ D 段所谓「真库 smoke」读的**永远是干净库**（init_db 新建的空库）。
+    #   后果：D1「真库 analyze ok」对空库当然 ok；D2/D3「与真库 COUNT 一致」
+    #   是**空库自己跟自己比**（0==0）⇒ 三条判据全是假绿，
+    #   只剩 D4（要求 design 有使用证据）会红 —— 而它红的理由被记成"产品 join 坏了"，
+    #   实际是"读错库"。**判据红/绿都在说假话，这才是最坏的一类。**
+    #   ⇒ 修法：D 段**显式**指向生产库文件（不读环境变量），并加一条"这确实是生产库"
+    #     的前置断言（agents 数量 > 干净库种子数），避免将来又读错。
+    _prod = os.path.join(ROOT, "mbse.db")
     if not os.path.exists(_prod):
-        skip("D1-D4 真库断言", "CI 环境无 mbse.db（干净库口径）⇒ 判据面不存在")
+        skip("D1-D4 真库断言", "无 mbse.db（CI 干净克隆）⇒ 生产库口径不存在")
     else:
         _pc = sqlite3.connect("file:%s?mode=ro" % _prod, uri=True)
         _pc.row_factory = sqlite3.Row
+        _n_ag_pre = _pc.execute("SELECT COUNT(*) FROM agents").fetchone()[0]
+        check("D0 ★连的是生产库（不是本文件切过去的干净夹具库）",
+              _n_ag_pre >= 20,
+              "agents 只有 %d 个 ⇒ 疑似读到干净库（夹具库走 init_db 种子，数量远小于生产库）"
+              % _n_ag_pre)
         _res_p = LC.analyze(_pc, now=NOW)
         check("D1 真库 analyze ok", _res_p.get("ok") is True)
         _n_ag = _pc.execute("SELECT COUNT(*) FROM agents").fetchone()[0]

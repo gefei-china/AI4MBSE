@@ -837,6 +837,49 @@ jobs:
         if: ${{ !cancelled() }}
         run: python tools/verify/verify_assign_trace_persisted.py
 
+      # ══ 2026-11-26：broken 层清零（6 条全数上调，budget.broken 6→0）══════════
+      # 这一批的共同点：**没有一条是"产品完全坏了"**，红因分四类，修法各不相同 ——
+      # 正是"broken 层不能只按颜色归类"的证据：
+      #   ① 判据钉死字面（产品对、判据过期）⇒ badcase、thinking_policy
+      #   ② 判据方向反了（守护"历史时刻"而非"目标状态"）⇒ fact_inference、conflict_check_retired
+      #   ③ 被测样本退役/改名（对象不存在）⇒ agent_loop_protocol（工具已 disabled）、
+      #      conflict_check_retired（画布 react 节点已移除）
+      #   ④ **门禁自欺**（判据绿/红都在说假话）⇒ lifecycle 的 D 段读错库、
+      #      conflict_check_retired 的 D 组对已迁移库自证、thinking_policy 的变异打空
+      # 另有一条真产品缺陷（agent_loop_protocol 顺带修出）：execute.py 的预算耗尽/
+      # 失败轮耗尽两条分支不告知模型停机原因 ⇒ 模型会归因为"调用次数上限"，
+      # 而 stream.py 早在 2026-10-28 就修过 ——「同一语义多入口只在一处修」。
+
+      # 并行配对 + 截断三分法。含真机端到端（F/G 组），干净库自动 SKIP 那部分。
+      - name: Guard Agent Loop 协议（并行配对 + 截断三分法）
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_agent_loop_protocol.py
+
+      # Bad Case 闭环（注册表 / 分级 / 配置变异 / 干净库端到端 / 告警）。
+      - name: Guard Bad Case 闭环（43 项）
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_badcase.py
+
+      # 假实现下线：两条注入路径都要切断（DB 注册表 + 插件"安装即可消费"）。
+      - name: Guard 假实现 conflict_check 已下线（两条注入路径）
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_conflict_check_retired.py
+
+      # 事实/推断分档：basis 真的被写进 evidence（能力生效且未回退）。
+      - name: Guard 事实推断分档（evidence.basis）
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_fact_inference.py
+
+      # 资产长尾治理：四档判定 + 配置消费 + 面板接线（真库 smoke 在开发机跑）。
+      - name: Guard 资产长尾治理（42 项）
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_lifecycle.py
+
+      # thinking 三态分流：off/on 两名单 + 「未命中不发字段」防事故判据 + 2 变异。
+      - name: Guard thinking 三态分流（2 变异）
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_thinking_policy.py
+
       # ── 2026-10-30：技能包磁盘文件 ↔ skills 表 内容一致性 ────────────────
       # 实测缺陷：技能「智源平台管理」磁盘 skill.md 是 v1.0（1677 字，讲已失效的
       #   zhiyuan_sysmlv2_* HTTP 工具），而 skills.content 是 v1.3（4830 字，MCP 版）

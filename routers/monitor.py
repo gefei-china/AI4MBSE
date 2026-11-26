@@ -918,6 +918,118 @@ def monitor_attribution_patterns(days: int = 0, conn=Depends(db_session)):
         return JSONResponse({"ok": False, "error": "%s: %s" % (type(e).__name__, e)}, 500)
 
 
+@router.get("/api/monitor/assignment-trace")
+def monitor_assignment_trace(limit: int = 30, conv_id: int = 0,
+                             conn=Depends(db_session)):
+    """分派依据留痕（「这次为什么派给它」的看板数据源）。
+
+    ## 为什么要有这个端点（2026-11-26）
+
+    `agent_tasks.assign_score` 是 `REAL DEFAULT 0`。在 2026-11-26 之前，
+    接线只把分数写进 `config`、**从没写过这一列** ⇒ 全表 642 行都是 0.0（默认值）。
+    于是「分了但没算」与「算出来就是 0 分」在数据层**完全同形**，
+    而这两件事对用户的意思截然不同：
+
+      · 未留痕 ⇒ 这一格**不该被当成分数读**（分派没走打分器 / 旧版本遗留）；
+      · 真 0 分 ⇒ 打分器认为该 Agent 与任务不匹配（capability_match≈0 且负载/成功率低）。
+
+    ## 本端点的契约（关键：`null` 而不是 0）
+
+    `assign_known=false` 时 **`assign_score` / `capability_match` 一律返回 `None`**，
+    即 JSON 里的 `null`。这不是"省略字段"，是**显式声明"这个值不存在"**——
+    前端 `0` 与 `null` 在 JS 里都是 falsy，若这里传 0，界面必然显示成"0 分"，
+    那正是要消灭的误导。所以判据必须在这一层守住（见 verify_assign_trace_persisted 的 [H] 组）。
+
+    `assign_known` 的取值来源是**写入方自己声明的** `assign_traced` 列，
+    不是"分数是否非零"的推断（那会把真 0 分误判成未留痕）。
+    """
+    from core.config import get as _get
+    lim = max(1, min(int(limit or 30), 200))
+    rows = []
+    try:
+        if conv_id:
+            cur = conn.execute(
+                "SELECT task_key, title, agent_name_snapshot, agent_id, assign_score, "
+                "assign_traced, load_snapshot, status, run_id, conversation_id, created_at, "
+                "config FROM agent_tasks WHERE conversation_id=? ORDER BY id DESC LIMIT ?",
+                (int(conv_id), lim))
+        else:
+            cur = conn.execute(
+                "SELECT task_key, title, agent_name_snapshot, agent_id, assign_score, "
+                "assign_traced, load_snapshot, status, run_id, conversation_id, created_at, "
+                "config FROM agent_tasks ORDER BY id DESC LIMIT ?", (lim,))
+        rows = cur.fetchall()
+    except Exception as e:
+        # 老库无 assign_traced 列 ⇒ 退回只读旧列，并**明确标注无法区分**
+        #   （不能假装"全是未留痕"，也不能假装"全是真 0 分"—— 两种都是编事实）。
+        try:
+            if conv_id:
+                cur = conn.execute(
+                    "SELECT task_key, title, agent_name_snapshot, agent_id, assign_score, "
+                    "load_snapshot, status, run_id, conversation_id, created_at "
+                    "FROM agent_tasks WHERE conversation_id=? ORDER BY id DESC LIMIT ?",
+                    (int(conv_id), lim))
+            else:
+                cur = conn.execute(
+                    "SELECT task_key, title, agent_name_snapshot, agent_id, assign_score, "
+                    "load_snapshot, status, run_id, conversation_id, created_at "
+                    "FROM agent_tasks ORDER BY id DESC LIMIT ?", (lim,))
+            rows = cur.fetchall()
+        except Exception:
+            return JSONResponse(
+                {"ok": False, "error": "分派留痕查询失败: %s" % e}, 500)
+
+    items = []
+    n_known = n_unknown = 0
+    for r in rows:
+        try:
+            d = dict(r)
+        except Exception:
+            d = {k: r[k] for k in r.keys()}
+        raw_tr = d.get("assign_traced")
+        known = bool(int(raw_tr)) if raw_tr is not None else False
+        if known:
+            n_known += 1
+        else:
+            n_unknown += 1
+        cap = None
+        try:
+            _cfg = json.loads(d.get("config") or "{}") if "config" in d else {}
+        except Exception:
+            _cfg = {}
+        if known:
+            cap = _cfg.get("capability_match")
+        items.append({
+            "task_key": d.get("task_key"),
+            "title": (d.get("title") or "")[:60],
+            "agent": d.get("agent_name_snapshot") or d.get("agent_id"),
+            "status": d.get("status"),
+            "run_id": d.get("run_id"),
+            "conversation_id": d.get("conversation_id"),
+            "created_at": d.get("created_at"),
+            # ★ 未留痕 ⇒ None（JSON null），不是 0
+            "assign_known": known,
+            "assign_score": (float(d.get("assign_score") or 0) if known else None),
+            "capability_match": cap if known else None,
+        })
+    return {
+        "ok": True,
+        "enabled": bool(_get("agent_assignment", "enabled", True)),
+        "items": items,
+        "total": len(items),
+        # 汇总也要分开报：把"未留痕"混进平均分会系统性拉低（历史噪声当成分数）
+        "summary": {
+            "traced": n_known,
+            "untraced": n_unknown,
+            "avg_score": (round(sum(i["assign_score"] for i in items
+                                    if i["assign_score"] is not None) / n_known, 4)
+                          if n_known else None),
+            "note": ("untraced 表示『该任务没有分派打分留痕』，其分数不存在，"
+                     "**不要按 0 分统计**；历史行（2026-11-26 前）全部属于此类。"),
+        },
+    }
+
+
 @router.get("/api/monitor/lifecycle")
 def monitor_lifecycle(kind: str = "all", verdict: str = "", limit: int = 200,
                       conn=Depends(db_session)):

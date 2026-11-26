@@ -76,9 +76,22 @@ def main():
     from core import badcase as BC
 
     specs = BC._detectors(False)
-    check("A1 检测器注册表三类（llm_call_failed/user_negative_feedback/llm_truncated）",
-          [s.kind for s in specs] == ["llm_call_failed", "user_negative_feedback", "llm_truncated"],
-          f"got={[s.kind for s in specs]}")
+    _kinds = [s.kind for s in specs]
+    # ★ 2026-11-26 修「判据钉死字面」：原判据 `[s.kind for s in specs] == [三个]`（**全等**）。
+    #   2026-10-29 按设计新增了第 4 个检测器 `alert_unhandled`（动机见 core/badcase.py 的
+    #   `_SQL_ALERT` 注释：生产库 328 条告警全是 open，一条没被处理，「BadCase 积压」
+    #   这条规则本身在报"坏例没人处理"）⇒ 产品是对的，判据过期。
+    #   ⚠️ 修法**不能**改成「包含三类就算过」——那会丢掉「注册表被人悄悄删掉一个」的保护。
+    #   改为**方向性判据**：①三类一个都不能少；②kind 唯一（重复会让同一事件被计两次）；
+    #     ③每个检测器的 SQL 都输出五列（由 A2 守）。这样「新增」放行、「删减/改名」判红。
+    _MUST_HAVE = ("llm_call_failed", "user_negative_feedback", "llm_truncated")
+    _absent = [k for k in _MUST_HAVE if k not in _kinds]
+    check("A1 检测器注册表含三类必检来源（llm_call_failed/user_negative_feedback/llm_truncated）",
+          not _absent, "缺失 %s；实际注册 %s" % (_absent, _kinds))
+    check("A1b 检测器 kind 唯一（重复会让同一事件被计两次）",
+          len(_kinds) == len(set(_kinds)), "重复：%s" % _kinds)
+    check("A1c 注册表非空且每个检测器都有 label/severity 与 SQL",
+          bool(specs) and all(s.label and s.severity and s.sql for s in specs))
     check("A2 各检测器 SQL 统一输出五列（src_id/subject/seen_at/title/detail）",
           all(all(c in s.sql for c in ("src_id", "subject", "seen_at", "title", "detail"))
               for s in specs))
@@ -90,8 +103,21 @@ def main():
     check("A5 截断：超限加字符数标记，未超限原样",
           BC._clip("x" * 100, 50).endswith("[100 chars]")
           and len(BC._clip("x" * 100, 50)) <= 50 and BC._clip("short", 50) == "short")
-    check("A6 负向反馈分级：wrong/corrected=high，modify=medium",
-          BC._FB_SEVERITY == {"wrong": "high", "corrected": "high", "modify": "medium"})
+    # ★ 2026-11-26 修「判据钉死字面」：原判据用 `==` 全等比对三键字面值。
+    #   2026-10-29 把词表改为单一真源（`core/feedback_types.NEGATIVE_SEVERITY`）时
+    #   一并加了 `down: medium`（quality 里的踩）⇒ 产品是对的，判据过期。
+    #   改为**方向性判据**：核心三键的分级不许变（这是真正的语义），新增键只要求「合法值」。
+    #   ⚠️ 不写成「只断言包含三键」：那样 `wrong` 被降级成 medium 也会绿 ——
+    #      「明确的质量证词必须是 high」这条语义就丢了。
+    _sev = BC._FB_SEVERITY
+    check("A6 负向反馈分级：wrong/corrected=high，modify=medium（核心三键语义不变）",
+          _sev.get("wrong") == "high" and _sev.get("corrected") == "high"
+          and _sev.get("modify") == "medium",
+          "实际 wrong=%r corrected=%r modify=%r"
+          % (_sev.get("wrong"), _sev.get("corrected"), _sev.get("modify")))
+    check("A6b 分级表所有取值合法（high/medium/low），无笔误",
+          set(_sev.values()) <= {"high", "medium", "low"} and bool(_sev),
+          "非法取值：%s" % (_sev,))
 
     # ── B. 配置消费（六键 + 变异自证）────────────────────────────────
     print("\n== B. 阈值走配置（DEFAULT_CONFIG/CONFIG_SCHEMA 双登记 + 变异自证）==")

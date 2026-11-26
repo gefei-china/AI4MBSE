@@ -636,6 +636,33 @@ def _migrate_columns(conn):
     # ── 架构优化：子任务执行快照（负载 / 分派打分 / 结构化摘要 / 重试 / token 统计）──
     _add("agent_tasks", "load_snapshot", "TEXT DEFAULT '{}'")             # 分派时各 Agent 负载快照
     _add("agent_tasks", "assign_score", "REAL DEFAULT 0")                 # 分派打分
+    # ★ 2026-11-26：**「分了没算」与「算了是 0 分」必须能分开**。
+    #   背景：assign_score 是 `REAL DEFAULT 0`，而接线只把分数写进 config
+    #   （2026-11-26 前的 642 行**全部是默认值 0.0**，从未被写入过）⇒ 看板/查询读列时
+    #   看到的 0.0 与"真的算出 0 分"**完全同形**，两者本来就该给用户不同解释：
+    #     · 未留痕 ⇒ 分派没走打分器（或走了旧版本）⇒ 这一格**不该被当成分数读**；
+    #     · 真 0 分 ⇒ 打分器认为该 Agent 与任务不匹配（capability_match=0 且负载/成功率低）。
+    #   为什么用**新增列**而不是把 assign_score 改成 NULL 默认值：
+    #     改默认值不影响存量行（仍是 0.0），要区分就得 UPDATE 全部历史行 —— 那是**破坏性**
+    #     且无法回头（一旦改成 NULL，就再也分不清"原本是 0"还是"没留过"）。
+    #     加一列则语义天然正确：历史行取默认 0 = 未留痕（事实如此），新行由写入方置 1。
+    #   ⚠️ 不要用 `load_snapshot != '{}'` 当判据（看似零成本）：那是**派生推断**，
+    #     一旦将来有路径只写分数不写快照（或反之），两者就会打架；
+    #     而显式布尔列是**写入方自己声明"我留痕了"**，不依赖其他列的形状。
+    _new_traced = _add("agent_tasks", "assign_traced", "INTEGER DEFAULT 0")  # 1=分数确实算过并写入
+    # 回填 —— **只在列刚建出来时**做一次（`_add` 的返回值就是为此设计的：
+    # 见其函数注释「调用方据此决定要不要做一次性回填」）。
+    # ⚠️ 不能无条件每次跑：那会反复覆盖（现在无辜，但将来若有人手工纠过某行就会被打回）。
+    # 口径必须**保守**：
+    #   · `assign_score > 0` ⇒ 必然是"算过并写入"（建表默认值是 0，只有写入方会给正数）⇒ 标 1；
+    #   · `assign_score = 0` ⇒ **分不清**（"真算出 0 分" 还是 "从没写过、停在默认值"）
+    #     ⇒ **不猜**，保持 0（未留痕）。猜成 1 就是给用户一个它并不拥有的可信度。
+    if _new_traced:
+        _bk = conn.execute(
+            "UPDATE agent_tasks SET assign_traced=1 "
+            "WHERE assign_score>0 AND COALESCE(assign_traced,0)=0").rowcount
+        print("[init_db] 迁移: agent_tasks.assign_traced 回填 %d 行"
+              "（仅 assign_score>0；=0 的行无法区分真 0 分与默认值，保守留未留痕）" % _bk)
     _add("agent_tasks", "summary_json", "TEXT DEFAULT '{}'")              # 结构化摘要协议结果（含 status）
     _add("agent_tasks", "retry_count", "INTEGER DEFAULT 0")               # 编排内自动重试次数
     _add("agent_tasks", "token_count", "INTEGER DEFAULT 0")               # 子任务 token 统计

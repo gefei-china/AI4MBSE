@@ -178,6 +178,77 @@ def main():
     check("[D] config 传字符串不二次编码（下游 json.loads 拿到 dict）且脏值不崩", v["D"])
     check("[E] config 列仍是完整原始 JSON（列是投影，未改真源）", v["E"])
 
+    # ── [H] 「未留痕」与「真 0 分」必须可区分（★ 2026-11-26 看板需求）──────
+    #   起因：`assign_score` 是 `REAL DEFAULT 0`，而 2026-11-26 前全表 642 行都是默认值 0.0
+    #   ⇒ 「分了但没算」与「算出来就是 0 分」在数据层完全同形，看板只能一律显示 0 分。
+    #   这两件事对用户的意思相反（前者"没有依据"，后者"有依据：这 Agent 不匹配"），
+    #   所以必须显式区分，而不是靠"分数是否为 0"去推断。
+    print("\n=== 区分「未留痕」与「真 0 分」===")
+    _t1 = rows.get("t1") or {}
+    _t2 = rows.get("t2") or {}
+    check("[H1] 算了分的任务 assign_traced=1",
+          int(_t1.get("assign_traced") or 0) == 1,
+          "got=%r ⇒ 看板无法知道这行有依据" % _t1.get("assign_traced"))
+    check("[H2] 没算分的任务 assign_traced=0（历史行/未接线行不得标成有留痕）",
+          int(_t2.get("assign_traced") or 0) == 0,
+          "got=%r ⇒ 会把『没算过』冒充成『算出来是 0 分』" % _t2.get("assign_traced"))
+    # [H3] 关键反例：**真 0 分**必须与未留痕分开。
+    #   构造 config 里显式写 assign_score=0.0（打分器真给了 0 分）⇒ 应 traced=1 且 score=0.0。
+    #   ⚠️ 这条不能省：只测 [H1]/[H2] 的话，一个"用 score>0 当 traced 判据"的实现也会全绿 ——
+    #      而那正好把真 0 分误判成未留痕（反了）。
+    import sqlite3 as _sq3
+    _c3 = _sq3.connect(TMP_DB)
+    # ⚠️ 必须设 row_factory：`resolve_agent_name` 用 `row["name"]` 取列（按名访问）。
+    #   裸连接返回 tuple ⇒ `row["name"]` 抛 TypeError ⇒ 被其 try/except 吞掉 ⇒ 返回 ""
+    #   ⇒ `create_plan(strict=True)` 报「计划引用了无法解析的 Agent」——
+    #   **错误信息把我们指向"Agent 不在表里"，而真因是"连接没有 row_factory"**。
+    #   本轮实测就是这么被误导的（花了一轮才定位）。产品侧已加下标兜底，这里用正确用法。
+    _c3.row_factory = _sq3.Row
+    _rid = TaskQueue.new_run_id(_c3)
+    TaskQueue.create_plan(_c3, _rid, [
+        {"key": "z1", "title": "零分任务", "agent": "requirement_structuring", "deps": [],
+         "config": {"assign_score": 0.0, "capability_match": 0.0,
+                    "load_snapshot": {"running": 0, "max_concurrency": 1, "success_rate": 0.0}}}],
+        assigned_by="gate", conversation_id=0)
+    _zrow = _c3.execute(
+        "SELECT assign_score, assign_traced FROM agent_tasks "
+        "WHERE run_id=? AND task_key='z1'", (_rid,)).fetchone()
+    _c3.close()
+    _z = {"assign_score": _zrow[0], "assign_traced": _zrow[1]} if _zrow else {}
+    check("[H3] ★ 真 0 分被标成「有留痕」（assign_traced=1 且 score=0.0）",
+          int(_z.get("assign_traced") or 0) == 1 and abs(float(_z.get("assign_score") or 0)) < 1e-12,
+          "got=%r ⇒ 用『score>0』当判据会把真 0 分误判成未留痕" % (_z,))
+    # [H4] 接口层：未留痕的分数必须是 **None（JSON null）**，不是 0。
+    #   为什么必须在接口层守：JS 里 `0` 与 `null` 都是 falsy，前端若拿 0 就必然显示"0 分"——
+    #   数据层区分得再清楚，只要接口把它翻成 0，用户看到的还是谎话。
+    try:
+        from routers.monitor import monitor_assignment_trace as _mat2
+        _conn = _sq3.connect(TMP_DB)
+        _conn.row_factory = _sq3.Row
+        _resp = _mat2(limit=200, conv_id=0, conn=_conn)
+        _conn.close()
+        _items = {i["task_key"]: i for i in (_resp.get("items") or [])}
+        _r_t1 = _items.get("t1") or {}
+        _r_t2 = _items.get("t2") or {}
+        _r_z1 = _items.get("z1") or {}
+        check("[H4] 接口对未留痕任务返回 null 分数（不是 0）",
+              _r_t2.get("assign_known") is False and _r_t2.get("assign_score") is None
+              and _r_t2.get("capability_match") is None,
+              "got=%r ⇒ 前端仍会把它显示成 0 分" % (_r_t2,))
+        check("[H5] 接口对有留痕任务返回真实分数", bool(_r_t1.get("assign_known"))
+              and _r_t1.get("assign_score") is not None)
+        check("[H6] ★ 真 0 分在接口上仍是 0.0（不是 null）——两档没被翻反",
+              _r_z1.get("assign_known") is True and _r_z1.get("assign_score") == 0.0,
+              "got=%r" % (_r_z1,))
+        check("[H7] 汇总把 traced/untraced 分开报（不把未留痕混进平均分）",
+              isinstance(_resp.get("summary"), dict)
+              and isinstance(_resp["summary"].get("traced"), int)
+              and isinstance(_resp["summary"].get("untraced"), int)
+              and _resp["summary"]["traced"] + _resp["summary"]["untraced"] == len(_resp["items"]),
+              "summary=%r" % (_resp.get("summary"),))
+    except Exception as e:
+        check("[H4-H7] 接口层区分执行成功", False, "%s: %s" % (type(e).__name__, e))
+
     # ── 反证：真机口径（不经过 LLM 的完整链路）──────────────────────────
     #   [A] 直接用夹具 config 已经证明"落库把 config 提升到列"；
     #   这里再补一段**接线 → 落库**的串联，证明两段接得上（各测一半不算数）。
@@ -285,16 +356,21 @@ def main():
     print("\n=== 变异自证 ===")
     # ⚠️ 锚点选择原则：**短、唯一、语义明确**。
     #   本轮第一版把锚点写成整段 INSERT（列名 + 占位符 + 两行值参数），
-    #   结果我把实现改成「有列 / 缺列」两分支后锚点全部失效 ⇒ 自证中止。
-    #   现在三个变异各打一个**单点**：
+    #   结果我把实现改成「有列 / 缺列」两分支后锚点全部失效 ⇒ 自证中止；
+    #   第二次又因为把 INSERT 改成**动态列名**（`",".join("?" * len(_vals))`）而再次失效。
+    #   ⇒ 教训：锚点只锚**真正承载语义的那一行**，不锚上下游结构。
+    #   现在四个变异各打一个**单点**：
     #     M1 强制走缺列分支（语义等价于"没加这两列"）
     #     M2 列值写死 0.0（"看起来写了"）
     #     M3 config 落库改回 json.dumps(原值)（二次编码）
+    #     M4 traced 判据改成 `score>0`（把「真 0 分」误判成「未留痕」）—— 反了本列的意义
     _m1_anchor = "            if _has_trace_cols:"
-    _m2_anchor = ("                        (float(_col_score) "
+    _m2_anchor = ("                    (float(_col_score) "
                   "if isinstance(_col_score, (int, float)) else 0.0),")
     _m3_anchor = 't.get("task_type", "agent"), json.dumps(_cfg_for_cols, ensure_ascii=False),'
-    _miss = [n for n, a in (("M1", _m1_anchor), ("M2", _m2_anchor), ("M3", _m3_anchor))
+    _m4_anchor = "                _traced = 1 if isinstance(_col_score, (int, float)) else 0"
+    _miss = [n for n, a in (("M1", _m1_anchor), ("M2", _m2_anchor),
+                            ("M3", _m3_anchor), ("M4", _m4_anchor))
              if a not in src]
     if _miss:
         check("M 变异锚点存在于源码（自证前提）", False,
@@ -324,11 +400,44 @@ def main():
 
         _mut_run("1", src.replace(_m1_anchor, "            if False:  # MUTATION: 回到没加列", 1),
                  ["A"], "强制走缺列分支（列不写，回到缺陷形态）")
-        _mut_run("2", src.replace(_m2_anchor, "                        0.0,  # MUTATION: 列写死 0 分", 1),
+        _mut_run("2", src.replace(_m2_anchor, "                    0.0,  # MUTATION: 列写死 0 分", 1),
                  ["A"], "列值写死 0.0（假留痕）")
         _mut_run("3", src.replace(_m3_anchor,
                                   't.get("task_type", "agent"), json.dumps(t.get("config") or {}, ensure_ascii=False),', 1),
                  ["D"], "config 改回 json.dumps(原值) ⇒ 字符串入参二次编码")
+
+        # ── M4：把 traced 判据改成 `score>0`（把「真 0 分」误判成「未留痕」）──
+        #   这是 [H3] 存在的**唯一理由**：一个"用分数是否非零推断留痕"的实现，
+        #   在 [H1]/[H2] 上会全绿，只有 [H3]（真 0 分）能抓住它 ——
+        #   反之若没有 M4，我们也无法证明 [H3] 真的在守这件事。
+        _m4 = src.replace(_m4_anchor,
+                          "                _traced = 1 if isinstance(_col_score, (int, float)) "
+                          "and float(_col_score) > 0 else 0  # MUTATION", 1)
+        try:
+            _ns4 = {"__name__": "_mut_tq4"}
+            exec(compile(_m4, "<mut4>", "exec"), _ns4)
+            _T4 = _ns4["TaskQueue"]
+            _c4 = _sq3.connect(TMP_DB)
+            _c4.row_factory = _sq3.Row
+            _rid4 = _T4.new_run_id(_c4)
+            _T4.create_plan(_c4, _rid4, [
+                {"key": "z4", "title": "零分任务", "agent": "requirement_structuring", "deps": [],
+                 "config": {"assign_score": 0.0, "capability_match": 0.0,
+                            "load_snapshot": {"running": 0, "max_concurrency": 1,
+                                              "success_rate": 0.0}}}],
+                assigned_by="gate", conversation_id=0)
+            _tr4 = _c4.execute("SELECT assign_traced FROM agent_tasks "
+                               "WHERE run_id=? AND task_key='z4'", (_rid4,)).fetchone()
+            _c4.close()
+            _tr4 = (_tr4[0] if _tr4 else None)
+            print("  M4 变异体：真 0 分任务的 assign_traced=%r（期望 0=变异生效）" % (_tr4,))
+            check("M4 traced 判据改成 score>0（真 0 分被误判成未留痕）⇒ [H3] 必须翻红",
+                  int(_tr4 or 0) == 0,
+                  "变异体下 traced=%r ⇒ 变异没生效（[H3] 抓不住）" % (_tr4,))
+            if int(_tr4 or 0) == 0:
+                _muts.append(("M4", "traced 判据用 score>0 推断 ⇒ 真 0 分被当成未留痕"))
+        except Exception as e:
+            check("M4 变异体执行成功", False, "%s: %s" % (type(e).__name__, e))
 
     print("\n" + "=" * 74)
     print("常态断言：%d 条，%d 通过 / %d 失败" % (_ok + _fail, _ok, _fail))

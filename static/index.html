@@ -1700,6 +1700,21 @@
             <div style="max-height:360px;overflow:auto;" id="ops-lifecycle"><div class="mut" style="padding:10px;font-size:13.5px;">加载中…</div></div>
           </div>
         </div>
+        <!-- 分派依据（2026-11-26）：回答「这次为什么派给它」。
+             ★ 关键口径：**「未留痕」与「真 0 分」必须分开显示** ——
+               assign_score 列是 REAL DEFAULT 0，历史行（2026-11-26 前）从未被写入过，
+               与"打分器算出 0 分"完全同形。前者是"没有依据"，后者是"有依据：该 Agent 不匹配"，
+               显示的语义相反 ⇒ 未留痕一律显示「—（未留痕）」，不显示 0。 -->
+        <div class="panel" style="margin-bottom:14px;"><div class="ph">分派依据 <span class="badge">只读留痕</span><span class="badge" id="ops-at-sum">—</span></div>
+          <div class="pb">
+            <div style="display:flex;gap:8px;margin-bottom:8px;flex-wrap:flex-wrap;align-items:center;">
+              <input id="ops-at-conv" placeholder="会话 ID（留空=全局最近）" style="width:190px;" />
+              <button class="btn sm" onclick="loadOpsAssignTrace()">刷新</button>
+              <span class="mut" style="font-size:12.5px;">未留痕=该任务没有打分记录（不是 0 分）</span>
+            </div>
+            <div style="max-height:340px;overflow:auto;" id="ops-assign-trace"><div class="mut" style="padding:10px;font-size:13.5px;">加载中…</div></div>
+          </div>
+        </div>
         <!-- Bad Case 台账（2026-10-18 P0-3）：LLM 失败/截断 + 用户负向反馈汇总，
              收集默认 dry-run（人工确认后入库），triage 人工关口；open 数入告警指标 badcase_open_count。 -->
         <div class="panel" style="margin-bottom:14px;"><div class="ph">Bad Case 台账 <span class="badge">只建议不自动执行</span><span class="badge r" id="ops-bc-open" style="display:none;">0 待处理</span></div>

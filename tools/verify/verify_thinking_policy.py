@@ -34,6 +34,7 @@
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import subprocess
@@ -60,18 +61,31 @@ def config_checks() -> list[tuple[str, bool]]:
             json.loads(config.get("llm", "thinking_policy", "{}")), dict)),
         ("★ 默认 **on 列表为空**（不擅自给重产码任务加思考）",
          not (json.loads(config.get("llm", "thinking_policy", "{}")).get("on") or [])),
-        # ★ 2026-10-10：off 列表新增 `chat_probe`（主对话探针轮）——
-        #   依据**真实 A/B**（flashY，真库 id=10035~10038）：
-        #   关思考后 tool_calls 保留（1→1），难任务 token 省 78%、耗时省 73%。
-        ("★ off 列表含实测确认的 4 个廉价任务 + `chat_probe`（有A/B 证据）",
-         set(json.loads(config.get("llm", "thinking_policy", "{}")).get("off") or [])
-         == {"crypto_probe", "probe", "routing", "doc_summary", "chat_probe"}),
-        #★ 反向护栏：**答案轮/修复轮不得进 off** ——
-        #   它们正文长、思考确有收益，关掉是质量赌注（未做 A/B）。
-        ("★ 答案轮/修复轮**不在** off 列表（未验证不关）",
-         not ({"chat_answer", "chat_repair"}
-              & set(json.loads(config.get("llm", "thinking_policy", "{}")).get("off") or []))),
     ]
+    # ★ 2026-10-10：off 列表新增 `chat_probe`（主对话探针轮）——
+    #   依据**真实 A/B**（flashY，真库 id=10035~10038）：
+    #   关思考后 tool_calls 保留（1→1），难任务 token 省 78%、耗时省 73%。
+    # ★ 2026-11-02：又新增 `subtask_protocol_repair`（把已有正文归纳成 JSON 的确定性任务，
+    #   实测 max_tokens=700 时 reasoning 吃掉 700 token、finish_reason=length、content 为空）。
+    # ★ 2026-11-26 修「判据钉死字面」：原判据用 `==` 全等比对 5 个元素的集合，
+    #   于是**任何一次有实测依据的扩充都会判红** ⇒ 判据在阻止它有证据的演进。
+    #   改为**必含集 + 反向护栏**两侧夹住：
+    #     ① 已有 A/B 证据的项**一个都不许被删**（守收益不丢）；
+    #     ② 答案轮/修复轮**不许进** off（守质量赌注，见下一条）；
+    #     ③ 新增项不禁止 —— 设计上 off 名单就是"有实测就加"，禁新增等于禁止改进。
+    _off = set(json.loads(config.get("llm", "thinking_policy", "{}")).get("off") or [])
+    _MUST_OFF = {"crypto_probe", "probe", "routing", "doc_summary", "chat_probe",
+                 "subtask_protocol_repair"}
+    _off_missing = sorted(_MUST_OFF - _off)
+    out.append(
+        ("★ off 列表含实测确认的廉价/确定性任务（A/B 证据项一个不许少；缺 %s）" % (_off_missing,),
+         not _off_missing))
+    #★ 反向护栏：**答案轮/修复轮不得进 off** ——
+    #   它们正文长、思考确有收益，关掉是质量赌注（未做 A/B）。
+    out.append(
+        ("★ 答案轮/修复轮**不在** off 列表（未验证不关）",
+         not ({"chat_answer", "chat_repair"} & _off)))
+    return out
     return out
 
 
@@ -242,12 +256,44 @@ def main() -> int:
     print("=" * 74)
     if ok:
         print("\n[变异自证①] 去掉 disabled 下发（回到『关闭不发字段』），应判红")
-        with open(PROVIDER, encoding="utf-8") as f:
+        # ★ 2026-11-26 行尾纪律（本门禁踩过两次）：
+        #   ① 读必须 `newline=""`：默认 text mode 会把 `\r\n` 翻成 `\n`，
+        #      写回时再翻成 `os.linesep` ⇒ 该文件（w/crlf）看起来"还原了"却已变形态；
+        #   ② 写也必须 `newline=""`，且**不能**对含 `\r\n` 的字符串用默认 mode 写 ——
+        #      那会把 `\r\n` 里的 `\n` **再翻译一次** ⇒ 落盘成 `\r\r\n`
+        #      （实测：git 立刻从 `w/crlf` 变成 `w/-text`，1276 行 diff 全红）；
+        #   ③ 回滚断言必须是**字节级**：文本比对看不见 `\r\r\n` 与 `\r\n` 的差别
+        #      （universal newlines 把两者都读成换行）⇒ 会静默把产品文件弄坏。
+        with open(PROVIDER, "rb") as f:
+            orig_bytes = f.read()
+        _orig_sha = hashlib.sha256(orig_bytes).hexdigest()
+        with open(PROVIDER, encoding="utf-8", newline="") as f:
             src = f.read()
         anchor = 'payload["thinking"] = {"type": "disabled"}'
         assert anchor in src, "锚点未找到"
-        mutated = src.replace(anchor, 'pass  # 变异：不发 disabled', 1)
-        with open(PROVIDER, "w", encoding="utf-8") as f:
+        # ★ 2026-11-26 修真·空转断言（本门禁此前一直报"变异自证①仍是绿"）：
+        #   锚点 `payload["thinking"] = {"type": "disabled"}` 在全文件出现 **2 次**：
+        #     · 第 554 行 —— `_apply_thinking()` 助手（**探针不走这条**）
+        #     · 第 1048 行 —— 三态分流本体（`probe_checks()` 测的就是这里）
+        #   `src.replace(anchor, ..., 1)` 只替换**文件里第一个**（554 行）⇒
+        #   被测的那行丝毫未动 ⇒ 判据当然仍绿。**不是判据无能，是变异打空了。**
+        #   ⇒ 改为「**先按分支边界切段，再段内替换**」：从三态分流的 guard 行之后
+        #     找第一处，确保改的是被测实现。
+        _guard = 'elif (_off and _who in _off) or _by_shape is False or _tmode_explicit:'
+        _gi = src.index(_guard)
+        _ai = src.index(anchor, _gi)
+        assert _ai > _gi, "在 guard 之后找不到 disabled 下发（实现形态已变，需人工核对）"
+        mutated = src[:_ai] + 'pass  # 变异：不发 disabled' + src[_ai + len(anchor):]
+        # 变异生效自证：① 内容确实变了；② 改的是**guard 之后**那一处；
+        #   ③ guard 之前的那一处（助手函数）**保持不变**（证明没打错目标）
+        assert mutated != src, "变异未生效（替换后内容相同）"
+        assert src.count(anchor) == 2, ("锚点数量变了（%d 处）⇒ 本段定位逻辑需复核"
+                                        % src.count(anchor))
+        assert mutated.count(anchor) == 1 and mutated.index(anchor) < _ai, \
+            "变异打错目标（改的不是 guard 之后那一处）"
+        print("  变异点：第 %d 行（三态分流本体；助手函数那处保持不动）"
+              % (src[:_ai].count("\n") + 1))
+        with open(PROVIDER, "w", encoding="utf-8", newline="") as f:
             f.write(mutated)
         try:
             import glob
@@ -263,8 +309,8 @@ def main() -> int:
             print(f"[变异自证①] {'已变红（真判据）' if red1 else '**仍是绿 ⇒ 空转断言**'}")
             ok = ok and red1
         finally:
-            with open(PROVIDER, "w", encoding="utf-8") as f:
-                f.write(src)
+            with open(PROVIDER, "wb") as f:
+                f.write(orig_bytes)
             import glob
             for pyc in glob.glob(os.path.join(_ROOT, "llm", "providers",
                                                "__pycache__", "*.pyc")):
@@ -272,15 +318,25 @@ def main() -> int:
                     os.remove(pyc)
                 except OSError:
                     pass
-        with open(PROVIDER, encoding="utf-8") as f:
-            assert f.read() == src, "回滚失败！"
-        print("[OK  ] 回滚校验：生产代码已逐字还原")
+            importlib.invalidate_caches()
+        with open(PROVIDER, "rb") as f:
+            _back = f.read()
+        assert _back == orig_bytes, (
+            "回滚失败（字节级不一致，sha %s != %s）。"
+            "!! 行尾被二次翻译时**文本比对查不出来**（universal newlines 把 "
+            "\\r\\r\\n 与 \\r\\n 都读成换行）=> 必须按字节比。"
+            % (hashlib.sha256(_back).hexdigest()[:16], _orig_sha[:16]))
+        print("[OK  ] 回滚校验：生产代码已逐字节还原（sha256=%s）" % _orig_sha[:16])
 
         print("\n[变异自证②] 把「受限下发」改成「总是发 disabled」，应判红")
         guard = 'elif (_off and _who in _off) or _by_shape is False or _tmode_explicit:'
         assert guard in src, "守卫锚点未找到"
         mutated2 = src.replace(guard, "elif True:", 1)
-        with open(PROVIDER, "w", encoding="utf-8") as f:
+        assert mutated2 != src, "变异②未生效"
+        # ⚠️ 写入必须 `newline=""`：`src` 是变异① 用 `newline=""` 读出来的（文件是 w/crlf，
+        #    所以 src 里含真实 `\r\n`）。默认 text mode 写入会把其中的 `\n` **再翻译一次**
+        #    ⇒ 落盘成 `\r\r\n` ⇒ 回滚断言必失败（看起来像"回滚坏了"，实际是行尾被二次翻译）。
+        with open(PROVIDER, "w", encoding="utf-8", newline="") as f:
             f.write(mutated2)
         try:
             import glob
@@ -301,8 +357,8 @@ def main() -> int:
             print(f"[变异自证②] {'已变红（防事故判据有效）' if red2 else '**仍是绿 ⇒ 防事故判据无效**'}")
             ok = ok and red2
         finally:
-            with open(PROVIDER, "w", encoding="utf-8") as f:
-                f.write(src)
+            with open(PROVIDER, "wb") as f:
+                f.write(orig_bytes)
             import glob
             for pyc in glob.glob(os.path.join(_ROOT, "llm", "providers",
                                                "__pycache__", "*.pyc")):
@@ -310,9 +366,15 @@ def main() -> int:
                     os.remove(pyc)
                 except OSError:
                     pass
-        with open(PROVIDER, encoding="utf-8") as f:
-            assert f.read() == src, "回滚失败！"
-        print("[OK  ] 回滚校验：生产代码已逐字还原")
+            importlib.invalidate_caches()
+        with open(PROVIDER, "rb") as f:
+            _back = f.read()
+        assert _back == orig_bytes, (
+            "回滚失败（字节级不一致，sha %s != %s）。"
+            "!! 行尾被二次翻译时**文本比对查不出来**（universal newlines 把 "
+            "\\r\\r\\n 与 \\r\\n 都读成换行）=> 必须按字节比。"
+            % (hashlib.sha256(_back).hexdigest()[:16], _orig_sha[:16]))
+        print("[OK  ] 回滚校验：生产代码已逐字节还原（sha256=%s）" % _orig_sha[:16])
         print("=" * 74)
         print(f"最终结论：{'全部通过' if ok else '未通过'}")
     return 0 if ok else 1

@@ -751,6 +751,33 @@ class ExecuteMixin:
                         break
                     # 预算耗尽 ⇒ 不再调工具，直接让模型基于已有信息作答
                     if not _guard.budget_left():
+                        # ★★ 2026-11-26（门禁 G13 查出的真缺陷）：**必须把真实停机原因告诉模型**。
+                        #
+                        #   同族事故（stream.py 在 2026-10-28 已修，**本条路径当时漏了**）：
+                        #   实测 conv 9726 真实停机原因是 token 预算耗尽，但模型在最终回答里
+                        #   写成「本轮工具调用已达上限」——**归因错误**，
+                        #   用户拿着"次数上限"去调配置怎么也调不动。
+                        #   根因就是本分支：只 `tools=None` 让模型"看不见工具了"，
+                        #   **一条消息都不进 messages** ⇒ 模型只能自己猜原因。
+                        #   而 stream.py:6442 的对应分支早已 `messages.append(...)` 精确文案
+                        #   （`（工具预算耗尽）…不是工具调用次数上限…`）。
+                        #   ⇒ 「同一语义多入口，只在一处修」的典型；本处补齐。
+                        #   ⚠️ 文案要与 stream 侧同源同义（两侧都改时一起改），
+                        #      否则同一现象在两个入口给出不同解释。
+                        _budget_note = (
+                            f"（工具预算耗尽）本轮 token 预算已用尽"
+                            f"（已用 {_guard.tokens_used} / 上限 {_guard.token_budget or '不限'}），"
+                            f"不是工具调用次数上限。请基于已有信息给出最终结论，"
+                            f"并在结论中如实说明「因 token 预算耗尽而停止」，"
+                            f"不要写成「工具调用次数已达上限」。")
+                        # ⚠️ **不能**用 `finalize_messages`：它恒加 FINALIZE_HINT
+                        #   「本轮工具调用次数已达上限」——那正是本分支要**纠正**的错误归因
+                        #   （预算耗尽 ≠ 次数上限）。stream.py:6466 也是直接 append，
+                        #   这里保持同源同语义：只 append 这份精确文案。
+                        try:
+                            messages.append({"role": "user", "content": _budget_note})
+                        except Exception:
+                            pass
                         llm_response = llm_client.chat(messages, provider_id=effective_provider,
                                                       tools=None, _intent=CHAT_TASK_ANSWER, _model_params=_agent_mp)
                         msg = llm_response["choices"][0]["message"]
@@ -760,6 +787,17 @@ class ExecuteMixin:
                     #   成功的正常推进**不限制** —— 旧实现把成功轮也计入总轮数上限，
                     #   导致"查 6 次都查不到"与"正常推进 6 轮"付同样代价（连坐）。
                     if not _guard.failed_rounds_left():
+                        # ★ 2026-11-26：同上（与 stream.py:6474 同源）——
+                        #   「失败轮耗尽」≠「调用次数上限」，不告诉模型就只能被归因错。
+                        _fail_note = (
+                            f"（工具失败轮耗尽）连续工具失败轮已达上限"
+                            f"（{_guard.failed_rounds} / {_guard.max_failed_rounds} 次；成功轮不计数），"
+                            f"不是工具调用次数上限。请基于已有信息给出最终结论，"
+                            f"并如实说明是「失败次数达上限」而不是「调用次数达上限」。")
+                        try:
+                            messages.append({"role": "user", "content": _fail_note})
+                        except Exception:
+                            pass
                         llm_response = llm_client.chat(messages, provider_id=effective_provider,
                                                       tools=None, _intent=CHAT_TASK_ANSWER, _model_params=_agent_mp)
                         msg = llm_response["choices"][0]["message"]

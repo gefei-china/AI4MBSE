@@ -40,8 +40,20 @@ def resolve_agent_name(conn, raw) -> str:
         row = conn.execute(
             "SELECT name FROM agents WHERE LOWER(TRIM(name))=LOWER(?) AND status='active' LIMIT 1",
             (name,)).fetchone()
-        if row and row["name"]:
-            return str(row["name"])
+        # ★ 2026-11-26：按名取值要兼容**裸连接**（无 row_factory ⇒ tuple）。
+        #   实测：门禁/脚本用 `sqlite3.connect(...)` 拿到 tuple ⇒ `row["name"]` 抛 TypeError
+        #   ⇒ 被本函数的 except 吞掉 ⇒ 返回 `""` ⇒ 调用方 `create_plan(strict=True)`
+        #   抛「计划引用了无法解析的 Agent」——**错误信息把人指向"Agent 不在表里"，
+        #   而真因是"连接没设 row_factory"**。这种误导比报错本身更贵（实测排查了一整轮）。
+        #   用下标兜底：两种连接都取得到值，且不改变任何既有语义。
+        _nm = None
+        if row is not None:
+            try:
+                _nm = row["name"]
+            except (TypeError, IndexError, KeyError):
+                _nm = row[0]
+        if _nm:
+            return str(_nm)
         # ★ 2026-11-04：**display_name 兜底**，与 `AgentRegistry.resolve()` 同口径。
         #
         #   起因（真库实证）：`agent_tasks.agent_id` 里有 78 行是 `工程建模方案设计Agent`
@@ -219,15 +231,26 @@ class TaskQueue:
         #   ⇒ 缺列时退回旧版 INSERT，但**必须留 warning**：
         #      静默退回就是"分派留痕又不生效了却没人知道"，正是不该再犯的形态。
         _has_trace_cols = True
+        # ★ 2026-11-26：`assign_traced` 是本轮新增的**可区分性标记**列
+        #   —— 「算了是 0 分」与「根本没算」在 `assign_score REAL DEFAULT 0` 上完全同形。
+        #   把它单独探测（而不是并进 _has_trace_cols）：老库/自建夹具表可能只补了前两列，
+        #   此时仍能写分数、只是不能标记「有留痕」—— 降级但**不丢数据**。
+        _has_traced_flag = True
         try:
             _tcols = {_r[1] for _r in conn.execute("PRAGMA table_info(agent_tasks)")}
             _has_trace_cols = ("assign_score" in _tcols and "load_snapshot" in _tcols)
+            _has_traced_flag = "assign_traced" in _tcols
         except Exception:
             _has_trace_cols = False
+            _has_traced_flag = False
         if not _has_trace_cols:
             logging.getLogger("mbse.planner").warning(
                 "agent_tasks 缺 assign_score/load_snapshot 列 ⇒ 本次分派留痕**只写 config**，"
                 "看板读列将拿不到分数。自建表请补齐这两列；生产库跑 database.init_db()。")
+        elif not _has_traced_flag:
+            logging.getLogger("mbse.planner").warning(
+                "agent_tasks 缺 assign_traced 列 ⇒ 分数会写但**无法与『算了是 0 分』区分**"
+                "（看板会把未留痕显示成 0 分）。请跑 database.init_db() 补列。")
         for t in plan:
             deps = [d for d in (t.get("deps") or []) if d in plan_keys]
             # ★ B1-11：把 Agent 名解析成权威写法再落库，并**额外存一份快照**。
@@ -287,17 +310,27 @@ class TaskQueue:
                          (t.get("context") or "")[:1000], (t.get("expected_output") or "").strip()[:500],
                          int(conversation_id or 0))
             if _has_trace_cols:
+                # ★ 2026-11-26：`assign_traced` 标记「这次分派真的算过分」。
+                #   判据用「config 里确实带了分数」而不是「分数不等于 0」——
+                #   后者会把"真 0 分"误标成未留痕，正好反了本列存在的意义。
+                #   ⚠️ 脏值（字符串 "not-a-number"）也记 0：它**没有产生有效分数**，
+                #      记成 1 会让看板把 0.0 当"算出来的 0 分"显示（伪造可信度）。
+                _traced = 1 if isinstance(_col_score, (int, float)) else 0
+                _cols = ("run_id, task_key, title, agent_id, agent_name_snapshot, "
+                         "task_type, config, deps, status, assigned_by, seq, context, "
+                         "expected_output, conversation_id, assign_score, load_snapshot")
+                _vals = _row_head + (
+                    # REAL 列：只接受数值；字符串/None 走默认 0.0（不把脏值静默转成有效分）
+                    (float(_col_score) if isinstance(_col_score, (int, float)) else 0.0),
+                    # TEXT 列：快照原样存 JSON（缺失时存 '{}'，与默认值一致）
+                    (json.dumps(_col_load, ensure_ascii=False)
+                     if isinstance(_col_load, dict) else "{}"))
+                if _has_traced_flag:
+                    _cols += ", assign_traced"
+                    _vals = _vals + (_traced,)
                 conn.execute(
-                    "INSERT INTO agent_tasks (run_id, task_key, title, agent_id, agent_name_snapshot, "
-                    "task_type, config, deps, status, assigned_by, seq, context, expected_output, "
-                    "conversation_id, assign_score, load_snapshot) "
-                    "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                    _row_head + (
-                        # REAL 列：只接受数值；字符串/None 走默认 0.0（不把脏值静默转成有效分）
-                        (float(_col_score) if isinstance(_col_score, (int, float)) else 0.0),
-                        # TEXT 列：快照原样存 JSON（缺失时存 '{}'，与默认值一致）
-                        (json.dumps(_col_load, ensure_ascii=False)
-                         if isinstance(_col_load, dict) else "{}")))
+                    "INSERT INTO agent_tasks (%s) VALUES (%s)"
+                    % (_cols, ",".join("?" * len(_vals))), _vals)
             else:
                 # 兼容分支：表没有这两列（自建夹具表）⇒ 只写旧字段，已在上面留 warning
                 conn.execute(

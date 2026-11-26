@@ -108,6 +108,31 @@ def load():
         return json.load(f)
 
 
+def load_or_fail():
+    """加载清单；**JSON 不可解析时判红而不是崩**（★ 2026-11-26）。
+
+    为什么需要这条：清单本身就是 JSON，写坏一处引号 ⇒ `gate_runner.py` 启动即崩、
+    所有门禁全部跑不了。而本门禁此前是直接 `load()` —— 语法坏时抛 Traceback，
+    表现为「脚本崩了」，而不是「清单有语法错，位置在第 N 行第 M 列」。
+    实测教训：2026-11-26 我在 reason 里写了**未转义的半角引号**，
+    `json.load` 报 `Expecting ',' delimiter: line 861 column 244`，
+    但因为是崩溃而非判红，提交前跑别的门禁全都绿 —— **坏清单进了库**。
+    ⇒ 现在把"能解析"变成一条判据，并把行/列打出来（照报错原文）。
+    """
+    try:
+        with open(MANIFEST, encoding="utf-8") as f:
+            return json.load(f)
+    except json.JSONDecodeError as e:
+        print("  [FAIL] M0 清单 JSON 可解析  <- %s（第 %d 行第 %d 列，char %d）"
+              % (e.msg, e.lineno, e.colno, e.pos))
+        print("        ⚠️ 清单语法错会让 gate_runner **启动即崩**，所有门禁都跑不了。")
+        print("        ⚠️ 常见原因：reason 字段里写了裸的半角双引号（应转义或用「」）。")
+        return None
+    except Exception as e:
+        print("  [FAIL] M0 清单可读取  <- %s: %s" % (type(e).__name__, e))
+        return None
+
+
 #: **门禁类**前缀：有 pass/fail 判据、可反复运行、结论可复现。
 GATE_PREFIXES = ("verify_", "audit_", "e2e_")
 
@@ -557,7 +582,11 @@ def main():
     if not os.path.isfile(MANIFEST):
         print("  [FAIL] 清单不存在: %s" % MANIFEST)
         return 1
-    m = load()
+    m = load_or_fail()
+    if m is None:
+        print("\n结论：门禁未通过（清单不可解析，后续判据全部无从谈起）")
+        return 1
+    rec("M0 清单 JSON 可解析", True)
     check_all(m)
     for st, name, detail in _results:
         print("  [%s] %s%s" % (st, name, ("  <- " + detail) if detail else ""))

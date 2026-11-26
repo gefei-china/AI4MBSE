@@ -518,6 +518,8 @@ async function loadOps() {
   try{ loadOpsCapability(d); }catch(e){}
   // 资产长尾治理（2026-10-18 P0-1）：agents/skills 四档建议，独立端点独立降级
   try{ loadOpsLifecycle(); }catch(e){}
+  // 分派依据（2026-11-26）：回答「这次为什么派给它」；未留痕与真 0 分分开显示
+  try{ loadOpsAssignTrace(); }catch(e){}
   // Bad Case 台账（2026-10-18 P0-3）：LLM 失败/截断 + 负向反馈，独立端点独立降级
   try{ loadOpsBadCases(); }catch(e){}
   // P0-b 在线评测回流（2026-10-25）：待标注队列 + 三段 dry-run 操作，独立端点独立降级
@@ -1091,6 +1093,59 @@ async function openSessionDrill(cid){
 // ── 资产长尾治理（2026-10-18 P0-1）：agents/skills 四档建议 ──
 // 口径：GET /api/monitor/lifecycle（core/lifecycle.py + core.config lifecycle 组）。
 // 纪律：只建议不自动执行——retire_candidate 也只提示「人工评估后停用」，不提供一键停用按钮。
+async function loadOpsAssignTrace(){
+  const box = document.getElementById('ops-assign-trace');
+  if(!box) return;
+  try{
+    const cv = (document.getElementById('ops-at-conv')||{}).value || '';
+    const p = new URLSearchParams({limit:'30'});
+    if(String(cv).trim()) p.set('conv_id', String(cv).trim());
+    const d = await api('/api/monitor/assignment-trace?'+p.toString());
+    const sum = document.getElementById('ops-at-sum');
+    if(sum && d.summary){
+      const t = d.summary.traced||0, u = d.summary.untraced||0;
+      sum.textContent = `有留痕 ${t} · 未留痕 ${u}` + (d.summary.avg_score===null||d.summary.avg_score===undefined
+        ? '' : ` · 均分 ${d.summary.avg_score}`);
+      sum.className = u>0 ? 'badge w' : 'badge';
+    }
+    if(!d.items || !d.items.length){
+      box.innerHTML = '<div class="mut" style="padding:10px;font-size:13.5px;">暂无编排任务</div>'; return;
+    }
+    box.innerHTML = renderOpsAssignTrace(d);
+  }catch(e){
+    box.innerHTML = '<div class="mut" style="padding:10px;font-size:13.5px;">分派依据加载失败：'+escMd(String(e).slice(0,80))+'</div>';
+  }
+}
+function renderOpsAssignTrace(d){
+  const rows = (d.items||[]).map(it=>{
+    // ★ 未留痕 ⇒ 一律「—（未留痕）」，**不显示 0**
+    //   为什么：0 与 null 在 JS 里都是 falsy，但只要渲染成 "0"，用户就会读成"得分 0"，
+    //   而事实上这一格根本没有分数。这两件事的含义相反（"没依据" vs "有依据：不匹配"）。
+    const known = it.assign_known === true;
+    const sc = known
+      ? `<b style="color:${it.assign_score>=0.6?'var(--grn)':(it.assign_score>=0.3?'':'var(--mut)')};">${(it.assign_score).toFixed(3)}</b>`
+      : '<span class="st g" title="该任务没有分派打分记录；0 分是"算出来不匹配"，与"没算过"完全不同">—（未留痕）</span>';
+    const cap = known && it.capability_match!==null && it.capability_match!==undefined
+      ? (it.capability_match).toFixed(2) : '—';
+    const st = {done:['ok','完成'],failed:['r','失败'],running:['b','运行'],ready:['w','就绪'],
+                planned:['g','待派'],blocked:['r','阻塞'],cancelled:['g','取消']}[it.status] || ['g', it.status||'—'];
+    return `<tr>
+      <td style="font-size:12.5px;white-space:nowrap;">${escMd(String(it.conversation_id||'') )}</td>
+      <td style="font-size:12.5px;">${escMd(String(it.task_key||''))}</td>
+      <td><b>${escMd(String(it.agent||'').slice(0,22))}</b></td>
+      <td style="font-size:12.5px;color:var(--mut);">${escMd(String(it.title||'').slice(0,30))}</td>
+      <td><span class="st ${st[0]}">${st[1]}</span></td>
+      <td>${sc}</td>
+      <td style="font-size:12.5px;">${cap}</td>
+    </tr>`;
+  }).join('');
+  const note = (d.summary && d.summary.note) ? escMd(d.summary.note) : '';
+  return `<table class="tb"><thead><tr>
+      <th>会话</th><th>任务</th><th>Agent</th><th>标题</th><th>状态</th><th>分派分</th><th>专长匹配</th>
+    </tr></thead><tbody>${rows}</tbody></table>
+    ${note?`<div class="mut" style="padding:8px 10px;font-size:12px;line-height:1.6;">${note}</div>`:''}`;
+}
+
 async function loadOpsLifecycle(){
   const box = document.getElementById('ops-lifecycle');
   if(!box) return;

@@ -159,7 +159,7 @@ check("E1 没有把 asserted 自动丢弃（能力边界：只能呈现不能过
 check("E2 模块注释写明『不用于自动采信/自动过滤』",
       "自动采信" in p_src or "不是**自动采信" in p_src or "不判" in p_src)
 
-print("\n=== F. 真库现状（只读，记录基线）===")
+print("\n=== F. 真库现状（只读）===")
 if os.path.exists(PROD_DB):
     _c = sqlite3.connect("file:%s?mode=ro" % PROD_DB, uri=True)
     _rows = [r[0] for r in _c.execute(
@@ -175,10 +175,25 @@ if os.path.exists(PROD_DB):
             for _e in (_d.get("evidence") or []):
                 if isinstance(_e, dict) and _e.get("basis"):
                     _has += 1
-    print("  真库 summary_json %d 行；带 basis 的 evidence 条目 %d 条（改动前必然为 0）"
-          % (len(_rows), _has))
-    check("F1 记录到改动前基线（evidence 本就全空，basis 无从谈起）",
-          _has == 0, "真库已有 %d 条带 basis ⇒ 基线描述需更新" % _has)
+    print("  真库 summary_json %d 行；带 basis 的 evidence 条目 %d 条" % (len(_rows), _has))
+    # ★ 2026-11-26 修判据方向：原判据是「**改动前** evidence 本就全空 ⇒ 基线必须仍是 0」
+    #     即 `_has == 0`，理由写成"记录到改动前基线"。
+    #   这是**把"状态"当"不变量"**：它守护的是"这项能力从没被用上"。
+    #   功能一上线（实测已有 1066 条带 basis）就必红 —— 而那正是**期望结果**。
+    #   症状与「判据过期」同形，但根子更深：这条断言**方向反了**，它在阻止功能生效。
+    #   改为正向：真库有可核查的 summary_json 时，要求 basis **确实被写出来**
+    #   （守能力不回退）；库里没有 summary_json（干净库/新环境）时 SKIP —— 
+    #   ⚠️ 用 SKIP 而不是 FAIL：CI 干净库本来就没有历史任务，判红是假红。
+    if not _rows:
+        print("  [SKIP] 真库无 summary_json 数据（干净库）⇒ basis 产出无法核查，不判红")
+    else:
+        check("F1 真库 evidence 里 basis 确实被写出（能力已生效且未回退）",
+              _has > 0,
+              "summary_json %d 行里 0 条带 basis ⇒ 分档能力在当前数据上没生效" % len(_rows))
+        # 这条是"记录基线"的原始诉求，改成打印而不判红：数字会随使用量自然增长，
+        # 任何固定阈值都会再次过期（本仓已踩过三次同类）。
+        print("  基线记录（仅供报告引用，不判红）：%d 条 basis / %d 行 summary_json"
+              % (_has, len(_rows)))
 else:
     print("  [SKIP] 未找到真库")
 

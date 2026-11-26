@@ -21,6 +21,7 @@ if _svroot and _svroot not in _svsys.path:
 from tools.stream_source import read_stream_source  # noqa: E402
 import json
 import os
+import re
 import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -206,8 +207,36 @@ import tempfile
 
 _SRC_DB = (os.environ.get("MBSE_DB_PATH") or os.path.join(ROOT, "mbse.db"))
 _TMP_DB = os.path.join(tempfile.gettempdir(), "_loop_e2e.db")
-_have_db = os.path.exists(_SRC_DB)
-ck(_have_db, "F0 生产库存在（端到端需真实会话/工具元数据）")
+
+
+def _has_real_data(path):
+    """库里有**真实使用留痕**吗（端到端能否成立的前提）。
+
+    ⚠️ 为什么不能只判 `os.path.exists`：`init_db()` 建出来的干净库**文件同样存在**，
+    但它没有真实会话 / 工具元数据 / 调用留痕。原判据 `exists` 在干净库上为真 ⇒
+    F/G 整组照跑 ⇒ 只有 G12（execute 拿不到正文）红，而那不是产品问题、
+    是**前提不成立**（干净库里那个会话 325 根本不存在）。
+    本轮干净库口径实测就是这个形态：生产库 90 PASS，干净库 89 PASS / 1 FAIL。
+    ⇒ 用 `tool_call_logs` 行数作"真机数据"代理（与 verify_conflict_check_retired 同口径）：
+      干净库 init_db 后恒为 0，生产库有真实留痕。
+    """
+    import sqlite3 as _sq
+    try:
+        _c = _sq.connect("file:%s?mode=ro" % str(path).replace("\\", "/"), uri=True)
+        try:
+            return _c.execute("SELECT COUNT(*) FROM tool_call_logs").fetchone()[0] > 0
+        finally:
+            _c.close()
+    except Exception:
+        return False
+
+
+_have_db = os.path.exists(_SRC_DB) and _has_real_data(_SRC_DB)
+if _have_db:
+    ck(True, "F0 生产库存在且有真实调用留痕（端到端前提成立）")
+else:
+    print("  [SKIP] F0 无真机数据（干净库 / CI）⇒ F/G 端到端整组跳过"
+          "（A~E 组是纯契约，照常判）")
 
 if _have_db:
     try:
@@ -334,12 +363,44 @@ if _have_db:
            "F3 ★真实 messages 序列协议零悬空（否则下轮 HTTP 400）")
 
         # ── F4/F5/F6：截断三分法在真实循环里 ──
+        # ★ 2026-11-26 换用例工具（同族第四例「被测样本已退役」）：
+        #   原用例用 `conflict_check`（空参数）与 `validate`，两者在真库里
+        #   **status='disabled'**（`conflict_check` 的能力已由 2026-11-14 新增的
+        #   `requirement_conflict_check` Agent 承载）⇒ 执行时走「未知工具」分支
+        #   ⇒ `ok=false, error=""`（**不是** args_truncated）⇒ F5 恒红。
+        #   ⚠️ 症状极具误导性：F4（截断被拒）与 F6（协议零悬空）都绿，只有 F5 红，
+        #      看起来像"空参数被误判为截断"这个**产品缺陷**；真因是工具名不在役。
+        #      诊断是靠 F5 上方新加的"事件摘要"打印定位的
+        #      （`conflict_check 那笔：[{ok:false, result:"未知工具: conflict_check"}]`）。
+        #   换成 `sysml_ast_extract`：active + side_effect=read + required=[]（无必填参数），
+        #   语义正好是"合法空参数"。
+        _EMPTY_OK_TOOL = "sysml_ast_extract"
+        # [F5-pre] 用例工具必须在役且有执行器。
+        #   ⚠️ 这条前置**不能省**：没有它，F5 在工具下线后会静默变成
+        #      "测工具存不存在"，而判据名义仍是"空参数没被误判为截断"。
+        try:
+            import sqlite3 as _sq
+
+            from core.config import DB_PATH as _DBP
+            _tc = _sq.connect("file:%s?mode=ro" % _DBP.replace("\\", "/"), uri=True)
+            _st = _tc.execute("SELECT status FROM tools WHERE name=?",
+                              (_EMPTY_OK_TOOL,)).fetchone()
+            _tc.close()
+            _tool_status = (_st[0] if _st else "(不存在)")
+        except Exception as _e:
+            _tool_status = "查询失败:%s" % type(_e).__name__
+        from agent.pipeline_parts.tools import builtin_has_executor as _bhe
+        ck(_tool_status == "active" and _bhe(_EMPTY_OK_TOOL),
+           "F0c ★空参数用例工具在役且有执行器（%s：status=%s executor=%s）"
+           % (_EMPTY_OK_TOOL, _tool_status, _bhe(_EMPTY_OK_TOOL)))
+
         _calls3 = [{"id": "e2e_tr", "type": "function",
                     "function": {"name": "graph_retrieve", "arguments": '{"query":"需求包1'}},
                    {"id": "e2e_em", "type": "function",
-                    "function": {"name": "conflict_check", "arguments": "{}"}},
+                    "function": {"name": _EMPTY_OK_TOOL, "arguments": "{}"}},
                    {"id": "e2e_ok", "type": "function",
-                    "function": {"name": "validate", "arguments": '{"target":"x"}'}}]
+                    "function": {"name": "graph_retrieve",
+                                 "arguments": '{"query":"需求包结构"}'}}]
         _stub2 = _Stub(_calls3)
         _use(_stub2)
         _ev2 = []
@@ -353,8 +414,45 @@ if _have_db:
             print("    (execute_stream 异常：%s: %s)" % (type(_e).__name__, str(_e)[:90]))
         ck(any(x.get("error") == "args_truncated" for x in _ev2),
            "F4 ★截断参数在真实循环里被拒（标记 args_truncated）")
-        ck(any(x.get("name") == "conflict_check" and x.get("ok") for x in _ev2),
-           "F5 ★合法空参数在真实循环里正常执行（未被误判为截断）")
+        # ★ 2026-11-26：F5 红了很久但**看不到原因**（只报一句"未正常执行"）。
+        #   区分三种可能必须先有诊断：
+        #     (a) 空参数被误判为截断（真产品缺陷，error=args_truncated）；
+        #     (b) 工具不存在 / 不在白名单 / 缺必填参数（执行失败但**不是**截断）；
+        #     (c) 执行抛异常被吞（事件里根本没有这笔）。
+        #   下面几行把空参数那笔的**完整关键字段**打出来，红的时候一眼能定位。
+        _cc = [x for x in _ev2 if x.get("name") == _EMPTY_OK_TOOL]
+        _summ = [{k: v for k, v in x.items()
+                  if k in ("name", "status", "ok", "error", "skipped")} for x in _ev2]
+        print("    事件摘要：%s" % json.dumps(_summ, ensure_ascii=False)[:400])
+        print("    空参数那笔（%s）：%s"
+              % (_EMPTY_OK_TOOL,
+                 json.dumps([{k: v for k, v in x.items()
+                              if k in ("ok", "error", "args", "result")} for x in _cc],
+                            ensure_ascii=False)[:300] or "（事件里没有这笔）"))
+        # ★ 2026-11-26 修判据射程（这是 F5 长期红的**第二层**原因，修完工具名后才暴露）：
+        #   原判据是 `ok=True`，即要求"空参数调用**业务成功**"。但那不是本门禁要守的东西 ——
+        #   本门禁守的是**截断三分法**（完整 JSON / 截断 JSON / 空对象 `{}`）：
+        #   `{}` 是**合法完整 JSON**，绝不能被归进"截断"。
+        #   实测：`sysml_ast_extract` 收到 `{}` 后**正常进入执行**，然后由工具自己
+        #   按业务规则拒绝（`result="需提供 code 或 files…"`，`error=""`）——
+        #   这是**工具的业务校验**，与协议层"是不是截断"完全无关。
+        #   用 `ok=True` 判它，等于把"工具业务成功"当成了"没被误判"，
+        #   判据与缺陷不对应 ⇒ 换任何工具都可能因业务规则而红（恒不稳定）。
+        #   ⇒ 改为**精确对应缺陷**：这笔调用①真被执行了（不是 skipped/不存在），
+        #     ②没有被标记 args_truncated，③错误文案里不含"截断"字样
+        #     （防有人把截断改报成业务错误来绕过 F4）。
+        _cc_t = _cc[0] if _cc else {}
+        ck(bool(_cc) and not _cc_t.get("skipped")
+           and _cc_t.get("error") != "args_truncated"
+           and "截断" not in str(_cc_t.get("result") or ""),
+           "F5 ★合法空参数 `{}` 在真实循环里进入执行且**未被误判为截断**")
+        # F5b 反向护栏：F4 那笔（真截断）必须是 args_truncated，
+        #   而 F5 这笔（空对象）必须**不是** —— 两者同时成立才证明"三分法真的分开了"。
+        #   只看 F5 会是"只要全都不判截断就绿"，那连"区分能力丢失"都抓不到。
+        _tr_flags = {x.get("error") == "args_truncated"
+                     for x in _ev2 if x.get("name") in ("graph_retrieve", _EMPTY_OK_TOOL)}
+        ck(_tr_flags == {True, False},
+           "F5b ★截断与空参数被**区分**处理（不是一刀切）")
         _m2 = [m for _a, _b, m in _stub2.seen if m]
         ck(not _m2, "F6 ★截断场景协议同样零悬空")
 
@@ -412,24 +510,80 @@ ck(all(m.get("role") != "assistant" for m in _mf[-1:]),
    "G7 不追加 assistant 空消息（部分 provider 对tool_call 后的空 assistant 敏感）")
 
 # G8 接线（源码级：两条路径都要有）
+# ★ 2026-11-26 修「判据钉死字面」（本仓第三次同族）：
+#   原判据 `"finalize_messages(messages" in _e_s` 要求括号后**紧跟** `messages`。
+#   实测 `stream.py:7315` 的真实形态是：
+#       _fin_msgs = _lproto.finalize_messages(
+#           messages, extra_context=_extra,
+#           reason=..., used=..., limit=..., write_ops=...)
+#   => ① 有模块前缀 `_lproto.`；② 括号后是**换行**再 `messages`。
+#   两个原因都让字面匹配失败 => 判据红，而**产品代码是对的**。
+#   改为宽松语义匹配：可选模块前缀 + 括号后允许任意空白（含换行）。
+_FIN_RE = re.compile(r"(?:[A-Za-z_][\w.]*\.)?finalize_messages\s*\(\s*messages")
 _e_s = read_stream_source()
 _e_e = open(os.path.join(ROOT, "agent", "pipeline_parts", "execute.py"), encoding="utf-8").read()
-ck("finalize_messages(messages" in _e_s, "G8 stream 收尾走 finalize_messages（同源）")
-ck("should_finalize(" in _e_e and "finalize_messages(messages" in _e_e,
+ck(_FIN_RE.search(_e_s) is not None,
+   "G8 stream 收尾走 finalize_messages（同源）")
+ck("should_finalize(" in _e_e and _FIN_RE.search(_e_e) is not None,
    "G9 ★execute 冷路径接入收尾（此前**完全没有**，实测返回 content 长度 0）")
-# ★ 收尾调用不得传 tools（否则模型又要一轮工具 ⇒ 死循环）
+
+
+def _call_args(src, open_paren):
+    """从 `(` 的位置起做括号配平，返回该调用的实参原文（不依赖单行/多行形态）。
+
+    为什么不用"往后固定 N 字符"：参数一多就落到窗口外，
+    历史上 G11 就因为 400 字窗口不够而被改成 600，仍是猜。配平是确定性做法。
+    """
+    depth = 0
+    i = open_paren
+    quote = None
+    while i < len(src):
+        ch = src[i]
+        if quote:
+            if ch == "\\":
+                i += 2
+                continue
+            if ch == quote:
+                quote = None
+        elif ch in "\"'":
+            quote = ch
+        elif ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+            if depth == 0:
+                return src[open_paren + 1:i]
+        i += 1
+    return ""
+
+
+def _stream_chat_calls(src):
+    """找出所有 `chat(` 调用中**含 stream=True** 的实参串。"""
+    out = []
+    for m in re.finditer(r"\bchat\s*\(", src):
+        args = _call_args(src, m.end() - 1)
+        if args and "stream=True" in args:
+            out.append(args)
+    return out
+
+
+# ★ 收尾调用不得传 tools（否则模型又要一轮工具 => 死循环）
 # ⚠️ 2026-10-09 修正（**判据过期**，不是生产代码问题）：
 #   `finalize_messages` 已加 `extra_context` 参数（修「收尾时模型看不见已offload 的正文」），
 #   实际调用变成 `finalize_messages(messages, extra_context=_extra)`
-#   ⇒ 原判据锁死字面量`finalize_messages(messages)` 必然红，而代码是**对的**。
-#   两条修正：① 匹配去掉右括号，接受带参数的合法形态；
-#            ② 搜索窗 400→600 字——参数变多后 `tools=None` 会落到窗口外。
-_i_fin_e = _e_e.find("finalize_messages(messages")
-ck("tools=None" in _e_e[_i_fin_e:_i_fin_e + 600],
+#   => 原判据锁死字面量必然红，而代码是**对的**。
+# ★ 2026-11-26：G11 原实现是「从 finalize_messages 往后 600 字找 stream=True」——
+#   实测 `stream.py` 的收尾 chat 在 finalize_messages **之后约 1300 字**（中间夹着大段注释），
+#   => 窗口法必然漏 => 判据红而产品是对的。
+#   改为：**逐个 chat( 调用做括号配平**，只要存在「含 stream=True 的 chat 调用」，
+#   就要求它的实参里不含 `tools=`（这才是"物理上无法再请求工具"的准确表达）。
+_i_fin_e = _FIN_RE.search(_e_e)
+ck(bool(_i_fin_e) and "tools=None" in _e_e[_i_fin_e.start():_i_fin_e.start() + 900],
    "G10 ★execute 收尾调用不带 tools（物理上无法再请求工具）")
-_i_fin_s = _e_s.find("finalize_messages(messages")
-ck(_i_fin_s > 0 and "stream=True" in _e_s[_i_fin_s:_i_fin_s + 600],
-   "G11 stream 收尾调用不传 tools（chat(..., stream=True) 无 tools 参数）")
+_scc = _stream_chat_calls(_e_s)
+ck(bool(_scc) and all("tools=" not in a for a in _scc),
+   "G11 stream 收尾调用不传 tools（形如 chat(..., stream=True) 的 %d 处调用均无 tools=）"
+   % len(_scc))
 
 
 # ── G12/G13：★端到端（复用 F 组已装配的类方法桩）──
@@ -475,7 +629,11 @@ if _have_db and "_use" in dir():
 
             def chat(self, messages, provider_id=None, stream=False, tools=None, **kw):
                 last = str((messages[-1] or {}).get("content") or "") if messages else ""
-                self.trace.append((bool(tools), stream, last))
+                # ★ 2026-11-26：额外记录 `_intent` —— G13 红时需要知道"这次调用是谁发起的"。
+                #   实测：`tools=None` 的调用**不一定**是收尾调用 —— 循环内对"没绑工具的
+                #   Agent"也是 `tools=tools_def or None` ⇒ None ⇒ `bool(None)=False`，
+                #   与收尾调用在 `(bool(tools), stream)` 上**完全同形**，靠这两个维度分不开。
+                self.trace.append((bool(tools), stream, last, kw.get("_intent") or ""))
                 # ★★ **每次**带 tools 的探测都返回 tool_calls（不是只有第一次）——
                 #   否则第 2 轮探测就返回 stop，循环在 `if not tool_calls: break`
                 #   提前退出 ⇒ **永远走不到轮次用尽** ⇒ 收尾分支不可达（假FAIL）。
@@ -517,7 +675,15 @@ if _have_db and "_use" in dir():
         print("    (execute 异常：%s: %s)" % (type(_e).__name__, str(_e)[:80]))
     _txt = str((_r or {}).get("content") or "")
     ck(len(_txt.strip()) > 0, "G12 ★execute 轮次用尽后 content 非空（修复前长度 0）")
-    ck(any((not t) and ("已达上限" in c) for t, _s, c in _cap1.trace),
+    # ★ 2026-11-26：G13 红时先看 trace —— 它区分三种完全不同的病因：
+    #   ·trace 为空 ⇒ **桩没被调用**（真实 LLM 兜底给了正文，G12 才"看着通过"）；
+    #   ·有带 tools 的调用但无「无 tools」调用 ⇒ 收尾分支没走到；
+    #   ·有无 tools 的调用但最后一条消息不含提示 ⇒ 提示没拼进去/拼错位置。
+    print("    execute trace（%d 次调用）：%s"
+          % (len(_cap1.trace),
+             json.dumps([[t, s, c[:28], it] for t, s, c, it in _cap1.trace],
+                        ensure_ascii=False)[:600]))
+    ck(any((not t) and ("已达上限" in c) for t, _s, c, _it in _cap1.trace),
        "G13 ★execute 收尾请求带「已达上限」指令（模型知道要总结）")
 
     # G14：stream.py 路径同样带提示且产出正文
@@ -533,7 +699,7 @@ if _have_db and "_use" in dir():
     except Exception as _e:
         print("    (execute_stream 异常：%s: %s)" % (type(_e).__name__, str(_e)[:80]))
     ck(_tok > 0, "G14 ★stream 轮次用尽后仍产出正文")
-    ck(any((not t) and ("已达上限" in c) for t, _s, c in _cap2.trace),
+    ck(any((not t) and ("已达上限" in c) for t, _s, c, _it in _cap2.trace),
        "G15 ★stream 收尾请求带「已达上限」指令")
     _use(None)
 
