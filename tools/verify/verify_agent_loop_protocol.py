@@ -765,12 +765,15 @@ ck("_fu_budget = 3" in _h_s, "H18 有消费次数上限（防用户狂点导致�
 # ── H19-H23：前端接线（否则后端能力 =没人用的死代码）──
 _j = open(os.path.join(ROOT, "static", "js", "mods", "12-chatsend.js"),
           encoding="utf-8").read()
-ck("/followup" in _j, "H19 ★前端已调用 /followup 端点（无调用方 = 死代码）")
+# ★ 2026-11-27：同会话连发已从「并入当前轮的 /followup」升级为「排队下一轮的 /queue」。
+#   判据同步接受两种形态，**语义仍要求"调用方存在 + 有反馈 + 失败不吞输入"**。
+ck("/followup" in _j or "/queue" in _j,
+   "H19 ★前端已调用同会话投递端点 /followup 或 /queue（无调用方 = 死代码）")
 ck("_el.dataset.convId" in _j or "dataset.convId" in _j,
    "H20 ★用流式现场 convId 而非 currentConvId（切会话时会投错）")
-ck("已作为补充指令提交" in _j, "H21 投递成功有用户可见反馈")
-ck("补充指令提交失败" in _j,
-   "H22 ★投递失败有 toast 且回退旧行为（不能静默吞掉用户输入）")
+ck("已作为补充指令提交" in _j or "已排队" in _j, "H21 投递成功有用户可见反馈")
+ck("补充指令提交失败" in _j or "排队失败" in _j,
+   "H22 ★投递失败有 toast 且不静默吞掉用户输入")
 ck("commitPartialStream" in _j,
    "H23 回退路径仍固化上一轮已生成内容（不丢已有产出）")
 

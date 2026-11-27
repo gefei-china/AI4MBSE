@@ -866,7 +866,9 @@ class ExecuteMixin:
                                 _lproto.prefetch_exec(self, _guard), _pf_entries)
                     except Exception:
                         _ro_prefetch = {}   # 预取失败 ⇒ 全部回落原串行路径
-                    for _ti, tc in enumerate(_exec_calls):
+                    _ti = -1
+                    for tc in _exec_calls:
+                        _ti += 1
                         fn = tc.get("function") or {}
                         tname = fn.get("name", "")
                         # P0-②：参数被 max_tokens 截断 ⇒ 拒绝执行（不以降级的空参数执行）
