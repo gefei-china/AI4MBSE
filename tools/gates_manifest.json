@@ -3184,6 +3184,18 @@
    "tier": "local",
    "timeout": 300,
    "reason": "2026-11-27 新增：冷层召回验证（21 项）。①不污染：默认召回 top30（真实注入 4）不得含冷层，端到端 recall_memories 也不得含；②可检索：include_archival 使候选池变大且冷层全部在场，每条冷层用自身全文作 query 都进池；③降优先级另立判据 A5b，防与可检索性混为一谈；④副本上验降层↔复活与口径隔离；⑤HTTP 验管理端可回捞。需真库且库内已有冷层行（数据状态而非代码不变量），故不入 pr 层；开发机 21/21"
+  },
+  {
+   "script": "verify_memory_failure_visible.py",
+   "tier": "local",
+   "timeout": 180,
+   "reason": "2026-11-27 新增（7 项 + 2 变异）：记忆检索失败不得伪装成「没有记忆」。真故障(database is locked)必须登记降级；夹具缺列(no such column)合法不得登记（防噪音）；结构判据防「某条路径没走到」假绿。变异 M1/M2 精确翻红。属本地夹具门禁，入 pr 层会因环境差异假红。"
+  },
+  {
+   "script": "verify_memory_deposit_notice.py",
+   "tier": "pr",
+   "timeout": 180,
+   "reason": "2026-11-27 新增（19 项 + 3 变异）：用户要求「保存记忆时必须告知」。A区验 deposit 五出口(created/dedup/revived/blocked/skipped)与文案；B区验 stream×2 + orchestration + 前端 esc 四处接线；C区三条变异证明判据有牙。夹具驱动，不依赖服务与 LLM，可入 pr 层。"
   }
  ]
 }

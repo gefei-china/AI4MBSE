@@ -13,6 +13,7 @@ import json
 import logging
 import math
 import re
+import sqlite3
 import time
 
 logger = logging.getLogger("mbse.memory")
@@ -29,6 +30,48 @@ class MemoryService:
     """
 
     MEM_TYPES = ("fact", "preference", "experience", "skill")  # 事实 / 偏好 / 经验 / 技能
+
+    # ── 列探测的统一入口（2026-11-27）────────────────────────────────────
+    @staticmethod
+    def _cols_of(conn, table: str = "agent_memory") -> set:
+        """读表结构；**区分"缺列/缺表"与"真故障"**，只对后者登记降级。
+
+        ★ 为什么需要这个区分（此前 5 个 `_has_*` 全是 `except: return False`）：
+          `except: return False` 让"读不到表结构"与"这张老表确实没有该列"**完全同形**。
+          后果分两种，都是坏的：
+            · 真故障（连接坏/库锁/语法错）⇒ 走"不分层/不过滤"的旧路径，
+              表现为"记忆功能静默降级到旧行为"，没有任何迹象；
+            · 夹具/老库缺列 ⇒ **这是合法场景**（门禁故意用最小表），
+              若也一律告警，会把日志刷成噪音，反而让人关掉告警。
+          ⇒ 判据：`sqlite3.OperationalError` 且消息含 `no such column` / `no such table`
+            视为**预期**（夹具/老库），其余一律登记降级 + warning。
+          ⚠️ 别用"异常类型就够了"来简化：缺列抛的也是 OperationalError，
+            与"database is locked"同类，只看类型区分不开。
+        """
+        try:
+            return {r[1] for r in conn.execute("PRAGMA table_info(%s)" % table).fetchall()}
+        except Exception as exc:  # noqa: BLE001
+            _msg = ""
+            try:
+                _msg = str(exc)
+            except Exception:                        # noqa: BLE001
+                _msg = ""
+            _expected = (isinstance(exc, sqlite3.OperationalError)
+                         and ("no such column" in _msg.lower()
+                              or "no such table" in _msg.lower()))
+            if not _expected:
+                try:
+                    logger.warning("读 %s 表结构失败（按「无新增列」降级，**不是**真的没有）：%s: %s",
+                                   table, type(exc).__name__, _msg[:140])
+                except Exception as _log_exc:        # noqa: BLE001
+                    logger.debug("表结构降级 warning 写入失败（不阻断探测）：%s", type(_log_exc).__name__)
+                try:
+                    from core import degrade as _deg
+                    _deg.note("memory_service._cols_of", exc=exc, level=_deg.DEGRADED,
+                              impact="记忆表结构探测失败，本轮按旧库路径处理（可能少应用分层/作用域/双时态过滤）。⚠️ 计数是**探测次数**不是故障次数：一次检索会探测 4~5 个列组，同一故障会计多次")
+                except Exception as _deg_exc:        # noqa: BLE001
+                    logger.debug("表结构降级登记失败（不阻断探测）：%s", type(_deg_exc).__name__)
+            return set()
 
     # ── 向量化助手（真 API 失败 → 返回 None，调用方走 bigram 兜底）──
     @staticmethod
@@ -47,20 +90,13 @@ class MemoryService:
     @staticmethod
     def _has_scope_cols(conn) -> bool:
         """探测 agent_memory 是否已有 scope_type/scope_id（老库/夹具库缺列 → False，走旧 SQL）。"""
-        try:
-            cols = [r[1] for r in conn.execute("PRAGMA table_info(agent_memory)").fetchall()]
-            return "scope_type" in cols and "scope_id" in cols
-        except Exception:
-            return False
+        cols = MemoryService._cols_of(conn)
+        return "scope_type" in cols and "scope_id" in cols
 
     @staticmethod
     def _has_tier_col(conn) -> bool:
         """探测 agent_memory 是否已有 tier 列（P1-18 分层；老库/夹具库缺列 → False，走不分层路径）。"""
-        try:
-            cols = [r[1] for r in conn.execute("PRAGMA table_info(agent_memory)").fetchall()]
-            return "tier" in cols
-        except Exception:
-            return False
+        return "tier" in MemoryService._cols_of(conn)
 
     @staticmethod
     def _has_verify_col(conn) -> bool:
@@ -68,11 +104,7 @@ class MemoryService:
 
         与 `_has_tier_col` 同款守卫：老库/夹具缺列时**不拼**该条件，逐字回到旧召回。
         """
-        try:
-            cols = [r[1] for r in conn.execute("PRAGMA table_info(agent_memory)").fetchall()]
-            return "verify_state" in cols
-        except Exception:
-            return False
+        return "verify_state" in MemoryService._cols_of(conn)
 
     @staticmethod
     def _no_contradicted_clause(conn) -> str:
@@ -91,11 +123,7 @@ class MemoryService:
         ⚠️ 与 `_has_tier_col` 同一套守卫思路：**老库未跑迁移时不能拼该条件**，
         否则 `no such column: superseded_by` 会让检索主链路整体报错。
         """
-        try:
-            cols = [r[1] for r in conn.execute("PRAGMA table_info(agent_memory)").fetchall()]
-            return "superseded_by" in cols
-        except Exception:
-            return False
+        return "superseded_by" in MemoryService._cols_of(conn)
 
     #: 存量行（scope_type=''）可见性策略的合法取值。见 `_legacy_policy`。
     LEGACY_POLICIES = ("visible", "windowed", "hidden")
@@ -155,11 +183,8 @@ class MemoryService:
         与 `_has_tier_col` / `_has_superseded_col` 同一套守卫纪律：
         **缺列时绝不拼该条件**，否则 `no such column` 会让检索主链路整体报错。
         """
-        try:
-            cols = {r[1] for r in conn.execute("PRAGMA table_info(agent_memory)").fetchall()}
-            return "valid_from" in cols and "valid_to" in cols
-        except Exception:
-            return False
+        cols = MemoryService._cols_of(conn)
+        return "valid_from" in cols and "valid_to" in cols
 
     @staticmethod
     def _valid_now_clause(conn) -> str:
@@ -550,7 +575,29 @@ class MemoryService:
                     continue
                 MemoryService.record_access(conn, it.get("id"))
             return out
-        except Exception:
+        except Exception as exc:  # noqa: BLE001
+            # ★★ 2026-11-27：这里原先**静默 `return []`**，是全仓最危险的一处兜底 ——
+            #   它对外的表现是"**没有相关记忆**"，而这个结论会被上层当成事实继续推理：
+            #     · `recall_memories` 拿不到同域命中 ⇒ 触发跨域兜底（多一次全库扫描）；
+            #     · `_build_memory_hint` 看到 0 条 ⇒ 整块【长期记忆】不注入；
+            #     · 用户与排查者看到的是"这平台没记住过东西"，而不是"检索坏了"。
+            #   实测踩到两次：① 只读连接/夹具缺列 ② 我在验证冷层时用短 query 导致的行为差异，
+            #   两次都差点被误判成"记忆功能坏了/冷层不可检索"。
+            #   ⇒ 与 `consolidate` 那次"缺列伪装成没东西可合并"、`forget` 那次
+            #     "异常伪装成没有可降的"是**同一型**：失败返回一个**看起来像真的值**。
+            #   处置：不抛（检索主链路不能被记忆侧拖死，这是既有纪律），
+            #        但必须**登记降级 + 留 warning**，让"检索失败"与"没有记忆"可区分。
+            try:
+                logger.warning("记忆检索失败（**不是**没有记忆）：%s: %s",
+                               type(exc).__name__, str(exc)[:160])
+            except Exception as _log_exc:            # noqa: BLE001
+                logger.debug("检索降级 warning 写入失败（不阻断返回空）：%s", type(_log_exc).__name__)
+            try:
+                from core import degrade as _deg
+                _deg.note("memory_service.search", exc=exc, level=_deg.CRITICAL,
+                          impact="本轮长期记忆检索失败，记忆块按空处理（不代表库里没有）")
+            except Exception as _deg_exc:            # noqa: BLE001
+                logger.debug("检索降级登记失败（不阻断返回空）：%s", type(_deg_exc).__name__)
             return []
 
     # ── P1-18 分层读：core 层常驻记忆（不依赖 query 相关性，注入时无条件附带）──
@@ -576,7 +623,20 @@ class MemoryService:
             params.append(top_k)
             rows = conn.execute(sql, params).fetchall()
             return [dict(r) for r in rows]
-        except Exception:
+        except Exception as exc:  # noqa: BLE001
+            # 与 `search` 同型（2026-11-27）：`core` 是**无条件常驻注入**的取数面，
+            # 静默返回空会让"核心偏好没注入"表现为"用户没设过偏好"，同样不可区分。
+            try:
+                logger.warning("core 层记忆读取失败（**不是**没有 core 记忆）：%s: %s",
+                               type(exc).__name__, str(exc)[:160])
+            except Exception as _log_exc:            # noqa: BLE001
+                logger.debug("core 降级 warning 写入失败（不阻断返回空）：%s", type(_log_exc).__name__)
+            try:
+                from core import degrade as _deg
+                _deg.note("memory_service.search_core", exc=exc, level=_deg.CRITICAL,
+                          impact="本轮 core 常驻记忆未能注入（不代表用户没有偏好）")
+            except Exception as _deg_exc:            # noqa: BLE001
+                logger.debug("core 降级登记失败（不阻断返回空）：%s", type(_deg_exc).__name__)
             return []
 
     # ── 写：主动沉淀 ──
@@ -588,9 +648,24 @@ class MemoryService:
         scope_type/scope_id：多维作用域（global/project/user/agent）。**ADD-only 不覆盖**——只追加，
         从不 UPDATE 旧记忆（对齐 mem0），去重/时效交给合并与软重排。
         P2：每 maintain_every 次沉淀触发一次维护（遗忘+合并）。
+
+        ★ 2026-11-27：新增可选出口 `extra["info"]`（dict）。传了就在返回前填充
+        `{action, id, content, mem_type, mem_topic, scope, reason}`，供上层**告知用户"存了什么"**。
+        为什么用可选出口而不是改返回值：返回值是 `int | None`，被 6 处调用方当 id 用
+        （`_mem_deposit_count` 计数、reflow 统计），改成结构体会一次性打断全部调用点；
+        而这只是**可观测性**需求，不该让业务签名承担。
+        `action` 取值：
+          · `created`    —— 新增一条
+          · `dedup_hit`  —— 命中近重复闸，**没有新增**，只给旧条记了一次访问
+          · `revived`    —— 命中冷层并把它复活回 recall
+          · `blocked`    —— 被安全扫描拦下（写审计，不落库）
+          · `skipped`    —— 空内容 / 其它前置拒绝
         """
+        _info = extra.get("info")
         try:
             if not content or not content.strip():
+                if isinstance(_info, dict):
+                    _info.update(action="skipped", reason="empty_content")
                 return None
             # P0-6：记忆写入前威胁扫描（提示注入/凭据外泄/越权）——命中不落库 + audit 记录
             from core.security_scan import MemoryScanner
@@ -605,6 +680,9 @@ class MemoryService:
                               conn=conn)
                     except Exception:
                         pass
+                    if isinstance(_info, dict):
+                        _info.update(action="blocked", reason="security_scan",
+                                     detail_ref="audit:memory_blocked")
                     return None
             mem_type = mem_type if mem_type in MemoryService.MEM_TYPES else "fact"
             c = content.strip()[:800]
@@ -637,8 +715,15 @@ class MemoryService:
                     MemoryService.record_access(conn, _dup["id"])
                     MemoryService.record_event(conn, "dedup_hit", _dup["id"], agent_id,
                                                "sim=%.4f topic=%s" % (_dup.get("sim") or 0, mem_topic))
-                    if str(_dup.get("tier") or "") == "archival":
+                    _was_cold = str(_dup.get("tier") or "") == "archival"
+                    if _was_cold:
                         MemoryService.revive_memory(conn, _dup["id"])
+                    if isinstance(_info, dict):
+                        _info.update(action="revived" if _was_cold else "dedup_hit",
+                                     id=_dup["id"], content=c, mem_type=mem_type,
+                                     mem_topic=mem_topic, scope=(st, sid),
+                                     reason="近重复，已合并到既有条目（相似度 %.3f）"
+                                            % float(_dup.get("sim") or 0))
                     return _dup["id"]
             cur = conn.execute(
                 "INSERT INTO agent_memory (agent_id, mem_type, content, embedding, embed_version, source, relevance, activation, mem_topic"
@@ -658,6 +743,9 @@ class MemoryService:
             conn.commit()
             MemoryService.record_event(conn, "created", int(cur.lastrowid or 0), agent_id,
                                        "type=%s topic=%s" % (mem_type, mem_topic))
+            if isinstance(_info, dict):
+                _info.update(action="created", id=int(cur.lastrowid or 0), content=c,
+                             mem_type=mem_type, mem_topic=mem_topic, scope=(st, sid))
             # ── P1-7 写时"口径取代"（2026-11-27）───────────────────────────────
             # 与近重复闸的分工：≥0.95 = **同一条事实的另一种说法**（去重）；
             # 0.85~0.95 且**新内容自身宣告"旧的不作数"** = **新旧口径**（取代）。
@@ -1397,15 +1485,24 @@ class MemoryService:
     @staticmethod
     def maybe_deposit(conn, agent_id: str, task_content: str,
                       task_query: str = "", min_len: int = 40,
-                      scope_type: str = "", scope_id: str = "", user_scope=None) -> int | None:
+                      scope_type: str = "", scope_id: str = "", user_scope=None,
+                      info: dict | None = None) -> int | None:
         """执行/任务完成后评估是否值得沉淀。
 
         真实 LLM 可用 → 要求 LLM 输出 JSON {worth, mem_type, memory, mem_topic}，按提炼结果沉淀；
         Mock/无 key/解析失败 → 规则降级 `_extract_worthy()`（三重门，宁缺毋滥）。
+
+        `info`：可选出口（2026-11-27），透传进 `deposit()` 并补上"为什么没沉淀"——
+        调用方据此告知用户。**不传则行为逐字不变**（既有 4 处调用点全部不传）。
         """
+        def _mark(action, reason=""):
+            if isinstance(info, dict):
+                info.update(action=action, reason=reason)
+
         try:
             content = (task_content or "").strip()
             if len(content) < min_len:
+                _mark("skipped", "too_short:内容不足 %d 字，不构成经验" % min_len)
                 return None
             from llm import llm_client
             resp = llm_client.chat(
@@ -1416,6 +1513,9 @@ class MemoryService:
             msg = (resp.get("choices") or [{}])[0].get("message", {})
             text = msg.get("content") or ""
             m = re.search(r"\{\s*\"worth\"\s*:\s*(true|false)", text)
+            if m and m.group(1) == "false":
+                _mark("skipped", "llm_worth_false:模型判定本次产出不值得沉淀")
+                return None
             if m and m.group(1) == "true":
                 mt = re.search(r"\"mem_type\"\s*:\s*\"(\w+)\"", text)
                 mem = re.search(r"\"memory\"\s*:\s*\"([^\"]+)\"", text)
@@ -1426,13 +1526,15 @@ class MemoryService:
                 # LLM 提炼结果仍需过噪音门（防 LLM 复读原文/记住寒暄）
                 ok, why = MemoryService._extract_worthy(memory, min_len=12)
                 if not ok:
+                    _mark("skipped", "extract_gate:" + str(why))
                     return None
                 # 偏好类记忆 → 用户作用域（跨 Agent 复用）；其余落默认作用域
                 _st, _sid = scope_type, scope_id
                 if mem_type == "preference" and user_scope:
                     _st, _sid = user_scope[0], user_scope[1]
                 return MemoryService.deposit(conn, agent_id, memory, mem_type, source="llm_agent",
-                                             mem_topic=mem_topic, scope_type=_st, scope_id=_sid)
+                                             mem_topic=mem_topic, scope_type=_st, scope_id=_sid,
+                                             info=info)
         except Exception:
             pass
         # 规则降级：三重门通过才沉淀（确定性）；提炼为一句，不整段抄
@@ -1441,7 +1543,9 @@ class MemoryService:
             return MemoryService.deposit(conn, agent_id, MemoryService._condense(content), "experience",
                                          source="rule_agent",
                                          mem_topic=MemoryService._rule_topic(content),
-                                         scope_type=scope_type, scope_id=scope_id)
+                                         scope_type=scope_type, scope_id=scope_id,
+                                         info=info)
+        _mark("skipped", "extract_gate:" + str(why))
         return None
 
     @staticmethod

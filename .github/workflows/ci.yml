@@ -1252,6 +1252,10 @@ jobs:
         if: ${{ !cancelled() }}
         run: python tools/verify/verify_memory_partition_p0.py
 
+      - name: Guard 记忆保存告知（deposit 出口/文案/四处接线/esc，19 项 + 3 变异）
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_memory_deposit_notice.py
+
       - name: Guard 项目记忆定位（禁止自动兜底，7 项）
         if: ${{ !cancelled() }}
         run: python tools/verify/verify_memory_project_memory.py
