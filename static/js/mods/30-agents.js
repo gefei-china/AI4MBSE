@@ -2461,11 +2461,44 @@ async function saveLLM() {
   // 否则"改了描述但入口列表还是旧的"（双份缓存不同步的典型症状）。
   try{ if(typeof loadChatProviders === 'function') loadChatProviders(); }catch(e){}
 }
-async function testLLM(id) {
-  const r = await api(`/api/llm/providers/${id}/test`, {method:'POST'});
-  toast(r.ok ? '连接成功' : `连接失败：${r.error||'未知错误'}`);
+// ★ 2026-11-27：模型「测试」= **功能自检**结果展示。
+//   旧实现只 toast 一句「连接成功」——用户原话："只确认连接成功，功能是否正常其实无法知道"。
+//   现在逐项列出判据 + 实际回显，让"能不能用"可读、可核（后端 llm/probe.py）。
+function _probeLevelMark(level){
+  return level === 'pass' ? '✅' : (level === 'warn' ? '⚠️' : '❌');
 }
-// 编辑表单内「测试」：用表单当前配置（名称/URL/Key/模型名）实时连通性测试，未保存也可测；
+function _formatProbeResult(r){
+  const lines = [];
+  // summary 自带「可用/不可用」结论，别再叠一次（实测会输出「❌ 不可用：不可用（…）」）
+  lines.push(r.summary ? `${r.ok ? '✅ ' : '❌ '}${r.summary}` : (r.ok ? '✅ 可用' : '❌ 不可用'));
+  if(r.error) lines.push('错误：' + r.error);
+  const checks = r.checks || [];
+  if(checks.length){
+    lines.push('');
+    checks.forEach(c => {
+      const req = c.required === false ? '（非必需）' : '';
+      const lat = c.latency_ms ? ` ${c.latency_ms}ms` : '';
+      lines.push(`${_probeLevelMark(c.level)} ${c.name}${req}${lat}`);
+      if(c.detail) lines.push('   ' + c.detail);
+      if(c.sample) lines.push('   实际返回：' + c.sample);
+    });
+  }
+  if(r.latency_ms) lines.push(`\n总耗时 ${(r.latency_ms/1000).toFixed(1)}s`);
+  // 探针本身花了真实 token，但标记 is_probe 不进业务成本口径 —— 如实说明，避免"测试不要钱"的误解
+  if(r.provider_id) lines.push('（自检用量已记 is_probe=1，不计入业务成本统计）');
+  return lines.join('\n');
+}
+async function _showProbeResult(title, r){
+  await confirmDialog(_formatProbeResult(r || {}), {title, hideCancel: true, okText: '知道了'});
+}
+async function testLLM(id) {
+  toast('正在做功能自检（对话/流式/工具/JSON，约 5~30 秒）…');
+  try {
+    const r = await api(`/api/llm/providers/${id}/test`, {method:'POST'});
+    await _showProbeResult('模型功能自检', r);
+  } catch(e) { toast('❌ 自检失败：' + e.message); }
+}
+// 编辑表单内「测试」：用表单当前配置（名称/URL/Key/模型名）实时功能自检，未保存也可测；
 // 编辑模式下表单 Key 为点点占位（已配置不可改）→ 回退用已保存的 provider 配置测试
 async function testLLMFromForm() {
   const id = document.getElementById('f-edit-llm').value;
@@ -2475,16 +2508,20 @@ async function testLLMFromForm() {
   const api_key = keyInput.disabled ? '' : keyInput.value.trim();
   const model_name = document.getElementById('f-model').value.trim();
   if(!name || !base_url || !model_name) { toast('请先填写必填项：名称 / Base URL / 模型名'); return; }
-  toast('正在测试连通…');
+  toast('正在做功能自检（对话/流式/工具/JSON，约 5~30 秒）…');
   try {
     let r;
     if(id && !api_key) {
       // 编辑模式：Key 未改动（留空/点点占位）→ 用已保存配置测试
       r = await api(`/api/llm/providers/${id}/test`, {method:'POST'});
     } else {
-      r = await api('/api/llm/providers/test', {method:'POST', body:JSON.stringify({name, base_url, api_key, model_name, model_type: document.getElementById('f-model-type')?.value||'chat'})});
+      r = await api('/api/llm/providers/test', {method:'POST', body:JSON.stringify({
+        name, base_url, api_key, model_name,
+        model_type: document.getElementById('f-model-type')?.value || 'chat',
+        tags: (typeof composeTagsFromForm === 'function' ? composeTagsFromForm() : []),
+      })});
     }
-    toast(r.ok ? `✅ 连接成功${r.latency_ms?`（${r.latency_ms}ms）`:''}${r.model?`：${r.model}`:''}` : `❌ 连接失败：${r.error||'未知错误'}`);
+    await _showProbeResult('模型功能自检（表单配置，未保存也生效）', r);
   } catch(e) { toast('❌ 测试失败：'+e.message); }
 }
 async function deleteLLM(id) {

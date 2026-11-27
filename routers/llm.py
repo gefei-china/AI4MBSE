@@ -185,17 +185,27 @@ def delete_provider(pid: int, conn=Depends(db_session), user=Depends(current_use
 
 
 @router.post("/api/llm/providers/{pid}/test")
-def test_provider(pid: int, conn=Depends(db_session), user=Depends(current_user)):
-    result = llm_client.test_connection(pid)
-    audit(audit_user(user), "llm_test", f"测试LLM#{pid}: {'成功' if result.get('ok') else '失败'}", conn=conn)
+def test_provider(pid: int, deep: bool = True, conn=Depends(db_session), user=Depends(current_user)):
+    """模型自检（2026-11-27 起默认 `deep=true` = **真实功能验证**）。
+
+    旧口径只发 `ping` 看 HTTP 200 ⇒ 内容空、不能流式、不支持 tool_calls、上游静默换模型
+    这四类"200 但没用"全部判绿（正是用户反馈的问题）。deep 口径逐项真跑并给出判据，
+    见 llm/probe.py。`?deep=false` 保留给"只想看通不通"的快速探活。
+    """
+    result = llm_client.test_connection(pid, deep=deep)
+    audit(audit_user(user), "llm_test",
+          f"自检LLM#{pid}({'功能全检' if deep else '快速探活'}): "
+          f"{'通过' if result.get('ok') else '未通过'} {result.get('summary') or ''}".strip(), conn=conn)
     return result
 
 
 @router.post("/api/llm/providers/test")
 def test_provider_form(body: dict, conn=Depends(db_session), user=Depends(current_user)):
-    """编辑表单「测试」入口：用表单当前配置（未保存）直接连通性测试。
+    """编辑表单「测试」入口：用表单当前配置（未保存）直接做**功能自检**。
 
     配置来源为前端表单字段（name/base_url/api_key/model_name/model_type），不落库。
+    2026-11-27：与列表页同口径（deep）——否则"编辑页说成功、用起来不行"，
+    这正是用户反馈"点击测试只确认连接成功，功能是否正常其实无法知道"的成因之一。
     """
     base_url = (body.get("base_url") or "").strip()
     api_key = (body.get("api_key") or "").strip()
@@ -211,13 +221,21 @@ def test_provider_form(body: dict, conn=Depends(db_session), user=Depends(curren
         "api_key": api_key,
         "model_name": model_name,
         "model_type": body.get("model_type") or "chat",
+        "tags": body.get("tags") or [],
         "context_window": 8192, "max_tokens": 512, "temperature": 0.3,
     }
+    deep = bool(body.get("deep", True))
     try:
-        from llm.providers.openai_compat import OpenAICompatProvider
-        impl = OpenAICompatProvider(cfg)
-        result = impl.test_connection(cfg)
+        if deep:
+            from llm.probe import probe as _probe
+            result = _probe(cfg, deep=True)
+        else:
+            from llm.providers.openai_compat import OpenAICompatProvider
+            impl = OpenAICompatProvider(cfg)
+            result = impl.test_connection(cfg)
     except Exception as e:
         result = {"ok": False, "error": str(e)}
-    audit(audit_user(user), "llm_test_form", f"表单测试LLM: {model_name}（{cfg['model_type']}）: {'成功' if result.get('ok') else '失败'}", conn=conn)
+    audit(audit_user(user), "llm_test_form",
+          f"表单自检LLM: {model_name}（{cfg['model_type']}）: "
+          f"{'通过' if result.get('ok') else '未通过'} {result.get('summary') or ''}".strip(), conn=conn)
     return result
