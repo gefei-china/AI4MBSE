@@ -462,8 +462,20 @@ class OrchestrMixin:
                                    % (_agg_status, _cause_txt)) + llm_content
         except Exception:
             _fill_verdicts = []
+        # P0-3：编排产出记忆沉淀（LLM 提炼 or 规则降级，每会话限 2 次）
+        # ★ 2026-11-27（用户要求）：**存了什么必须让用户看见**。
+        #   非流式路径没有 SSE，故走 `card_data.memory_notice`（前端按字段渲染一行系统提示）；
+        #   为此把沉淀调用**前移**到 card_data 构造之前 —— 它是纯副作用、无顺序依赖
+        #   （`llm_content` 在本行之前已定稿）。这也是"同一语义两条路径同口径"的既有纪律。
+        _mem_info = self._deposit_session_memory(user_input, llm_content, intent)
+        _mem_notice = ""
+        if _mem_info and _mem_info.get("notice") and int(conversation_id or 0):
+            _mem_notice = str(_mem_info["notice"])
+
         card_data = json.dumps({
             "intent": intent, "agent": agent_def.name, "hil_level": hil_level,
+            # 记忆沉淀告知（空串 = 本次没存 / 子任务 / 不该打扰）
+            "memory_notice": _mem_notice,
             "kb_tags": kb_tags, "skill_hits": self._last_skill_hits, "slots": slots,
             "orchestrated": True, "degraded": bool(orch.get("degraded")),
             "orchestrated_status": _agg_status,   # P0-3：三态与流式路径对齐
@@ -498,9 +510,8 @@ class OrchestrMixin:
                      "agent": agent_def.name, "tools": [],
                      "subtasks": plan_meta},  # P0-2：子任务轨迹持久化
         }, ensure_ascii=False)
-        # P0-3：编排产出记忆沉淀（LLM 提炼 or 规则降级，每会话限 2 次）
-        self._deposit_session_memory(user_input, llm_content, intent)
         # P0-5：技能使用反馈采集（非流式编排路径）
+        # （记忆沉淀已前移到 card_data 构造之前，见上方 `_mem_info`）
         self._record_skill_feedback(conversation_id=int(conversation_id or 0), intent=intent, output_content=llm_content)
         msg_id = 0
         with db_conn() as conn:

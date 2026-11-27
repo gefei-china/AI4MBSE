@@ -4517,7 +4517,15 @@ class StreamMixin:
         _attach_usage_summary(card_obj, orch_content, _usage)
         card_data = json.dumps(card_obj, ensure_ascii=False)
         # P0-3：编排产出记忆沉淀（LLM 提炼 or 规则降级，每会话限 2 次）
-        self._deposit_session_memory(user_input, orch_content, intent)
+        # ★ 2026-11-27：同样要把"存了什么"告诉用户。**但子任务不发** ——
+        #   编排子任务是以 `conversation_id=0` 嵌套调用本方法（见下方落库处的同一条注释），
+        #   若在子任务里也 yield，提示会串进父会话的执行过程里，用户看到"记了 5 条"实际是一批子任务。
+        _mem_info = self._deposit_session_memory(user_input, orch_content, intent)
+        if _mem_info and _mem_info.get("notice") and int(conversation_id or 0):
+            yield {"type": "progress", "kind": "progress",
+                   "delta": _mem_info["notice"], "source": "memory_deposit",
+                   "memory": {k: _mem_info.get(k) for k in
+                              ("action", "id", "mem_type", "mem_topic")}}
         # P0-5：技能使用反馈采集（流式编排路径）
         self._record_skill_feedback(conversation_id=int(conversation_id or 0), intent=intent, output_content=orch_content)
         with db_conn() as conn2:
@@ -8026,7 +8034,17 @@ class StreamMixin:
             msg_id = 0
             if not dry_run:
                 # P0-3：主会话产出记忆沉淀（LLM 提炼 or 规则降级，每会话限 2 次）
-                self._deposit_session_memory(user_input, llm_content, intent)
+                # ★ 2026-11-27（用户要求）：**存了什么必须让用户看见**。
+                #   此前这一路完全静默 —— 用户既不知道平台记住了什么，也不知道"这次为什么没记"。
+                #   走 `progress` 事件走的是 `procAddSystemNotice`：与 AI 思考流**分开**显示，
+                #   不会被误读成模型在自言自语（B2-10 已经把这两类拆开了，这里复用那条通道）。
+                _mem_info = self._deposit_session_memory(user_input, llm_content, intent)
+                if _mem_info and _mem_info.get("notice"):
+                    yield {"type": "progress", "kind": "progress",
+                           "delta": _mem_info["notice"],
+                           "source": "memory_deposit",
+                           "memory": {k: _mem_info.get(k) for k in
+                                      ("action", "id", "mem_type", "mem_topic")}}
                 # P0-5：技能使用反馈采集（主会话直行路径）
                 self._record_skill_feedback(conversation_id=_sess_conv, intent=intent, output_content=llm_content)
                 # RETRIEVE_COUNT_RECONCILE_V1 计数回填：初始检索未触发(should_retrieve=False)时，

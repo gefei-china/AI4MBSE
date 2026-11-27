@@ -558,17 +558,25 @@ class MemoryMixin:
         except Exception:
             return ""
 
-    def _deposit_session_memory(self, user_input: str, content: str, intent: str) -> None:
+    def _deposit_session_memory(self, user_input: str, content: str, intent: str) -> dict | None:
         """会话产出记忆沉淀：LLM 提炼 or 规则降级；每会话限 2 次防噪音。
 
         仅主会话（非 dry_run）调用；dry_run 子任务路径由 nodes._exec_agent 自行沉淀。
         作用域：默认落 **project**（会话所属工程），无工程上下文回落 **agent**；
         偏好类记忆（mem_type=preference）由 maybe_deposit 改落 **user** 槽（跨 Agent 复用）。
         签名保持 3 参（既有调用点与自检脚本零改动）。
+
+        ★ 2026-11-27：返回值从 `None` 改为「告知信息」dict（或 None）。动机是用户要求
+        **"保存记忆时必须告知用户"** —— 此前整个过程完全静默，用户不知道平台记住了什么、
+        也不知道"为什么这次没记"。返回值变化对既有调用点**零影响**：
+        3 处调用点此前都没接收返回值。
+        返回结构：`{action, notice, id?, content?, mem_type?, mem_topic?, scope?, reason?}`
+          · `action`：created / dedup_hit / revived / blocked / skipped（见 `deposit` docstring）
+          · `notice`：**给用户看的一行话**（已脱敏、不带内部规则细节）
         """
         try:
             if not content or not content.strip():
-                return
+                return None
             # P0#1 显式写触发：被显式排除的 intent 不沉淀（避免污染记忆库；内容级判定仍归 maybe_deposit 三重门）
             try:
                 from agent.memory_recall import should_deposit_memory as _should_deposit
@@ -590,15 +598,64 @@ class MemoryMixin:
             user_scope = ("user", uname) if uname else None
             conn = get_db()
             try:
+                # 三个分支共用同一个 info dict（deposit / maybe_deposit 会往里填 action）
+                _info: dict = {}
                 mem_id = get_memory_backend().maybe_deposit(
                     conn, intent or "chat", content, user_input,
-                    scope_type=scope_type, scope_id=scope_id, user_scope=user_scope)
+                    scope_type=scope_type, scope_id=scope_id, user_scope=user_scope,
+                    info=_info)
                 if mem_id:
                     self._mem_deposit_count = getattr(self, "_mem_deposit_count", 0) + 1
+                return self._memory_notice(_info, scope_type=scope_type, scope_id=scope_id)
             finally:
                 conn.close()
         except Exception:
-            pass
+            return None
+
+    @staticmethod
+    def _memory_notice(info: dict, scope_type: str = "", scope_id: str = "") -> dict | None:
+        """把 `info` 翻成**给用户看的一行话**。返回 None 表示"不必打扰用户"。
+
+        三条设计判据（都不是随手定的）：
+        ① **不该说的别说**：`skipped` 里"太短/没经验信号"是**正常过滤**，每次都提示会变成刷屏，
+           用户照样不会读，反而会学着忽略所有提示 ⇒ 只有 `created/dedup_hit/revived/blocked` 才说。
+        ② **安全拦截只说"有一条没保存"**，不报规则名/命中片段 —— 报了就等于把绕过方法写在屏幕上
+           （详情已在 `audit:memory_blocked`，需要的人去那里看）。
+        ③ **命中去重要明说**：用户以为教会了新东西，实际只是给旧条 +1 次访问。不说清楚，
+           下次他发现"我说的没生效"会以为是缺陷。这条是"可解释性"而非"礼貌"。
+        """
+        if not isinstance(info, dict):
+            return None
+        act = str(info.get("action") or "")
+        if act in ("", "skipped"):
+            return None
+        _where = {"project": "本项目", "user": "你的偏好", "agent": "本 Agent", "global": "全局"}.get(
+            str(scope_type or ""), "本 Agent")
+        _snip = re.sub(r"\s+", " ", str(info.get("content") or ""))[:60]
+        _mt = str(info.get("mem_type") or "")
+        _type_cn = {"preference": "偏好", "experience": "经验", "skill": "技能",
+                    "fact": "事实"}.get(_mt, "记忆")
+        if act == "created":
+            notice = "【记忆】已记入%s%s：%s" % (_where, _type_cn, _snip)
+        elif act == "dedup_hit":
+            # 相似度从 `reason` 里取（deposit 写的是"…（相似度 0.973）"）。
+            # 取不到就**略去括号**，不要为了格式去猜一个数字 —— 给用户看的数必须是真值。
+            # ★ 2026-11-27 门禁 A8 抓到：原正则 `0\.\d+` 漏掉 **1.000**。
+            #   完全相同的内容/向量必然得到 1.000（夹具里一条新增一条同向量改写就是），
+            #   此时真值被吞、提示里只剩"我早记住了" —— 用户无从判断是不是误判。
+            _m = re.search(r"\b([01]\.\d+)\b", str(info.get("reason") or ""))
+            _sim = ("（相似度 %s）" % _m.group(1)) if _m else ""
+            notice = "【记忆】这条我早记住了%s，已标为「再次用到」而未重复保存：%s" % (_sim, _snip)
+        elif act == "revived":
+            notice = "【记忆】这条曾被归档（当时久未用到），这次又用上了，已从冷层取回：%s" % _snip
+        elif act == "blocked":
+            notice = "【安全】有一段内容因安全策略未写入长期记忆（详情见审计日志）"
+        else:
+            return None
+        return {"action": act, "notice": notice,
+                "id": info.get("id"), "content": _snip,
+                "mem_type": _mt, "mem_topic": info.get("mem_topic"),
+                "scope": info.get("scope") or (scope_type, scope_id)}
 
     def _record_skill_feedback(self, conversation_id=0, intent="", output_content="", error=None) -> None:
         """P0-5 技能使用反馈采集：本次命中技能按输出成功/失败更新 use_stats，失败滚动备注。

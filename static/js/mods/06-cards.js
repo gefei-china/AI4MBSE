@@ -231,6 +231,13 @@ function renderOrchCard(cd){
   }
   // 子任务轨迹列表（状态徽章/专长标签/摘要前 60 字/耗时/错误）
   const rows = plan.map(p=>subtaskCardHtml(p)).join('');
+  // ★ 2026-11-27（用户要求）：记忆沉淀告知。
+  //   非流式编排没有 SSE，后端把「存了什么」塞进 `card_data.memory_notice`；
+  //   空串 = 本次没存 / 子任务 / 不该打扰（后端已判过）⇒ 这里不需要再判一次。
+  //   ⚠️ 必须 esc：notice 里含**用户/模型产出的原文摘要**，直接插 innerHTML 是可注入面。
+  const memNotice = cd.memory_notice
+    ? '<div style="margin-top:5px;font-size:12.5px;color:var(--mut);">' + esc(String(cd.memory_notice)) + '</div>'
+    : '';
   // P1-2 历史编排：run 级预算进度条（done 事件 run_budget 已随 card_data 持久化）
   const rb = cd.run_budget;
   let budgetHtml = '';
@@ -314,6 +321,7 @@ function renderOrchCard(cd){
   return `<div class="rc">
     <div class="rc-chip b" style="cursor:pointer;user-select:none;" title="点击展开/收起子任务明细" onclick="orchDetailToggle(this)">🕸 自动编排 · ${plan.length} 个子任务 · ${doneN} 完成${failN?` / ${failN} 失败`:''}${pendingN?` / ${pendingN} 未完成`:''}${degraded}${oscBadge}<span class="chev" style="margin-left:6px;font-size:11.5px;">▾</span></div>
     ${partialHint}
+    ${memNotice}
     ${budgetHtml}
     ${refHtml}
     ${planAuditHtml}
