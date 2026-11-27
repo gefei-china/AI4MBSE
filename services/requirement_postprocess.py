@@ -255,10 +255,23 @@ def process_for_run(conn, content: str, *, run_id: int = 0, intent: str = "",
                   project=project, source_ref=("run#%d" % run_id) if run_id else "")
     if not run_id:
         return out
+    # ★ 2026-11-27 修（真机暴露于 conv 1000000246）：
+    #   `process()` 自己会用 `_conn_alive` 优雅跳过已关闭的连接，但**观测写入**直接复用了
+    #   同一个 conn ⇒ 抛 "Cannot operate on a closed database"，被下面的 except 吞成一行
+    #   warning。后果正是本函数要防的那件事：**"落库了没"在数据层没有痕迹**，且没人发现。
+    #   主链路 `with db_conn()` 在 done 之前就退出（同 `_conn_alive` docstring 所述），
+    #   所以这不是偶发 —— 连接关闭时**必然**丢观测。
+    #   改法：连接不可用时自开一条短连接写观测，写完即关；业务结果 out 不受影响。
+    _own_ctx = None
+    _c = conn
     try:
+        if not _conn_alive(conn):
+            from database import db_conn as _dbc
+            _own_ctx = _dbc()
+            _c = _own_ctx.__enter__()
         import json as _j
-        row = conn.execute("SELECT params_json FROM orch_checkpoints WHERE run_id=?",
-                           (int(run_id),)).fetchone()
+        row = _c.execute("SELECT params_json FROM orch_checkpoints WHERE run_id=?",
+                         (int(run_id),)).fetchone()
         if row is None:
             return out
         raw = row[0] if not hasattr(row, "keys") else row["params_json"]
@@ -273,10 +286,16 @@ def process_for_run(conn, content: str, *, run_id: int = 0, intent: str = "",
             "ac_rate": float(out.get("ac_rate") or 0.0),
             "inserted": int(out.get("inserted") or 0),
         }
-        conn.execute("UPDATE orch_checkpoints SET params_json=? WHERE run_id=?",
-                     (_j.dumps(params, ensure_ascii=False), int(run_id)))
-        conn.commit()
+        _c.execute("UPDATE orch_checkpoints SET params_json=? WHERE run_id=?",
+                   (_j.dumps(params, ensure_ascii=False), int(run_id)))
+        _c.commit()
     except Exception as exc:                      # noqa: BLE001
         # 观测写入失败不影响业务（但留一行日志，排查"为什么看不到落库结果"时有据可查）
         logger.warning("[req-postprocess] 写 run 观测失败 run=%s: %s", run_id, exc)
+    finally:
+        if _own_ctx is not None:
+            try:
+                _own_ctx.__exit__(None, None, None)
+            except Exception:
+                pass
     return out
