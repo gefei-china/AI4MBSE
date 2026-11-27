@@ -65,19 +65,31 @@ _ASK_USER_TOOL = {
             "③ 调用本工具前，**必须先回答用户本轮的直接问题**：若用户在问『在哪 / 是什么 / 为什么 / 有没有』，"
             "回答里必须正面给出该问题的答案，不能只报告执行障碍或只贴确认卡。"
         ),
-        "parameters": {
+            "parameters": {
             "type": "object",
             "properties": {
                 "question": {"type": "string",
-                             "description": "要用户确认/回答的问题：一句话说清这次要决定什么，必须结合当前上下文具体化（如『要导出哪个版本的 SysML v2 代码？』），不要写泛泛的『请问您想做什么』"},
+                             "description": "【单题】要用户确认/回答的问题：一句话说清这次要决定什么，必须结合当前上下文具体化（如『要导出哪个版本的 SysML v2 代码？』）。多题时改用 questions，一次问完，不要分多次弹卡"},
                 "options": {"type": "array", "items": {"type": "string"},
-                            "description": "供用户点选的候选答案：2-6 个，基于当前上下文生成（如具体版本号/具体范围/具体工程名）；用户也可选『其他/自定义』自由输入"},
+                            "description": "【单题】供用户点选的候选答案：2-6 个，基于当前上下文生成；用户也可选『其他/自定义』自由输入"},
                 "context": {"type": "string",
                             "description": "（可选）补充背景：为什么需要确认、各选项的含义与差异，帮助用户决策（限 500 字内）"},
                 "allow_custom": {"type": "boolean",
                                  "description": "（可选，默认 true）是否允许用户选『其他/自定义』自由输入"},
+                "questions": {"type": "array",
+                              "description": "【多题，推荐】一次需要多个独立决策时用本数组一次问完（最多 3 题，前端向导逐题作答、汇总提交）。每项：{question:string必填, options:string[], allow_custom:boolean}。已回答过的问题系统会自动过滤，不要重复问",
+                              "items": {
+                                  "type": "object",
+                                  "properties": {
+                                      "question": {"type": "string", "description": "本题要确认的内容（必填）"},
+                                      "options": {"type": "array", "items": {"type": "string"},
+                                                  "description": "本题候选答案 2-6 个"},
+                                      "allow_custom": {"type": "boolean", "description": "是否允许自由输入（默认 true）"},
+                                  },
+                                  "required": ["question"],
+                              }},
             },
-            "required": ["question"],
+            "required": [],
         },
     },
 }
@@ -2064,24 +2076,47 @@ class ToolMixin:
                 return result
             if name == "ask_user":
                 _a = arguments or {}
-                _q = str(_a.get("question") or "").strip()
-                if not _q:
-                    result = {"ok": False,
-                              "result": "ask_user 缺少 question（要问的问题）——请把要用户确认"
-                                        "的内容写进 question 后重试"}
+                # ★ 2026-11-27：多题优先（questions），单题（question）向后兼容。
+                #   唯一 id（ask_user_1..n）是硬要求：前端 radio name 用 q.id 分组，
+                #   重复 id 会让第二题点选顶掉第一题 ⇒ 答案静默丢失。
+                _raw_qs = _a.get("questions")
+                if isinstance(_raw_qs, list) and _raw_qs:
+                    _qs = []
+                    for _qi, _item in enumerate(_raw_qs[:3]):
+                        if not isinstance(_item, dict):
+                            continue
+                        _qt = str(_item.get("question") or "").strip()
+                        if not _qt:
+                            continue
+                        _qs.append({
+                            "id": "ask_user_%d" % (_qi + 1),
+                            "question": _qt[:500],
+                            "options": [str(o).strip() for o in (_item.get("options") or [])
+                                        if str(o).strip()][:6],
+                            "allow_custom": bool(_item.get("allow_custom", True)),
+                        })
                 else:
-                    _opts = [str(o).strip() for o in (_a.get("options") or [])
-                             if str(o).strip()][:6]
+                    _qt = str(_a.get("question") or "").strip()
+                    _qs = [{
+                        "id": "ask_user_1",
+                        "question": _qt[:500],
+                        "options": [str(o).strip() for o in (_a.get("options") or [])
+                                    if str(o).strip()][:6],
+                        "allow_custom": bool(_a.get("allow_custom", True)),
+                    }] if _qt else []
+                if not _qs:
+                    result = {"ok": False,
+                              "result": "ask_user 缺少 question / questions（要问的问题）"
+                                        "——请把要用户确认的内容写进 question（单题）"
+                                        "或 questions（多题）后重试"}
+                else:
                     result = {"ok": True, "clarify_required": True,
-                              "clarify": {
-                                  "id": "q_ask_user",
-                                  "question": _q[:500],
-                                  "options": _opts,
-                                  "context": str(_a.get("context") or "").strip()[:500],
-                                  "allow_custom": bool(_a.get("allow_custom", True)),
-                              },
-                              "result": "已向用户发起确认（%s，%d 个选项）——流程暂停，"
-                                        "等待用户回答后继续" % (_q[:60], len(_opts))}
+                              "clarify_questions": _qs,
+                              # 单题兼容：clarify 仍为 dict，且 id 与 questions[0] 一致
+                              "clarify": dict(_qs[0], context=str(_a.get("context") or "").strip()[:500]),
+                              "result": "已向用户发起确认（%d 题：%s）——流程暂停，"
+                                        "等待用户回答后继续" % (
+                                            len(_qs), "；".join(q["question"][:30] for q in _qs))}
                 self._log_tool_call(name, tool_type, arguments, result,
                                     intent_ctx, agent_ctx, conv_ctx, t0)
                 return result

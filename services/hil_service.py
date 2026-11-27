@@ -34,7 +34,12 @@ WRITE_TOOLS = {"entity_create", "relation_create", "entity_update", "entity_dele
 #:   rejected   —— 被人工拒绝
 #:   expired    —— 超时未响应（fallback_level 生效后）
 #:   superseded —— 被同批次的后续确认单取代（批次合并用）
-STATUSES = ("pending", "approved", "rejected", "executed", "failed", "expired", "superseded")
+STATUSES = ("pending", "approved", "rejected", "executed", "failed", "expired", "superseded",
+            # ★ 2026-11-27：批内逐条决策 —— 部分项已决/已执行、仍有未决项。
+            #   注意：status TEXT 无 CHECK 约束，加值不需迁移。
+            "partial")
+#: 允许再次进入 decide 的状态（partial = 还有未决项可继续处理）
+DECIDABLE = ("pending", "partial")
 
 #: 需要**人点头**的 level（其余放行）。沿用 services/hil_policy.LEVELS 的取值域。
 BLOCKING_LEVELS = ("confirm", "approve")
@@ -344,7 +349,12 @@ class HILService:
                     _items.append({"tool": action,
                                    "preview": (preview or "")[:300],
                                    "target": _batch_target(payload or {}),
-                                   "args": payload or {}})
+                                   "args": payload or {},
+                                   # ★ 2026-11-27：批内逐条决策字段。空串=未决，
+                                   #   approve/reject=已决；result 只存短摘要（≤200），
+                                   #   完整回执仍在 result_json，避免 8000 截断把 JSON 切坏。
+                                   "decision": "", "decided_by": "", "decided_at": "",
+                                   "result": ""})
                     _try_items = json.dumps(_items, ensure_ascii=False)[:8000]
                     try:
                         conn.execute(
@@ -401,7 +411,9 @@ class HILService:
                  tool_type or "", level or "", batch_id or "", 1, _timeout_at,
                  json.dumps([{"tool": action, "preview": (preview or "")[:300],
                               "target": _batch_target(payload or {}),
-                              "args": payload or {}}], ensure_ascii=False)) + tuple(_rb_val))
+                              "args": payload or {},
+                              "decision": "", "decided_by": "", "decided_at": "",
+                              "result": ""}], ensure_ascii=False)) + tuple(_rb_val))
             conn.commit()
             out = HILService.get(conn, cur.lastrowid)
             if isinstance(out, dict):
@@ -617,6 +629,84 @@ class HILService:
             conn.commit()
         return {"status": new_status, "payload": row["payload"], "row": row}
 
+    @staticmethod
+    def decide_items(conn, conf_id: int, decisions: list, decided_by: str = "") -> dict:
+        """批内逐条决策（2026-11-27）。`decisions=[{item_index, approve}, ...]`。
+
+        逻辑闭环纪律：
+          · 已决项（decision 非空）**跳过**——不覆盖用户先前的决定；
+          · 未决项写入 decision/decided_by/decided_at 到 batch_items 对应项；
+          · 全部有决定 ⇒ status='approved'（交给既有执行器，执行器按 decision 过滤）；
+          · 部分有决定 ⇒ status='partial'（可再次进入本方法处理剩余项）；
+          · 条件更新 + rowcount 防并发双批（与 decide 同一纪律）。
+        """
+        row = HILService.get(conn, conf_id)
+        if not row:
+            return {"status": "not_found", "payload": {}}
+        if row["status"] not in DECIDABLE:
+            return {"status": row["status"], "payload": row["payload"], "row": row,
+                    "raced": True}
+        if not isinstance(decisions, list) or not decisions:
+            return {"status": "invalid_decisions", "payload": row["payload"]}
+        try:
+            items = json.loads(row.get("batch_items") or "[]") if isinstance(
+                row.get("batch_items"), str) else (row.get("batch_items") or [])
+        except Exception:
+            items = []
+        if not isinstance(items, list) or not items:
+            return {"status": "no_items", "payload": row["payload"]}
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        skipped, applied = [], []
+        for d in decisions:
+            if not isinstance(d, dict):
+                continue
+            try:
+                idx = int(d.get("item_index"))
+            except (TypeError, ValueError):
+                continue
+            if idx < 0 or idx >= len(items) or not isinstance(items[idx], dict):
+                skipped.append({"item_index": idx, "reason": "索引越界"})
+                continue
+            if str(items[idx].get("decision") or "").strip():
+                skipped.append({"item_index": idx, "reason": "此前已决，不覆盖"})
+                continue
+            _ap = bool(d.get("approve"))
+            items[idx].update({"decision": "approve" if _ap else "reject",
+                               "decided_by": decided_by or "", "decided_at": now,
+                               "result": ""})
+            applied.append({"item_index": idx, "decision": items[idx]["decision"]})
+        if not applied:
+            _all = all(str(x.get("decision") or "").strip() for x in items
+                       if isinstance(x, dict))
+            return {"status": "approved" if _all else row["status"],
+                    "payload": row["payload"], "row": row,
+                    "applied": [], "skipped": skipped}
+        _all_decided = all(str(x.get("decision") or "").strip() for x in items
+                           if isinstance(x, dict))
+        _new_status = "approved" if _all_decided else "partial"
+        try:
+            cur = conn.execute(
+                "UPDATE hil_confirmations SET status=?, decided_by=?, decided_at=?, "
+                "batch_items=? WHERE id=? AND status IN ('pending','partial')",
+                (_new_status, decided_by or "", now,
+                 json.dumps(items, ensure_ascii=False)[:8000], conf_id))
+            conn.commit()
+            if cur.rowcount == 0:
+                _r2 = HILService.get(conn, conf_id) or {}
+                return {"status": _r2.get("status") or "pending",
+                        "payload": _r2.get("payload") or {}, "row": _r2,
+                        "raced": True}
+        except Exception:
+            conn.execute(
+                "UPDATE hil_confirmations SET status=?, batch_items=? WHERE id=?",
+                (_new_status, json.dumps(items, ensure_ascii=False)[:8000], conf_id))
+            conn.commit()
+        return {"status": _new_status, "payload": row["payload"],
+                "row": HILService.get(conn, conf_id) or row,
+                "applied": applied, "skipped": skipped,
+                "per_item": [{"item_index": i, "decision": str(x.get("decision") or "")}
+                             for i, x in enumerate(items) if isinstance(x, dict)]}
+
 
 # ══════════════════════════════════════════════════════════════════════
 # ★ 2026-10-28（写前确认 HITL）统一执行器 + 回灌文案构造
@@ -703,16 +793,23 @@ def execute_confirmation(conn, conf: dict, user=None) -> dict:
         except Exception:
             _items = []
         _todo = []
-        for _it in _items:
+        for _idx, _it in enumerate(_items):
             if not isinstance(_it, dict):
                 continue
+            # ★ 2026-11-27：逐条决策 —— 显式 reject 跳过；已执行（result 非空）跳过；
+            #   缺省（老数据无 decision）视为 approve（保证既有门禁 3/3 全执行）。
+            if str(_it.get("decision") or "").strip() == "reject":
+                continue
+            if str(_it.get("result") or "").strip():
+                continue                      # item 级幂等：已有回执不再执行
             _a = _it.get("args")
             if isinstance(_a, dict) and _a:
                 _todo.append({"tool": str(_it.get("tool") or action), "args": _a,
-                              "target": _it.get("target") or ""})
+                              "target": _it.get("target") or "",
+                              "item_index": _idx})
         if not _todo:
             # 单条 / 老数据（无 batch_items 或无 args）⇒ 退回主 payload（逐字节兼容）
-            _todo = [{"tool": action, "args": payload, "target": ""}]
+            _todo = [{"tool": action, "args": payload, "target": "", "item_index": -1}]
 
         _results, _any_fail, _ok_n = [], False, 0
         for _i, _t in enumerate(_todo, 1):
@@ -726,10 +823,25 @@ def execute_confirmation(conn, conf: dict, user=None) -> dict:
                 _any_fail = True
             else:
                 _ok_n += 1
+            _rtext = str((_r or {}).get("result") or "")
             _results.append({"seq": _i, "tool": _t["tool"], "target": _t.get("target") or "",
                              "ok": _ok1,
-                             "result": str((_r or {}).get("result") or "")[:1200]})
+                             "result": _rtext[:1200],
+                             "item_index": _t.get("item_index", -1)})
+            # ★ 2026-11-27：逐项回执写回 batch_items —— 已决项状态不丢，
+            #   刷新页面/再次 decide 都能看到「这项已执行/失败」。
+            _ix = int(_t.get("item_index", -1))
+            if _ix >= 0 and _ix < len(_items) and isinstance(_items[_ix], dict):
+                _items[_ix]["result"] = ("OK " if _ok1 else "FAIL ") + _rtext[:200]
         pipe._hil_authorized_conf_id = None
+        if _items:
+            try:
+                conn.execute(
+                    "UPDATE hil_confirmations SET batch_items=? WHERE id=?",
+                    (json.dumps(_items, ensure_ascii=False)[:8000], cid))
+                conn.commit()
+            except Exception:
+                pass
         _n = len(_todo)
         if _n > 1:
             _summary = ("批次执行完成：%d/%d 项成功" % (_ok_n, _n)

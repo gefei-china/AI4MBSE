@@ -4784,7 +4784,10 @@ class StreamMixin:
 
         调用方约定：`yield from` 之后必须 `return`（本方法已发 done，主流程收尾）。
         """
-        _iqs = [dict(clarify_req)]
+        from agent.clarify_dedup import as_question_list
+        _iqs = as_question_list(clarify_req)
+        if not _iqs:
+            return                      # 全部已答：不落空澄清卡
         _mid = self._persist_clarify(conversation_id, user_input, intent, branch, attachments,
                                      forced_intent, skill_name, team, _iqs,
                                      content=content, card_data=exec_card)
@@ -6734,7 +6737,21 @@ class StreamMixin:
                                 # ★ 2026-10-17：ask_user 人在回路澄清 —— 记录信号并中断 ReAct 循环
                                 #   （不再喂 tool_result、不再继续探测：等用户回答后续跑）
                                 if isinstance(result, dict) and result.get("clarify_required"):
-                                    _clarify_req = result.get("clarify") or {}
+                                    # ★ 2026-11-27：多题归一化 + 已答去重（防「确认后又问同一题」）
+                                    from agent.clarify_dedup import as_question_list, filter_questions
+                                    _cq = as_question_list(result)
+                                    try:
+                                        from database import db_conn as _dedup_db_s
+                                        with _dedup_db_s() as _c_dedup_s:
+                                            _cq = filter_questions(_cq, _c_dedup_s, conversation_id,
+                                                                   user_input=user_input)
+                                    except Exception:
+                                        pass
+                                    if _cq:
+                                        _clarify_req = {"clarify_questions": _cq, "clarify": _cq[0]}
+                                    else:
+                                        # 全部已答 ⇒ 不弹卡，让 ReAct 继续
+                                        result = {"ok": True, "result": "所有待确认问题此前已回答，无需重复确认"}
                                     # ★ 2026-11-12（米爸反馈3 复发，conv 9571 实证 7 连问 /
                                     #   conv 9553 实证 24 连问）：**必须补 done 事件**。
                                     #   此前 break 发生在 yield "tool done" **之前** ⇒ 前端
@@ -6750,7 +6767,8 @@ class StreamMixin:
                                            "skip_reason": "", "agent": _ctx_agent,
                                            "skill": _ctx_skill, "skill_guide": _ctx_skill_guide, "depth": 2 if _ctx_skill else 1,
                                            "mcp": _mcp_of(tname)}
-                                    break
+                                    if _cq:      # 全部已答时不 break，让 ReAct 继续（不弹空卡）
+                                        break
                                 # ★ 2026-10-28（写前确认 HITL）：写操作被确认闸拦下 ⇒ 中断本轮。
                                 #   与 `clarify_required` **同构**：不喂 tool_result、不继续探测
                                 #   （否则模型会继续发写请求 ⇒ 弹出一堆确认单）。
@@ -8120,20 +8138,30 @@ class StreamMixin:
                     },
                     "sysml_views": sysml_views,
                     "submitted_by": audit_user(user) if isinstance(user, dict) else "会话发起人",
+                    # ★ 2026-11-27（报告链路根因闭合）：报告结构必须在**落库前**算好并写进
+                    #   card_data，否则 _archive_artifacts 的「复用 cd.sections」是死代码，
+                    #   只能把无标题的一段正文重解析成单节「正文」。
+                    **self._report_card_fields(intent, llm_content, user_input),
                     **self._build_rich_card(intent, retrieval, branch, user_input, provider_id),
                 }
                 # ★ 2026-11-20：usage + 速览随消息落库（此前只有手点「生成结论」才写，
                 # 用户看到的就是"统计不见了"）。tokens 取 llm 计费口径，tool_calls 取
                 # 本轮真实执行过的工具数（不再让 exec.tools 为空时显示 0）。
-                _tokens_used = 0
+                # ★ 2026-11-27（统计不见根因之一）：llm_info["tokens"] 只有
+                #   prompt/completion，**没有 total** —— 旧代码读 total 失败后
+                #   回退 completion，只落「最后一次输出 token」，prompt 永不落卡。
+                #   真机 conv=1000000255：卡片 tokens=559 而该轮 13 次调用合计 total=160765。
+                _tk = llm_info.get("tokens") or {}
                 try:
-                    _tokens_used = int((llm_info.get("tokens") or {}).get("total")
-                                       or (llm_info.get("tokens") or {}).get("completion")
-                                       or 0)
+                    _pt = int(_tk.get("prompt") or 0)
+                    _ct = int(_tk.get("completion") or 0)
                 except Exception:
-                    pass
+                    _pt, _ct = 0, 0
+                _tokens_used = int(_tk.get("total") or (_pt + _ct) or 0)
                 _attach_usage_summary(card_obj, llm_content, {
                     "tokens": _tokens_used,
+                    "prompt_tokens": _pt,
+                    "completion_tokens": _ct,
                     "elapsed_ms": int((_t_stats.time() - _stats_t0) * 1000),
                     "tool_calls": len(exec_tools or []),
                 })

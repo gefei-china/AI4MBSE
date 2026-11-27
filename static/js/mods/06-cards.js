@@ -376,15 +376,34 @@ function hilConfirmCardHtml(c){
     ? (typeof c.arguments === 'string' ? c.arguments : JSON.stringify(c.arguments, null, 1)) : '';
   const prev = c.preview || '';
   const tool = c.tool || '';
+  // ★ 2026-11-27：批内逐条 —— batch_items 平铺，每项独立决策按钮。
+  //   已决项只读展示，不再渲染按钮（刷页面也不会重复问）。
+  let _items = c.batch_items || [];
+  if(typeof _items === 'string'){ try{ _items = JSON.parse(_items)||[]; }catch(e){ _items = []; } }
+  const _perItem = (Array.isArray(_items) && _items.length > 1) ? _items.map((it, i)=>{
+    const _d = String(it.decision||'').trim();
+    const _r = String(it.result||'').trim();
+    const _label = esc(String(it.preview||it.target||it.tool||('第 '+(i+1)+' 项')).slice(0,90));
+    if(_d || _r){
+      const _st = _d === 'reject' ? '<span style="color:#A32D2D;">✕ 已拒绝</span>'
+        : (_r ? '<span style="color:#3B6D11;">✓ 已执行</span>' : '<span style="color:#185FA5;">✓ 已批准</span>');
+      return `<div style="margin-top:5px;font-size:12.5px;">${i+1}. ${_label}　${_st}${_r ? '　<span style="color:var(--mut);">'+esc(_r.slice(0,60))+'</span>' : ''}</div>`;
+    }
+    return `<div style="margin-top:5px;font-size:12.5px;display:flex;gap:6px;align-items:center;flex-wrap:wrap;">`
+      + `<span>${i+1}. ${_label}</span>`
+      + `<button class="btn sm ghost" id="${_p}-ok-${cid}-${i}" onclick="hilInlineDecide(${cid}, true, ${i})">批准</button>`
+      + `<button class="btn sm ghost" id="${_p}-no-${cid}-${i}" onclick="hilInlineDecide(${cid}, false, ${i})">拒绝</button></div>`;
+  }).join('') : '';
   return `<div class="hil-card" data-cid="${cid}" style="border:1px solid ${border};background:${bg};border-radius:10px;padding:10px 12px;margin-top:8px;">`
     + `<div style="font-size:13.5px;font-weight:500;color:${title};">⏸ 写操作待你确认</div>`
     + `<div style="font-size:12.5px;line-height:1.7;margin-top:6px;">`
     +   `<div><b>动作：</b>${esc(tool)}</div>`
     +   (prev ? `<div><b>影响面：</b>${esc(prev)}</div>` : '')
     +   `<div><b>性质：</b>${kindTxt}</div>`
-    +   (c.reason ? `<div><b>依据：</b>${esc(String(c.reason).slice(0,90))}</div>` : '')
-    +   batchTxt
-    +   `<div style="color:var(--mut);margin-top:6px;">批准后才会真正执行；<b>在此之前不会产生任何副作用</b>。拒绝则该动作不生效。</div>`
+     +   (c.reason ? `<div><b>依据：</b>${esc(String(c.reason).slice(0,90))}</div>` : '')
+     +   batchTxt
+     +   _perItem
+     +   `<div style="color:var(--mut);margin-top:6px;">批准后才会真正执行；<b>在此之前不会产生任何副作用</b>。拒绝则该动作不生效。</div>`
     +   (args ? `<details style="margin-top:6px;"><summary style="cursor:pointer;color:var(--mut);font-size:12.5px;">查看原始参数</summary>`
     +        `<div style="max-height:120px;overflow:auto;white-space:pre-wrap;background:var(--bg,#f6f7f9);border:1px solid var(--line);border-radius:6px;padding:6px 8px;margin-top:4px;font-size:12px;">${esc(args)}</div></details>` : '')
     +   `<div style="margin-top:8px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;">`

@@ -2196,9 +2196,24 @@ def clarify_answer(conv_id: int, body: dict = None, conn=Depends(db_session),
             _ft_v = str(body.get("free_text") or "").strip()
             if _ft_v:
                 _ans_lines.append(_ft_v)
+            # ★ 2026-11-27：结构化答案（question_id + 原题 + 值）——多题时
+            #   扁平 answers 无法对应「哪题答了什么」，去重指纹也需要题目原文。
+            #   保留扁平 answers 供旧渲染兼容（05-markdown.js 的 join）。
+            _qmap_ans = {str(q.get("id")): str(q.get("question") or "")
+                         for q in (_cd.get("questions") or []) if isinstance(q, dict)}
+            _ans_struct = []
+            for _a in (body.get("answers") or []):
+                _qid = str(_a.get("question_id") or "")
+                _av = str(_a.get("value") or "").strip()
+                if not _av:
+                    continue
+                _ans_struct.append({"question_id": _qid,
+                                    "question": _qmap_ans.get(_qid, ""),
+                                    "value": _av})
             _cd["answered"] = {
                 "at": _dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                "answers": _ans_lines,
+                "answers": _ans_lines,          # 旧形态：扁平 value 列表
+                "answers_detail": _ans_struct,  # 新形态：题目↔答案对应
                 "skipped": bool(body.get("skip")),
             }
             conn.execute("UPDATE messages SET card_data=? WHERE id=?",

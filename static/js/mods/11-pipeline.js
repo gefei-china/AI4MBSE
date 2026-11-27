@@ -1066,15 +1066,24 @@ function hilAppendMsgCard(ev){
 // 批准/拒绝：同一 decide API；失败恢复按钮可重试。
 // 函数名 hilInlineDecide（区别于聊天内联确认卡场景）：2026-10-03 29-flow.js 已随编排孤页移除，
 // 原「与 29-flow 全局 hilDecide 同名冲突」的约束不复存在，保留现名避免无关 churn。
-async function hilInlineDecide(cid, approve){
+async function hilInlineDecide(cid, approve, itemIndex){
   // ★ 2026-11-13：同一张确认单在页面上可能同时存在**三处**载体（通用 Ask 层）：
   //   时间线卡(hil-*) / 消息流卡(hilmsg-*) / 输入框 dock 卡(hildock-*)，
   //   处置时三处按钮都要禁用 ⇒ 用**属性选择器按单号后缀**一次取全（不写死前缀清单）。
+  // ★ 2026-11-27：逐项决策时 id 带 `-<index>` 后缀，选择器需同时兼容两种。
+  const _idx = (typeof itemIndex === 'number') ? itemIndex : null;
   const _okBtns = document.querySelectorAll('[id$="-ok-' + cid + '"]');
   const _noBtns = document.querySelectorAll('[id$="-no-' + cid + '"]');
+  const _sel = _idx === null ? null
+    : document.querySelectorAll('[id$="-ok-' + cid + '-' + _idx + '"], [id$="-no-' + cid + '-' + _idx + '"]');
   const _disable = (els, dis) => { for(let i=0;i<els.length;i++){ els[i].disabled = dis; } };
-  _disable(_okBtns, true);
-  _disable(_noBtns, true);
+  // ★ 逐项决策：只锁当前项按钮，其余项仍可点；整批决策才锁全部。
+  if(_idx !== null){
+    _disable(_sel, true);
+  } else {
+    _disable(_okBtns, true);
+    _disable(_noBtns, true);
+  }
   try{
     // ★ 2026-10-23：**不再传 decided_by**。
     //   原代码硬编码 decided_by:'王工'，会把虚构人名写进审计流水（"谁批准的"不可追责）。
@@ -1087,13 +1096,15 @@ async function hilInlineDecide(cid, approve){
     //   不一致 ⇒ 409 ⇒ **不执行**（防"确认单挂起期间版本已变、批准后写到错的地方"）。
     const _ev = (window._hilVerMap || {})[cid] || '';
     const _body = {approve: !!approve};
+    // ★ 逐项决策：带 decisions 数组走后端 decide_items；无则整批（旧行为）
+    if(_idx !== null) _body.decisions = [{item_index: _idx, approve: !!approve}];
     if(_ev) _body.expected_version = _ev;
     const r = await api('/api/studio/hil-confirmations/' + cid + '/decide',
                         {method:'POST', body:JSON.stringify(_body)});
     // 409 版本不一致：不执行，恢复按钮可重试（用户需重新定位）
     if(r && r.status === 'version_mismatch'){
-      _disable(_okBtns, false);
-      _disable(_noBtns, false);
+      if(_idx !== null){ _disable(_sel, false); }
+      else { _disable(_okBtns, false); _disable(_noBtns, false); }
       procUpsert('hil_' + cid, {status:'failed', statusText:'⚠ 确认单已过期 · 未执行'});
       if(window.toast && toast.error) toast.error(r.error || '确认单已过期，未执行');
       return;

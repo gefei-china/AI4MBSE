@@ -803,6 +803,9 @@ class MemoryMixin:
         try:
             if report_type == "impact":
                 card = self._card_impact(retrieval)
+                # ★ 2026-11-27：图数据只被拼成 prompt 文本 ⇒ 产物永远没有「变更影响图谱」。
+                #   在这里暂存一份，由 _report_card_fields 写进 card_data → artifacts.meta.graph。
+                self._last_impact_graph = card
                 src = card.get("change_source")
                 src_txt = src.get("name") if isinstance(src, dict) else "-"
                 lines = [f"变更源：{src_txt}",

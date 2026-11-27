@@ -983,6 +983,17 @@ def _archive_artifacts(conn, conversation_id: int, message_id: int,
                            # ★ 顶层也放一份：嵌套在 meta.meta 里对下游太深、
                            #   实测被漏读（同 review 的处理纪律）。
                            "delivery_contract": _dc}
+                    # ★ 2026-11-27（变更影响图谱缺失根因闭合）：影响图数据此前只活在
+                    #   prompt 上下文/报告第4章 Mermaid 源码，从不落产物 ⇒ 用户看不到
+                    #   「对应的变更影响图谱」。这里把 card_data 里的图数据随报告落库
+                    #   （与 2026-09-16 旧产物 meta.graph 同构，前端 04-artifacts.js 可渲染）。
+                    _graph = {}
+                    for _gk in ("impact_nodes", "impact_edges", "change_source",
+                                "impact_levels", "depth", "direction", "risk_analysis"):
+                        if cd.get(_gk) not in (None, "", [], {}):
+                            _graph[_gk] = cd.get(_gk)
+                    if _graph:
+                        _am["graph"] = _graph
                     if _review:
                         # ★ 顶层也放一份：让 `meta.review.score` 可被直接查询
                         #   （嵌套在 meta.meta.review 里对下游太深，易被漏读）。

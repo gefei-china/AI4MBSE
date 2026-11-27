@@ -102,8 +102,14 @@ def decide_hil_confirmation(cid: int, body: dict | None = None, conn=Depends(db_
     # ★ 2026-10-28（写前确认 HITL）：乐观锁 `expected_version` ——
     #   确认单挂起期间平台坐标可能已变（versionId 变了 / 父容器被删），
     #   批准时必须比对，不一致则**不执行**、要求模型重新定位（否则会写到错的地方）。
-    r = HILService.decide(conn, cid, bool(body.get("approve")), _decider,
-                           expected_version=str(body.get("expected_version") or ""))
+    # ★ 2026-11-27：批内逐条决策 —— body.decisions=[{item_index, approve}] 时走
+    #   逐条路径；无 decisions 时完全走旧行为（单 approve 布尔），向后兼容。
+    _decisions = body.get("decisions")
+    if isinstance(_decisions, list) and _decisions:
+        r = HILService.decide_items(conn, cid, _decisions, _decider)
+    else:
+        r = HILService.decide(conn, cid, bool(body.get("approve")), _decider,
+                               expected_version=str(body.get("expected_version") or ""))
     exec_note = ""
     # ★ B2-5（2026-11-18）：不可逆动作的自批拦截。必须给**可操作**的说明，
     #   否则用户只会看到"点批准没反应"，不知道要换人批。
@@ -121,7 +127,7 @@ def decide_hil_confirmation(cid: int, body: dict | None = None, conn=Depends(db_
                      "请重新定位后再试，本次**未执行**。"
                      % (r.get("expected_version"), r.get("payload_version")),
             "status": "version_mismatch", "executed": False}, 409)
-    if r.get("status") == "approved":
+    if r.get("status") in ("approved", "partial"):
         row = HILService.get(conn, cid) or {}
         _run_id = int(row.get("run_id") or 0)
         _task_key = str(row.get("task_key") or "")
@@ -287,7 +293,7 @@ def decide_hil_confirmation(cid: int, body: dict | None = None, conn=Depends(db_
                 print("[hil] ⚠️ 取原请求失败（回灌文案将缺上下文）: %s: %s"
                       % (type(_oe).__name__, str(_oe)[:150]))
         from services.hil_service import build_resume_text as _brt
-        if r.get("status") == "approved":
+        if r.get("status") in ("approved", "partial"):
             r["resume_text"] = _brt(_act_final, r.get("exec_result") or {}, True,
                                     original_input=_orig_input)
         elif r.get("status") == "rejected":

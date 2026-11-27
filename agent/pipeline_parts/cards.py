@@ -658,6 +658,36 @@ class CardMixin:
                 except Exception:
                     continue
 
+    def _report_card_fields(self, intent, content, user_input="") -> dict:
+        """报告类意图：在**落库前**把结构化章节写进 card_data（2026-11-27 根因闭合）。
+
+        此前 `report = _rg.structure(...)` 在落库之后才算、只进 SSE done 事件，
+        card_data 里根本没有 sections/report ⇒ `_archive_artifacts` 复用修复是死代码，
+        产物恒为单节「正文」。这里统一算一次，流式/非流式两条路径共用。
+
+        返回空 dict 表示非报告意图（零行为变更）。失败时返回空 dict（fail-safe）。
+        """
+        if intent != "report_generation":
+            return {}
+        try:
+            from services.report_generator import report_generator as _rg
+            _rtype = _rg.detect_report_type(str(user_input or "")[:120]
+                                            + " " + str(content or "")[:80])
+            _rep = _rg.structure(str(user_input or "")[:80], content or "",
+                                 report_type=_rtype)
+            _out = {"report": _rep, "sections": _rep.get("sections") or [],
+                    "report_type": _rtype}
+            # 变更影响图谱：_build_report_material 暂存的图数据随报告落库
+            if _rtype == "impact":
+                _g = getattr(self, "_last_impact_graph", None) or {}
+                for _gk in ("impact_nodes", "impact_edges", "change_source",
+                            "impact_levels", "depth", "direction", "risk_analysis"):
+                    if _g.get(_gk) not in (None, "", [], {}):
+                        _out[_gk] = _g[_gk]
+            return _out
+        except Exception:
+            return {}
+
     def _build_rich_card(self, intent, retrieval, branch, user_input="", provider_id=None):
         """Build structured card data based on intent type."""
         if intent == "requirement_analysis":

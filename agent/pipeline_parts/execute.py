@@ -983,8 +983,22 @@ class ExecuteMixin:
                         # ★ 2026-10-17：ask_user 人在回路澄清 —— 记录信号并中断 ReAct 循环
                         #   （不再喂 tool_result、不再继续探测：等用户回答后续跑）
                         if isinstance(result, dict) and result.get("clarify_required"):
-                            _clarify_req = result.get("clarify") or {}
-                            break
+                            # ★ 2026-11-27：多题归一化 + 已答去重（防「确认后又问同一题」）
+                            from agent.clarify_dedup import as_question_list, filter_questions
+                            from database import db_conn as _dedup_db
+                            _iqs = as_question_list(result)
+                            try:
+                                with _dedup_db() as _c_dedup:
+                                    _iqs = filter_questions(_iqs, _c_dedup, conversation_id,
+                                                            user_input=user_input)
+                            except Exception:
+                                pass
+                            if _iqs:
+                                _clarify_req = {"clarify_questions": _iqs, "clarify": _iqs[0]}
+                                break
+                            # 全部已答 ⇒ 不当澄清处理，让 ReAct 继续（不弹空卡、不空转）
+                            result = {"ok": True, "result": "所有待确认问题此前已回答，无需重复确认"}
+                            _t_res = result["result"]
                         _t_res = str(result.get("result") or "")
                         # ★ 2026-10-17（米爸反馈4）：识别工具结果里的完整 SysML 文档
                         #   （智源导出 READ 的 JSON 信封 / 裸文本源码），persist 时归档。
@@ -1300,7 +1314,8 @@ class ExecuteMixin:
         #   **不能**落进下面的常规落库段：那会写一条 llm_content 可能为空的 assistant
         #   消息（UI 上多一个空气气泡），且 pending_clarify 没挂起（用户无法作答）。
         if _clarify_req:
-            _iqs = [dict(_clarify_req)]
+            from agent.clarify_dedup import as_question_list
+            _iqs = as_question_list(_clarify_req)
             _mid = 0
             if not dry_run and conversation_id:
                 try:
@@ -1326,6 +1341,17 @@ class ExecuteMixin:
             "model": llm_meta.get("model", "-"),
             "used_mock": llm_meta.get("used_mock", True),
             "latency_ms": llm_meta.get("latency_ms", 0),
+        }
+        # ★ 2026-11-27（统计不见根因）：非流式直行路径从未写 usage/summary，
+        #   刷新后统计全丢。这里在 card_data 构造前固化（与 stream.py 同口径）。
+        _card_usage = {
+            "tokens": int(llm_meta.get("total_tokens") or
+                          ((llm_meta.get("prompt_tokens") or 0) +
+                           (llm_meta.get("completion_tokens") or 0)) or 0),
+            "prompt_tokens": int(llm_meta.get("prompt_tokens") or 0),
+            "completion_tokens": int(llm_meta.get("completion_tokens") or 0),
+            "elapsed_ms": int(llm_meta.get("latency_ms") or 0),
+            "tool_calls": len(_ac_tools_hist or []),
         }
         # SysML v2 视图联动：LLM 输出含 SysML 代码 → 解析并投影各视图 ViewModel（会话内即时预览，不落库）
         # 2026-09-20：正文无代码时用工具层缓存补回（见 _ensure_sysml_from_tools 的说明）
@@ -1372,9 +1398,11 @@ class ExecuteMixin:
                     (conversation_id, "user", user_input, "text", json.dumps(_att_explicit, ensure_ascii=False))
                 )
                 # Assistant message
-                card_data = json.dumps({
+                _card_obj = {
                     "intent": intent,
                     "agent": agent_def.name,
+                    # ★ 2026-11-27：报告结构落库前写入（与 stream.py 同构）
+                    **self._report_card_fields(intent, llm_content, user_input),
                     "hil_level": hil_level,
                     "kb_tags": kb_tags,
                     "skill_hits": self._last_skill_hits,   # P1/P3：自动触发技能（可观测）
@@ -1389,7 +1417,14 @@ class ExecuteMixin:
                     "sysml_views": sysml_views,
                     "submitted_by": audit_user(user) if isinstance(user, dict) else "会话发起人",
                     **self._build_rich_card(intent, retrieval, branch, user_input, provider_id),
-                }, ensure_ascii=False)
+                }
+                # ★ 2026-11-27：在落库前固化 usage/summary（刷新后统计不丢）
+                try:
+                    from agent.pipeline_parts.stream import _attach_usage_summary
+                    _card_obj = _attach_usage_summary(_card_obj, llm_content, _card_usage)
+                except Exception:
+                    _card_obj["usage"] = _card_usage
+                card_data = json.dumps(_card_obj, ensure_ascii=False)
                 # ★ 2026-11-19：结构化留痕注入（见 core/attempt_trace.attach）。
                 #   · 单次生成 ⇒ attempts 为空 ⇒ attach 原样返回（向后兼容，零字段膨胀）；
                 #   · 多次生成 ⇒ exec.attempts 存历次原文，content 仍是收敛后的最终版。

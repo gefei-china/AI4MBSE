@@ -481,6 +481,12 @@ function renderMessage(m) {
     if(_ans){
       if(_ans.skipped){
         _ansHtml = `<div style="margin-top:6px;font-size:12.5px;color:var(--mut);">已跳过确认，按现有信息继续执行</div>`;
+      } else if((_ans.answers_detail||[]).length){
+        const _parts = (_ans.answers_detail||[]).map(x=>{
+          const _q = x.question ? esc(x.question)+' → ' : '';
+          return _q + '<b>' + esc(x.value||'') + '</b>';
+        });
+        _ansHtml = `<div style="margin-top:6px;font-size:12.5px;">✓ 已回答：${_parts.join('；')}</div>`;
       } else if((_ans.answers||[]).length){
         _ansHtml = `<div style="margin-top:6px;font-size:12.5px;">✓ 已回答：<b>${esc((_ans.answers||[]).join('；'))}</b></div>`;
       }

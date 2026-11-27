@@ -3208,6 +3208,24 @@
    "tier": "pr",
    "timeout": 180,
    "reason": "2026-11-27 新增（19 项 + 3 变异）：用户要求「保存记忆时必须告知」。A区验 deposit 五出口(created/dedup/revived/blocked/skipped)与文案；B区验 stream×2 + orchestration + 前端 esc 四处接线；C区三条变异证明判据有牙。夹具驱动，不依赖服务与 LLM，可入 pr 层。"
+  },
+  {
+   "script": "verify_ask_user_multi_question.py",
+   "tier": "pr",
+   "timeout": 60,
+   "reason": "ask_user 多题与去重门禁（2026-11-27）：多题产出 id 唯一（前端 radio 分组）、已答指纹去重（含 skip）、显式改主意不过滤、结构化答案 answers_detail 题目↔答案对应、旧扁平形态兼容。变异自证 1 组。零写库、实测 17/17。"
+  },
+  {
+   "script": "verify_hil_item_decisions.py",
+   "tier": "pr",
+   "timeout": 60,
+   "reason": "HIL 批内逐条决策门禁（2026-11-27）：batch_items 逐项 decision/result、已决不覆盖、partial 可再进入、reject 跳过、item 幂等、缺省 approve 兼容老数据、前端平铺逐项按钮。变异自证 1 组。内存库，实测 26/26。"
+  },
+  {
+   "script": "verify_usage_stats_paths.py",
+   "tier": "pr",
+   "timeout": 60,
+   "reason": "统计固化门禁（2026-11-27）：token 入/出口径（prompt+completion）、stream/execute 两条主落库路径全覆盖、execute 落库前 attach usage。源码覆盖范围断言+变异自证，实测 13/13。"
   }
  ]
 }
