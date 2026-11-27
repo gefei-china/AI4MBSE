@@ -1,6 +1,7 @@
 """GraphRAG（实体链接 + 子图遍历 + 向量降级）+ ConflictDetector（冲突检测）。"""
 import os
 import re
+import copy
 import json
 import time
 import uuid
@@ -28,6 +29,91 @@ def _cfg_bool(value, default=False) -> bool:
     if isinstance(value, bool):
         return value
     return str(value).strip().lower() in ("1", "true", "yes", "on")
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# 长输入压缩：整篇提示词不能当检索串（2026-11-27 实测问题）
+# ══════════════════════════════════════════════════════════════════════════
+# 实测（conv 1000000246，10:20:05）：用户把 2665 字的需求说明整段发给 Agent，
+# 上游 `retrieve_query = user_input + …` 原样送检索 ⇒
+#   · 检索耗时 **42.7 秒**（同一 query 在 10:21:29 / 10:21:48 又各跑一次，无去重）
+#   · 命中 19 条全是同一两个文档的相邻 chunk，top 分 0.197
+#   · 领域词（低空预警雷达 / 目标搜索 / 航迹）**0 命中**
+# ⇒ 长串做 query 既慢又糊：向量落在"一大段话"的语义重心上，具体术语被稀释。
+#
+# 判据刻意做成**确定性**的（不调模型，避免为"怎么问"再付一次 LLM 成本）：
+#   · 按空行/换行切段，每段取**首句** —— 需求文档与粘贴的提示词里，段首句信息密度最高
+#     （"1. 背景：…" / "2. 功能要求：…"）
+#   · 按句末标点对齐截断，不把句子切成半截
+#   · 超过上限即停，总长 ≤ limit
+# ⚠️ 调用方必须**只压缩用户原话那一段**，槽位实体 / kb_hint / 附件摘要要**在压缩之后**拼，
+#   否则它们会被截掉（它们本来就在串尾）。见 stream.py / execute.py 的两处拼装。
+
+def compact_query(query: str, limit: int = 300) -> str:
+    """把长输入压成 ≤ limit 字的检索串（确定性、保句子边界）。短输入原样返回。"""
+    q = (query or "").strip()
+    if limit <= 0 or len(q) <= limit:
+        return q
+    parts, total = [], 0
+    for block in re.split(r"[\r\n]+", q):
+        block = block.strip()
+        if not block:
+            continue
+        # 每段只取首句（句末标点后切）。整段无句号时退化为该段本身。
+        sent = re.split(r"(?<=[。！？!?；;])", block)[0].strip() or block
+        room = limit - total
+        if room <= 0:
+            break
+        if len(sent) > room:
+            # 尽量在逗号处收尾，读起来仍是一个完整意群
+            cut = sent[:room]
+            pos = max(cut.rfind("，"), cut.rfind(","), cut.rfind("、"))
+            sent = cut[:pos + 1] if pos >= room * 0.6 else cut
+        parts.append(sent)
+        total += len(sent) + 1
+        if total >= limit:
+            break
+    out = " ".join(parts).strip()
+    return (out or q[:limit])[:limit]
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# 检索结果短期缓存（2026-11-27）
+# ══════════════════════════════════════════════════════════════════════════
+# 实测：同一 query 在 10:21:29 与 10:21:48 各检索一次（19s 内），两条 trace 的
+# hits/top_score 完全相同 ⇒ 纯粹重复劳动（每次约 1.4s + 一次 embedding 计费）。
+# 为什么用**短 TTL 进程内缓存**而不是持久缓存：
+#   · 知识库会持续入库，长 TTL 会让"刚传的文档搜不到"（比慢更糟）；
+#   · 120s 覆盖"同一轮里多次拼装同一 query"和"用户连点两次"，
+#     超出窗口的重复本就该重新检（内容可能已变）。
+# 失效条件：超 TTL / 变更 query / branch / kb_scope / 带附件（附件命中是请求私有的）。
+_RET_CACHE: dict = {}
+_RET_CACHE_MAX = 64
+
+
+def _cache_get(key, ttl):
+    ent = _RET_CACHE.get(key)
+    if not ent:
+        return None
+    ts, val = ent
+    if (time.time() - ts) > ttl:
+        _RET_CACHE.pop(key, None)
+        return None
+    return val
+
+
+def _cache_put(key, val):
+    if len(_RET_CACHE) >= _RET_CACHE_MAX:
+        try:
+            _RET_CACHE.pop(min(_RET_CACHE.items(), key=lambda kv: kv[1][0])[0], None)
+        except Exception:
+            _RET_CACHE.clear()
+    _RET_CACHE[key] = (time.time(), val)
+
+
+def clear_retrieval_cache() -> None:
+    """清空检索缓存（入库/重建索引后调用；门禁也用它保证可重复）。"""
+    _RET_CACHE.clear()
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -145,8 +231,56 @@ class GraphRAG:
         #   这条赋值必须留在函数体最前面 —— 它是"原话只在此刻存在"的唯一窗口，
         #   一旦挪到归一化之后，记下来的就又是被替换过的串，且**看不出来**。
         _query_raw = query_raw if isinstance(query_raw, str) and query_raw.strip() else query
+        # ★ 2026-11-27：超长输入兜底压缩。正常路径由调用方（stream/execute）在拼装时
+        #   就压到 `rag.query_max_chars`（默认 300），此处只挡"直连调用"把整篇文档当
+        #   query 的形态（> hard 上限），避免 40s 级检索与语义稀释。
+        _q_hard = int(_cfg_get("rag", "query_max_chars_hard", 1200) or 0)
+        _q_compacted = False
+        if _q_hard > 0 and isinstance(query, str) and len(query) > _q_hard:
+            query = compact_query(query, _q_hard)
+            _q_compacted = True
         conn = get_db()
         t0 = time.time()
+        # ★ 2026-11-27：同 query 短期缓存（见 `_RET_CACHE` 注释）。
+        #   带附件时不缓存：附件命中是**请求私有**的（attachment_text 参与了命中计算）。
+        _cache_ttl = int(_cfg_get("rag", "cache_ttl_s", 120) or 0)
+        _cache_key = None
+        if _cache_ttl > 0 and not attachment_text:
+            try:
+                _cache_key = (query, str(branch),
+                              json.dumps(kb_scope or {}, sort_keys=True,
+                                         ensure_ascii=False, default=str))
+            except Exception:
+                _cache_key = None
+        if _cache_key is not None:
+            _cached = _cache_get(_cache_key, _cache_ttl)
+            if _cached is not None:
+                out = copy.deepcopy(_cached)
+                out["cache_hit"] = True
+                out["latency_ms"] = int((time.time() - t0) * 1000)
+                # 命中也要落 trace：否则"同一 query 重复检索"在统计里完全消失，
+                # 零命中率的分母会悄悄变小（分母失真是本仓踩过的老坑）。
+                try:
+                    from core.domain.glossary import trace_query as _tq
+                    _hits = (out.get("chunk_hits") or out.get("vector_docs") or [])
+                    _tq(conn, query, {
+                        "normalized": query, "query_raw": _query_raw,
+                        "intent": "knowledge_qa", "route": out.get("route") or "vector",
+                        "domain": "all",
+                        "hit_docs": [str((h or {}).get("source_doc") or "")[:200]
+                                     for h in _hits[:5]],
+                        "hit_count": len(_hits),
+                        "top_score": out.get("confidence") or 0,
+                        "score_kind": "cache",
+                        "latency_ms": out["latency_ms"],
+                        "detail": {"cache_hit": True,
+                                   "cached_latency_ms": _cached.get("latency_ms"),
+                                   "query_compacted": _q_compacted},
+                    })
+                except Exception:
+                    pass
+                conn.close()
+                return out
         # P0-b M4：rag span（会话级 trace）。开在入口——AST 验证本函数体
         # （L126-428）只有 L398 一个 return ⇒ 单点闭即全覆盖；异常路径不闭
         # 也不留假象：SpanCollector.flush 对未闭 span 按 error 收口并带
@@ -838,7 +972,7 @@ class GraphRAG:
                                       top_score=_top, latency_ms=latency_ms)
             except Exception:
                 pass   # 观测收口失败绝不阻断检索主链路
-        return {
+        _result = {
             "source": route,  # 兼容旧字段：graph | mixed | vector
             "route": route,   # P1: 双引擎路由决策
             "route_reason": reason,
@@ -878,7 +1012,17 @@ class GraphRAG:
                        "entities_dropped": int(_tenant_dropped),
                        "frozen": True,   # 标记：本链路按架构决策不做项目隔离（勿据此判断"已隔离"）
                        },
+            # ★ 2026-11-27：本次结果是否来自短期缓存 / 入口是否做过超长压缩。
+            #   回显而不是只写日志：调用方（卡片、执行详情）可据此区分"检索慢"与"命中缓存"。
+            "cache_hit": False,
+            "query_compacted": _q_compacted,
         }
+        if _cache_key is not None:
+            try:
+                _cache_put(_cache_key, copy.deepcopy(_result))
+            except Exception:
+                pass
+        return _result
 
     @staticmethod
     def _group_by_category(conn, entities: list) -> dict:
@@ -1221,7 +1365,8 @@ class GraphRAG:
         """
         stats = {
             "nominal": len(chunk_hits or []), "kept": len(chunk_hits or []), "dropped": 0,
-            "floor": 0.0, "all_low": False, "strong_bm25_exempt": False, "degraded": False,
+            "floor": 0.0, "floor_all": 0.0, "all_low": False,
+            "strong_bm25_exempt": False, "degraded": False,
         }
         if not chunk_hits:
             return [], stats
@@ -1230,9 +1375,19 @@ class GraphRAG:
             if not _cfg.as_bool("rag", "suppress_low_confidence", True):
                 return chunk_hits, stats          # 开关关闭 ⇒ 完全不过滤（旧行为）
             floor = float(_cfg.get("rag", "low_conf_floor", 0.15) or 0.0)
+            # ★ 2026-11-27：**混合批次**（不是全低）也要有下限。
+            #   事故实证（conv 1000000246，02:20:05）：19 条命中 relevance 低至 0.197，
+            #   但 `all_low=false` ⇒ 旧实现**一条都没过滤**（kept=19 / dropped=0），
+            #   19 条噪声全进了上下文。
+            #   为什么单独一个键：全低批次的门槛（0.15）是为**降级态**设的
+            #   （bigram 时分数系统性塌陷，用正常门槛会把切题也砍掉，那是更坏的故障）。
+            #   而正常态混合批次里，切题命中实测 relevance 0.405~0.826，
+            #   0.30 落在"垃圾(0.197) 与 切题(≥0.405)"之间的空隙里。
+            floor_all = float(_cfg.get("rag", "low_conf_floor_all", 0.30) or 0.0)
         except Exception:
-            floor = 0.15
+            floor, floor_all = 0.15, 0.30
         stats["floor"] = floor
+        stats["floor_all"] = floor_all
 
         # 降级判定：优先用 knowledge_engine 如实上报的 `vector_mode`（唯一可信来源）。
         # 为什么要标：降级时"低置信"是**系统性塌陷**（实测 vec 0.07~0.29 vs 真向量 0.4~0.8）
@@ -1259,6 +1414,30 @@ class GraphRAG:
         # 只有"全批低"才进入过滤；否则原样返回（高/中置信说明召回本身健康）
         _all_low = all(str(h.get("confidence_level") or "") == "低" for h in chunk_hits)
         stats["all_low"] = _all_low
+
+        # ★ 2026-11-27：**正常态混合批次**的逐条下限（新分支，见 floor_all 的说明）。
+        #   · 降级态（bigram）不启用：分数不可比，砍了就是"静默清零"那个老故障；
+        #   · 全低批次不走这里：下面按 `floor`(0.15) 的老口径处理，行为不变；
+        #   · 至少保留 1 条（top1）：宁少给也不清空 —— 清空的代价是模型完全没有依据。
+        if (not _all_low) and (not stats.get("degraded")) and floor_all > 0:
+            _scored = [(self._relevance_of(h), h) for h in chunk_hits]
+            _kept = [(r, h) for (r, h) in _scored if r >= floor_all]
+            if not _kept:                      # 全都不够也留最好的那条
+                _kept = [max(_scored, key=lambda x: x[0])]
+            if len(_kept) < len(_scored):
+                _out = []
+                for r, h in _kept:
+                    h = dict(h)
+                    h["relevance"] = round(r, 4)
+                    _out.append(h)
+                stats["kept"] = len(_out)
+                stats["dropped"] = len(_scored) - len(_out)
+                stats["filtered_by"] = "floor_all"
+                return _out, stats
+            for r, h in _scored:               # 未丢任何条：仍回填 relevance（可观测）
+                h["relevance"] = round(r, 4)
+            return chunk_hits, stats
+
         if not _all_low:
             return chunk_hits, stats
 

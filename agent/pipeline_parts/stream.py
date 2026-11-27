@@ -5825,7 +5825,20 @@ class StreamMixin:
             self._citation_registry = []
             if should_retrieve:
                 yield {"type": "stage", "name": "知识库检索", "status": "run"}
-                retrieve_query = user_input + kb_hint
+                # ★ 2026-11-27：先压用户原话再拼槽位/附件（与 execute.py 成对，口径必须一致）。
+                #   实测：2665 字整段当 query ⇒ 42.7s、命中全是同两个文档的相邻 chunk、
+                #   领域词 0 命中。槽位实体与附件摘要在串尾，先拼后压会被截掉。
+                _qcap = 0
+                try:
+                    from core import config as _cfg_q
+                    _qcap = int(_cfg_q.get("rag", "query_max_chars", 300) or 0)
+                except Exception:
+                    _qcap = 300
+                _q_user = user_input
+                if _qcap > 0 and len(_q_user or "") > _qcap:
+                    from agent.rag import compact_query as _compact
+                    _q_user = _compact(_q_user, _qcap)
+                retrieve_query = _q_user + kb_hint
                 # ★ 2026-11-19：短输入时压低实体上限（见 _slot_entity_cap 的说明）
                 slot_ents = [str(e) for e in (slots.get("entities") or []) if str(e)][
                     :_slot_entity_cap(user_input)]

@@ -1187,6 +1187,29 @@ DEFAULT_CONFIG = {
         #   标定：实测切题 relevance 0.273~0.632，域外 0.069 ⇒ 门槛 0.15 落在可分间隙内。
         #     ⚠️ 该标定仅 6 条样本，只证明"可分"不证明"最优"；扩到 200 条 qrels 后必须重算。
         "low_conf_floor": 0.15,
+        # ★ 2026-11-27（事故驱动）：**混合批次**的逐条下限（新键，与上面那个**分工不同**）。
+        #   事故实证（conv 1000000246，02:20:05）：19 条命中 relevance 低至 0.197，
+        #   但批次里混着「中/高」⇒ `all_low=false` ⇒ 旧实现一条都不过滤（kept=19/dropped=0），
+        #   19 条噪声全部进上下文。旧键 `low_conf_floor` 只在**全批低**时生效，够不着这种形态。
+        #   为什么旧键不能直接抬高：它是为**降级态**（embedding 502 → bigram）设的，
+        #   那时分数系统性塌到 0.07~0.29，用正常门槛会把切题命中一起砍光（2026-11-01 的静默清零故障）。
+        #   标定（2026-11-27，真库 4 条切题 query）：切题 relevance 0.405~0.826；
+        #   域外查询 0 命中；事故垃圾批次 0.197 ⇒ 0.30 落在空隙内。
+        #   保护：全批都不够时**至少保留 top1**（宁少给不清空）。
+        #   置 0 = 关闭本层（回到逐字旧行为）。
+        "low_conf_floor_all": 0.30,
+        # ★ 2026-11-27：检索串长度上限。实测 2665 字整篇当 query ⇒ 检索 42.7s、
+        #   命中 19 条全是同两个文档的相邻 chunk、领域词 0 命中（长串的语义重心被稀释）。
+        #   调用方（stream/execute）按本值压缩**用户原话**，槽位实体/附件摘要随后再拼。
+        #   0 = 不压缩（旧行为）。
+        "query_max_chars": 300,
+        # 兜底：直连调用（工具/脚本）传进来的串超过本值才在 retrieve() 内压缩，防"把整篇文档当 query"。
+        "query_max_chars_hard": 1200,
+        # ★ 2026-11-27：同一 query 的短期结果缓存（秒）。实测 10:21:29 与 10:21:48
+        #   同一 query 各检索一次，hits/top 完全相同（纯重复劳动 + 一次 embedding 计费）。
+        #   只缓存进程内、只 120s：知识库持续入库，长 TTL 会让"刚传的文档搜不到"。
+        #   0 = 关闭缓存。
+        "cache_ttl_s": 120,
         # ★ 2026-11-01（P0-1b 拒答）：域外问题的"整体拒答"门槛。
         #   与 low_conf_floor 是**两层**语义，别混：
         #     low_conf_floor → 逐条过滤（去掉明显无关的，留下真命中）
@@ -2556,6 +2579,10 @@ CONFIG_SCHEMA = {
         "relation_relevance_gate": {"type": "bool", "desc": "图谱置信度关系因子只计入与 query 相关的关系（两端实体名均在 query 中）；False=旧行为全量计数"},
         "suppress_low_confidence": {"type": "bool", "desc": "低置信检索抑制：全批「低」置信时不返回任何向量内容（neg 域收敛）；False=旧行为"},
         "low_conf_floor": {"type": "float", "desc": "低置信过滤分数门槛（0~1）：全批低置信时只保留 relevance ≥ 该值的条目；relevance=max(vec,bm25/50)。0=不过滤（等价旧的一刀切保留）"},
+        "low_conf_floor_all": {"type": "float", "desc": "混合批次的逐条下限（0~1）：正常态下 relevance 低于该值的命中一律不进上下文（至少保 top1）；0=关闭本层。降级态不启用"},
+        "query_max_chars": {"type": "int", "desc": "检索串长度上限（字符）：超长输入先压成检索词再检索；0=不压缩"},
+        "query_max_chars_hard": {"type": "int", "desc": "retrieve 内兜底阈值：直连调用传入的串超过该长度才在检索层压缩；0=关"},
+        "cache_ttl_s": {"type": "int", "desc": "同 query 检索结果进程内缓存秒数（0=关闭）"},
         "reject_max_score": {"type": "float", "desc": "域外拒答门槛（最高分）：向量路由且图谱无命中时，若 top1 relevance 与均值都低于本档则整体拒答"},
         "reject_avg_score": {"type": "float", "desc": "域外拒答门槛（均分）：与 reject_max_score **同时**低于才拒答（任一超标即放行，宁少拒不误杀）"},
         "chunk_content_chars": {"type": "int", "desc": "检索命中内容的返回长度上限（字符）：0=不截断；默认 1200。仅影响注入/工具返回，不影响前端 citations（另有 800 上限）"},
