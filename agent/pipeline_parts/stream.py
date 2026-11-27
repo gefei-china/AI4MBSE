@@ -2000,7 +2000,20 @@ class StreamMixin:
                             if last_res[2]:
                                 return last_res
                         else:
-                            # 超时：不等待线程（后台继续运行），标记 error 含 "timeout"
+                            # ★ 2026-11-27（超时治理）：超时不再"放任后台线程自然结束" ——
+                            #   落一个协作式取消意图（TaskQueue.cancel），跑在后台线程里的
+                            #   _run_subtask 在下一次产出时会经 _cancel_probe 看到并 break。
+                            #   ⚠️ 必须用**独立连接**：主 conn 此时可能持未提交写事务（同
+                            #   _cancel_probe 的纪律）；也不能强杀线程（LLM 流/DB 事务泄漏）。
+                            #   飞行中的那一次 LLM 调用仍会跑完，但后续步骤全部跳过。
+                            from agent.orch_timeout import request_timeout_cancel as _req_cancel
+                            if _req_cancel(tk["id"], _stall):
+                                logger.warning("[orch] 子任务 %s 超时(%s)：已请求协作式取消",
+                                               tkey, _stall)
+                            else:
+                                logger.warning("[orch] 子任务 %s 超时(%s)：取消意图未落库（任务已终态或异常）",
+                                               tkey, _stall)
+                            # 超时：不等待线程（后台在最近的安全点收敛），标记 error 含 "timeout"
                             # ★★ 2026-10-30（长任务治理）：**把已产出的正文带回来**。
                             #   改前 payload 硬写 `""` ⇒ 子任务跑了 240s、吐出几千字，
                             #   却对下游表现为"什么都没做" ⇒ 整批降级（真库 63/76 失败即此类）。
@@ -3220,7 +3233,11 @@ class StreamMixin:
                                 except Exception:
                                     pass
                             else:
-                                TaskQueue.fail(conn, tk["id"], _t_err or "子任务未产生输出")
+                                # ★ 2026-11-27：超时已请求协作式取消 ⇒ 任务行保持 cancelled，
+                                #   不能再被 fail() 覆写成 failed（resume 据此重排队）。
+                                from agent.orch_timeout import was_timeout_cancelled as _was_cancel
+                                if not _was_cancel(conn, tk["id"]):
+                                    TaskQueue.fail(conn, tk["id"], _t_err or "子任务未产生输出")
                                 # ★ P1 replanning（2026-10-21，v2 §4.6）：任务失败点
                                 #   判定 + 决策记录。每次失败落一条 kind=replan span
                                 #   （**含 action=none** —— "为什么不补跑"与"为什么补跑"
