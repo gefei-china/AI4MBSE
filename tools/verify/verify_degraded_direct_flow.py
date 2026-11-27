@@ -66,12 +66,68 @@ GUARDED = ["_gate_gaps", "_fill_verdicts", "_fill_filled", "_fill_patch",
            "_orch_tool_counts", "_orch_probe_caps", "_orch_val_stalls"]
 
 results = []
+skipped = []
 
 
 def chk(tag, ok, detail=""):
     results.append((tag, bool(ok), detail))
     print(("  PASS " if ok else "  FAIL ") + tag + ("  | " + detail if detail else ""))
     return ok
+
+
+def skip(tag, detail=""):
+    """不算 PASS、也不算 FAIL —— 但**绝不能**静默当成通过（假绿）。"""
+    skipped.append((tag, detail))
+    print("  SKIP " + tag + ("  | " + detail if detail else ""))
+
+
+# ══════════════════════════════════════════════════════════════════
+# D0 排他守卫：绝不把全局 mock 开关翻在一个**正被使用**的服务上
+#
+# 2026-11-27 事故（本脚本上一版，入口 prep_degraded_render.py）：
+#   10:19 用户发起真实建模任务 → 10:20:55 门禁 PUT llm.force_mock=true
+#   → 该会话其后 11 次 LLM 调用 used_mock=1（lat 3~10ms / out 161）
+#   → 模型被替换成固定样板，验收连续 2 次无进展 ⇒ harness 强制放行
+#   → 用户看到「任务未完成」+ 一段与需求无关的「3 个方案对比」。
+#   `llm_mock_rate_1h` 因此被打到 90.9%。
+# ⇒ 跑之前必须确认没有别的会话在跑；不确定就不要改全局配置。
+
+def _active_others(window_s=180):
+    """返回 [(kind, label)] —— 非本门禁的活跃迹象。空列表才算独占。"""
+    import sqlite3
+    hits = []
+    try:
+        c = sqlite3.connect(DB, timeout=5)
+        c.row_factory = sqlite3.Row
+        for r in c.execute("select id, conversation_id, status from agent_tasks "
+                           "where status in ('running','pending') limit 5"):
+            hits.append(("task", "任务 %s（conv %s）status=%s"
+                         % (r["id"], r["conversation_id"], r["status"])))
+        for r in c.execute("select id, title, updated_at from conversations "
+                           "where updated_at >= datetime('now', ?) "
+                           "and coalesce(title,'') not like '__degraded%' "
+                           "order by updated_at desc limit 5", ("-%d seconds" % window_s,)):
+            hits.append(("conv", "会话 %s「%s」%s 内仍有活动"
+                         % (r["id"], (r["title"] or "")[:24], window_s)))
+        c.close()
+    except Exception as e:
+        hits.append(("db", "无法确认服务是否空闲（%s）—— 保守视为忙碌" % e))
+    return hits
+
+
+def check_exclusive():
+    if os.environ.get("MBSE_GATE_ALLOW_SHARED") == "1":
+        skip("D0 排他守卫", "已显式设 MBSE_GATE_ALLOW_SHARED=1，明知会污染共享服务仍继续")
+        return True
+    hits = _active_others()
+    if hits:
+        skip("D0 排他守卫", "服务正被使用，拒绝翻全局 mock 开关")
+        for kind, label in hits:
+            print("       · " + label)
+        print("       → 改用独立实例（独立端口 + 独立库），或确认无人使用后重跑")
+        return False
+    chk("D0 排他守卫", True, "无其他活跃会话/任务，可安全临时开 mock")
+    return True
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -158,6 +214,8 @@ def check_behavior():
         return
     if not chk("D1.0 服务可访问", code == 200, "HTTP %s" % code):
         return
+    if not check_exclusive():
+        return
 
     orig = open(CFG, "rb").read()
     cid = None
@@ -230,9 +288,14 @@ def main():
     print("== D1 行为断言（真实跑一轮降级直行）==")
     check_behavior()
     bad = [t for t, ok, _ in results if not ok]
-    print("\n合计 %d 项，PASS %d，FAIL %d" % (len(results), len(results) - len(bad), len(bad)))
+    print("\n合计 %d 项，PASS %d，FAIL %d，SKIP %d"
+          % (len(results) + len(skipped), len(results) - len(bad), len(bad), len(skipped)))
     if bad:
         print("失败项：" + "; ".join(bad))
+    if skipped:
+        print("跳过项：" + "; ".join(t for t, _ in skipped))
+        print("⚠️ 行为段未验证 —— 不得据此认为降级路径正常")
+        return 2 if not bad else 1
     return 0 if not bad else 1
 
 
