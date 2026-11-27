@@ -46,9 +46,18 @@ DB = os.environ.get("MBSE_GATE_DB") or os.environ.get("MBSE_DB_PATH") or os.path
 TOOL = os.path.join(ROOT, "tools", "memory_dream_apply.py")
 
 #: 落库允许改的列（其余列必须一字不动）
-ALLOWED_COLS = {"verify_state", "evidence_ref", "evidence_note", "source_credibility"}
-#: 落库前后必须逐字节一致的列（影子语义：只改状态，不改内容/生命周期）
-FROZEN_COLS = ("content", "tier", "forgotten", "superseded_by", "access_count", "activation")
+#: ★ 2026-11-27（P0-1）：`tier` / `superseded_by` / `superseded_at` / `valid_to` /
+#:   `archived_at` 也属**允许改的状态列**，因为 apply_candidates 现在真的会落
+#:   merge（superseded_by）/ promote·demote·revive（tier）—— 这正是"候选包四分之三动作
+#:   此前是死的"那条缺陷的修复。它们仍属"状态"，不是"内容"。
+ALLOWED_COLS = {"verify_state", "evidence_ref", "evidence_note", "source_credibility",
+                "tier", "superseded_by", "superseded_at", "archived_at", "valid_to"}
+#: 落库前后必须逐字节一致的列（影子语义的**核心**：不改内容、不删行）
+#: ⚠️ `forgotten` 从本组移出（2026-11-27）：revive 的语义就是"冷层回流"，
+#:   对存量 `forgotten=1` 的归档行必须置 0 —— 否则"复活"名不副实。
+#:   代价是这一组不再覆盖生命周期列，故**另设 B2b**：行数必须不变（不许删行），
+#:   且 `content` 必须一字不动（真正不可逆的东西只有它）。
+FROZEN_COLS = ("content", "mem_type", "access_count")
 
 _PASS, _FAIL, _SKIP = [], [], []
 
@@ -126,7 +135,7 @@ def group_b():
         from core.memory_dream import dream, apply_candidates
 
         # B1：不带 hil_approved ⇒ 零写入
-        h0, _ = frozen_hash(conn)
+        h0, h0_rows = frozen_hash(conn)
         pkg = dream(conn, note_limit=30)
         res = apply_candidates(conn, pkg, hil_approved=False)
         h1, _ = frozen_hash(conn)
@@ -136,9 +145,13 @@ def group_b():
 
         # B2：带批准 ⇒ 只改允许的列
         res2 = apply_candidates(conn, pkg, hil_approved=True, approved_by="gate")
-        h2, _ = frozen_hash(conn)
-        chk("B2 落库只改状态列（content/tier/forgotten 等的 sha 必须一致）",
+        h2, n2 = frozen_hash(conn)
+        chk("B2 落库只改状态列（content/mem_type/access_count 的 sha 必须一致）",
             h2 == h0, "%s vs %s（applied=%s）" % (h0[:12], h2[:12], res2.get("applied")))
+        # B2b：**行数不变**（P0-1 的 merge 用 superseded_by 而非 forgotten=1，
+        #      更不许 DELETE —— 这是"影子语义可回退"的最后一道）
+        chk("B2b 落库不删任何行（merge 用 superseded_by，不用软删/硬删）",
+            n2 == h0_rows, "%s vs %s" % (n2, h0_rows))
 
         # B3/B4：分级过滤必须**真的在挡** contradicted（用构造包直接测，不靠"本次包内恰好没有"）
         #

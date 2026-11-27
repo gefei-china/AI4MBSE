@@ -10,9 +10,12 @@
 与 Hermes MEMORY 机制对齐的最小实现（零外部依赖，SQLite + VectorEngine）。
 """
 import json
+import logging
 import math
 import re
 import time
+
+logger = logging.getLogger("mbse.memory")
 
 from services.knowledge_engine import VectorEngine
 
@@ -117,6 +120,193 @@ class MemoryService:
             return "visible", ""
         return p, cut
 
+    # ── P2 事件埋点（2026-11-27）──────────────────────────────────────────
+    #: 事件类型白名单。**故意收窄**：只记"生命周期改变"，不记读与命中
+    #: （record_access 每次召回都会触发，记进事件表会把周报淹掉 —— 那是访问日志的活）。
+    EVENT_KINDS = ("created", "dedup_hit", "archived", "forgotten", "revived",
+                   "promote", "demote", "merged", "superseded")
+
+    @staticmethod
+    def record_event(conn, kind: str, memory_id: int = 0, agent_id: str = "",
+                     detail: str = "") -> None:
+        """写一条生命周期事件（append-only）。失败**绝不抛出** —— 埋点不能挡住维护主链路。
+
+        ⚠️ 表不存在（老库未迁移 / 单表夹具）时静默跳过：本仓纪律是
+        "新依赖必须带缺表兼容"，否则夹具库会在第一次维护时抛异常，
+        被外层 `except` 吞成"维护返回 0"（看起来像"没什么可维护"）。
+        """
+        if kind not in MemoryService.EVENT_KINDS:
+            return
+        try:
+            conn.execute(
+                "INSERT INTO memory_events (kind, memory_id, agent_id, detail) VALUES (?,?,?,?)",
+                (kind, int(memory_id or 0), str(agent_id or "")[:60], str(detail or "")[:200]))
+        except Exception as exc:  # noqa: BLE001
+            # 埋点失败不得挡住维护/写入，但**必须留痕**：否则周报的"tier 流动"会静默变 0，
+            # 而看起来像"这周没有任何流动"（本仓"静默兜底看起来像真的值"同族）。
+            logger.warning("memory_events 写入失败（kind=%s）：%s: %s",
+                           kind, type(exc).__name__, str(exc)[:120])
+
+    # ── P1-7 双时态（2026-11-27）──────────────────────────────────────────
+    @staticmethod
+    def _has_validity_col(conn) -> bool:
+        """探测 agent_memory 是否已有 valid_from/valid_to（老库/夹具缺列 → False，逐字回到旧召回）。
+
+        与 `_has_tier_col` / `_has_superseded_col` 同一套守卫纪律：
+        **缺列时绝不拼该条件**，否则 `no such column` 会让检索主链路整体报错。
+        """
+        try:
+            cols = {r[1] for r in conn.execute("PRAGMA table_info(agent_memory)").fetchall()}
+            return "valid_from" in cols and "valid_to" in cols
+        except Exception:
+            return False
+
+    @staticmethod
+    def _valid_now_clause(conn) -> str:
+        """"当前有效"过滤片段：`valid_to` 为空 = 未被取代/未过期。
+
+        ⚠️ 为什么仍要这一条（库里已有 `superseded_by` 排除）：两列语义**不重叠** ——
+        `superseded_by` 记"被谁取代"，`valid_to` 记"何时失效"。人工/运维可能只关有效期
+        而不改取代链（例如按时间到期的口径），只查一列会漏。缺列 ⇒ 空串（零行为漂移）。
+        """
+        return (" AND (valid_to IS NULL OR TRIM(valid_to)='')"
+                if MemoryService._has_validity_col(conn) else "")
+
+    @staticmethod
+    def _archive_mode(conn) -> bool:
+        """遗忘判据的落点：True=降冷层（tier='archival'，forgotten 保持 0）；False=硬遗忘（forgotten=1）。
+
+        P1-6（2026-11-27）。为什么默认归档：`forgotten` 一个字段同时承担了「不再召回」与
+        「这条没用了」两种含义 ⇒ 冷层既不可检索、也不能被 dream 复活。拆开后**召回口径不变**
+        （archival 与 forgotten 一样不进 `search`），但冷层可被
+        `search(include_archival=True)` 检索、可被 dream 复活、可人工回捞。
+        配置 `memory.forget_archives`（默认 True）；**无 tier 列**的老库/夹具强制 False（零漂移）。
+        """
+        if not MemoryService._has_tier_col(conn):
+            return False
+        try:
+            from core import config as _cfg
+            return bool(_cfg.get("memory", "forget_archives", True))
+        except Exception:
+            return True
+
+    @staticmethod
+    def near_duplicate(conn, agent_id: str, mem_topic: str, vec, ver: str,
+                       threshold: float = 0.95, exclude_id: int = 0) -> dict:
+        """写前近重复探测（P0-3，2026-11-27）：返回 `{id, sim, tier, reason}` 或 `{}`。
+
+        判据（对齐方案 P0-3「同 agent + 同 topic，余弦 ≥0.95 ⇒ 只记访问不新增」）：
+          · 同 `agent_id`；`mem_topic` 非空时**要求同 topic**（空 topic 视为未知 ⇒ 不限 topic，
+            因为"空==空"会把全库互不相关的条都算候选，而 0.95 已足够严）；
+          · 同 `embed_version` 且都有向量（不同版本的向量**物理不可比**，这是既有设计）；
+          · `forgotten=0`，但**故意包含 archival**：冷层里已有同一条事实时，正确动作是
+            复活（tier 回 recall），不是再写一条新的 —— 否则冷层会成为"重复的坟墓"。
+        无真向量（vec 为空/无 ver）⇒ 直接返回 {}（bigram 口径 0.95 不成立，宁可不判）。
+
+        ⚠️ 这是**写入闸**，不是清理器：命中时**只**记访问 + 复活，**不改 content**
+        （与 `apply_candidates` 的"只改状态"同一条纪律：影子语义、可回退）。
+        """
+        if not vec or not ver or not agent_id:
+            return {}
+        try:
+            where = ["agent_id=?", "forgotten=0", "embed_version=?",
+                     "COALESCE(embedding,'')<>''", "COALESCE(embedding,'')<>'[]'"]
+            params: list = [agent_id, ver]
+            if str(mem_topic or "").strip():
+                where.append("mem_topic=?")
+                params.append(str(mem_topic).strip())
+            if exclude_id:
+                where.append("id<>?")
+                params.append(int(exclude_id))
+            cols = "id, content, tier, embedding, embed_version, mem_topic"
+            rows = conn.execute(
+                "SELECT " + cols + " FROM agent_memory WHERE " + " AND ".join(where)
+                + " ORDER BY id DESC LIMIT 400", params).fetchall()
+        except Exception as exc:  # noqa: BLE001
+            # 探测失败 ⇒ 不拦写入（宁可有重复，不可丢沉淀），但要让"去重闸坏了"可诊断
+            logger.warning("近重复探测失败（本次不拦写）：%s: %s",
+                           type(exc).__name__, str(exc)[:120])
+            return {}
+        qn = math.sqrt(sum(x * x for x in vec)) or 1.0
+        best, best_s = {}, 0.0
+        for r in rows:
+            try:
+                sv = json.loads(r["embedding"]) if isinstance(r["embedding"], str) else (r["embedding"] or [])
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("id=%s 的 embedding 解析失败（跳过该行）：%s",
+                               r.get("id"), type(exc).__name__)
+                continue
+            if not sv or len(sv) != len(vec):
+                continue
+            vn = math.sqrt(sum(y * y for y in sv)) or 1.0
+            s = sum(a * b for a, b in zip(vec, sv)) / (qn * vn)
+            if s > best_s:
+                best_s, best = s, dict(r)
+        if best and best_s >= float(threshold):
+            return {"id": int(best["id"]), "sim": round(best_s, 4),
+                    "tier": (best.get("tier") or ""), "reason": "near_duplicate"}
+        return {}
+
+    @staticmethod
+    def set_tier(conn, memory_id: int, tier: str) -> bool:
+        """分层迁移（`core` / `recall` / `archival`）—— **只改层，不改 content**。
+
+        与 `revive_memory` 的分工：`set_tier` 是通用搬层（dream 的 promote/demote 用），
+        `revive_memory` 是"冷层回活跃"（同时清 forgotten 与 valid_to，语义更强）。
+        非法层级 / 无 tier 列 / 行不存在 ⇒ False（不静默假装成功）。
+        """
+        if tier not in ("core", "recall", "archival"):
+            return False
+        if not MemoryService._has_tier_col(conn):
+            return False
+        try:
+            if tier == "archival":
+                try:
+                    cur = conn.execute(
+                        "UPDATE agent_memory SET tier=?, archived_at=datetime('now','localtime') "
+                        "WHERE id=?", (tier, int(memory_id)))
+                except Exception:
+                    cur = conn.execute("UPDATE agent_memory SET tier=? WHERE id=?",
+                                       (tier, int(memory_id)))
+            else:
+                cur = conn.execute("UPDATE agent_memory SET tier=? WHERE id=?",
+                                   (tier, int(memory_id)))
+            conn.commit()
+            if cur.rowcount:
+                MemoryService.record_event(
+                    conn,
+                    "archived" if tier == "archival" else ("promote" if tier == "core" else "demote"),
+                    int(memory_id), "", "->" + tier)
+            return cur.rowcount > 0
+        except Exception:
+            return False
+
+    @staticmethod
+    def revive_memory(conn, memory_id: int) -> bool:
+        """把冷层条目复活回 recall（P0-3/P1-6 共用）。
+
+        「复活」= tier 回 recall + forgotten=0，**不改 content**。
+        为什么需要：遗忘/归档是**软删**，正确的再出现信号是"这条又被写/被用到了"，
+        此时应当归位而不是再插一条副本（那正是重复膨胀的来源）。
+        """
+        try:
+            if not memory_id:
+                return False
+            _tc = MemoryService._has_tier_col(conn)
+            if _tc:
+                cur = conn.execute(
+                    "UPDATE agent_memory SET tier='recall', forgotten=0, "
+                    "valid_to=NULL WHERE id=?", (int(memory_id),))
+            else:
+                cur = conn.execute("UPDATE agent_memory SET forgotten=0 WHERE id=?",
+                                   (int(memory_id),))
+            conn.commit()
+            if cur.rowcount:
+                MemoryService.record_event(conn, "revived", int(memory_id), "", "cold->recall")
+            return cur.rowcount > 0
+        except Exception:
+            return False
+
     @staticmethod
     def _scope_filter(conn, agent_id: str, scopes, legacy_policy: str = "", cut_ts: str = ""):
         """构造作用域复合过滤 → (clause, params, idx_of)。
@@ -219,7 +409,8 @@ class MemoryService:
     @staticmethod
     def search(conn, agent_id: str, query: str = "", top_k: int = 5,
                mem_type: str = "", max_age_days: int = 90, mem_topic: str = "",
-               scopes: list | None = None, any_scope: bool = False) -> list:
+               scopes: list | None = None, any_scope: bool = False,
+               include_archival: bool = False) -> list:
         """按语义相关度检索记忆（真向量优先 + 时间衰减；bigram 兜底）。
 
         mem_topic 非空 → 先按主题标签精确过滤（Auto Memory 索引，避免平铺误拉），再语义排序。
@@ -240,8 +431,11 @@ class MemoryService:
             if any_scope:
                 _clause, _cparams, _idx_of = "", [], {}
             # P1-18 分层：常规召回排除 archival（归档层不参与 query 相关性召回；存量 NULL tier 视为 recall）
+            # P1-6（2026-11-27）：`include_archival=True` 时**不排除**冷层 —— 供管理端回捞、
+            #   dream 复活候选、以及"我确定看过这条但召不回来"的排查用。默认 False = 逐字旧行为。
             _tc = MemoryService._has_tier_col(conn)
-            _no_arch = " AND (tier IS NULL OR tier != 'archival')" if _tc else ""
+            _no_arch = ("" if include_archival
+                        else (" AND (tier IS NULL OR tier != 'archival')" if _tc else ""))
             # ── D1-c 召回期仲裁（2026-10-07）──
             # 被标记 superseded_by>0 的旧条**不进召回**（模型看不到已被取代的旧口径）。
             # ⚠️ 用 `COALESCE(superseded_by,0)=0` 而非 `superseded_by=0`：
@@ -254,6 +448,9 @@ class MemoryService:
                 _base_extra = ""
             # P0-3：被流水证伪的笔记不进召回。列缺失时该片段为空 ⇒ 零行为漂移。
             _base_extra += MemoryService._no_contradicted_clause(conn)
+            # P1-7 双时态：有效期已关闭（valid_to 非空）的口径不再召回。
+            # 存量行 valid_to 全 NULL ⇒ 本片段零行为漂移（可回滚：置空该列即恢复）。
+            _base_extra += MemoryService._valid_now_clause(conn)
             if not query:
                 # 作用域生效时不再用 agent_id 作唯一约束（user/global 槽需跨 Agent 复用）
                 if any_scope:
@@ -417,14 +614,41 @@ class MemoryService:
             vec, ver = MemoryService._embed(conn, c)
             _sc = MemoryService._has_scope_cols(conn)   # 老库/夹具库缺列 → 走旧列集（fail-safe）
             _tc = MemoryService._has_tier_col(conn)     # P1-18 分层：preference 恒 core，其余 recall
+            _vc = MemoryService._has_validity_col(conn) # P1-7 双时态（缺列 → 不拼）
             _tier = "core" if mem_type == "preference" else "recall"
+            # ── P0-3 写前近重复闸（2026-11-27）────────────────────────────────
+            # 为什么放在 INSERT **之前**：写完再删/合会把 id 序列打乱，且"先脏后清"
+            #   在崩溃窗口里会留下重复。写到门口就挡住最省事。
+            # 命中后的动作（对齐方案验收「只 record_access 旧条、不新增」）：
+            #   ① 记访问（这条被再次确认，使用证据 +1，供遗忘/分层引擎判活）；
+            #   ② 若命中冷层（archival）⇒ 复活回 recall（**不是**再插一条新副本）。
+            # 返回既有 id 而不是 None：调用方据此知道"这次沉淀落到哪条"，
+            #   与"内容为空/被安全扫描拦下"（返回 None）是两回事，不能混。
+            _dd_on, _dd_sim = True, 0.95
+            try:
+                from core import config as _cfg_dd
+                _dd_on = bool(_cfg_dd.get("memory", "dedup_enabled", True))
+                _dd_sim = float(_cfg_dd.get("memory", "dedup_sim", 0.95) or 0.95)
+            except Exception:
+                pass
+            if _dd_on:
+                _dup = MemoryService.near_duplicate(conn, agent_id, mem_topic, vec, ver, _dd_sim)
+                if _dup:
+                    MemoryService.record_access(conn, _dup["id"])
+                    MemoryService.record_event(conn, "dedup_hit", _dup["id"], agent_id,
+                                               "sim=%.4f topic=%s" % (_dup.get("sim") or 0, mem_topic))
+                    if str(_dup.get("tier") or "") == "archival":
+                        MemoryService.revive_memory(conn, _dup["id"])
+                    return _dup["id"]
             cur = conn.execute(
                 "INSERT INTO agent_memory (agent_id, mem_type, content, embedding, embed_version, source, relevance, activation, mem_topic"
                 + (", tier" if _tc else "")
-                + (", scope_type, scope_id" if _sc else "") + ") "
+                + (", scope_type, scope_id" if _sc else "")
+                + (", valid_from" if _vc else "") + ") "
                 "VALUES (?,?,?,?,?,?,?,1.0,?"
                 + (",?" if _tc else "")
-                + (",?,?" if _sc else "") + ")",
+                + (",?,?" if _sc else "")
+                + (", datetime('now')" if _vc else "") + ")",
                 (agent_id, mem_type, c,
                  json.dumps(vec, ensure_ascii=False) if vec else "[]",
                  ver if vec else "",
@@ -432,6 +656,28 @@ class MemoryService:
                 + ((_tier,) if _tc else ())
                 + ((st, sid) if _sc else ()))
             conn.commit()
+            MemoryService.record_event(conn, "created", int(cur.lastrowid or 0), agent_id,
+                                       "type=%s topic=%s" % (mem_type, mem_topic))
+            # ── P1-7 写时"口径取代"（2026-11-27）───────────────────────────────
+            # 与近重复闸的分工：≥0.95 = **同一条事实的另一种说法**（去重）；
+            # 0.85~0.95 且**新内容自身宣告"旧的不作数"** = **新旧口径**（取代）。
+            # 判据方向是实测定下的：互斥对字面高度重叠（实测 0.7252 bigram / 真向量重复区 0.94+），
+            #   所以只能靠 ①相似 ②互斥词 两条同时成立来分，语义"不像"反而漏判（见 detect_conflicts）。
+            # ⚠️ 只在**新内容含互斥断言词**时取代：那是说话者在宣告"旧口径已废"，
+            #   是本条路径最窄、最可辩护的信号；仅"相似"一律不动（避免把互补经验挤掉）。
+            _sp_on, _sp_sim = True, 0.85
+            try:
+                from core import config as _cfg_sp
+                _sp_on = bool(_cfg_sp.get("memory", "supersede_on_deposit", True))
+                _sp_sim = float(_cfg_sp.get("memory", "supersede_sim", 0.85) or 0.85)
+            except Exception:
+                pass
+            if _sp_on and vec and ver and _has_conflict_marker(c):
+                _old = MemoryService.near_duplicate(
+                    conn, agent_id, mem_topic, vec, ver, _sp_sim,
+                    exclude_id=int(cur.lastrowid or 0))
+                if _old:
+                    MemoryService.mark_superseded(conn, _old["id"], int(cur.lastrowid))
             # P2：周期维护（每 maintain_every 次沉淀）
             try:
                 from core import config as _cfg
@@ -461,7 +707,8 @@ class MemoryService:
     # ── P2：遗忘引擎——激活度低于阈值 → 软遗忘（forgotten=1，检索跳过，可恢复）──
     @staticmethod
     def forget(conn, agent_id: str = "", threshold: float = 0.2, max_age_days: int = 90,
-               max_unused_days: int = 0, min_access: int = 0) -> int:
+               max_unused_days: int = 0, min_access: int = 0,
+               max_unused_access: int | None = None) -> int:
         """按「时效 + 使用证据」标记遗忘记忆，返回遗忘条数（软删，不物理删除，可恢复）。
 
         ⚠️ 2026-09-29 根因修复：原实现 `decayed = activation * max(0.4, 1 - age/max_age)`
@@ -483,10 +730,28 @@ class MemoryService:
              默认**关**）：因为它对 activation < 0.5 的行仍有效，且关掉可避免
              "旧口径突然生效导致批量误删"。默认关 = 行为可预测、不惊群。
 
+        ★★ 2026-11-27（真机预演推翻原判据）：判据 1 必须带**价值维度**，不能只看时间。
+        实测（生产库 275 条活跃，`max_unused_days=30` 预演）会归档 28 条，其中：
+          · id=278「链路需求分析」**access=69**、id=317「平台查询排障」**access=62**、
+            id=380（access=49）、id=279（access=42）、id=122（access=40）、id=384（access=35）…
+          · 28 条里 **25 条有访问记录**，只有 3 条零访问 —— 它们不是"陈旧"，是"最近一个月
+            没问到相关任务"。
+        ⇒ 纯时间判据在这里**会误伤最值钱的记忆**（高频经验恰是旧条目，因为新条目还没被用起来）。
+        这不是"阈值调大一点"能解决的：60/90 天档预演都是 **0 条**，说明库里根本没有真正的陈旧数据，
+        唯一能动的就是"久未用 + 低频"这一档。
+        ⇒ 判据 1 改为 `age_days >= max_unused_days AND access_count <= max_unused_access`
+          （后者默认读 `memory.forget_max_access`，默认 2；传 -1/None 以外的负数表示"不限制"，
+           即回滚到只看时间的旧行为）。
+        ⚠️ **默认仍零行为漂移**：`max_unused_days` 默认 0 ⇒ 判据 1 不启用，冷层保持 0；
+          启用时必须同时给 `forget_max_access`，否则等于恢复"按日期轮换"。
+
         参数：
-          max_unused_days —— 主判据：多少天未被访问即遗忘；**0/None = 该判据不启用**（防误配全删）
-          min_access      —— 低价值判据的访问次数上限（默认 0 = 从未访问过）
-          max_age_days    —— 低价值判据的年龄门槛（沿用原参数名，语义扩展为"陈旧门槛"）
+          max_unused_days   —— 主判据：多少天未被访问；**0/None = 该判据不启用**（防误配全删）
+          max_unused_access —— 主判据的价值维度：仅当 `access_count <= 此值` 才降层。
+                               `None` → 读配置 `memory.forget_max_access`（默认 2）；
+                               `-1` → 不限制（回滚到"只看时间"的旧行为）
+          min_access        —— 低价值判据的访问次数上限（默认 0 = 从未访问过）
+          max_age_days      —— 低价值判据的年龄门槛（沿用原参数名，语义扩展为"陈旧门槛"）
 
         返回遗忘条数。异常返回 0（不阻断）。
         """
@@ -494,6 +759,14 @@ class MemoryService:
         try:
             where = "WHERE forgotten=0"
             params: list = []
+            # ★★ 2026-11-27 实测缺陷：解耦后归档行的 `forgotten` **就是 0**，
+            #   而这里只按 forgotten=0 选 ⇒ **已经是冷层的行每跑一次就被"再归档"一次**。
+            #   实测：同一批行连跑两次 forget，每次都新增 2 条 archived 事件
+            #   （事件表 7→9→11），周报的「本周归档数」被自己刷成假数。
+            #   6h 调度下这就等于每天 4 次、每次若干条 —— 一上线周报立刻失真。
+            #   ⇒ 必须排除既已在冷层的行（冷层是终态，直到被 revive）。
+            if MemoryService._has_tier_col(conn):
+                where += " AND (tier IS NULL OR tier != 'archival')"
             if agent_id:
                 where += " AND agent_id=?"
                 params.append(agent_id)
@@ -507,6 +780,13 @@ class MemoryService:
                 _by_act = _cfg.as_bool("memory", "forget_by_activation", False)
             except Exception:
                 _by_act = False
+            # 判据 1 的价值维度：未显式传参时读配置（默认 2 = 只降"几乎没人用"的）
+            if max_unused_access is None:
+                try:
+                    from core import config as _cfg2
+                    max_unused_access = int(_cfg2.get("memory", "forget_max_access", 2))
+                except Exception:
+                    max_unused_access = 2
             n = 0
             for r in rows:
                 la = r["last_accessed_at"] or r["created_at"] or ""
@@ -517,9 +797,12 @@ class MemoryService:
                 age_days = max(0, (now - ts) / 86400)
                 _access = int(r["access_count"] or 0)
                 reason = ""
-                # 判据 1（主）：久未访问
-                if max_unused_days and max_unused_days > 0 and age_days >= max_unused_days:
-                    reason = f"unused_{int(age_days)}d"
+                # 判据 1（主）：久未访问 **且** 低频使用（2026-11-27 加价值维度）
+                # ⚠️ 只看时间会误伤高频旧经验（实测 id=278 access=69 也会被判冷层）。
+                if (max_unused_days and max_unused_days > 0 and age_days >= max_unused_days
+                        and (max_unused_access is None or max_unused_access < 0
+                             or _access <= int(max_unused_access))):
+                    reason = f"unused_{int(age_days)}d_access{_access}"
                 # 判据 2：陈旧且从未被用过
                 elif (max_age_days and max_age_days > 0 and age_days >= max_age_days
                       and _access <= int(min_access or 0)):
@@ -530,14 +813,48 @@ class MemoryService:
                     if decayed < threshold:
                         reason = f"activation_{round(decayed, 3)}"
                 if reason:
-                    conn.execute("UPDATE agent_memory SET forgotten=1 WHERE id=?", (r["id"],))
-                    # P1-18 分层：遗忘同步标记 archival（软删与归档一致）
-                    if MemoryService._has_tier_col(conn):
-                        conn.execute("UPDATE agent_memory SET tier='archival' WHERE id=?", (r["id"],))
+                    # P2（2026-11-27）事件埋点：周报的"tier 流动"只能靠这里，
+                    #   `agent_memory` 只存当前状态，答不了"本周降了几条、复活几条"。
+                    MemoryService.record_event(
+                        conn, "archived" if MemoryService._archive_mode(conn) else "forgotten",
+                        r["id"], "", reason)
+                    # ── P1-6（2026-11-27）遗忘与归档**解耦** ────────────────────
+                    # 旧实现两句连着写（forgotten=1 + tier='archival'）⇒ 一个字段同时承担
+                    #   「不再召回」和「这条没用了」，冷层因此既不可检索、也不能被复活，
+                    #   "曾有用但当前不相关"的经验只能永久消失。
+                    # 现在默认只降层（tier='archival'，forgotten 保持 0）：
+                    #   召回口径**不变**（search 本来就排除 archival），
+                    #   但冷层可被 `search(include_archival=True)` 检索、可被 dream 复活、可人工回捞。
+                    if MemoryService._archive_mode(conn):
+                        # archived_at 是 P1-6 新列：夹具/老库可能没有 ⇒ 退回"只降层"，
+                        # 但**不得**因为一次 UPDATE 失败就把这条静默漏掉（计数照记）。
+                        try:
+                            conn.execute(
+                                "UPDATE agent_memory SET tier='archival', "
+                                "archived_at=datetime('now','localtime') WHERE id=?", (r["id"],))
+                        except Exception:
+                            conn.execute("UPDATE agent_memory SET tier='archival' WHERE id=?",
+                                         (r["id"],))
+                    else:
+                        # 硬遗忘档（`memory.forget_archives=False` 回滚用）：保持旧语义
+                        # —— forgotten=1 即退出召回，tier 同步标 archival 仅为台账一致。
+                        conn.execute("UPDATE agent_memory SET forgotten=1 WHERE id=?", (r["id"],))
+                        if MemoryService._has_tier_col(conn):
+                            try:
+                                conn.execute("UPDATE agent_memory SET tier='archival' WHERE id=?", (r["id"],))
+                            except Exception:
+                                pass
                     n += 1
             conn.commit()
             return n
-        except Exception:
+        except Exception as exc:  # noqa: BLE001
+            # ★ 2026-11-27 实测踩到：这里原先**静默 return 0**，于是任何内部异常
+            #   （我自己的探针把 row_factory 设成 None ⇒ `r["last_accessed_at"]` 抛 TypeError）
+            #   都表现为"降冷层 0 条"，与"库里确实没有该降的"**完全同形**。
+            #   这与 consolidate 那次"静默 return 0 把缺列伪装成没东西可合并"是同一型。
+            #   ⇒ 保留不抛（维护不能因一条脏数据整体失败），但必须留痕。
+            logger.warning("forget 执行异常（本次降冷层未生效，**不是**没有可降的）：%s: %s",
+                           type(exc).__name__, str(exc)[:160])
             return 0
 
     # ── P2：合并引擎——内容相似度高且同类型 → 保留较新，旧标记遗忘（防重复膨胀）──
@@ -547,10 +864,41 @@ class MemoryService:
 
         P1b-3 修正：真向量优先（复用存储 embedding，同版本余弦，阈值 0.85 对齐 Mem0 语义合并）；
         bigram 降级时用 0.5（bigram 稀疏余弦对改写句普遍 0.4-0.65，原 0.85 导致合并从不触发）。
+
+        ⚠️⚠️ **2026-11-27（P0-2 副产物）修正：真向量口径的阈值不能沿用 0.85。**
+        起因：把 `run_maintenance` 接进 6h 作业后，在**生产库副本**上实跑一次维护 ——
+        `merged=165`（275 条活跃 → 只剩 110）。60% 的记忆被当"重复"软删。
+        取证与定标（同一副本，真向量 1024 维）：
+          · ≥0.95 的近重复 **13 对**、0.90~0.95 **25 对**、0.85~0.90 还有上百对；
+          · 也就是说 0.85 在**真向量**口径下根本不是"重复"，而是"同一领域的两件事"。
+        定标依据（既有实测表，见 `detect_conflicts` docstring）：
+        **重复区在真向量下是 0.94~0.9986** ⇒ 阈值取 `memory.consolidate_dense_sim`（默认 0.94）。
+        bigram 路仍用 0.5（那是另一套量纲，已按 bigram 标定，别混用）。
+        ⇒ **两路各自用自己标定过的阈值**，这才是"同口径"的真正含义。
+
+        另：合并动作从 `forgotten=1`（软删）改为 `mark_superseded`（有取代链）。
+        两者对召回等效（都被排除），但软删后 `restore` 只能整条复活、无法回答"被谁取代"；
+        而 `superseded_by` 是**可回溯、可回退**的影子语义（与 dream merge 同一条纪律）。
         """
         try:
             where = "WHERE forgotten=0"
             params: list = []
+            # P1-6（2026-11-27）：冷层不参与合并。
+            # ⚠️ 必须显式排除：归档行的 forgotten 现在是 0（解耦后），若仍按旧判据取全量，
+            #   consolidate 会把冷层当"重复"再打一次 forgotten=1 ⇒ 冷层被**二次清除**，
+            #   与"可被 dream 复活"直接矛盾（"新口径只改一半"最容易漏）。
+            if MemoryService._has_tier_col(conn):
+                where += " AND (tier IS NULL OR tier != 'archival')"
+            # ★★ 2026-11-27 实测缺陷（第二次真机验证）：**没有排除已被取代的行** ⇒
+            #   同一批 12 对每跑一次就被"再合并"一次。后果比"多写几条事件"严重得多：
+            #     · `mark_superseded` 会再执行 `valid_to=datetime('now')` ⇒
+            #       **把"这条何时失效"一路往后推**，双时态（P1-7）的时间线被自己的维护任务篡改；
+            #     · `memory_events` 每次 +24 条 ⇒ 周报「本周合并数」翻倍、且随调度频率线性膨胀；
+            #     · 6h 调度下一天 4 次，一周就是 672 条假事件把真流动淹掉。
+            #   实测取证：连跑两次 maintain，事件 36 → 84，merged 恒为 12。
+            #   ⇒ 合并的输入面必须与「召回面」同口径：已被取代的不再参与（与 detect_conflicts 一致）。
+            if MemoryService._has_superseded_col(conn):
+                where += " AND COALESCE(superseded_by,0)=0"
             if agent_id:
                 where += " AND agent_id=?"
                 params.append(agent_id)
@@ -574,9 +922,21 @@ class MemoryService:
                             dense_pairs[r["id"]] = (r["embed_version"], v)
                     except Exception:
                         pass
-            # bigram 降级时阈值放宽（bigram 余弦量纲 0-1 且稀疏）
-            eff_threshold = threshold
+            # ── 阈值：两路各用自己标定过的量纲（2026-11-27 修正）──
+            # ⚠️ 原实现只有一个 `eff_threshold` 变量，并在 bigram 分支里**就地改成 0.5**：
+            #   `if not used_dense: eff_threshold = 0.5` —— 这个赋值**会一直生效到后续所有对**，
+            #   于是只要库里有一条没有真向量的行（实测 13 条）参与过比较，
+            #   之后**所有真向量对都按 0.5 合并** ⇒ 生产库副本上 275 条活跃被合并 165 条（60%）。
+            #   ⇒ 阈值必须**逐对计算**，不能跨迭代复用（与"判据要用自己构造的基准"同源）。
+            _bigram_thr = 0.5          # bigram 口径（稀疏余弦，已标定）
+            _dense_thr = 0.94
+            try:
+                from core import config as _cfg_c
+                _dense_thr = float(_cfg_c.get("memory", "consolidate_dense_sim", 0.94) or 0.94)
+            except Exception:
+                _dense_thr = 0.94
             ve = VectorEngine()
+            _has_sup = MemoryService._has_superseded_col(conn)
             merged = 0
             for i in range(len(rows_dict)):
                 a = rows_dict[i]
@@ -604,16 +964,21 @@ class MemoryService:
                             used_dense = True
                     if not used_dense:
                         s = ve._cosine(ve._vector(a["content"] or ""), ve._vector(b["content"] or ""))
-                        eff_threshold = 0.5  # bigram 降级阈值（对齐量纲）
-                    if s >= eff_threshold:
-                        # 保留较新（id 大者），旧标记遗忘
-                        if b["id"] > a["id"]:
-                            conn.execute("UPDATE agent_memory SET forgotten=1 WHERE id=?", (a["id"],))
-                            merged += 1
-                            break
+                    thr = _dense_thr if used_dense else _bigram_thr
+                    if s >= thr:
+                        # 保留较新（id 大者），旧条打"被取代"标记（**不软删、不改正文**）
+                        _old = a["id"] if b["id"] > a["id"] else b["id"]
+                        _new = b["id"] if b["id"] > a["id"] else a["id"]
+                        if _has_sup:
+                            if MemoryService.mark_superseded(conn, _old, _new):
+                                MemoryService.record_event(conn, "merged", _old, "",
+                                                           "into=%d sim=%.3f" % (_new, s))
+                                merged += 1
                         else:
-                            conn.execute("UPDATE agent_memory SET forgotten=1 WHERE id=?", (b["id"],))
+                            conn.execute("UPDATE agent_memory SET forgotten=1 WHERE id=?", (_old,))
                             merged += 1
+                        if b["id"] > a["id"]:
+                            break
             conn.commit()
             return merged
         except Exception as _ce:
@@ -703,6 +1068,10 @@ class MemoryService:
         try:
             where = ["forgotten=0", "COALESCE(superseded_by,0)=0"]
             params: list = []
+            # P1-6（2026-11-27）：冷层不参与冲突检测 —— 冷层与活跃层"同键+高相似"是常态
+            #   （同一事实被归档前就有多个措辞），把它算进冲突会把活跃条误标 superseded。
+            if MemoryService._has_tier_col(conn):
+                where.append("(tier IS NULL OR tier != 'archival')")
             if agent_id:
                 where.append("agent_id=?")
                 params.append(agent_id)
@@ -780,6 +1149,19 @@ class MemoryService:
             return False
 
     @staticmethod
+    def _supersede_sql(has_valid_to: bool) -> str:
+        """取代语句的唯一构造点（供 `mark_superseded` 与门禁变异共用）。
+
+        抽成独立函数的原因很实际：门禁 `verify_memory_conflict_gate` 的 M3 变异
+        （把"影子标记"改成"真删"）要能**稳定命中**这一句。此前 SQL 直接内联在
+        `mark_superseded` 里，加了一列（valid_to）就把锚点打断 —— 门禁会以
+        "变异锚点未命中"报红，看起来像实现坏了，实际是判据耦合了文本形态。
+        """
+        return ("UPDATE agent_memory SET superseded_by=?, superseded_at=datetime('now','localtime')"
+                + (", valid_to=datetime('now')" if has_valid_to else "")
+                + " WHERE id=? AND forgotten=0")
+
+    @staticmethod
     def mark_superseded(conn, old_id: int, new_id: int) -> bool:
         """把 `old_id` 标记为被 `new_id` 取代（**只打标记，不删内容**）。
 
@@ -790,10 +1172,15 @@ class MemoryService:
         try:
             if not old_id or not new_id or int(old_id) == int(new_id):
                 return False
-            cur = conn.execute(
-                "UPDATE agent_memory SET superseded_by=?, superseded_at=datetime('now','localtime') "
-                "WHERE id=? AND forgotten=0", (int(new_id), int(old_id)))
+            # P1-7 双时态：取代同时**关闭旧条有效期**（valid_to，UTC 口径，与 valid_from 同源）。
+            # ⚠️ 只写标记、不改 content —— 影子语义（可回退、可审计），与既有纪律一致。
+            _vc = MemoryService._has_validity_col(conn)
+            cur = conn.execute(MemoryService._supersede_sql(_vc),
+                               (int(new_id), int(old_id)))
             conn.commit()
+            if cur.rowcount:
+                MemoryService.record_event(conn, "superseded", int(old_id), "",
+                                           "by=%d" % int(new_id))
             return cur.rowcount > 0
         except Exception:
             return False
@@ -819,7 +1206,8 @@ class MemoryService:
                 threshold=float(_cfg.get("memory", "forget_threshold", 0.2)),
                 max_age_days=int(_cfg.get("memory", "max_age_days", 90)),
                 max_unused_days=int(_cfg.get("memory", "max_unused_days", 0)),
-                min_access=int(_cfg.get("memory", "forget_min_access", 0)))
+                min_access=int(_cfg.get("memory", "forget_min_access", 0)),
+                max_unused_access=int(_cfg.get("memory", "forget_max_access", 2)))
         # ── D1 冲突消解接线（2026-10-07）──
         # ⚠️⚠️ **顺序是实质性的：必须在 consolidate 之前跑**（2026-10-07 实测踩到）。
         #  `consolidate()` 在 **bigram 降级口径**下阈值降到 0.5，而互斥对的相似度
@@ -847,7 +1235,13 @@ class MemoryService:
                 conflict_n = 0
         merge_n = MemoryService.consolidate(conn, agent_id,
                                             threshold=float(_cfg.get("memory", "consolidate_threshold", 0.85)))
-        return {"forgotten": forget_n, "merged": merge_n, "conflicts": conflict_n}
+        # P1-6（2026-11-27）：把「降冷层」与「硬遗忘」分开报，否则运维看到的
+        # `forgotten` 会把归档也算进去（数字看着像"删了"，实际只是降层、还能复活）。
+        if MemoryService._archive_mode(conn):
+            return {"forgotten": 0, "archived": forget_n,
+                    "merged": merge_n, "conflicts": conflict_n}
+        return {"forgotten": forget_n, "archived": 0,
+                "merged": merge_n, "conflicts": conflict_n}
 
     @staticmethod
     def run_maintenance(conn=None) -> dict:

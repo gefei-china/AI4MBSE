@@ -1,0 +1,150 @@
+{
+  "generated_at": "2026-11-27 14:25:29",
+  "db": "mbse.db",
+  "norm": "fullwidth->halfwidth, drop spaces/punct, lower",
+  "cases": {
+    "T01": [
+      {
+        "id": 81,
+        "fp": "9c95db258ff5d8c2355c606d11c49116",
+        "head": "智源平台工程 vc 格式为 branchId,quId：普通工程 quId=0 即草稿上下文，导入工程带 queryType=1 及版本号；SysML v2 覆盖导入写回仅草稿上下文支持。"
+      }
+    ],
+    "T02": [
+      {
+        "id": 186,
+        "fp": "8b1c28b0eed810d7c44944d701a4cd06",
+        "head": "SysML v2 中需求与用例追溯用 satisfy（满足）和 verify（验证）两类专用关系表达，弱语义追溯可用 dependency 替代 refines/traces；satisfy 必须引用 usage 而非 definition。"
+      },
+      {
+        "id": 172,
+        "fp": "528733c8536259e58ad269f0cbebcb0c",
+        "head": "SysML v2 中需求与用例的追溯一般用 satisfy（系统元素满足需求）与 verify（验证用例验证需求）两类专用关系表达；弱语义追溯可用 dependency 替代 refines/traces，且 satisfy 须引用 usage 而非定义。"
+      },
+      {
+        "id": 284,
+        "fp": "d1d431a5a5f76a345d3e4eacda2ee76b",
+        "head": "SysML v2 需求追溯口径：架构元素用 satisfy 声明满足需求、验证用例用 verify 声明验证需求，引用对象须为 requirement usage 而非 definition；弱语义追溯可用 dependency（本项目经验，非规范原文）。"
+      },
+      {
+        "id": 285,
+        "fp": "16650428267ccf16f7075101351d083e",
+        "head": "SysML v2 需求追溯用 satisfy/verify 关系表达，二者须引用 requirement usage 而非 requirement definition，弱追溯可用 dependency；属建模实践约定，交付前应对照规范正文复核。"
+      }
+    ],
+    "T03": [
+      {
+        "id": 265,
+        "fp": "8126662121e4b5279eba08b1e366b3e1",
+        "head": "整车需求导入建模时须严守三条红线：不改需求语义、不改编号规则、不做需求分析与功能推导，仅形成初始输入与IR需求图。"
+      }
+    ],
+    "T04": [
+      {
+        "id": 165,
+        "fp": "58c40207de543aa1723a0a4c1e432039",
+        "head": "SysML v2 中 satisfy X by Y 句式合法，但 X 必须是需求 usage 而非 definition，Y 必须是满足方 usage；同一需求上 subject 绑定与 satisfy 只能二选一，否则报 Cannot override a binding feature value。"
+      },
+      {
+        "id": 166,
+        "fp": "f72671407933a86ffa1a2a37787f16bb",
+        "head": "校验 satisfy X by Y 句式需提交含 package、requirement usage、part usage 的完整可解析代码；X 须为需求 usage、Y 须为满足方 usage，且与 subject 绑定互斥。"
+      },
+      {
+        "id": 284,
+        "fp": "d1d431a5a5f76a345d3e4eacda2ee76b",
+        "head": "SysML v2 需求追溯口径：架构元素用 satisfy 声明满足需求、验证用例用 verify 声明验证需求，引用对象须为 requirement usage 而非 definition；弱语义追溯可用 dependency（本项目经验，非规范原文）。"
+      },
+      {
+        "id": 285,
+        "fp": "16650428267ccf16f7075101351d083e",
+        "head": "SysML v2 需求追溯用 satisfy/verify 关系表达，二者须引用 requirement usage 而非 requirement definition，弱追溯可用 dependency；属建模实践约定，交付前应对照规范正文复核。"
+      }
+    ],
+    "T05": [
+      {
+        "id": 145,
+        "fp": "bccffa82ba44133ef7a032c954db6938",
+        "head": "SysML v2 接口建模三大语法陷阱：端口名不可与 port 等保留字同名；interface def 内须用 end 声明两端；接口定义与 connect 使用须分层，不可把接口定义当实例连接。"
+      }
+    ],
+    "T06": [],
+    "T07": [
+      {
+        "id": 268,
+        "fp": "b4c177c0541bd5324679dc5b2260615d",
+        "head": "SysML需求追溯口径：涉众/参与者追溯挂在关注点需求与参与者信息需求上，不挂涉众实例自身；satisfy须引用usage而非definition；同一需求上「绑定主体」与「声明被满足」互斥；需求特化时subject须为体内首参，稳妥做法是不走特化。"
+      }
+    ],
+    "T08": [
+      {
+        "id": 182,
+        "fp": "37a6ca36c2bf6e98f353af33cae216fa",
+        "head": "通信卫星总体设计应先完成需求到架构的显式映射再画框图，指标缺失时统一标TBD并列为评审风险项，避免编造数据。"
+      }
+    ],
+    "M01": [
+      {
+        "id": 174,
+        "fp": "f6801a60d7c430b9493e6fd2cd8a5d1e",
+        "head": "MBSE方法论骨架：需求按涉众→系统→子系统→单元逐级派生，经SATISFIES/ALLOCATED_TO落到架构元素，由VERIFIED_BY验证用例闭环，形成DERIVES/SATISFIES/ALLOCATED_TO/VERIFIED_BY全链路追溯，支撑变更影响评估。"
+      },
+      {
+        "id": 216,
+        "fp": "3d6e181f8acdba8062a5f24ef7c1777b",
+        "head": "MBSE方法论骨架是用结构化模型串起需求→架构→验证的可追溯闭环，由DERIVES、SATISFIES/ALLOCATED_TO、VERIFIED_BY四类关系承载，服务于变更影响评估与覆盖度审计，缺任一环追溯链即断。"
+      },
+      {
+        "id": 180,
+        "fp": "a66d75fd2238729a85a8de7a9b01a858",
+        "head": "MBSE方法论以需求→架构→验证为主线，用DERIVES、SATISFIES/ALLOCATED_TO、VERIFIED_BY四类关系串成可追溯链路，支撑变更影响评估与覆盖度审计。"
+      },
+      {
+        "id": 173,
+        "fp": "fb3a017b93c9fe99869ee3c5dbffa8e5",
+        "head": "MBSE方法论四层骨架：需求层（DERIVES派生）、架构层（SATISFIES/ALLOCATED_TO）、行为参数层、验证层（VERIFIED_BY），核心是用显式关系连接模型元素而非画更多图。"
+      }
+    ],
+    "M02": [
+      {
+        "id": 150,
+        "fp": "9b80ba634d6f3a64b541bfa77e01aecc",
+        "head": "电动汽车热管理系统需求分析应先识别系统边界与涉众，再抓住两类热负载控温诉求错位这一核心矛盾，据此确定回路解耦、冷源共享与优先级、模式切换可靠性三条架构权衡主轴，最后按利益相关方/系统/子系统三层展开需求。"
+      },
+      {
+        "id": 146,
+        "fp": "1fd6ee6128e36b277830b2dfab1d7df9",
+        "head": "电动汽车热管理系统建模经验：检索命中不足时可按工程完整性自行补齐要素，采用端口→部件→连接→需求→满足关系的建模范式；热管理核心矛盾是电池控温精度与电驱散热的工况冲突，双回路液冷+制冷剂旁通方案B为快充车型推荐方案。"
+      }
+    ],
+    "M03": [
+      {
+        "id": 90,
+        "fp": "8b997a2e9276ddd77d4c1de40ada159c",
+        "head": "知识库领域模型采用的需求工程方法核心为：需求分层派生（利益相关方→系统→子系统→单元）、需求与系统元素满足/分配、需求通过验证用例可验证、全链路追溯。"
+      },
+      {
+        "id": 91,
+        "fp": "2340294fe9037ef7912904fe5f5c4c1e",
+        "head": "知识库需求工程方法：需求按涉众—系统—子系统—单元逐级派生，经满足/分配关系落到系统元素，并由验证用例闭环，形成全链路追溯；分析前须与用户逐项确认范围、材料、涉众、约束与优先级。"
+      }
+    ],
+    "C01": [
+      {
+        "id": 133,
+        "fp": "1b7328ba7662d88b20d3fb3c3915ebc2",
+        "head": "需求追溯链五环节：来源需求→派生需求分解→分配到系统元素→关联实现部件/功能→链接验证用例，形成来源—分解—分配—实现—验证双向可回溯闭环。"
+      },
+      {
+        "id": 134,
+        "fp": "4e9443a5f1100d2f2596498539a9af34",
+        "head": "需求追溯链包含五个环节：来源需求、派生需求分解、需求分配到系统元素、关联实现部件或功能、链接验证用例，形成来源—分解—分配—实现—验证的双向可回溯闭环。"
+      },
+      {
+        "id": 135,
+        "fp": "e51e21f9a803081aa3f43734d8c954ee",
+        "head": "需求追溯链包含五环节：来源需求、派生需求分解、需求分配到系统元素、关联实现部件或功能、链接验证用例，形成来源—分解—分配—实现—验证双向可回溯闭环。"
+      }
+    ]
+  }
+}

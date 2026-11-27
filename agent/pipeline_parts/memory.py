@@ -502,6 +502,19 @@ class MemoryMixin:
         无可用阈值（见本文件 `_build_model_context` 上方注释与 tmp/kcx/calib.py）。
         模型本就有识别能力（会话 351 的 t1/t3 主动写「素材与标题不匹配、套用就是虚构」并拒绝产出），
         它缺的只是**被明确授权忽略**这一句。
+
+        ★ 2026-11-27（P1-8）**定位裁决：这是人工台账，禁止自动兜底**。
+        方案曾提"由 knowledge_reflow 自动生成项目级决策填充"，实测后否掉了：
+          · `project_memories` 0 行；`knowledge_reflow` 的 `project_memories` 支路**要求项目归属**
+            （无归属跳过），而实测 56 条 reflow 记忆**全部**来自 `test-reg` 测试源、scope 为空
+            ⇒ 自动通道历史上从未被真实业务触发过（不是"没接"，是"没有可归属的真实数据"）；
+          · 库内仅有的 5 条 `决策/规范` 记忆**全部 `scope_type=''`**，内容是 impact 测试残留
+            （「载荷配置调整 ×3」「巡飞弹参数调整」…）。
+        ⇒ 自动填充只有两种结局：无内容，或**给无归属行臆造归属** —— 后者正是历史上
+          "孤儿记忆被顺手补默认项目 → 测试数据变成项目知识"的事故形态。
+        ⇒ 结论：保留本函数**只读 `project_memories`** 的结构（源码中不出现 `agent_memory`），
+          由 `tools/verify/verify_memory_project_memory.py` 的 P4/P5/P6 三条判据锁死；
+          页面作为人工台账保留（空态有新增引导），不承诺"AI 自动维护"。
         """
         try:
             from database import get_db

@@ -250,13 +250,34 @@ class ContextMixin:
             try:
                 from core import config as _cfg3
                 _mem_cap = int(_cfg3.get("context_audit", "memory_max_chars", 200) or 200)
+                _mem_block = str(_cfg3.get("context_audit", "memory_context_block", "digest")
+                                 or "digest").strip().lower()
             except Exception:
                 _mem_cap = 200
-            _ml = [f"· [{h.get('mem_type','')}] {str(h.get('content') or '')[:_mem_cap]}"
-                   for h in memory_hits[:4]]
-            parts.append(
-                "【已沉淀记忆（跨会话经验/决策，**仅供对齐参考，不得作为事实依据引用**，"
-                "与本次任务无关时必须忽略；不可据此编造需求或参数）】\n" + "\n".join(_ml))
+                _mem_block = "digest"
+            # ★ P1-5（2026-11-27）：**正文只注入一次**。
+            #   实测：`memory_single_source=True` 之后，本块与 `_build_memory_hint` 的
+            #   【长期记忆】块消费的是**同一个 `memory_hits` 列表** ⇒ 同一批记忆在一份
+            #   system prompt 里出现两次（各截 200 字），纯重复。按 275 条库、每轮 4 条命中算，
+            #   重复段约 400~800 字 ≈ 3~6% 的 prompt，全是白付的钱与"两处口径不一致"的风险。
+            #   ⇒ 默认改为 digest：本块只报**条数 + 主题**（导航用，不占正文预算），
+            #     正文由长期记忆块承载；`memory_context_block="full"` 可逐字回退旧行为。
+            if _mem_block == "full":
+                _ml = [f"· [{h.get('mem_type','')}] {str(h.get('content') or '')[:_mem_cap]}"
+                       for h in memory_hits[:4]]
+                parts.append(
+                    "【已沉淀记忆（跨会话经验/决策，**仅供对齐参考，不得作为事实依据引用**，"
+                    "与本次任务无关时必须忽略；不可据此编造需求或参数）】\n" + "\n".join(_ml))
+            else:
+                _topics = []
+                for h in memory_hits[:4]:
+                    _t = str(((h.get("meta") or {}).get("mem_topic")) or "").strip()
+                    if _t and _t not in _topics:
+                        _topics.append(_t)
+                _nav = ("｜主题：" + "、".join(x[:12] for x in _topics[:4])) if _topics else ""
+                parts.append(
+                    "【已沉淀记忆 %d 条%s（仅供对齐参考，**不得作为事实依据引用**，"
+                    "与本次任务无关时必须忽略；正文不在此重复）】" % (len(memory_hits), _nav))
         # 建模独立性：检索命中有限时追加指引——代码元素完整性不依赖检索数量
         n_entities = len(retrieval.get("entities") or [])
         n_chunks = len(retrieval.get("chunk_hits") or [])

@@ -1,13 +1,17 @@
 # -*- coding: utf-8 -*-
-"""记忆分层（core / recall / archival）的自检（P1-18）。
+"""记忆分层（core / recall / archival）的自检（P1-18；2026-11-27 P1-6 升级）。
 
 验证 memory_service 的三层读写语义：
 - deposit：preference 恒 core，其余 recall
-- forget：遗忘同步标 archival
-- search：常规召回排除 archival
+- forget：**降冷层**（tier=archival，forgotten 保持 0）—— 2026-11-27 起与"硬遗忘"解耦
+- search：常规召回排除 archival；`include_archival=True` 可取（冷层可检索）
 - search_core：只取 core 层（无条件常驻注入的取数面）
+- `_archive_mode=False`（回滚档）：forgotten=1 的旧语义仍可用
 
 用临时库（mkdtemp）建最小 agent_memory 表（含 tier 列），不污染真库；含变异自证。
+⚠️ 2026-11-27 F3 的断言**反过来了**：旧版要求 `forgotten=1`，那是"遗忘与归档耦合"的旧口径。
+   本次刻意改成 `forgotten=0` —— 若照旧断言，P1-6 的整个改造会被判成回归
+   （"测量口径跟着被测语义改"必须显式写清，否则事后无法分辨是修还是让判据迁就实现）。
 """
 import os
 from _tmpdir import mkdtemp  # 共享：创建即登记，atexit 退出时自动回收临时目录
@@ -77,7 +81,7 @@ try:
           _r2["tier"] == "recall" and _r3["tier"] == "recall",
           "fact=%s exp=%s" % (_r2["tier"], _r3["tier"]))
 
-    # F3: forget → archival（同时 forgotten=1）
+    # F3: forget → **降冷层**（tier=archival），forgotten 保持 0（P1-6 解耦）
     MemoryService.forget(conn, agent_id="test_agent", max_unused_days=1,
                          max_age_days=0, min_access=0)
     # 刚写入的 memory last_accessed_at 为空 → 回退 created_at → age≈0，不会遗忘。
@@ -86,9 +90,34 @@ try:
     conn.commit()
     n = MemoryService.forget(conn, agent_id="test_agent", max_unused_days=1, max_age_days=0, min_access=0)
     _r2b = conn.execute("SELECT tier, forgotten FROM agent_memory WHERE id=?", (_id2,)).fetchone()
-    check("F3 forget → tier=archival 且 forgotten=1",
-          _r2b["tier"] == "archival" and _r2b["forgotten"] == 1,
-          "forgotten=%s tier=%s (遗忘 %d 条)" % (_r2b["forgotten"], _r2b["tier"], n))
+    check("F3 forget → tier=archival 且 forgotten 保持 0（解耦，可复活）",
+          _r2b["tier"] == "archival" and _r2b["forgotten"] == 0 and n >= 1,
+          "forgotten=%s tier=%s (归档 %d 条)" % (_r2b["forgotten"], _r2b["tier"], n))
+
+    # F3b：冷层**可检索**（`include_archival=True`）—— 这是"解耦"买到的唯一新能力，
+    #      不验证它，等于只改了写入不改读取（"新口径只改一半"）。
+    _cold = MemoryService.search(conn, "test_agent", query="链路预算按 xx 计算",
+                                top_k=10, include_archival=True)
+    check("F3b 冷层可被 include_archival 召回（归档不等于消失）",
+          _id2 in {h["id"] for h in _cold},
+          "cold_ids=%s" % sorted({h["id"] for h in _cold}))
+
+    # F3c：**回滚档仍可用** —— `memory.forget_archives=False` 走的就是 `_archive_mode()→False`。
+    #      不做这条，一旦有人把解耦写成"只能归档"，回滚开关就成了空话（配置写了不生效）。
+    _orig_am = MemoryService._archive_mode
+    try:
+        MemoryService._archive_mode = staticmethod(lambda _c: False)
+        conn.execute("UPDATE agent_memory SET tier='recall', forgotten=0 WHERE id=?", (_id3,))
+        conn.execute("UPDATE agent_memory SET created_at='2020-01-01 00:00:00', "
+                     "last_accessed_at='2020-01-01 00:00:00' WHERE id=?", (_id3,))
+        conn.commit()
+        MemoryService.forget(conn, agent_id="test_agent", max_unused_days=1,
+                             max_age_days=0, min_access=0)
+        _r3b = conn.execute("SELECT forgotten FROM agent_memory WHERE id=?", (_id3,)).fetchone()
+        check("F3c 回滚档（_archive_mode=False）仍是硬遗忘 forgotten=1",
+              _r3b["forgotten"] == 1, dict(_r3b) if _r3b else None)
+    finally:
+        MemoryService._archive_mode = staticmethod(_orig_am)
 
     # F4: search 排除 archival —— 加一条 recall 的同类记忆，证明 search 能召回 recall 却排除 archival
     _id4 = MemoryService.deposit(conn, "test_agent", "链路预算按功率谱密度估算", mem_type="fact")

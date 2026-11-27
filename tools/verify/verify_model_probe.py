@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# CI-OPTIONAL: 需真实 provider 凭据做功能自检（CI 无 secret），开发机 40/40；不进 CI
 """verify_model_probe —— 锁住「模型测试 = 真实功能验证」的口径（离线确定性）。
 
 ## 背景（2026-11-27 用户需求）

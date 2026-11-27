@@ -299,6 +299,17 @@ async def lifespan(app: FastAPI):
         print("[startup] 作业队列 worker 启动失败（长任务将只能同步跑）：%s" % str(_e)[:160],
               flush=True)
 
+    # ── P0-2（2026-11-27）：记忆周期调度 ──
+    # 必须在 worker **之后**：调度器只负责"到点提交"，没有 worker 就只会积压 queued。
+    # ⚠️ 不改用内存状态判"跑过没有"（重启即失效 ⇒ 每次重启补跑），判据取 job_jobs 历史。
+    try:
+        from services import memory_scheduler as _memsch
+        if _memsch.start():
+            print("[startup] memory-scheduler：维护 + 每日 dream 预览已接管", flush=True)
+    except Exception as _e:
+        print("[startup] 记忆周期调度启动失败（可手动 POST /api/jobs 提交 memory_maintain）：%s"
+              % str(_e)[:160], flush=True)
+
     # ── 2026-11-01 事件源注册（文档入库 = 第一个真实源）──
     # ⚠️ **注册不等于启用**：来源注册只是让底座认识这个 kind，
     #    事件仍按 observe 模式记录、**不执行任何动作**。

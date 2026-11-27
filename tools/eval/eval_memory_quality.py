@@ -35,7 +35,9 @@
     # 默认只读生产库副本；--apply 才会写 eval_reports
 """
 import argparse
+import hashlib
 import json
+import math
 import os
 import sqlite3
 import sys
@@ -45,6 +47,37 @@ ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 sys.path.insert(0, ROOT)
 
 from agent.memory_recall import recall_memories  # noqa: E402
+
+FP_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                       "memory_eval_fingerprints.json")
+DEFAULT_SEM_SIM = 0.90
+
+
+# ══════════════════════════════════════════════════════════════════════
+# 内容指纹（P0-4，2026-11-27）—— 判据的**单一真源**
+#
+# ⚠️ 归一化只在这里实现一次：`reanchor_memory_fingerprints.py` 直接 import 本函数。
+#   曾经"生成器写一份、评测写一份"的形态必然漂移（本仓同类事故已多次：同一枚举两份必错）。
+# 归一化范围刻意保守：全角转半角、去空白/标点、小写。
+#   不做同义词、不做语序、不做截断 —— 那是"语义等价"判据的事；
+#   混进来会让指纹失去"可复现"这一唯一价值。
+# ══════════════════════════════════════════════════════════════════════
+def norm_content(s) -> str:
+    out = []
+    for ch in str(s or ""):
+        code = ord(ch)
+        if code == 0x3000:                      # 全角空格
+            continue
+        if 0xFF01 <= code <= 0xFF5E:            # 全角 ASCII → 半角
+            ch = chr(code - 0xFEE0)
+        if ch.isalnum() or ("\u4e00" <= ch <= "\u9fff"):
+            out.append(ch.lower())
+    return "".join(out)
+
+
+def fingerprint(s) -> str:
+    n = norm_content(s)
+    return hashlib.md5(n.encode("utf-8")).hexdigest() if n else ""
 
 # ══════════════════════════════════════════════════════════════════════
 # 评测集：从生产库真实记忆反推（2026-10-07 实测快照，用 id锚定防漂移）
@@ -67,8 +100,15 @@ T_CASES = [
          expect=[165, 166], why="X 必须是 requirement usage（access 97/69）"),
     dict(id="T05", q="SysML v2 接口建模常见陷阱", intent="design",
          expect=[145], why="端口名不可与 port 等保留字同名（access=69）"),
+    # ★ 2026-11-27（P0-4）：`ref_text` 是**手写参照**，用于锚点行已被彻底删除的用例。
+    #   原锚 id=266 已不在库（连正文都取不到）⇒ 指纹快照与语义等价都无从生成，
+    #   该用例会退化成 STALE（不测任何东西）。补上它要测的那条事实本身，
+    #   判据即可继续工作：库里只要还有"讲这件事"的条目，就能通过语义等价命中。
     dict(id="T06", q="需求建模时绑定主体和声明被满足能同时用吗", intent="requirement_analysis",
-         expect=[266], why="二者互斥，否则模型校验不通过（access=64）"),
+         expect=[266], why="二者互斥，否则模型校验不通过（access=64）",
+         ref_text="需求建模时，requirement 实例若已用 subject = x 绑定主体，"
+                  "就不能再用 satisfy r by x.y 声明被满足；二者互斥，"
+                  "同时使用会让模型校验报 Cannot override a binding feature value。"),
     dict(id="T07", q="涉众追溯应该挂在哪类需求上", intent="knowledge_qa",
          expect=[268], why="挂在关注点需求与参与者信息需求上（access=62）"),
     dict(id="T08", q="通信卫星总体设计先做什么", intent="design",
@@ -178,40 +218,144 @@ def _fid_set(hits):
     return out
 
 
-def run_case(conn, case, kind, expect=None):
-    """跑单条，返回 (pass, detail)。
+def _cos(a, b) -> float:
+    q = math.sqrt(sum(x * x for x in a)) or 1.0
+    w = math.sqrt(sum(y * y for y in b)) or 1.0
+    return sum(x * y for x, y in zip(a, b)) / (q * w)
 
-    `expect` 由调用方传入**重锚后的有效 id 集合**（2026-11-16）；
-    不传则退回用例原始 expect（兼容旧调用者）。
+
+def load_fingerprints(path: str = FP_PATH) -> dict:
+    """读内容指纹快照；缺失/损坏 → {}（退化为纯 id 锚 + 语义等价，不阻断评测）。"""
+    try:
+        with open(path, encoding="utf-8") as f:
+            return (json.load(f) or {}).get("cases") or {}
+    except Exception:
+        return {}
+
+
+def alive_rows(conn) -> list:
+    """**可被召回**的条目（口径与 `MemoryService.search` 对齐）。
+
+    刻意把 5 类排除掉：forgotten / archival / contradicted / superseded / 有效期已关。
+    否则"期望 id 明明在库里"却永远召不回来，会把"口径不允许召回"错报成"召回失败"。
+    列缺失（老库/夹具）时不拼该条件 —— 与生产代码同一套守卫。
     """
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(agent_memory)").fetchall()}
+    where = ["COALESCE(forgotten,0)=0"]
+    if "tier" in cols:
+        where.append("(tier IS NULL OR tier != 'archival')")
+    if "verify_state" in cols:
+        where.append("COALESCE(verify_state,'unverifiable')!='contradicted'")
+    if "superseded_by" in cols:
+        where.append("COALESCE(superseded_by,0)=0")
+    if "valid_to" in cols:
+        where.append("(valid_to IS NULL OR TRIM(valid_to)='')")
+    sql = ("SELECT id, content, embedding, embed_version, mem_topic FROM agent_memory WHERE "
+           + " AND ".join(where))
+    rows = []
+    for r in conn.execute(sql):
+        d = dict(r) if hasattr(r, "keys") else {"id": r[0], "content": r[1],
+                                                "embedding": r[2], "embed_version": r[3],
+                                                "mem_topic": r[4]}
+        try:
+            d["vec"] = json.loads(d["embedding"]) if isinstance(d.get("embedding"), str) else (
+                d.get("embedding") or [])
+        except Exception:
+            d["vec"] = []
+        d["fp"] = fingerprint(d.get("content") or "")
+        rows.append(d)
+    return rows
+
+
+def _embed_refs(conn, texts):
+    """参照正文 → (向量列表, 版本)。降级（bigram）时版本返回 'bigram-tf'。"""
+    if not texts:
+        return [], ""
+    try:
+        from knowledge_pipeline.embedder import Embedder
+        vecs, ver = Embedder(conn).embed_with_version(list(texts), batch_size=0)
+        if vecs and len(vecs) == len(texts) and ver and ver != "bigram-tf":
+            return vecs, ver
+    except Exception:
+        pass
+    try:
+        from knowledge_pipeline.vector_engine import VectorEngine
+    except Exception:
+        from services.knowledge_engine import VectorEngine
+    ve = VectorEngine()
+    return [ve._vector(t) for t in texts], "bigram-tf"
+
+
+def equiv_ids(case, refs, refs_vec, ver, rows, sim):
+    """本用例的「语义等价集合」→ (ids, detail)。
+
+    三个来源（并集），对应三种"锚点失效但用例仍有判别力"的情形：
+      ① **anchor**：`expect` / `REANCHOR_ALIVE` 里的 id 且当前可召回（旧判据，逐字保留）；
+      ② **fingerprint**：内容归一化 md5 与参照相同（同一条被删后**重沉淀**，新 id 但同文）；
+      ③ **semantic**：与参照正文余弦 ≥ `sim`（改写版 —— 指纹抓不到，只有向量能抓）。
+    ⚠️ ③ 是**放宽**，必须单独报数：本脚本同时输出「严格 id 命中率」与「等价命中率」，
+      只用后者会把"评测变松"伪装成"质量变好"。
+    """
+    anchor = set()
+    reanchor = REANCHOR_ALIVE.get(case["id"])
+    base = reanchor if reanchor is not None else (case.get("expect") or [])
+    for i in base:
+        try:
+            anchor.add(int(i))
+        except Exception:
+            pass
+    ids_alive = {int(r["id"]) for r in rows}
+    anchor &= ids_alive
+    fps = {r["fp"] for r in refs if r.get("fp")}
+    fp_hit = {int(r["id"]) for r in rows if r["fp"] in fps} if fps else set()
+    sem_hit = set()
+    if refs_vec:
+        for i, v in enumerate(refs_vec):
+            if not v:
+                continue
+            for r in rows:
+                if ver == "bigram-tf":
+                    if not r.get("vec"):
+                        continue
+                    if _cos(v, r["vec"]) >= sim:
+                        sem_hit.add(int(r["id"]))
+                else:
+                    # 真向量口径：只与**同版本**的库存向量比（跨版本物理不可比）
+                    if r.get("embed_version") != ver or not r.get("vec"):
+                        continue
+                    if _cos(v, r["vec"]) >= sim:
+                        sem_hit.add(int(r["id"]))
+    allids = anchor | fp_hit | sem_hit
+    return allids, {"anchor": sorted(anchor), "fp": sorted(fp_hit - anchor),
+                    "sem": sorted(sem_hit - anchor - fp_hit), "sim": sim, "ver": ver}
+
+
+def judge(case, kind, got_ids, strict_ids, equiv, max_hits=None, want_min=1):
+    """判定 → (ok, detail)。N 组（拒答）只判 forbid，不涉及等价集合。"""
+    if kind == "N":
+        leaked = got_ids & set(case.get("forbid") or [])
+        return (not leaked), {"leaked": sorted(leaked)}
+    s_hit = got_ids & set(strict_ids)
+    e_hit = got_ids & set(equiv)
+    strict_ok = len(s_hit) >= want_min
+    if strict_ok and max_hits is not None:
+        strict_ok = len(s_hit) <= max_hits
+    ok = len(e_hit) >= want_min
+    if ok and max_hits is not None:
+        ok = len(e_hit) <= max_hits
+    return ok, {"matched": sorted(e_hit), "strict_matched": sorted(s_hit),
+                "strict_ok": bool(strict_ok), "want_min": want_min,
+                "max_hits": max_hits, "want": case.get("expect", [])}
+
+
+def run_case(conn, case, kind):
+    """跑一次召回，返回 (hits, got_ids, top1, snippet)。判定交给 `judge()`。"""
     hits = recall_memories(conn, case["q"], agent_id=case["intent"],
                           scopes=None, project_id="")
     got_ids = _fid_set(hits)
     top1 = f"{hits[0]['score']:.3f}" if hits else "-"
     snippet = (hits[0]["content"][:38] if hits else "(空)")
-    if kind == "N":
-        # 拒答组：期望 forbid 的都不出现
-        leaked = got_ids & set(case["forbid"])
-        return (not leaked), {
-            "q": case["q"], "top1": top1, "hits": len(hits),
-            "leaked": sorted(leaked), "why": case["why"], "top1_text": snippet}
-    # 命中组：期望 id 至少出现 want_min 条
-    want_min = case.get("want_min", 1)
-    effective = set(case["expect"]) if expect is None else set(expect)
-    hit = got_ids & effective
-    # ★ 2026-10-22 新增：可选的**污染上限** max_hits（同 topic 最多召回几条）。
-    #   为什么需要它：C01 声明测"同 topic 多条是否污染排序"，但只有 want_min=1
-    #   ⇒ 实测 matched=[133,134,135]（三条同源**全部**召回）也判 PASS。
-    #   **D1 冲突仲裁上线与否，这个用例都绿** ⇒ 判据失效、基线无意义。
-    #   加上 max_hits 后它才真正在测"污染"：命中≥1 且同源召回≤上限。
-    max_hits = case.get("max_hits")
-    ok = (len(hit) >= want_min)
-    if ok and max_hits is not None:
-        ok = (len(hit) <= max_hits)
-    return ok, {
-        "q": case["q"], "top1": top1, "hits": len(hits),
-        "matched": sorted(hit), "want_min": want_min, "max_hits": max_hits,
-        "want": case["expect"], "why": case["why"], "top1_text": snippet}
+    return hits, got_ids, top1, snippet
 
 
 def main():
@@ -220,6 +364,10 @@ def main():
     ap.add_argument("--json-out", default="")
     ap.add_argument("--apply", action="store_true",
                     help="写入 eval_reports（默认只读，避免污染生产库）")
+    ap.add_argument("--sem-sim", type=float, default=DEFAULT_SEM_SIM,
+                    help="语义等价阈值（默认 0.90；调高=更严。改它等于改判据，报告必须带此参数）")
+    ap.add_argument("--strict", action="store_true",
+                    help="只按 id 锚判定（回滚到 2026-11-16 口径，用于对照）")
     args = ap.parse_args()
 
     # ⚠️ `--apply` 必须用**可写**连接（2026-10-07 实测踩到）：
@@ -234,10 +382,15 @@ def main():
         conn.row_factory = sqlite3.Row
     # 确认评测集锚定的 id 仍在库中（被删则 skipped，不判FAIL）
     alive = {r[0] for r in conn.execute("SELECT id FROM agent_memory")}
+    rows = alive_rows(conn)
+    fps_all = load_fingerprints()
 
     results, n_pass, n_fail, n_skip = [], 0, 0, 0
+    n_strict_pass = 0
     print("=" * 74)
     print("记忆质量评测基准（D5）  db=%s" % os.path.basename(args.db))
+    print("判据：内容指纹 + 语义等价集合（sem=%.2f）%s"
+          % (args.sem_sim, "  [--strict：只看 id 锚]" if args.strict else ""))
     print("=" * 74)
 
     for group, cases, kind in (("T 信息抽取", T_CASES, "T"),
@@ -246,75 +399,112 @@ def main():
                                ("N 拒答/噪音", N_CASES, "N")):
         print("\n== %s ==" % group)
         for cs in cases:
-            # ★ 2026-11-16：用**重锚后的有效 id**判 SKIP/评测，不再拿 10-07 的
-            #   已遗忘锚点判"召回失败"（那是库内容变化，不是算法退化）。
-            # N 组用 `forbid` 而非 `expect`（拒答组没有"期望命中"），
-            # 这里给它空集即可 —— run_case 的 N 分支只读 forbid。
-            effective = (_effective_expect(cs, alive) if kind != "N"
-                         else set(cs.get("expect") or []))
-            if kind != "N" and not effective:
-                print("  SKIP %s （%s）" % (cs["id"], REANCHOR_SKIP_WHY))
-                n_skip += 1
-                # 也要落进 results：否则汇总处的 SKIP 明细取不到，
-                # 且 JSON 报告里看不到"哪条失效了"（静默缩水）。
-                results.append({"id": cs["id"], "kind": kind, "status": "skip",
-                                "passed": None, "why": REANCHOR_SKIP_WHY,
-                                "want": cs.get("expect", []),
-                                "matched": [],
-                                "reanchor": REANCHOR_ALIVE.get(cs["id"])})
+            if kind == "N":
+                hits, got_ids, top1, snippet = run_case(conn, cs, kind)
+                ok, d = judge(cs, kind, got_ids, set(), set())
+                results.append(dict(case=cs["id"], kind=kind, passed=ok,
+                                    q=cs["q"], top1=top1, hits=len(hits),
+                                    why=cs["why"], top1_text=snippet, **d))
+                if ok:
+                    n_pass += 1
+                    print("  ok   %s  top1=%s hits=%d  %s"
+                          % (cs["id"], top1, len(hits), cs["why"][:34]))
+                else:
+                    n_fail += 1
+                    print("  FAIL %s  top1=%s hits=%d  泄漏 %s | top1=%s"
+                          % (cs["id"], top1, len(hits), d.get("leaked"), snippet))
                 continue
-            ok, d = run_case(conn, cs, kind, expect=effective)
-            if kind != "N" and REANCHOR_ALIVE.get(cs["id"]) is not None:
-                d["reanchor"] = sorted(effective)
-                d["original_expect"] = cs.get("expect", [])
-            results.append(dict(case=cs["id"], kind=kind, passed=ok, **d))
+
+            # ── 参照集合：快照指纹（含已遗忘/已删行的正文）+ 可选手写 ref_text ──
+            refs = list(fps_all.get(cs["id"]) or [])
+            if cs.get("ref_text"):
+                refs.append({"id": 0, "head": cs["ref_text"],
+                             "fp": fingerprint(cs["ref_text"])})
+            refs_vec, ver = ([], "") if args.strict else _embed_refs(
+                conn, [r.get("head") or "" for r in refs if (r.get("head") or "").strip()])
+            if not args.strict and refs_vec and len(refs_vec) != len(
+                    [r for r in refs if (r.get("head") or "").strip()]):
+                refs_vec = []          # 长度对不上 ⇒ 宁可不判语义，也不张冠李戴
+            equiv, ed = equiv_ids(cs, refs, refs_vec, ver, rows, args.sem_sim)
+            reanchor = REANCHOR_ALIVE.get(cs["id"])
+            base = reanchor if reanchor is not None else (cs.get("expect") or [])
+            strict_ids = {int(i) for i in base if str(i).isdigit()} & alive
+
+            if not equiv:
+                print("  STALE %s（库内已无参照、也无语义等价 —— 不是召回失败；"
+                      "该用例已失去判别力，应补 ref_text 或下线）" % cs["id"])
+                n_skip += 1
+                results.append({"id": cs["id"], "kind": kind, "status": "stale",
+                                "passed": None, "why": REANCHOR_SKIP_WHY,
+                                "want": cs.get("expect", []), "matched": [],
+                                "reanchor": reanchor})
+                continue
+
+            hits, got_ids, top1, snippet = run_case(conn, cs, kind)
+            ok, d = judge(cs, kind, got_ids, strict_ids, equiv,
+                          max_hits=cs.get("max_hits"), want_min=cs.get("want_min", 1))
+            if d.get("strict_ok"):
+                n_strict_pass += 1
+            results.append(dict(case=cs["id"], kind=kind, passed=ok,
+                                q=cs["q"], top1=top1, hits=len(hits),
+                                why=cs["why"], top1_text=snippet,
+                                strict_ids=sorted(strict_ids), eq=ed,
+                                reanchor=reanchor, **d))
             if ok:
                 n_pass += 1
-                print("  ok   %s  top1=%s hits=%d  %s" % (cs["id"], d["top1"], d["hits"], d["why"][:34]))
+                print("  ok   %s  top1=%s hits=%d  命中 %s%s  %s"
+                      % (cs["id"], top1, len(hits), d["matched"],
+                         "" if d.get("strict_ok") else "（*仅语义等价，id 锚未命中）",
+                         cs["why"][:28]))
             else:
                 n_fail += 1
-                extra = ("泄漏 %s" % d["leaked"]) if kind == "N" else (
-                    "命中 %s（要 %d）" % (d["matched"], d["want_min"]))
-                print("  FAIL %s  top1=%s hits=%d  %s | top1=%s"
-                      % (cs["id"], d["top1"], d["hits"], extra, d["top1_text"]))
+                print("  FAIL %s  top1=%s hits=%d  命中 %s（要 %d） 等价集合 %d 条 | top1=%s"
+                      % (cs["id"], top1, len(hits), d["matched"], d["want_min"],
+                         len(equiv), snippet))
 
     total = n_pass + n_fail
     rate = (n_pass / total) if total else 0.0
     print("\n" + "=" * 74)
-    print("PASS %d / FAIL %d / SKIP %d  →  命中率 %.1f%%"
+    print("PASS %d / FAIL %d / STALE %d  →  等价命中率 %.1f%%"
           % (n_pass, n_fail, n_skip, rate * 100))
+    # ★ 双口径并列：等价判据是**放宽**，不并列就等于把"评测变松"报成"质量变好"。
+    print("（对照）严格 id 口径：%d/%d = %.1f%%"
+          % (n_strict_pass, total, (n_strict_pass / total * 100) if total else 0.0))
     print("=" * 74)
 
-    # ⚠️ SKIP 不得静默（2026-10-22 补）。SKIP = 评测集锚定的记忆已不在库中。
-    #   它的危险在于：**命中率把 SKIP 排除在分母外**，于是"用例失效"表现为
+    # ⚠️ STALE 不得静默（2026-10-22 补，2026-11-27 改名）。STALE = 库内已无该能力的任何等价条目。
+    #   它的危险在于：**命中率把 STALE 排除在分母外**，于是"用例失效"表现为
     #   "覆盖率下降"而非"失败"——数字看着正常，实际上这条用例已经不测任何东西了。
-    #   实测 T06 已 SKIP（锚定记忆被删），而汇总行此前不给出任何提示。
     if n_skip:
-        print("⚠ SKIP %d 条：评测集锚定的记忆已不在库中（本组已不产生判别力）。"
+        print("⚠ STALE %d 条：库内找不到任何语义等价条目（本组已不产生判别力）。"
               % n_skip)
-        print("  SKIP 不计入命中率分母，故上面那个百分数**不代表全部用例有效**。")
-        print("  处理：重锚（换 expect id）或删除该用例，别让基线静默缩水。")
-        print("  SKIP 明细：%s"
-              % ", ".join(r["id"] for r in results if r.get("status") == "skip")
-              if any(r.get("status") == "skip" for r in results)
-              else "  SKIP 明细：（见上方逐行输出）")
+        print("  STALE 不计入命中率分母，故上面那个百分数**不代表全部用例有效**。")
+        print("  处理：在该用例上补 `ref_text`（手写它要测的那条事实），或下线该用例，"
+              "别让基线静默缩水。")
+        print("  STALE 明细：%s"
+              % ", ".join(r["id"] for r in results if r.get("status") == "stale"))
 
     # 分类小计（哪类能力拖后腿，一眼可见）
     for g, kind in (("T", "T"), ("M", "M"), ("C", "C"), ("N", "N")):
-        # SKIP 不算"未通过"（它是"不测了"而非"测了没过"），
+        # STALE 不算"未通过"（它是"不测了"而非"测了没过"），
         # 但要在小计里显出来，否则组内通过率会被稀释得不明不白。
-        sub = [r for r in results if r["kind"] == kind and r.get("status") != "skip"]
+        sub = [r for r in results if r["kind"] == kind and r.get("status") != "stale"]
         if sub:
             p = sum(1 for r in sub if r["passed"])
-            ns = sum(1 for r in results if r["kind"] == kind and r.get("status") == "skip")
-            print("  %s 组: %d/%d%s" % (g, p, len(sub),
-                                        ("（另有 %d 条 SKIP 不计）" % ns) if ns else ""))
+            ns = sum(1 for r in results if r["kind"] == kind and r.get("status") == "stale")
+            sp = sum(1 for r in sub if r.get("strict_ok"))
+            print("  %s 组: %d/%d%s（严格 id 口径 %d/%d）"
+                  % (g, p, len(sub), ("（另有 %d 条 STALE 不计）" % ns) if ns else "",
+                     sp, len(sub)))
 
     if args.json_out:
         with open(args.json_out, "w", encoding="utf-8") as f:
             json.dump(dict(ts=time.strftime("%Y-%m-%d %H:%M:%S"),
                            db=os.path.basename(args.db),
+                           sem_sim=None if args.strict else args.sem_sim,
+                           strict=bool(args.strict),
                            pass_=n_pass, fail=n_fail, skip=n_skip,
+                           strict_pass=n_strict_pass,
                            rate=round(rate, 4), results=results),
                       f, ensure_ascii=False, indent=2)
         print("\nJSON 已写出: %s" % args.json_out)

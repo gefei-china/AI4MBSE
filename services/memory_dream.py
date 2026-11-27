@@ -30,10 +30,13 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import re
 from datetime import datetime
 
 from services.memory_service import MemoryService
+
+_LOG = logging.getLogger("mbse.memory")
 
 SCHEMA = 1
 MAX_INDEX_LINES = 200
@@ -317,27 +320,108 @@ def _merge_candidates(conn, limit: int = 5) -> list:
 
 
 def _tier_candidates(conn, limit: int = 6) -> list:
-    """按访问频次/新鲜度给上下推建议（shape injected context）。"""
+    """按访问频次/新鲜度给上下推建议（shape injected context）。
+
+    ★ 2026-11-27（P1-6）：新增 `revive` 分支 —— 冷层（archival）里**仍有使用证据**的条目
+      应当回流，而不是永久沉底。判据必须能区分"归档后又被用到"与"归档前最后一次用"：
+        `last_accessed_at >= archived_at`（`archived_at` 为空 = 迁库前就已归档，时刻未知
+        ⇒ 只要 access_count>0 就允许提一次，交 HIL 判；**不自动落库**，仍走 apply 门）。
+      ⚠️ 不能拿"access_count 高"当复活判据：search 对 archival 本来就不召回，
+        计数冻结在归档前 —— 用它判会变成"归档时热的一条永久优先复活"。
+    """
+    try:
+        _cols = {r[1] for r in conn.execute("PRAGMA table_info(agent_memory)").fetchall()}
+    except Exception as exc:  # noqa: BLE001
+        _LOG.warning("分层候选：读表结构失败（本次不产出 promote/demote/revive）：%s: %s",
+                     type(exc).__name__, str(exc)[:120])
+        return []
+    _has_arch_at = "archived_at" in _cols
+    _sel = ("id, tier, access_count, last_accessed_at, mem_topic"
+            + (", archived_at" if _has_arch_at else ""))
     try:
         rows = [dict(r) for r in conn.execute(
-            "SELECT id, tier, access_count, last_accessed_at, mem_topic "
-            "FROM agent_memory WHERE COALESCE(forgotten,0)=0 AND tier IS NOT NULL")]
-    except Exception:
+            "SELECT " + _sel + " FROM agent_memory WHERE COALESCE(forgotten,0)=0 "
+            "AND tier IS NOT NULL")]
+    except Exception as exc:  # noqa: BLE001
+        _LOG.warning("分层候选：查询失败（本次不产出 promote/demote/revive）：%s: %s",
+                     type(exc).__name__, str(exc)[:120])
         return []
-    out = []
+    # ★★ 2026-11-27 真机验证抓到的缺陷：配额原先**全局一个 `limit` 且顺序扫**，
+    #   `promote` 一类就能把 6 个名额吃光（实测：archive 里明明有一条"归档后又被访问"，
+    #   `dream()` 却产出 revive=0 —— 因为它排在 6 条 promote 之后，`len(out) >= limit` 直接 break）。
+    #   后果是**整条复活通道形同虚设**，而候选包里看数字完全正常（有 6 条建议、只是没 revive）。
+    #   ⇒ 改成**按动作分桶、各自配额**：revive 优先（稀缺且不可替代），
+    #     剩余额度再给 promote/demote —— 任何一类都挤不掉另一类。
+    # ★★ 2026-11-27（第二次真机验证）promote 判据 `access>=5` 是随手取的，实测**病灶很大**：
+    #   生产库 257 条可召回行里 **209 条（81%）** 的 access_count >= 5
+    #   （median=20、max=2090）⇒ 若按 5 判，`core` 会收进 81% 的行，而这个 tier 的语义是
+    #   **无条件常驻注入**。后果是"永远有 promote 候选、永远注水"，而 `by_tier.core`
+    #   这个周报数字立刻失去意义。且 `demote` 只在"无 last_accessed"时触发 ⇒ core **单调膨胀**。
+    #   ⇒ 三条一起改（缺一都治不干净）：
+    #     ① 门槛按**分位数**取（`memory.promote_min_access`，默认 100 ≈ top 16%），
+    #        不再用 5 这种"人人都过"的值；
+    #     ② **硬上限** `memory.core_max`（默认 8）：满了就不再 promote，并在 reason 里写明
+    #        "core 已满"——不静默截断，否则会看成"没有候选"；
+    #     ③ `demote` 补一条**自清理**：core 里 access 已低于当前门槛的，降回 recall
+    #        （门槛上移后旧 core 自动出清，而不是靠"无访问"这种极少发生的条件）。
+    _REVIVE_QUOTA = max(2, limit // 2)
+    try:
+        from core import config as _cfg_t
+        _promote_min = int(_cfg_t.get("memory", "promote_min_access", 100))
+        _core_max = int(_cfg_t.get("memory", "core_max", 8))
+    except Exception as exc:  # noqa: BLE001
+        # 读配置失败用默认值，但留痕：core 上限被静默换成默认值时，
+        # 表现是"core 里躺了 20 条却不 promote"，看不出是配置没读到。
+        _LOG.warning("分层候选：读 promote 门槛失败（用默认 100/8）：%s: %s",
+                     type(exc).__name__, str(exc)[:120])
+        _promote_min, _core_max = 100, 8
+    revive_bucket, tier_bucket = [], []
+    _core_sz = sum(1 for r in rows if r["tier"] == "core")
     for r in rows:
         ac = int(r.get("access_count") or 0)
         last = str(r.get("last_accessed_at") or "")
-        if r["tier"] == "recall" and ac >= 5 and last:
-            out.append({"action": "promote", "memory_id": r["id"],
-                        "to_tier": "core", "reason": "访问 %d 次且近期命中" % ac,
-                        "confidence": 0.7})
-        elif r["tier"] == "core" and not last:
-            out.append({"action": "demote", "memory_id": r["id"],
-                        "to_tier": "recall", "reason": "core 但无最近访问记录",
-                        "confidence": 0.5})
-        if len(out) >= limit:
-            break
+        if r["tier"] == "archival":
+            # 冷层 → 复活（仅在"归档之后又被访问过"或"归档时刻未知但有访问"时提）
+            _arch = str(r.get("archived_at") or "")
+            if ac > 0 and (not _arch or (last and last >= _arch)):
+                revive_bucket.append({
+                    "action": "revive", "memory_id": r["id"], "to_tier": "recall",
+                    "reason": ("归档后仍被访问 %d 次（最后 %s）" % (ac, last[:16])
+                               if _arch else "迁库前已归档且访问 %d 次，待人工判是否回流" % ac),
+                    "confidence": 0.6 if _arch else 0.4})
+        elif r["tier"] == "recall" and ac >= _promote_min and last:
+            if _core_sz >= _core_max > 0:
+                # 满了要**说出来**：否则"没候选"与"配额满"同形
+                tier_bucket.append({"action": "skip", "memory_id": r["id"],
+                                    "reason": "core 已满（%d/%d），跳过 promote" % (_core_sz, _core_max),
+                                    "confidence": 0.0})
+            else:
+                tier_bucket.append({"action": "promote", "memory_id": r["id"],
+                                    "to_tier": "core",
+                                    "reason": "访问 %d 次（≥门槛 %d）且近期命中" % (ac, _promote_min),
+                                    "confidence": 0.7, "_access": ac})
+                _core_sz += 1
+        elif r["tier"] == "core" and (not last or ac < _promote_min):
+            tier_bucket.append({"action": "demote", "memory_id": r["id"],
+                                "to_tier": "recall",
+                                "reason": ("core 但无最近访问记录" if not last
+                                           else "core 但访问 %d 次已低于门槛 %d（自清理）"
+                                                % (ac, _promote_min)),
+                                "confidence": 0.5, "_access": ac})
+    out = revive_bucket[:_REVIVE_QUOTA]
+    # `skip` 不是动作，只是"为什么没动作"的留痕；不占配额、也不进 apply
+    out += [c for c in tier_bucket if c["action"] == "skip"][:2]
+    # 名额有限时**按访问量降序**取（不是按 id 顺序）。
+    # ⚠️ 这条不是风格问题：core 被硬上限限成 8 条后，"取哪 8 条"直接决定注入质量；
+    #   按 id 取等于"先入库的赢"，与"最值钱的常驻"这个语义无关（实测 id 顺序与 access 无关）。
+    _acts = [c for c in tier_bucket if c["action"] != "skip"]
+    # demote 优先（先把水排掉才有名额给 promote）；同类按**实际访问量**降序。
+    # `_access` 随候选一起带出去：它是"为什么排这一条"的唯一依据，不带出来就无法复核。
+    _acts.sort(key=lambda c: (0 if c["action"] == "demote" else 1, -int(c.get("_access") or 0)))
+    _picked = _acts[:max(0, limit - len(out))]
+    for _c in _picked:
+        _c.pop("_access", None)          # 只用于排序，不外泄成对外契约
+    out += _picked
     return out
 
 
@@ -538,11 +622,21 @@ def dream(conn, *, agent_id: str = "", sessions: int = 10,
     """
     snapshot = _input_snapshot(conn)
     input_sha = _sha256(snapshot)
+    # P1-6（2026-11-27）：冷层不进"笔记对账"。
+    # 归档层的语义是"当前不相关但保留"，拿它跟流水对账会把它重新拉回评估面，
+    # 且它的 verify_state 早已定过 —— 复算只会白花证据检索。
+    try:
+        _tcols = {r[1] for r in conn.execute("PRAGMA table_info(agent_memory)").fetchall()}
+    except Exception:
+        _tcols = set()
+    _note_where = "WHERE COALESCE(forgotten,0)=0"
+    if "tier" in _tcols:
+        _note_where += " AND (tier IS NULL OR tier != 'archival')"
     try:
         notes = [dict(r) for r in conn.execute(
             "SELECT id, content, mem_topic, mem_type, verify_state, evidence_ref, "
             "source_credibility, tier, access_count, last_accessed_at "
-            "FROM agent_memory WHERE COALESCE(forgotten,0)=0 ORDER BY id LIMIT ?",
+            "FROM agent_memory " + _note_where + " ORDER BY id LIMIT ?",
             (note_limit,))]
     except Exception:
         notes = [dict(r) for r in conn.execute(
@@ -578,7 +672,9 @@ def dream(conn, *, agent_id: str = "", sessions: int = 10,
                      "contradicted": sum(1 for c in candidates if c.get("state") == "contradicted"),
                      "create": sum(1 for c in candidates if c["action"] == "create"),
                      "merge": sum(1 for c in candidates if c["action"] == "merge"),
-                     "tier": sum(1 for c in candidates if c["action"] in ("promote", "demote"))},
+                     "tier": sum(1 for c in candidates if c["action"] in ("promote", "demote")),
+                     # P1-6：冷层回流候选单列，避免与 promote 混成一个数（二者动作相反）
+                     "revive": sum(1 for c in candidates if c["action"] == "revive")},
            "candidates": candidates, "wiki": wiki, "index": index,
            "metrics": {}, "read_only": True}
     pkg["metrics"] = metrics(pkg)
@@ -591,8 +687,24 @@ def apply_candidates(conn, package: dict, *, hil_approved: bool = False,
 
     没批准就一个字节都不写。这条是 Anthropic「错误笔记被提升到 injected context
     会污染每个会话」的对应防线，也是本仓 B1 纪律的延续。
+
+    ★ 2026-11-27（P0-1）：此前**只有 `correct` 分支**，于是 `dream()` 明明产出了
+      merge / promote / demote 候选（`_merge_candidates` / `_tier_candidates`），
+      批准后却一条都不落库 —— 候选包看着"有建议"，实际**四分之三的动作是死的**。
+      实测生产库现状即：12 条 superseded_by、0 条由 dream 产生的层级变更。
+
+      四条动作一律**只改状态**，全部可回退（`valid_to`/`superseded_by`/`tier` 都能改回）：
+        · correct  → verify_state + evidence_ref（原行为，逐字不变）
+        · merge    → 非保留条标 `superseded_by=keep_id`（**不置 forgotten、不改正文**）
+        · promote  → `tier` 升 core
+        · demote   → `tier` 降 recall
+        · revive   → 冷层回流：`tier='recall'` + 清 forgotten/valid_to
+
+      ⚠️ merge 刻意**不用 forgotten=1**：那是"软删"，而合并的语义是"这条有更新的版本"。
+        两者在召回上是等效的（都被排除），但在**可回溯性**上完全不同 —— 软删后
+        `restore` 只能整条复活，而 superseded 链能回答"它被哪条取代了"。
     """
-    out = {"ok": False, "applied": 0, "reason": "", "fingerprint": ""}
+    out = {"ok": False, "applied": 0, "reason": "", "fingerprint": "", "detail": {}}
     if not package or not isinstance(package, dict):
         out["reason"] = "EMPTY_PACKAGE"
         return out
@@ -603,15 +715,66 @@ def apply_candidates(conn, package: dict, *, hil_approved: bool = False,
     if _sha256(_input_snapshot(conn)) != package.get("input_sha256"):
         out["reason"] = "INPUT_STORE_CHANGED"
         return out
+    detail = {"correct": 0, "merge": 0, "promote": 0, "demote": 0, "revive": 0,
+              "skipped": 0, "failed": []}
     for c in package.get("candidates") or []:
-        if c.get("action") != "correct" or c.get("state") not in VALID_STATES:
+        _act = c.get("action")
+        if _act == "correct":
+            if c.get("state") not in VALID_STATES:
+                detail["skipped"] += 1
+                continue
+            if MemoryService.mark_verify_state(
+                    conn, c.get("memory_id"), c["state"],
+                    evidence_ref=c.get("evidence_ref") or "",
+                    note="dream:%s %s" % (package.get("fingerprint", "")[:12],
+                                          (c.get("reason") or "")[:80])):
+                detail["correct"] += 1
+            else:
+                detail["failed"].append(("correct", c.get("memory_id")))
             continue
-        if MemoryService.mark_verify_state(
-                conn, c.get("memory_id"), c["state"],
-                evidence_ref=c.get("evidence_ref") or "",
-                note="dream:%s %s" % (package.get("fingerprint", "")[:12],
-                                      (c.get("reason") or "")[:80])):
-            out["applied"] += 1
+        if _act == "merge":
+            _ids = []
+            for _x in (c.get("memory_ids") or []):
+                try:
+                    _ids.append(int(_x))
+                except Exception as exc:  # noqa: BLE001
+                    _LOG.warning("merge 候选里 memory_ids 含非整数（跳过该项）：%r %s",
+                                 _x, type(exc).__name__)
+            if len(_ids) < 2:
+                detail["skipped"] += 1
+                continue
+            try:
+                _keep = int(c.get("keep_id") or max(_ids))
+            except Exception as exc:  # noqa: BLE001
+                _LOG.warning("merge 候选的 keep_id 非法（退回最大 id=%s）：%s",
+                             max(_ids), type(exc).__name__)
+                _keep = max(_ids)
+            _n = 0
+            for _mid in _ids:
+                if _mid == _keep:
+                    continue
+                if MemoryService.mark_superseded(conn, _mid, _keep):
+                    _n += 1
+            detail["merge"] += _n
+            if not _n:
+                detail["failed"].append(("merge", _ids))
+            continue
+        if _act in ("promote", "demote", "revive"):
+            _mid = c.get("memory_id")
+            _to = str(c.get("to_tier") or ("core" if _act == "promote" else "recall"))
+            if _act == "revive":
+                _ok = MemoryService.revive_memory(conn, _mid)
+            else:
+                _ok = MemoryService.set_tier(conn, _mid, _to)
+            if _ok:
+                detail[_act] += 1
+            else:
+                detail["failed"].append((_act, _mid))
+            continue
+        detail["skipped"] += 1
+    out["applied"] = sum(v for k, v in detail.items()
+                         if k in ("correct", "merge", "promote", "demote", "revive"))
     out["ok"] = True
     out["reason"] = "APPLIED_STATES_ONLY"
+    out["detail"] = detail
     return out

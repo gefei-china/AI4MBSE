@@ -93,8 +93,51 @@ _ms = open(os.path.join(ROOT, "services/memory_service.py"), encoding="utf-8").r
 _dit = _ms[_ms.find("def deposit("):_ms.find("def record_access(")]
 ck("UPDATE agent_memory" not in _dit,
    "A4 deposit() 内无 UPDATE agent_memory（仍是 ADD-only，未被改成覆盖写）")
-ck("mark_superseded" not in _dit,
-   "A5 deposit() 不调用 mark_superseded（影子标记由独立入口做，不由写入路径自动触发）")
+# ★ 2026-11-27（P1-7）改写：原判据是**源码文本**断言「deposit 不调用 mark_superseded」，
+#   但写入路径新增了「口径取代」能力（`memory.supersede_on_deposit`）⇒ 文本判据必然红，
+#   而它想保护的东西其实没变：**默认不得由写入路径自动改历史解释权**。
+#   ⇒ 改成**行为判据**（与配置绑定，两条成对，缺一不成立）：
+#     ① 默认配置下：一次带互斥词的写入**不**产生 superseded_by（默认零副作用）；
+#     ② 显式开启后：同一场景**必须**产生（证明能力真的接上了，不是死代码）。
+def _supersede_probe(enabled: bool):
+    """默认关 vs 显式开启：同一条互斥写入是否产生 superseded_by。
+
+    ⚠️ 必须打桩 `_embed`：`deposit` 的取代分支要求**真向量**（不同版本向量物理不可比，
+       这是既有设计），而门禁不能依赖外网 embedding。打桩后相似度由夹具显式指定：
+       cos([0,1,0], [0.45,0.89,0]) ≈ 0.892 ⇒ 落在 [supersede_sim=0.85, dedup_sim=0.95)。
+    """
+    _c = fresh()
+    _orig_embed = MemoryService._embed
+    MemoryService._embed = staticmethod(
+        lambda _conn, t: (([0.0, 1.0, 0.0] if t == C_OLD else [0.45, 0.89, 0.0]), "test-1"))
+    from core import config as _cfgmod
+    _orig_cfg = _cfgmod.get
+    _cfgmod.get = lambda s, k, d=None: (
+        enabled if (s == "memory" and k == "supersede_on_deposit") else _orig_cfg(s, k, d))
+    try:
+        _a = MemoryService.deposit(_c, "design", C_OLD, mem_type="fact", mem_topic="t1",
+                                   scope_type="project", scope_id="p1")
+        _n_before = _c.execute("SELECT COUNT(*) FROM agent_memory").fetchone()[0]
+        MemoryService.deposit(_c, "design", C_NEW, mem_type="fact", mem_topic="t1",
+                              scope_type="project", scope_id="p1")
+        _n_after = _c.execute("SELECT COUNT(*) FROM agent_memory").fetchone()[0]
+        _row = _c.execute("SELECT id, superseded_by FROM agent_memory WHERE id=?",
+                          (_a,)).fetchone()
+        return dict(_row), _n_before, _n_after
+    finally:
+        MemoryService._embed = staticmethod(_orig_embed)
+        _cfgmod.get = _orig_cfg
+        _c.close()
+
+
+_r_def, _nb, _na = _supersede_probe(False)
+ck(int(_r_def["superseded_by"] or 0) == 0 and _nb == 1 and _na == 2,
+   "A5 默认配置下 deposit 不标记 superseded_by（写入路径不自动改历史解释权）"
+   "  sup=%s rows=%s→%s" % (_r_def.get("superseded_by"), _nb, _na))
+_r_on, _nb2, _na2 = _supersede_probe(True)
+ck(int(_r_on["superseded_by"] or 0) > 0,
+   "A5b 显式开启 supersede_on_deposit 后同一场景必须标记（能力非死代码）"
+   "  sup=%s rows=%s→%s" % (_r_on.get("superseded_by"), _nb2, _na2))
 # 互斥词表不得含高频技术限定词
 ck(not any(m in ("不是", "而非", "而不是") for m in MemoryService._CONFLICT_MARKERS),
    "A6 互斥词表**不含**「不是/而非/而不是」（实测会误伤 SysML 标准限定句式）")
@@ -330,11 +373,16 @@ except AssertionError as e:
 
 # M3 影子标记改成真删（覆盖内容）⇒破坏可回退
 try:
+    # ★ 2026-11-27：锚点改指 `_supersede_sql()`（SQL 的唯一构造点）。
+    #   原锚点内联在 mark_superseded 里，P1-7 给它加了 `valid_to` 列就把串打断 ⇒
+    #   "变异锚点未命中"（门禁红得像实现坏了，其实是判据耦合了文本形态）。
     _m3 = _mutate(
         _msrc,
-        '"UPDATE agent_memory SET superseded_by=?, superseded_at=datetime(\'now\',\'localtime\') "\n'
-        '                "WHERE id=? AND forgotten=0", (int(new_id), int(old_id)))',
-        '"DELETE FROM agent_memory WHERE id=?", (int(old_id),))')
+        '"UPDATE agent_memory SET superseded_by=?, superseded_at=datetime(\'now\',\'localtime\')"',
+        # ⚠️ 末尾 `--` 不能省：`_supersede_sql()` 会在前面这句之后**再拼** `" WHERE id=? AND forgotten=0"`，
+        #   不注释掉就会变成 `... IN (?,?) WHERE id=?` ⇒ 占位符 3 个、参数 2 个 ⇒ SQL 报错 ⇒
+        #   变异体自己崩掉，看起来像"抓住了"，其实变异没生效（本仓记过的"变异打空"）。
+        '"DELETE FROM agent_memory WHERE id IN (?,?) --"')
     _c4 = fresh()
     _a4 = add(_c4, C_OLD)
     _m3["MemoryService"].mark_superseded(_c4, _a4, 999)

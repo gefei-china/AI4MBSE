@@ -320,6 +320,46 @@ def dream_ab_report(conn=Depends(db_session), user=Depends(current_user)):
     return r
 
 
+@router.get("/api/memory/stats/weekly")
+def memory_weekly(days: int = 7, dup_sim: float = 0.95, conn=Depends(db_session),
+                  user=Depends(current_user)):
+    """记忆周报（P2，2026-11-27）：存量结构 + 重复率 + 命中率 + tier 流动 + 技能聚类候选。
+
+    **只读**，不触发任何维护动作（要跑维护请提交 `memory_maintain` 作业）。
+
+    ⚠️ 三个数字的口径必须一起看，单独一个都能读反：
+      · `dup_rate.rate` 是"近重复对数 ÷ 可召回行"，`sampled=true` 时只算了最近 N 行；
+      · `hit_rate.rate` 是**覆盖率**（有访问证据的行占比），不是召回准确率；
+      · `flow.by_kind` 依赖 `memory_events` 埋点，**自 2026-11-27 起才有**，
+        窗口内为 0 可能是"还没跑过维护"，不一定是"没有流动"。
+    """
+    from services.memory_stats import weekly
+    return weekly(conn, days=days, dup_sim=dup_sim)
+
+
+@router.get("/api/memory/stats/topics")
+def memory_topic_clusters(min_n: int = 3, min_access: int = 5, limit: int = 10,
+                          conn=Depends(db_session), user=Depends(current_user)):
+    """经验聚类候选（P2「经验聚类成技能」的输入面）：同主题下多条高频经验。
+
+    只给**候选**，不自动生成技能草稿 —— 技能沉淀走 `services.skill_deposit.py`（LLM 判 + 人工审）。
+    聚类的键是 `mem_topic`（既有 Auto Memory 主题索引），不是向量聚类：主题边界比 k-means 稳，
+    而 k 需要"技能质量"判据来标定，本工程还没有。
+    """
+    from services.memory_stats import topic_clusters, _recallable
+    rows = _recallable(conn)
+    try:
+        types = {int(r[0]): (r[1] or "") for r in conn.execute(
+            "SELECT id, mem_type FROM agent_memory")}
+        for r in rows:
+            r["_mem_type"] = types.get(int(r["id"]), "")
+    except Exception:
+        pass
+    return {"clusters": topic_clusters(rows, min_n=min_n, min_access=min_access, limit=limit),
+            "rows": len(rows),
+            "note": "候选仅作技能草稿的输入；生成仍需人工确认（skill_deposit 的 draft 态）"}
+
+
 @router.post("/api/memory/retention/sweep")
 def retention_sweep(older_than_days: int = 90, conn=Depends(db_session),
                     user=Depends(current_user)):

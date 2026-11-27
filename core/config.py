@@ -792,6 +792,9 @@ DEFAULT_CONFIG = {
         # 无记忆命中时整块不产生，故对空库/寒暄场景零行为变化。
         "memory_index_enabled": True,
         "memory_index_rows": 3,       # 导航行数上限（硬上限 5，见 build_index）
+        # ★ 2026-11-27（P1-5）：记忆正文**只注入一次**。digest=检索块只报「条数+主题」
+        #   （正文留给【长期记忆】块，省 ~70% 记忆字符）；full=回滚旧行为（同一批记忆出现两次）。
+        "memory_context_block": "digest",
         # ★ 2026-10-29：记忆中的「用户叫X」身份声明剥离。
         #   实测：长期记忆存有「用户叫米巴…」（tier=core，无条件常驻注入），
         #   而登录账号是 gefei ⇒ 模型优先用记忆里的自报名称呼用户（输出"你好，米巴！"）。
@@ -834,19 +837,40 @@ DEFAULT_CONFIG = {
         "salience_soft_guidance": True,
         "forget_threshold": 0.2,     # 遗忘激活度阈值（仅 forget_by_activation=true 时生效，见下）
         "consolidate_threshold": 0.85,  # 合并引擎：记忆内容相似度阈值（bigram 余弦）
+        # ★ 2026-11-27：真向量口径的合并阈值**必须单列**（0.94，取自实测重复区 0.94~0.9986）。
+        #   原实现复用 0.85，又在 bigram 分支里把同一个变量改成 0.5 ⇒ 阈值跨迭代污染，
+        #   生产库副本实测一次维护合并掉 **165/275（60%）**。详见 `consolidate()` docstring。
+        "consolidate_dense_sim": 0.94,
+        # ── P1-6 分层：core 必须有界（2026-11-27 真机验证后补）──
+        # 原判据 `access_count >= 5` 是随手取的：实测 257 条可召回行里 **209 条（81%）** 满足
+        # （median=20 / max=2090）⇒ core 会收进八成记忆，而这个 tier 是**无条件常驻注入**。
+        # ⇒ 门槛按分位取（100 ≈ top 16%），并加硬上限 + demote 自清理，三者缺一都会重新注水。
+        "promote_min_access": 100,    # promote 到 core 的访问次数门槛（按实测分位取，非直觉值）
+        "core_max": 8,                # core 层硬上限（满了不再 promote；旧 core 由 demote 自清理）
         "maintain_every": 50,        # 每 N 次沉淀触发一次维护（遗忘+合并）
         # 多维作用域软重排（对齐 mem0）：「仅打破近邻，不做硬分桶」——按检索槽位序号取加成
         "scope_boost": "1.35,1.18,1.06,1.0",  # 槽位0..3 作用域优先级加成（project/user/agent/global）
         "backend": "sqlite",         # 记忆后端（sqlite=内置；预留外部实现挂载点，见 memory_backend.py）
 
         # ── 2026-09-29 遗忘判据重写（原激活度公式结构性永不触发，见 memory_service.forget docstring）──
-        # 判据1（主）：距「最后一次被访问」超过 max_unused_days 天 → 遗忘。
-        #   这是"过期经验"的真正语义：**没人再用它**。置 0 关闭该判据。
-        "max_unused_days": 0,
+        # 判据1（主）：距「最后一次被访问」超过 max_unused_days 天 **且** 访问次数 ≤ forget_max_access
+        #   → 降冷层（不是删）。这是"过期经验"的真正语义：**没人再用它**。置 0 关闭该判据。
+        #
+        # ★ 2026-11-27 定为 **45**，依据是**实测分位**（生产库 256 条活跃）：
+        #   未访问天数 p50=11 / p75=19 / p90=26 / p95=35 / max=48。
+        #   ⇒ 30 天低于 p90，剪的是**正常尾部**（顾问跨项目轮转，一个月没碰某域是常态）；
+        #     45 天在 p95 之上，只碰最外围 5%，且与 access≤2 相交后实测是"3 条 / 约 19 天后"。
+        #   60/90 天实测恒为 0 条 ⇒ 等于没接通（这正是本方案要治的病）。
+        "max_unused_days": 45,
         # 判据2：从未被访问过（access_count <= forget_min_access）且创建已超过 max_age_days 天 → 遗忘。
         #   专治"沉淀即死"的噪音：沉淀时一次性写入、此后无人检索命中的条目。
         "max_age_days": 90,
         "forget_min_access": 0,
+        # ★ 2026-11-27：判据 1 的**价值维度**。实测（真库 275 条活跃，max_unused_days=30 预演）
+        #   纯时间判据会归档 28 条，其中 25 条有访问记录、最高 access=69 —— 高频经验恰是"旧条目"，
+        #   30 天没人问就被降层 = 按日期轮换，不是 LRU。
+        #   ⇒ 只有 `access_count <= 此值` 的"久未用且低频"行才降层。-1 = 不限制（回滚旧行为）。
+        "forget_max_access": 2,
         # 判据3（遗留通道）：按 activation 衰减阈值遗忘。默认 **关闭** ——
         #   deposit 固定写 activation=1.0、record_access 只增不减、衰减下限 0.4 > 阈值 0.2，
         #   该通道在本工程实测恒定不触发（对 118 条跑出 0 遗忘）。保留为可运维开关，勿轻易打开。
@@ -866,6 +890,30 @@ DEFAULT_CONFIG = {
         #  真实阈值需等生产出现第一个真实互斥对后再标定（届时开开关并观察）。
         #  现在取 0.5 的理由：宁可多报候选（互斥词已是很强的过滤器）也不漏。
         "conflict_detect_sim_high": 0.5,  # 同键候选的相似度下限（**未在真向量口径下标定**，见上）
+        # ── P0-3 写前近重复闸（2026-11-27）──
+        # 实测（mbse.db，活跃 275 条 / 268 条有真向量）：≥0.95 的近重复 **13 对**、
+        #   0.90~0.95 另有 25 对。峰值样本是「需求追溯链五环节」（id 133/134/135 三条同义）。
+        #   成因不是合并引擎坏了，而是**写入侧从不判重**：同一结论换个说法就再插一条。
+        "dedup_enabled": True,
+        "dedup_sim": 0.95,
+        # ── P1-7 写时口径取代（2026-11-27）──
+        # 与近重复闸的分工见 `deposit()` 注释：≥dedup_sim 是"同一条事实"（去重）；
+        # [supersede_sim, dedup_sim) 且新条自带互斥断言词，才是"新旧口径"（取代）。
+        # ⚠️ **默认关**（不是保守，是既有纪律）：`verify_memory_conflict_gate` 的 A5 明确要求
+        #   「deposit 不调用 mark_superseded —— 影子标记由独立入口做，不由写入路径自动触发」。
+        #   理由成立：**写入路径不该拥有"解释历史"的权限**（错判不可逆地改变模型看到的口径）。
+        #   ⇒ 能力保留（配置可开），但默认由离线 dream + HIL 或 `memory.conflict_detect_enabled` 负责。
+        "supersede_on_deposit": False,
+        "supersede_sim": 0.85,
+        # ── P1-6 遗忘 / 归档解耦（2026-11-27）──
+        # True = 判据命中只降冷层（tier='archival'，forgotten 保持 0）：
+        #   召回口径不变（search 本来就排除 archival），但冷层可检索、可被 dream 复活。
+        "forget_archives": True,
+        # ── P0-2 周期维护调度（2026-11-27）──
+        # 此前 `run_maintenance()` 只有管理端点手动调用 ⇒ 「只要不写新记忆，过期经验永远不被清理」。
+        "maintain_scheduler_enabled": True,
+        "maintain_interval_h": 6,     # 维护周期（小时）
+        "maintain_dream_hour": 3,     # 每日 dream 预览时刻（本地时间 0-23；<0 = 关闭）
         # ── P0#1 显式记忆触发器（2026-10-28 落地）──
         # 把"是否查/写记忆"从隐式（intent 标签 + 提取门限）升级为任务级显式判断。
         # 全部默认**放行**（零行为漂移）；仅对明确该跳过的才跳（寒暄跳过召回、排除 intent 跳过写回）。
@@ -2417,6 +2465,10 @@ CONFIG_SCHEMA = {
         "memory_index_enabled":  {"type": "bool", "desc": "P1-1：有记忆注入时是否附带轻量导航索引（主题+编号+校验状态）"},
         "memory_index_rows":     {"type": "int",  "desc": "P1-1：记忆导航索引行数上限"},
         "memory_identity_strip": {"type": "bool", "desc": "有登录身份时，是否剥离记忆中的「用户叫X」身份声明子句（称呼以账号为准）"},
+        # ★ 2026-11-27（P1-5）：记忆正文**只注入一次**。
+        #   digest = 检索块只报「条数 + 主题」、正文留给【长期记忆】块（默认，省 ~40% 记忆字符）；
+        #   full   = 回滚到旧行为（检索块也带正文，同一批记忆在两个块里各出现一次）。
+        "memory_context_block":  {"type": "str",  "desc": "检索块里的记忆呈现方式：digest=只报条数+主题（正文只在长期记忆块，默认）/ full=回滚旧行为（正文重复两次）"},
         "jit_fallback_top_n":    {"type": "int",  "desc": "JIT 语义预筛空回退时的 top-N（0=退回全量）"},
         "mcp_meta_enabled":      {"type": "bool", "desc": "MCP 工具是否使用真实描述+参数契约（tool_meta）"},
         "mcp_min_keep":          {"type": "int",  "desc": "每个 MCP server 至少暴露的工具数（0=不保底）"},
@@ -2429,15 +2481,36 @@ CONFIG_SCHEMA = {
         "salience_soft_guidance": {"type": "bool", "desc": "P2：记忆沉淀用目标式宽指引（False=回滚到旧的硬清单式规则）"},
         "forget_threshold":     {"type": "float", "desc": "遗忘激活度阈值（仅 forget_by_activation=true 时生效）"},
         "consolidate_threshold": {"type": "float", "desc": "合并引擎相似度阈值（bigram 余弦）"},
+        "consolidate_dense_sim": {"type": "float", "desc": "合并引擎真向量口径阈值（实测重复区 0.94~0.9986；与 bigram 的 0.5 是两套量纲，勿混）"},
+        "promote_min_access": {"type": "int", "desc": "promote 到 core 的访问次数门槛（core=无条件常驻，必须是小集合；实测 5 会让 81% 的行命中，故按分位取 100）"},
+        "core_max": {"type": "int", "desc": "core 层硬上限（满了不再 promote；低于门槛的旧 core 由 demote 自清理）"},
         "maintain_every":       {"type": "int", "desc": "每 N 次沉淀触发一次维护"},
         "scope_boost":          {"type": "str", "desc": "作用域优先级加成（逗号分隔，槽位0..3：project/user/agent/global）"},
         "backend":              {"type": "str", "desc": "记忆后端（sqlite=内置；预留外部实现）"},
         "max_unused_days":      {"type": "int", "desc": "距今未访问超过 N 天则遗忘（0=关闭；主判据，治“没人再用”）"},
         "max_age_days":         {"type": "int", "desc": "零访问条目的存活天数上限（配合 forget_min_access 治“沉淀即死”噪音）"},
         "forget_min_access":    {"type": "int", "desc": "低于此访问次数视为“从未被用”（默认 0=只清零访问）"},
+        "forget_max_access":    {"type": "int", "desc": "时效判据的价值维度：仅当访问次数≤此值才降冷层（默认 2；-1=不限制，回滚到只看时间的旧行为）"},
         "forget_by_activation": {"type": "bool", "desc": "启用按 activation 衰减阈值遗忘（遗留通道，本工程实测恒定不触发，默认关）"},
         "conflict_detect_enabled": {"type": "bool", "desc": "冲突消解总开关：检出同键互斥记忆后打 superseded_by 标记（仅标记不删；默认关）"},
         "conflict_detect_sim_high": {"type": "float", "desc": "冲突检测的同键候选相似度下限（互斥事实字面高度重叠，实测 0.73）"},
+        # ★ 2026-11-27（P0-3）：写前近重复闸。实测生产库活跃 275 条里有 **13 对** ≥0.95 的近重复
+        #   （「需求追溯链五环节」×3、「MBSE 定义」×2…），全都来自"同一结论换个说法又沉淀一次"。
+        #   命中时只 record_access 旧条 + 复活冷层，**不新增**。
+        "dedup_enabled": {"type": "bool", "desc": "写前近重复闸：同 agent+同 topic 余弦 ≥ dedup_sim 时不新增（只记访问/复活旧条）"},
+        "dedup_sim": {"type": "float", "desc": "近重复判定阈值（真向量口径；0.95 = 同一事实的另一种说法）"},
+        # ★ 2026-11-27（P1-7）：写时"口径取代"。与近重复闸分工：≥dedup_sim 去重；
+        #   [supersede_sim, dedup_sim) 且**新内容自身含互斥断言词**（不再/已废弃/更正为…）⇒ 取代旧条。
+        "supersede_on_deposit": {"type": "bool", "desc": "写时口径取代：新条宣告旧口径作废时，给旧条打 superseded_by 并关闭 valid_to（仅标记不删）"},
+        "supersede_sim": {"type": "float", "desc": "口径取代的相似度下界（须低于 dedup_sim，否则会被去重截走）"},
+        # ★ 2026-11-27（P1-6）：遗忘与归档解耦。True=降冷层（tier=archival，forgotten 保持 0，
+        #   可检索/可复活）；False=旧行为（forgotten=1）。
+        "forget_archives": {"type": "bool", "desc": "遗忘判据的落点：True=降冷层（archival，forgotten 保持 0，可复活）/ False=硬遗忘（forgotten=1，旧行为）"},
+        # ★ 2026-11-27（P0-2）：周期维护作业。此前 run_maintenance 只能手动调，
+        #   于是"只要不写新记忆，过期经验永远不被清理"。
+        "maintain_scheduler_enabled": {"type": "bool", "desc": "周期维护调度：按 maintain_interval_h 提交 memory_maintain 作业（关=只能手动触发）"},
+        "maintain_interval_h": {"type": "int", "desc": "维护作业周期（小时，默认 6；最小 1）"},
+        "maintain_dream_hour": {"type": "int", "desc": "每日 dream 预览作业的本地时刻（0-23，默认 3；<0 关闭）"},
         "recall_trigger_enabled": {"type": "bool", "desc": "记忆读触发总开关：关=每轮无条件召回（回退旧行为）；开=寒暄/噪音类 query 跳过召回（省检索开销，零行为漂移）"},
         "deposit_trigger_enabled": {"type": "bool", "desc": "记忆写触发总开关：关=每会话照常尝试沉淀；开=被显式排除的 intent 不沉淀"},
         "recall_skip_intents": {"type": "str", "desc": "永不召回记忆的 intent 列表（逗号分隔，默认空）"},

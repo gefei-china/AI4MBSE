@@ -3136,6 +3136,48 @@
    "tier": "pr",
    "timeout": 120,
    "reason": "2026-11-26 新增：守住「建模」误列为复合任务信号导致「建模需求条目」被 design 抢走的回归；16 断言 + 2 组变异自证，确定性层不调 LLM，空库/真库均可跑。"
+  },
+  {
+   "script": "verify_memory_partition_p0.py",
+   "tier": "pr",
+   "timeout": 300,
+   "reason": "2026-11-27 新增：记忆分型 P0 —— apply_candidates 的 merge/promote/demote/revive 四分支、写前近重复闸与冷层复活、口径取代+双时态、memory_maintain/memory_dream 注册与 6h 调度、注入去重≥40%、遗忘判据的价值维度（高频旧经验不得被时间判据降层）、分层候选分桶配额（promote 不得挤掉 revive）。含 **8 条**变异自证（含「promote 挤掉 revive」「forget 重复归档」「maintain 非幂等→改写双时态」三条真机缺陷的复现）；夹具驱动，不依赖服务与 LLM"
+  },
+  {
+   "script": "verify_memory_project_memory.py",
+   "tier": "pr",
+   "timeout": 120,
+   "reason": "2026-11-27 新增：项目记忆（Project Constitution）定位裁决 —— 空表⇒注入空串、跨项目隔离、**禁止**从 agent_memory 自动兜底（P4 行为 + P5 变异 + P6 AST 结构三判据）。防『孤儿测试记忆被顺手补默认项目』事故复发"
+  },
+  {
+   "script": "verify_memory_weekly_stats.py",
+   "tier": "pr",
+   "timeout": 120,
+   "reason": "2026-11-27 新增：记忆周报口径 —— 重复率分母=可召回行、命中率=覆盖率、tier 流动无表时报 available=False 而非 0。含 `>=`→`>` 变异自证；纯内存夹具"
+  },
+  {
+   "script": "verify_degraded_direct_flow.py",
+   "tier": "local",
+   "timeout": 300,
+   "reason": "2026-11-27 补登记（原已入库但漏登清单，元门禁 G5a/G5b 因此判红）：降级直行路径『能收尾』，防只在非降级分支赋值的局部名在兜底路径触发 UnboundLocalError。自起独立实例 + 改全局 mock 开关 ⇒ 不入 pr；本机 20/20"
+  },
+  {
+   "script": "verify_mock_scope.py",
+   "tier": "local",
+   "timeout": 300,
+   "reason": "2026-11-27 补登记（漏登清单）：『真实使用中永不使用 Mock』——force_mock 只允许在测试态进程生效。需独立实例并翻全局开关；本机 13 PASS/1 SKIP"
+  },
+  {
+   "script": "verify_model_probe.py",
+   "tier": "local",
+   "timeout": 300,
+   "reason": "2026-11-27 补登记（漏登清单）：模型『测试』须做真实功能自检（含向量维度与存量不符 ⇒ 判不可用）。需真实 provider 凭据，CI 无；本机 40/40"
+  },
+  {
+   "script": "verify_retrieval_quality.py",
+   "tier": "pr",
+   "timeout": 180,
+   "reason": "2026-11-27 补登记（漏登清单）：检索侧三条修复（整篇提示词当检索串 / 领域词 0 命中 / 强 BM25 豁免）。纯离线、3 秒、19/19，可进 pr"
   }
  ]
 }

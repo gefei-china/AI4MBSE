@@ -297,6 +297,10 @@ def recall_memories(conn, query: str, agent_id: str = "chat", scopes: list | Non
                     "meta": {"created_at": r.get("created_at") or "", "id": _rid,
                              "cross_domain": bool(cross),
                              "own_agent": r.get("agent_id") or "",
+                             # P1-5（2026-11-27）：主题随命中一起回传。
+                             # 检索块改为「只报条数+主题」后，主题是它唯一的导航信息；
+                             # 此前 meta 不带该字段 ⇒ 摘要块只能退化成"N 条（无主题）"。
+                             "mem_topic": r.get("mem_topic") or "",
                              "raw_score": round(_sc, 4)},
                 })
             return got

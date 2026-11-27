@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# CI-OPTIONAL: 需自起独立服务实例并翻全局 mock 开关（会干扰共享服务），且判定依赖进程态；开发机 13 PASS/1 SKIP，不进 CI
 """verify_mock_scope —— 锁住「真实使用中永不使用 Mock」。
 
 ## 需求（用户原话，2026-11-27）

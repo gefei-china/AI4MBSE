@@ -714,7 +714,8 @@ async function loadProjectMemories(){
     _pmCache = list || [];
     const sum = document.getElementById('pm-summary');
     if(sum) sum.textContent = `共 ${_pmCache.length} 条 · ${_pmCache.filter(m=>m.enabled).length} 启用`;
-    if(!_pmCache.length){ el.innerHTML = '<div class="loading">暂无记忆条目，点击「＋ 新增记忆」添加项目规范/基线/决策/经验</div>'; return; }
+    if(!_pmCache.length){ el.innerHTML = '<div class="loading">暂无记忆条目。<br>本页是<b>人工维护的项目台账</b>（规范/基线/决策/经验），<b>不会</b>从 AI 记忆自动生成 —— '
+      + '只有在这里手工新增并启用的条目，才会作为「项目规范基线」注入该项目下 AI 会话的提示词。点击「＋ 新增记忆」开始。</div>'; return; }
     const catMeta = {规范:'#E6F1FB', 基线:'#FFF3E0', 决策:'#EDE7F6', 经验:'#EAF3DE'};
     el.innerHTML = _pmCache.map(m=>`
       <div class="panel">

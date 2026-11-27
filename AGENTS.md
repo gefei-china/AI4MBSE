@@ -70,8 +70,9 @@
 | 视图→图谱（v2g） | `js/mods/17-v2g.js` | `services/vector2graph.py` |
 | 建表 / 补列 / 数据迁移 | — | `database/migrations/*`（S7-3 起按域分 8 个文件）、`database/schema.py`（**唯一定序编排者**，顺序即语义） |
 | 配置 / 参数 | `js/mods/35-ctxconfig.js` | `core/config.py` |
+| 记忆（沉淀/召回/遗忘/分层/双时态/周报） | `js/mods/30-agents.js`（项目记忆台账）、`45-memory.js`（如新增页则挂这里） | `services/memory_service.py`（读写与生命周期）、`services/memory_dream.py`（离线做梦+apply 四分支）、`services/memory_scheduler.py`（6h 维护 + 每日做梦调度）、`services/memory_stats.py`（周报口径）、`agent/memory_recall.py`（召回）、`routers/memory_admin.py`（`/api/memory/stats/*`）；门禁 `tools/verify/verify_memory_*.py` |
 
-## 3. 必知的 51 个坑（都是踩过的）
+## 3. 必知的 54 个坑（都是踩过的）
 
 1. **`esc` / `escA` 定义在 `static/js/mods/01-core.js`**（2026-09-18 S6-1 从 `08-sysmlview.js:151/153` 迁入，因它是**最先加载**的模块），却被 35 个文件约 1,700 处调用 → 拆它、或调整模块加载顺序前，必须先确认它仍最先加载并做浏览器回归。
 2. **`toast` 只有一份实现，在 `01-core.js`**（2026-09-18 S6-4 合并）。它是「可直接调用 + 挂方法」的混合体：`toast('x')` / `toast('x', 2000)` / `toast.success('x')` 都行。**不要**再在别处定义 toast，更**不要把普通对象赋给 `window.toast`** —— 历史事故：那样会覆盖函数声明，全站 700+ 处 `toast('...')` 抛 TypeError，表现为「点保存没反应、无任何提示」。同批迁入的还有 `errOverlay`、全局 error / unhandledrejection 兜底、`alert` 桥接。
@@ -411,6 +412,21 @@
     恒为 false（看起来像"输入行没插在父节点后面"）。
     **规避**：跨一次重渲染的比对一律用**稳定标识**（`data-fid` / `data-dftkey`）现查现比，
     不要缓存元素引用。同族坑见本文件第 22 条（两条渲染路径必须成对维护）。
+52. **`consolidate()` 的相似度阈值必须逐对计算，不能跨迭代复用**（2026-11-27 实测，一次 60% 误删）：
+    原实现只有一个 `eff_threshold` 变量，并在 bigram 分支里**就地**把它改成 0.5
+    （`if not used_dense: eff_threshold = 0.5`）—— 这个赋值会一直生效到**后续所有对**。
+    库里只要有 13 条没真向量的行参与过比较，之后**所有真向量对都按 0.5 合并** ⇒
+    把 `run_maintenance` 接进 6h 作业后，生产库副本上一次维护合并掉 **165/275（60%）**。
+    **规避**：每对各自取阈值（`consolidate_dense_sim`=0.94 用于真向量、`consolidate_threshold`=0.5 用于 bigram），
+    并记住"同一个变量服务两种量纲"是这类事故的通用形态。
+53. **"项目记忆为空"不是缺陷，自动填充才是**（2026-11-27 勘察结论，别再来一遍）：
+    `project_memories` 实测 0 行；库内仅 5 条 `决策/规范` 记忆**全部 `scope_type=''`**（无项目归属），
+    内容是 impact 测试残留；`knowledge_reflow` 的项目记忆支路**要求项目归属**，实测 56 条 reflow
+    记忆全来自 `test-reg`、scope 为空 ⇒ 自动通道从未被真实业务触发。
+    ⇒ 任何"自动生成项目级决策"只有两种结局：无内容，或**给无归属行臆造归属**（=历史事故形态）。
+    结论钉在 `tools/verify/verify_memory_project_memory.py`（P4 行为 + P5 变异 + P6 AST 结构三判据）。
+    同族：`_build_project_memory` 的 docstring 里写了"源码中不出现 agent_memory"，
+    于是第一版文本判据被**自己新增的文档**判红 —— 判据要么走 AST，要么别判源码文本。
 
 ## 4. 起服务 / 验证
 

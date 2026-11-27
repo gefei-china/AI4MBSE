@@ -326,6 +326,75 @@ def handler_knowledge_reconcile(payload: dict, job: dict) -> dict:
 
 
 # ══════════════════════════════════════════════════════════════════
+# handler：记忆域（P0-2，2026-11-27）
+# ══════════════════════════════════════════════════════════════════
+def handler_memory_maintain(payload: dict, job: dict) -> dict:
+    """记忆周期维护：遗忘/归档 + 合并 + 冲突标记（`MemoryService.maintain`）。
+
+    为什么必须进队列（原方案 P0-2）：`run_maintenance()` 此前**只能手动调**
+    （管理端点 / 运维脚本），于是一条经验一旦不再被写入覆盖，就永远留在活跃层 ——
+    "只有倒垃圾时才扫地"。接进队列后由 `services/memory_scheduler.py` 每
+    `memory.maintain_interval_h` 小时提交一次，与写入彻底解耦。
+
+    幂等：`maintain()` 的每条判据都基于当前库状态（已归档的不再被选中、
+    已 superseded 的不再参与冲突），重复跑不会二次伤害 —— 但仍走 LeaseKeeper，
+    因为几分钟内可能被 worker 当崩溃残留重领。
+    """
+    conn = _own_conn()
+    try:
+        with LeaseKeeper(int(job["id"]), lease_s=int(payload.get("lease_s") or 900)):
+            _report(job, 10, "记忆维护：遗忘/归档 + 合并 + 冲突…")
+            from services.memory_service import MemoryService
+            res = MemoryService.maintain(conn)
+            _report(job, 90, "维护完成：%s" % (
+                "archived=%s forgotten=%s merged=%s conflicts=%s" % (
+                    res.get("archived"), res.get("forgotten"),
+                    res.get("merged"), res.get("conflicts"))))
+            res["mode"] = ("archive" if res.get("archived") else "forget_or_noop")
+            return res
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+def handler_memory_dream(payload: dict, job: dict) -> dict:
+    """离线 Dreaming 预览（**只读**，不落库、不调 LLM）。
+
+    用途：把候选包（correct / merge / promote / demote / revive）每晚生成一份，
+    供人工在「记忆」页复核后再走 `POST /api/memory/dream/apply`（HIL 门）。
+    ⚠️ 本 handler **绝不调用 `apply_candidates`** —— 自动落库会绕过 HIL，
+       正是 Anthropic 那条「错笔记被提升到注入上下文会污染每个会话」的红线。
+    `persist_wiki=True` 时才把 wiki 页落盘（纯 markdown 产物，无 DB 写）。
+    """
+    conn = _own_conn()
+    try:
+        with LeaseKeeper(int(job["id"]), lease_s=int(payload.get("lease_s") or 900)):
+            _report(job, 10, "Dreaming：只读对账…")
+            from services.memory_dream import dream as _dream
+            pkg = _dream(conn, sessions=int(payload.get("sessions") or 10),
+                         note_limit=int(payload.get("note_limit") or 80))
+            out = {"stats": pkg.get("stats") or {},
+                   "fingerprint": pkg.get("fingerprint") or "",
+                   "index_lines": (pkg.get("index") or {}).get("lines"),
+                   "wiki_pages": len((pkg.get("wiki") or {}).get("pages") or {}),
+                   "applied": 0,
+                   "note": "只读预览：落库需人工批准（POST /api/memory/dream/apply）"}
+            if payload.get("persist_wiki"):
+                _report(job, 70, "Dreaming：落盘 wiki 页…")
+                from services.memory_dream import persist_wiki as _persist
+                out["wiki"] = _persist(pkg.get("wiki") or {})
+            _report(job, 100, "Dreaming 预览完成（未写任何记忆状态）")
+            return out
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+# ══════════════════════════════════════════════════════════════════
 # handler：自进化域（P1-4）
 # ══════════════════════════════════════════════════════════════════
 def handler_config_sandbox(payload: dict, job: dict) -> dict:
@@ -593,6 +662,9 @@ KINDS = {
     "project_ingest": handler_project_ingest,
     "v2g_extract": handler_v2g_extract,
     "knowledge_reconcile": handler_knowledge_reconcile,
+    # 记忆域（2026-11-27 P0-2）：维护与离线做梦 —— 此前两者都只有手动入口
+    "memory_maintain": handler_memory_maintain,
+    "memory_dream": handler_memory_dream,
     "config_sandbox": handler_config_sandbox,
     "eval_trace": handler_eval_trace,
     "eval_gen": handler_eval_gen,
@@ -630,6 +702,9 @@ def describe() -> dict:
         "project_ingest": {"label": "工程入库", "required": ["project_id"], "group": "ops"},
         "v2g_extract": {"label": "向量转图谱抽取", "required": ["query"], "group": "ops"},
         "knowledge_reconcile": {"label": "写后调和", "required": [], "group": "ops"},
+        # 记忆域：维护可手动触发（dry 需要现场看数字时），做梦预览同样可手动
+        "memory_maintain": {"label": "记忆维护（归档/遗忘/合并/冲突）", "required": [], "group": "ops"},
+        "memory_dream": {"label": "记忆 Dreaming 预览（只读，落库需人工批准）", "required": [], "group": "ops"},
         "config_sandbox": {"label": "配置沙箱 A/B 评估", "required": ["run_id"], "group": "evolution"},
         # 评测域（T1：前端"立即跑批"；payload 无必填项）
         "eval_trace": {"label": "Trace 一致性评测（~15s）", "required": [], "group": "eval"},
