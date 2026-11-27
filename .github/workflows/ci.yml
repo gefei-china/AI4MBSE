@@ -1653,6 +1653,10 @@ jobs:
         if: ${{ !cancelled() }}
         run: python tools/verify/verify_artifact_validator.py
 
+      - name: Guard 通用交付契约 —— 声称完成不得冒充实际交付（会话 1000000251，23 条 + 2 变异）
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_delivery_contract.py
+
       # ── 2026-10-14：init_db 在**老库**上的启动安全 ──────────────────────
       # 为什么这条必须进 CI（生产库补迁移时实拍的真缺陷）：
       #   `init_db` 里 `idx_hc_idem(idem_key, status)` 建在**建表段**（第 953 行），

@@ -69,6 +69,20 @@ REPORT_TYPES = {
 DEFAULT_REPORT_TYPE = "analysis"
 
 
+def expected_sections_for(report_type: str) -> int:
+    """报告类型的**机器可读**章节契约（模板里声明几节就是几节）。
+
+    2026-11-27 事故根因之一：10/10/8 节只写在 prompt 模板里，落库时无人校验，
+    LLM 自述「十节已输出」就通过了。这里把模板节数暴露成可校验的整数，
+    供 `core.delivery_contract.check_section_contract` 跨层消费。
+    未知类型返回 0（= 无契约，不得当作「验收通过」）。
+    """
+    cfg = REPORT_TYPES.get(report_type or "")
+    if not cfg:
+        return 0
+    return len(cfg.get("sections") or [])
+
+
 class ReportGenerator:
     """通用报告生成器（无状态，可被对话与工坊复用）。"""
 

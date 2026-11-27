@@ -267,6 +267,12 @@
    "timeout": 120
   },
   {
+   "script": "verify_delivery_contract.py",
+   "tier": "pr",
+   "timeout": 120,
+   "reason": "通用交付契约门禁（2026-11-27 会话 1000000251：声称十节正文交付，实际 artifacts/reports 只有一段自述）。A 契约内核（有契约达标才 ok、无契约 checked=False、自定义清单通用、凑数缺标题仍红）；B 证据分级（machine/claim/manual/unknown 四类分开，claim 可点名）；C 跨边界真跑 _archive_artifacts 落内存库，断言 artifacts.meta.delivery_contract 与 reports.summary 的警示（判据落在用户读的地方）；D 变异自证 2 条（锚点唯一+变异体真的变了）。零写生产库、不调 LLM，实测 23/23。"
+  },
+  {
    "script": "verify_artifact_version_chain.py",
    "tier": "local",
    "timeout": 180,

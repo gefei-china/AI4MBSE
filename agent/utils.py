@@ -941,11 +941,48 @@ def _archive_artifacts(conn, conversation_id: int, message_id: int,
                     # 把评分/建议随产物一并沉淀，避免只留标题不见结论
                     report_meta = dict(report_meta) if isinstance(report_meta, dict) else {}
                     report_meta["review"] = _review
-                structured = cd.get("sections") or _rg.structure("", content, report_type=rtype)["sections"]
+                # ★ 2026-11-27（会话 1000000251 根因闭合）：复用执行侧已算好的结构，
+                #   避免 `cd.report.sections` 被丢弃后重解析成单节「正文」。
+                structured = (cd.get("sections")
+                              or (cd.get("report") or {}).get("sections")
+                              or _rg.structure("", content, report_type=rtype)["sections"])
+                # ★ 通用交付契约：任何报告归档都必须过这一关（不绑定具体类型/工具）。
+                #   判据跨边界落到 artifacts.meta + reports.summary，用户读的地方可见。
+                _dc = {"checked": False, "ok": False, "min": 0, "actual": len(structured or []),
+                       "missing": [], "source": "", "reason": "未声明交付契约"}
+                try:
+                    from core import config as _cfg_dc
+                    _dc_on = bool(_cfg_dc.get("orchestration",
+                                              "enforce_report_section_contract", True))
+                except Exception:
+                    _dc_on = True           # 读不到配置 ⇒ 保守开启校验
+                if _dc_on:
+                    try:
+                        from core.delivery_contract import (
+                            contract_from_card, check_section_contract)
+                        from services.report_generator import expected_sections_for
+                        _dc = check_section_contract(
+                            structured,
+                            contract=contract_from_card(cd),
+                            template=expected_sections_for(rtype))
+                    except Exception:
+                        pass  # 契约模块不可用 ⇒ checked=False，绝不当作通过
+                report_meta = dict(report_meta) if isinstance(report_meta, dict) else {}
+                report_meta["delivery_contract"] = _dc
                 summary = str(cd.get("summary") or structured[-1].get("body", "") if structured else "")[:500]
+                # 未达契约时如实告知：不动正文（保信息），但摘要前置警示——
+                # 防止「说十节、实际一段」在报告中心继续冒充已交付。
+                if _dc.get("checked") and not _dc.get("ok"):
+                    summary = ("⚠️ 未达章节交付契约（%s；实际 %d 节）：本产物不是完整报告，"
+                               "不得作为变更审批依据。%s" % (
+                                   _dc.get("reason") or "章节不足",
+                                   _dc.get("actual", 0), summary))[:500]
                 if not repo.exists(conversation_id, message_id, "report", title):
                     _am = {"report_type": rtype, "sections": structured,
-                           "summary": summary, "meta": report_meta}
+                           "summary": summary, "meta": report_meta,
+                           # ★ 顶层也放一份：嵌套在 meta.meta 里对下游太深、
+                           #   实测被漏读（同 review 的处理纪律）。
+                           "delivery_contract": _dc}
                     if _review:
                         # ★ 顶层也放一份：让 `meta.review.score` 可被直接查询
                         #   （嵌套在 meta.meta.review 里对下游太深，易被漏读）。

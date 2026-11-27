@@ -1627,6 +1627,9 @@ DEFAULT_CONFIG = {
         # ★ 2026-11-18（G08 根因闭合）：编排评审评分/建议沉淀为 report 产物。
         #   关掉 = 回到改动前归档行为（评审结果只留 messages.card_data）。
         "archive_review_report": True,
+        # ★ 2026-11-27（会话 1000000251 根因闭合）：报告归档时按类型模板校验章节契约。
+        #   关掉 = 退回改动前（任意正文都可能被物化成「完整报告」）。
+        "enforce_report_section_contract": True,
     },
     # ── P0-C（2026-10-04）：异步作业队列（长任务提交即返回 job_id）──
     # 队列语义与取舍见 core/job_queue.py 顶部；此处只列运行参数。
@@ -2914,6 +2917,7 @@ CONFIG_SCHEMA = {
         "auto_resume_max_age_s":      {"type": "int",  "desc": "自动重投年龄闸：批次失活超过该秒数不再自动投（转人工），0=不限"},
         "checkpoint_enabled":         {"type": "bool", "desc": "检查点写入开关（失败永不阻断编排）"},
         "archive_review_report":      {"type": "bool", "desc": "编排 reflection 的评分/建议沉淀为 report 产物（G08 根因闭合；关=回到改动前）"},
+        "enforce_report_section_contract": {"type": "bool", "desc": "报告归档时按类型模板校验章节契约并把结果落 meta/summary（2026-11-27 十节事故；关=回到改动前）"},
     },
     "replanning": {
         "enabled":             {"type": "bool", "desc": "重规划总闸（差量重画/LLM 重画；默认关=零行为变更，T1 补跑不受此闸约束——由 retry_once 单独控制）"},        "retry_once":          {"type": "bool", "desc": "T1 补跑：可重试类失败（timeout/transient/internal，排除 interrupted）同 key 自动补跑一次"},

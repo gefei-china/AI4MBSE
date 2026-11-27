@@ -254,10 +254,18 @@ def harness_decide(gate: dict, blocks_used: int, max_blocks: int = HARNESS_MAX_B
                 "force_release": False, "remaining": remaining,
                 "blocks_used": blocks_used, "max_blocks": max_blocks,
                 "stalled": False}
-    # 全部完成 ⇒ 放行
+    # 全部完成 ⇒ 放行（但**不替自述背书**，2026-11-27 会话 1000000251 根因闭合）
     if (gate or {}).get("done"):
-        return {"block": False, "reason": "待办全部通过验收 ⇒ 放行",
+        _claim_n = int((gate or {}).get("claim_n") or 0)
+        _gate_reason = str((gate or {}).get("reason") or "")
+        # gate 已把证据分级写进 reason；这里直接透传，不再硬编码「全部通过验收」。
+        # claim_n>0 时用户/上游能看到「仅自述、非验收通过」的如实告知。
+        if _claim_n and "仅自述" not in _gate_reason:
+            _gate_reason = (f"全部待办已结项，其中 {_claim_n} 项**仅自述**"
+                            f"（无机器回执，非验收通过）⇒ 放行但如实告知")
+        return {"block": False, "reason": _gate_reason or "待办全部结项 ⇒ 放行",
                 "force_release": False, "remaining": [],
+                "claim_n": _claim_n,
                 "blocks_used": blocks_used, "max_blocks": max_blocks,
                 "stalled": False}
     # ★ 无进展检测：同一批 remaining 连续 max_stall 次没变 ⇒ 提前放行

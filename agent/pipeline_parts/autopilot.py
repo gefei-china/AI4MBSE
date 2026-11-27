@@ -514,6 +514,24 @@ class AutoPilotMixin:
                     "stall_streak": 0, "stalled": False,
                     "mode": "subtask", "shadow": False, "would_block": False}
         gate = self._todo_gate(conversation_id)
+        # ★ 2026-11-27：把「仅自述」证据分级带进 gate，避免绿灯替自述背书。
+        #   零执行（纯统计已落库的 evidence），不改 done 判定 —— 保持放行行为。
+        try:
+            from core.delivery_contract import claim_evidence_summary
+            from agent.todo_store import list_todos as _list_todos_for_ev
+            # ⚠️ 必须用**本模块级** db_conn：门禁脚本会逐模块打补丁把它指向内存夹具，
+            #   `from database import db_conn` 会绕过补丁写进真库（真机踩过）。
+            with db_conn() as _c_ev:
+                _ev_sum = claim_evidence_summary(_list_todos_for_ev(_c_ev, conversation_id))
+            if isinstance(gate, dict):
+                gate = dict(gate)
+                gate["evidence_summary"] = _ev_sum
+                gate["claim_n"] = int(_ev_sum.get("claim") or 0)
+                if gate.get("done") and gate["claim_n"] and "仅自述" not in str(gate.get("reason") or ""):
+                    gate["reason"] = (f"待办全部结项，其中 {gate['claim_n']} 项**仅自述**"
+                                      f"（无机器回执，非验收通过）⇒ 放行但如实告知")
+        except Exception:
+            pass
         # ★ 无进展：本轮 remaining 与上轮完全相同 ⇒ stall_streak + 1
         cur_rem = list((gate or {}).get("remaining") or [])
         try:

@@ -76,16 +76,20 @@ class TodoItem:
     :param note:     备注
     """
 
-    __slots__ = ("subject", "status", "verify", "verify_result", "blocked_by", "note")
+    __slots__ = ("subject", "status", "verify", "verify_result", "blocked_by",
+                 "note", "evidence")
 
     def __init__(self, subject, status="pending", verify="", verify_result="",
-                 blocked_by="", note=""):
+                 blocked_by="", note="", evidence=None):
         self.subject = subject
         self.status = status
         self.verify = verify
         self.verify_result = verify_result
         self.blocked_by = blocked_by
         self.note = note
+        #: 机器验收回执（dict 或 JSON 字符串）。默认 None（无回执）——
+        #: `None` 与「回执不可用 unknown」不同：前者是没查，后者是查了查不到。
+        self.evidence = evidence
 
     def as_dict(self) -> dict:
         return {
@@ -95,6 +99,7 @@ class TodoItem:
             "verify_result": self.verify_result,
             "blocked_by": self.blocked_by,
             "note": self.note,
+            "evidence": self.evidence,
         }
 
     def __repr__(self):  # pragma: no cover - 调试用
@@ -187,8 +192,29 @@ def todo_gate(items, *, has_todos=None) -> dict:
     # ① 全部 completed 且验收回执齐全 ⇒ 完成
     if live and all(t.status == "completed" and (t.verify_result or "").strip()
                     for t in live):
+        # ★ 2026-11-27（会话 1000000251 根因闭合）：放行但**不得伪装成「通过验收」**。
+        #   全仓既有语义是「completed + verify_result 非空 = done」，直接改判未完成
+        #   会让模型反复空转（无工具可补回执）；因此保持 done=True，只把证据分级
+        #   带出来并在 reason 里如实告知——门禁绿灯不再替自述背书。
+        try:
+            from core.delivery_contract import claim_evidence_summary
+            es = claim_evidence_summary([t.as_dict() for t in live])
+        except Exception:
+            es = {"total": len(live), "machine": 0, "claim": 0,
+                  "manual": 0, "unknown": 0, "claim_subjects": []}
+        _claim_n = int(es.get("claim") or 0)
+        _unknown_n = int(es.get("unknown") or 0)
+        if _claim_n:
+            _reason = (f"全部 {len(live)} 项已结项，其中 {_claim_n} 项**仅自述**"
+                       f"（无机器回执，非验收通过）⇒ 放行但如实告知")
+        elif _unknown_n:
+            _reason = (f"全部 {len(live)} 项已结项，其中 {_unknown_n} 项回执无法核验"
+                       f"⇒ 放行但如实告知")
+        else:
+            _reason = f"全部 {len(live)} 项已通过验收"
         return {"done": True, "next_step": "", "remaining": [],
-                "fallback": False, "reason": f"全部 {len(live)} 项已通过验收"}
+                "fallback": False, "reason": _reason,
+                "evidence_summary": es, "claim_n": _claim_n}
 
     # ② 存在未完成 ⇒ 未完成，next_step 指向第一个 pending
     pending = [t for t in live if t.status == "pending"]

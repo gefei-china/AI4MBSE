@@ -166,6 +166,12 @@ def list_todos(conn, conversation_id: int, include_deleted: bool = False) -> lis
     _cols_ev = ("SELECT id, seq, subject, status, verify, verify_result, blocked_by, note, "
                 "verify_tool, verify_args, COALESCE(evidence,'') "
                 "FROM agent_todos WHERE conversation_id=?")
+    # ★ 2026-11-27：run_todos 也必须带 evidence —— 编排收口的验收统计走它，
+    #   缺列会让「仅自述」在编排路径上再次隐身。
+    _run_cols_ev = ("SELECT id, seq, subject, status, verify, verify_result, "
+                    "blocked_by, note, verify_tool, verify_args, COALESCE(evidence,'') "
+                    "FROM agent_todos WHERE run_id=? AND status != 'deleted' "
+                    "ORDER BY COALESCE(seq, id), id")
     _cols_legacy = ("SELECT id, seq, subject, status, verify, verify_result, blocked_by, note, "
                     "verify_tool, verify_args "
                     "FROM agent_todos WHERE conversation_id=?")
@@ -216,18 +222,33 @@ def run_todos(conn, run_id: int) -> list:
     """
     if not run_id:
         return []
+    rows, has_ev = [], True
     try:
-        rows = conn.execute(
-            "SELECT id, subject, status, verify, verify_tool, verify_args "
-            "FROM agent_todos WHERE run_id=? AND status != 'deleted' "
-            "ORDER BY COALESCE(seq, id), id", (int(run_id),)).fetchall()
+        rows = conn.execute(_run_cols_ev, (int(run_id),)).fetchall()
     except Exception:
-        return []
+        try:
+            rows = conn.execute(
+                "SELECT id, subject, status, verify, verify_tool, verify_args "
+                "FROM agent_todos WHERE run_id=? AND status != 'deleted' "
+                "ORDER BY COALESCE(seq, id), id", (int(run_id),)).fetchall()
+            has_ev = False
+        except Exception:
+            return []
     out = []
     for r in rows:
+        _evd = {}
+        if has_ev and r[10]:
+            try:
+                _evd = json.loads(r[10]) or {}
+            except Exception:
+                _evd = {}
         out.append({
             "id": r[0], "subject": r[1] or "", "status": r[2] or "",
-            "verify": r[3] or "", "verify_tool": r[4] or "", "verify_args": r[5] or "",
+            "verify": r[3] or "",
+            # legacy 查询只取 6 列，r[6] 会越界 —— 无 evidence 列时也必须可用
+            "verify_result": (r[6] or "") if has_ev else "",
+            "verify_tool": r[4] or "", "verify_args": r[5] or "",
+            "evidence": _evd,
         })
     return out
 
@@ -238,7 +259,8 @@ def load_todo_items(conn, conversation_id: int, include_deleted: bool = False):
     rows = list_todos(conn, conversation_id, include_deleted)
     return [_at.TodoItem(subject=r["subject"], status=r["status"],
                          verify=r["verify"], verify_result=r["verify_result"],
-                         blocked_by=r["blocked_by"], note=r["note"])            for r in rows]
+                         blocked_by=r["blocked_by"], note=r["note"],
+                         evidence=r.get("evidence"))            for r in rows]
 
 
 def todo_gate_for_conv(conn, conversation_id: int) -> dict:
