@@ -4401,6 +4401,40 @@ class StreamMixin:
             _gate_gaps
         except NameError:
             _gate_gaps = []
+        # ★ 2026-11-27 修（**与上面 _gate_gaps 同族的既有缺陷**，非本轮引入）：
+        #   `_fill_verdicts/_fill_filled/_fill_patch` 只在「非降级」分支（`else:` 内，见 3795 行）
+        #   赋值 —— 降级直行（计划为空 / 计划校验失败 / 编排异常兜底）时这三个名字根本不存在，
+        #   下面组装 card_obj 读它们必然 UnboundLocalError ⇒ 整轮以 error 帧收尾。
+        #   实测：mock 下 `智源对接agent` 走降级直行，前三阶段全 done，最后一步
+        #   「写入会话」抛 "cannot access local variable '_fill_verdicts'"，用户看不到任何回答。
+        #   口径同 _gate_gaps：降级时就是"没有病因可分类、没有补齐"，取空值而非中断。
+        try:
+            _fill_verdicts
+        except NameError:
+            _fill_verdicts = []
+        try:
+            _fill_filled
+        except NameError:
+            _fill_filled = []
+        try:
+            _fill_patch
+        except NameError:
+            _fill_patch = {}
+        # ★ 2026-11-27（同族，一并收口）：编排实时统计三个计数器只在非降级分支初始化
+        #   （见 3134-3136），降级直行时 4498-4499 读它们同样炸 UnboundLocalError。
+        #   降级路径本来就没有编排级工具调用/停滞计数 ⇒ 取 0 / 空 dict 是准确口径。
+        try:
+            _orch_tool_counts
+        except NameError:
+            _orch_tool_counts = {}
+        try:
+            _orch_probe_caps
+        except NameError:
+            _orch_probe_caps = 0
+        try:
+            _orch_val_stalls
+        except NameError:
+            _orch_val_stalls = 0
         card_obj = {
             "intent": intent, "agent": agent_def.name, "hil_level": hil_level,
             "kb_tags": kb_tags, "skill_hits": self._last_skill_hits, "slots": slots,
