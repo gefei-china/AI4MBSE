@@ -256,8 +256,10 @@ def scan(root: str | None = None, product_only: bool = True) -> dict:
     by_dir: dict[str, dict] = {}
     parse_fail: list[dict] = []
 
+    scanned: list[str] = []          # 扫描面全量（含 0 条的文件）
     for full, rel in _iter_py(_root, product_only=product_only):
         files += 1
+        scanned.append(rel)
         try:
             src = open(full, "r", encoding="utf-8", errors="replace").read()
             tree = ast.parse(src, filename=rel)
@@ -298,6 +300,11 @@ def scan(root: str | None = None, product_only: bool = True) -> dict:
     return {
         "generated_at": __import__("time").strftime("%Y-%m-%d %H:%M:%S"),
         "scanned_files": files,
+        # ★ 2026-11-27：扫描面**全量清单**（不只是"有静默的文件"）。
+        #   为什么必须给全量：基线若只记"有静默的文件"，一个 0 条的文件变成 1 条时，
+        #   在账上会被当成"**新增文件**"（B3）而不是"**同一文件劣化**"（B1）——
+        #   判定归错通道，说出来的原因就是错的（实测踩到：memory_stats.py 明明是老文件却被报"新增文件 1 个"）。
+        "scanned": sorted(scanned),
         "except_total": total,
         # 宽口径：含 `return 默认值 / assign / continue` 兜底（治理视角，见 _is_strict_silent）
         "silent_total": silent_total,

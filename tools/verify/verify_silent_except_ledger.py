@@ -133,7 +133,33 @@ _plain = {"generated_at": res["generated_at"],
                    "**不可直接比对**：报告未公布扫描范围与判据实现。"
                    "本机实测 `except Exception` 基数更大（见 broad_except_total）。"
                    "后续所有引用一律以本文件为准；要更新基线必须跑一次门禁并人工确认。"),
-          "by_dir": res["by_dir"]}
+          "by_dir": res["by_dir"],
+          # ★ 2026-11-27：**逐文件账**。只比总数是不成立的：扫描面一变（新增分层目录/
+          #   新模块），总数必然变化，而"变红"与"真的多写了静默兜底"在总数上看不出区别 ——
+          #   实测 437 → 547 个文件使总数 2564 → 2648，红得毫无信息量。
+          #   有了逐文件账，判定可以落到「**同一个文件**里有没有变多」，这才是
+          #   "这次改动有没有增加静默兜底"的真判据。
+          # ⚠️ 必须覆盖**扫描面全量**（含 0 条的文件）：只记"有静默的文件"会把
+          #   一家老文件从 0→1 误判成"新增文件"（归因错通道）。
+          "files": {_f: sum(1 for _x in res["items"] if _x["file"] == _f)
+                    for _f in sorted(set(res.get("scanned") or []))},
+          "strict_files": {_f: sum(1 for _x in res["items"]
+                                   if _x["file"] == _f and _x.get("strict"))
+                           for _f in sorted(set(res.get("scanned") or []))},
+          # 新增文件允许的静默额度（默认 0 = 新文件不该带静默兜底；要放宽必须显式改这个数）
+          "new_files_allow": 0}
+# ★ 2026-11-27：补上 `--update-baseline`。此前 B3 的提示语写着"可执行 --update-baseline 固化"，
+#   但**该开关根本没实现** —— 提示指向一个不存在的动作，比不提示更糟。
+#   纪律：更新基线必须带 `--reason`（一段说明），且旧/新总数会一起写进 note，
+#   让"这次放宽了多少"永远可追溯，而不是覆盖式静默改写。
+_UPDATE = "--update-baseline" in sys.argv
+_REASON = ""
+if "--reason" in sys.argv:
+    try:
+        _REASON = sys.argv[sys.argv.index("--reason") + 1]
+    except IndexError:
+        _REASON = ""
+
 if baseline is None:
     # 首次跑：写基线并**显式提示**（不能静默创建 —— 静默创建等于给了自己一个
     # "随便多少都算合规"的起点，这正是本项目反对的那种做法）
@@ -145,18 +171,80 @@ if baseline is None:
 else:
     _bw = int(baseline.get("silent_total") or 0)
     _bs = int(baseline.get("strict_silent_total") or 0)
-    check("B1 宽口径未劣化（silent_total ≤ 基线）",
-          res["silent_total"] <= _bw,
-          "now=%s baseline=%s（新增静默必须显式更新基线，那一步就是人工复核）"
-          % (res["silent_total"], _bw))
-    check("B2 严格口径未劣化（strict_silent_total ≤ 基线）",
-          res["strict_silent_total"] <= _bs,
-          "now=%s baseline=%s" % (res["strict_silent_total"], _bs))
-    # 只在**变好**时提示更新基线（把治理成果固化下来，否则下次基线形同虚设）
-    if res["silent_total"] < _bw:
-        check("B3 静默数下降 → 建议更新基线（提示项，不算失败）", True,
-              "now=%s < baseline=%s，可执行 --update-baseline 固化"
-              % (res["silent_total"], _bw))
+    _bf = baseline.get("files")
+    _bsf = baseline.get("strict_files") or {}
+    if not isinstance(_bf, dict) or not _bf:
+        # 老基线（只有总数）：**保留**总数判据，但把"口径不可比"说清楚，
+        # 不让它看起来像"这次改动把它弄红了"。
+        check("B1 宽口径未劣化（silent_total ≤ 基线）",
+              res["silent_total"] <= _bw,
+              "now=%s baseline=%s；⚠️ 该基线**无逐文件账**，总数比对在扫描面变化时不可比"
+              "（现扫描 %d 文件）" % (res["silent_total"], _bw, res["scanned_files"]))
+        check("B2 严格口径未劣化（strict_silent_total ≤ 基线）",
+              res["strict_silent_total"] <= _bs,
+              "now=%s baseline=%s" % (res["strict_silent_total"], _bs))
+    else:
+        # ── 逐文件同口径比对（真判据）──
+        # ⚠️ 必须以**扫描面全量**为键（含 0 条的文件），不能只从 items 建。
+        #   只从 items 建的话：所有"0 条静默"的文件都不在 now_f 里 ⇒
+        #   ① B1 漏判"0→N"（新写的静默落在原本干净的文件上，那是最常见的情形）；
+        #   ② B4 把这几百个 0 条文件全部误报成"消失"（实测报了 200 个）。
+        now_f = {f: 0 for f in (res.get("scanned") or [])}
+        for _x in res["items"]:
+            now_f[_x["file"]] = now_f.get(_x["file"], 0) + 1
+        now_sf = {f: 0 for f in (res.get("scanned") or [])}
+        for _x in res["items"]:
+            if _x.get("strict"):
+                now_sf[_x["file"]] = now_sf.get(_x["file"], 0) + 1
+        common = set(_bf) & set(now_f)
+        worse = sorted("%s %s→%s" % (f, _bf[f], now_f.get(f, 0))
+                       for f in common if now_f.get(f, 0) > int(_bf[f] or 0))
+        worse_s = sorted("%s %s→%s" % (f, _bsf.get(f, 0), now_sf.get(f, 0))
+                         for f in common if now_sf.get(f, 0) > int(_bsf.get(f, 0) or 0))
+        check("B1 共同文件集内宽口径无劣化（逐文件同口径）", not worse, worse[:6])
+        check("B2 共同文件集内严格口径无劣化（逐文件同口径）", not worse_s, worse_s[:6])
+        # 新增文件：不该带静默兜底；要放宽必须显式改 new_files_allow（额度必须记账）
+        new_files = sorted(set(now_f) - set(_bf))
+        new_silent = sum(now_f[f] for f in new_files)
+        allow = int(baseline.get("new_files_allow") or 0)
+        check("B3 新增文件的静默数 ≤ 记账额度（new_files_allow）",
+              new_silent <= allow,
+              "新增文件 %d 个、静默 %d 条 > 额度 %d：%s"
+              % (len(new_files), new_silent, allow,
+                 ["%s(%d)" % (f, now_f[f]) for f in new_files if now_f.get(f)][:6]))
+        # 消失的文件（被删/搬迁）单独报：静默"变少"可能只是范围缩小（本仓记过的同族坑）
+        gone = sorted(set(_bf) - set(now_f))
+        if gone:
+            check("B4 基线里的文件未静默消失（防「少扫=变好」）", False,
+                  "消失 %d 个：%s" % (len(gone), gone[:6]))
+        check("B5 总账（信息项：允许随扫描面变化，不作为劣化判据）", True,
+              "now %d/%d（基线 %d/%d，扫描面 %d 文件）"
+              % (res["silent_total"], res["strict_silent_total"], _bw, _bs,
+                 res["scanned_files"]))
+
+if _UPDATE:
+    if not _REASON:
+        check("B6 更新基线必须带 --reason（放宽多少要可追溯）", False,
+              "用法：--update-baseline --reason '……'")
+    else:
+        _old_note = baseline.get("note", "") if baseline else ""
+        _plain["note"] = (
+            "%s\n\n── 基线更新 %s ──\n原因：%s\n"
+            "旧：silent=%s strict=%s 扫描面=%s 文件\n"
+            "新：silent=%s strict=%s 扫描面=%s 文件\n"
+            "⚠️ 本次更新**吸收了未被逐条归因的差额**：宽 %+d / 严 %+d（含扫描面扩大的影响）。"
+            "自本条起判定改为**逐文件同口径**（B1/B2），因此该差额不会掩盖后续新增。"
+            % (_old_note, res["generated_at"], _REASON,
+               (baseline or {}).get("silent_total"), (baseline or {}).get("strict_silent_total"),
+               (baseline or {}).get("scanned_files"),
+               res["silent_total"], res["strict_silent_total"], res["scanned_files"],
+               res["silent_total"] - int((baseline or {}).get("silent_total") or 0),
+               res["strict_silent_total"] - int((baseline or {}).get("strict_silent_total") or 0)))
+        with open(BASELINE, "w", encoding="utf-8") as f:
+            json.dump(_plain, f, ensure_ascii=False, indent=1)
+        check("B6 基线已更新（含新旧总数与原因，差额可追溯）", True,
+              "写 %s（宽 %d / 严 %d）" % (BASELINE, res["silent_total"],
+                                       res["strict_silent_total"]))
 
 # ══ ④ E2E：临时目录造真文件，断言扫描器真的走 AST ════════════════════
 print("[4] E2E（临时目录真文件）", flush=True)
