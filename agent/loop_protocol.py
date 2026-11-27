@@ -48,7 +48,12 @@ import re
 import sys
 
 __all__ = ["MAX_TOOLS_PER_ROUND", "split_calls", "skipped_results",
-           "is_truncated_args", "truncated_result"]
+           "is_truncated_args", "truncated_result",
+           "READONLY_CONCURRENCY", "is_parallel_safe_readonly",
+           "prefetch_exec", "prefetch_readonly"]
+
+#: 单轮只读工具预取的并发上限。与编排批并行的 3 路同量级，不额外放大上游 QPS。
+READONLY_CONCURRENCY = 3
 
 #: 单轮最多**执行**几个工具。⚠️ 这是失控护栏，不是性能参数——
 #: 未执行的尾部**必须**由 `skipped_results` 补齐结果（见模块 docstring 缺陷①）。
@@ -89,6 +94,79 @@ def skipped_results(tool_calls) -> list:
                 "skip_reason": "round_tool_limit",
             }, ensure_ascii=False),
         })
+    return out
+
+
+# ── 2026-11-27：只读工具并发预取（方案 2）────────────────────────────────────
+# 背景：单轮最多执行 3 个工具，但两条 ReAct 路径此前都逐个串行调用；
+# 代码注释实测 69 个会话里 67 次出现 1 秒内连续多笔调用。
+# 纪律：**只在执行前放行严格判据为真的纯读工具**，写类、去重/探测短路、校验工具、
+# 人在回路工具一律保持原串行路径 —— 副作用与状态机语义逐字不变。
+_PARALLEL_SAFE_RE = re.compile(
+    r"^(?:query_|search_|read_|get_|list_|kb_|graph_|vector_|fetch_)", re.I)
+_PARALLEL_UNSAFE_NAMES = frozenset((
+    "ask_user", "read_attachment_section", "memory_fetch",
+    "tool_result_fetch", "todo_write", "sysml_v2_validate",
+))
+
+
+def is_parallel_safe_readonly(pipe, name, args, guard=None) -> bool:
+    """纯函数式判据：该调用是否可安全并发预取（不执行、无副作用）。"""
+    n = str(name or "")
+    if n in _PARALLEL_UNSAFE_NAMES or not _PARALLEL_SAFE_RE.match(n):
+        return False
+    try:
+        if pipe._tool_side_effect(n) in ("write", "destructive"):
+            return False
+    except Exception:
+        pass
+    try:
+        from agent.mcp_tool_meta import mcp_write_group
+        if mcp_write_group(n):
+            return False
+    except Exception:
+        pass
+    if guard is not None:
+        try:
+            # 探测上限 / 语义重复短路都属于状态机分支，必须留给原循环处理
+            if guard.probe_cap(n) or guard.probe_dup(n, args):
+                return False
+        except Exception:
+            return False
+    return True
+
+
+def prefetch_exec(pipe, guard):
+    """返回给 prefetch_readonly 的执行函数：带统一超时护栏，零业务状态写入。"""
+    from agent.loop_guard import call_tool_guarded
+
+    def _run(name, args):
+        return call_tool_guarded(pipe._exec_tool_call, name, args,
+                                 timeout_s=getattr(guard, "tool_timeout_s", 120))
+    return _run
+
+
+def prefetch_readonly(exec_fn, entries, max_workers=READONLY_CONCURRENCY) -> dict:
+    """并发执行 entries=[(key, name, args)]，返回 {key: result}。
+
+    任何单笔异常都降级为该笔的错误结果，绝不影响其它笔 —— 只读工具失败不阻断
+    主循环，主循环仍按原顺序消费结果并跑所有既有状态机分支。
+    """
+    out = {}
+    entries = list(entries or [])
+    if len(entries) < 2:
+        return out
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    n = max(1, min(int(max_workers or READONLY_CONCURRENCY), len(entries)))
+    with ThreadPoolExecutor(max_workers=n, thread_name_prefix="ro_tool") as pool:
+        futs = {pool.submit(exec_fn, name, args): key for key, name, args in entries}
+        for f in as_completed(futs):
+            key = futs[f]
+            try:
+                out[key] = f.result()
+            except Exception as e:
+                out[key] = {"ok": False, "error": str(e)[:200],
+                            "result": "只读工具并发执行失败（已降级为错误结果）"}
     return out
 
 

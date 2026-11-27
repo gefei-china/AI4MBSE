@@ -843,7 +843,30 @@ class ExecuteMixin:
                     # 这两条路径是同一套 ReAct 语义的两种实现，协议层缺陷漏一条就是线上 400。
                     # ⚠️ 不能删掉上限（失控护栏），必须为未执行尾部补 tool_result。
                     _exec_calls, _skip_calls = _lproto.split_calls(tool_calls)
-                    for tc in _exec_calls:
+                    # ── 2026-11-27（方案 2）：与 stream.py 同源的只读工具并发预取 ──
+                    # 两条 ReAct 路径必须同步（loop_guard 立过的规矩），否则同一能力
+                    # 在 SSE/非流式下行为漂移。判据与回填口径与 stream.py 逐字一致。
+                    _ro_prefetch = {}
+                    try:
+                        _pf_entries = []
+                        for _pi, _ptc in enumerate(_exec_calls):
+                            _pfn = _ptc.get("function") or {}
+                            _pname = _pfn.get("name", "")
+                            if _lproto.is_truncated_args(_pfn):
+                                continue
+                            try:
+                                _pargs = json.loads(_pfn.get("arguments") or "{}")
+                            except Exception:
+                                continue
+                            if not _lproto.is_parallel_safe_readonly(self, _pname, _pargs, _guard):
+                                continue
+                            _pf_entries.append((_pi, _pname, _pargs))
+                        if len(_pf_entries) > 1:
+                            _ro_prefetch = _lproto.prefetch_readonly(
+                                _lproto.prefetch_exec(self, _guard), _pf_entries)
+                    except Exception:
+                        _ro_prefetch = {}   # 预取失败 ⇒ 全部回落原串行路径
+                    for _ti, tc in enumerate(_exec_calls):
                         fn = tc.get("function") or {}
                         tname = fn.get("name", "")
                         # P0-②：参数被 max_tokens 截断 ⇒ 拒绝执行（不以降级的空参数执行）
@@ -913,7 +936,15 @@ class ExecuteMixin:
                                 "role": "tool", "name": tname,
                                 "content": json.dumps(_pay, ensure_ascii=False)})
                             continue
-                        result = _guard.call(self._exec_tool_call, tname, targs)
+                        if _ti in _ro_prefetch:
+                            # 并发预取命中：结果已就绪，只补 Guard 记账，不重复执行
+                            result = _ro_prefetch[_ti]
+                            try:
+                                _guard.calls.append((tname, targs, bool(result.get("ok")), 0))
+                            except Exception:
+                                pass
+                        else:
+                            result = _guard.call(self._exec_tool_call, tname, targs)
                         # ★ 2026-11-24（与 stream.py 同源）：真执行返回后也要判校验停滞，
                         #   否则"每版代码都不同 ⇒ 去重不命中"的重复校验在本路径完全没有闸
                         #   （run 71 实测 8 次全 pass，白烧约 2 分钟工具+往返时间）。

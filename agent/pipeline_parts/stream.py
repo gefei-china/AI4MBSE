@@ -6528,6 +6528,30 @@ class StreamMixin:
                         #    ⇒ 下一轮 HTTP 400（tool_use ids without tool_result blocks）。
                         #    详见 agent/loop_protocol.py 模块 docstring 缺陷①。
                         _exec_calls, _skip_calls = _lproto.split_calls(ptool_calls)
+                        # ── 2026-11-27（方案 2）：只读工具并发预取 ────────────────
+                        # 只对「纯读 + 未被去重/探测闸短路 + 非校验/HIL」的调用并发执行，
+                        # 结果按 _exec_calls 的下标回填；下方 for 循环仍按原顺序消费，
+                        # 所有 yield 事件顺序、去重/停滞/写操作记账语义逐字不变。
+                        _ro_prefetch = {}
+                        try:
+                            _pf_entries = []
+                            for _pi, _ptc in enumerate(_exec_calls):
+                                _pfn = _ptc.get("function") or {}
+                                _pname = _pfn.get("name", "")
+                                if _lproto.is_truncated_args(_pfn):
+                                    continue
+                                try:
+                                    _pargs = json.loads(_pfn.get("arguments") or "{}")
+                                except Exception:
+                                    continue
+                                if not _lproto.is_parallel_safe_readonly(self, _pname, _pargs, _lg):
+                                    continue
+                                _pf_entries.append((_pi, _pname, _pargs))
+                            if len(_pf_entries) > 1:
+                                _ro_prefetch = _lproto.prefetch_readonly(
+                                    _lproto.prefetch_exec(self, _lg), _pf_entries)
+                        except Exception:
+                            _ro_prefetch = {}   # 预取失败 ⇒ 全部回落原串行路径
                         for _ti, tc in enumerate(_exec_calls):
                             fn = tc.get("function") or {}
                             tname = fn.get("name", "")
@@ -6626,7 +6650,15 @@ class StreamMixin:
                                     result = _lg.replay_payload(tname, targs, _dup)
                             else:
                                 _dup_streak = 0       # ★ 真执行 ⇒ 有新进展，连续计数归零
-                                result = _lg.call(self._exec_tool_call, tname, targs)
+                                if _ti in _ro_prefetch:
+                                    # 并发预取命中：结果已就绪，只补 Guard 记账，不重复执行
+                                    result = _ro_prefetch[_ti]
+                                    try:
+                                        _lg.calls.append((tname, targs, bool(result.get("ok")), 0))
+                                    except Exception:
+                                        pass
+                                else:
+                                    result = _lg.call(self._exec_tool_call, tname, targs)
                                 # ★ 2026-10-17：ask_user 人在回路澄清 —— 记录信号并中断 ReAct 循环
                                 #   （不再喂 tool_result、不再继续探测：等用户回答后续跑）
                                 if isinstance(result, dict) and result.get("clarify_required"):
