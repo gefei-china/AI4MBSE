@@ -245,13 +245,20 @@ def test_consumers_use_probe_mark_singleton():
        `"COALESCE(is_probe,0)=0" not in src`，结果带别名的写法
        `COALESCE(l.is_probe,0)=0` 正好绕过（变异 8 因此空转一轮）。
        凡"检查某种写法"的断言，要把**等价变体**一起覆盖。
+
+    ⚠️ 判据必须落在**真实现所在文件**（2026-11-27 修）：`capability_effective`
+       已按 P1「应用服务归位」迁到 `services/capability_effective.py`，
+       `core/capability_effective.py` 只剩 4 行兼容垫片（`sys.modules` re-export）。
+       旧判据仍在读 `core/` 那份，于是**永远找不到 `probe_mark import`** ⇒ 假红。
+       改法：判据读 `services/` 真实现，另加一条反向断言锁住"垫片不得长出第二份实现"
+       —— 否则把逻辑抄回垫片就能绕开本用例。
     """
     import re
 
     # 可选表别名 + 可选空格，覆盖 `COALESCE(l.is_probe,0)=0` 等写法
     hand_rolled = re.compile(r"COALESCE\(\s*\w*\s*\.?\s*is_probe\s*,\s*0\s*\)\s*=\s*0")
     for rel in ("core/attribution.py", "core/evolution_report.py",
-                "core/capability_effective.py", "core/capability_registry.py",
+                "services/capability_effective.py", "core/capability_registry.py",
                 "services/alert_evaluator.py"):
         src = _src(rel)
         assert "probe_mark import" in src, f"★ {rel} 未引用口径真源 probe_mark"
@@ -259,3 +266,11 @@ def test_consumers_use_probe_mark_singleton():
         assert m is None, (
             f"★ {rel} 自己硬编码了探针过滤字符串 {m.group(0)!r}"
             f"（应走 probe_where()，否则将来改口径会漏掉这一处）")
+
+    # 兼容垫片只允许 re-export：既不许自己实现过滤，也不许另起一份真源
+    shim = _src("core/capability_effective.py")
+    assert "_sys.modules[__name__] = _impl" in shim, (
+        "★ core/capability_effective.py 已不是纯 re-export 垫片"
+        "（判据落在 services/，此处再长出实现就会绕开上面的检查）")
+    assert hand_rolled.search(shim) is None and "probe_where" not in shim, (
+        "★ 兼容垫片里又写了一份探针过滤 —— 口径真源必须唯一")
