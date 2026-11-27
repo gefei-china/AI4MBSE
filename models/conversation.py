@@ -51,6 +51,9 @@ class ChatIn(BaseModel):
     o_context: Optional[int] = 0      # 本轮上下文窗口（tokens，0=不覆盖）
     o_max_tokens: Optional[int] = 0   # 本轮输出上限（tokens，0=不覆盖）
     o_temperature: Optional[float] = None  # 本轮温度（None=不覆盖；0 是合法值）
+    # ★ 2026-11-26（同会话串行）：排队票号。由 /queue/next 取出后原样带回，
+    #   chat/stream 用它占用/释放会话执行位，撤回与乱序收口才不会互相踩。
+    queue_ticket_id: Optional[str] = None
 
 
 class RenameIn(BaseModel):

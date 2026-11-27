@@ -271,6 +271,91 @@ async function _submitClarify(msg, input){
   return true;
 }
 
+// ── 2026-11-26 同会话排队：未开始可撤回 / 前条收口后自动接续 ──
+function renderQueuedTurn(msg, atts, ticket, position, convId){
+  const files = (atts||[]).filter(a=>a && a.filename)
+    .map(a=>'<span style="margin-right:8px;">📎 '+esc(a.filename)+'</span>').join('');
+  return '<div class="msg user queued-turn" id="queued-'+esc(ticket)+'" data-ticket="'+esc(ticket)+'"'
+    + ' data-conv-id="'+esc(convId)+'" style="opacity:.86;">'
+    + '<span class="who">我</span><div class="msg-inner"><div class="body">'
+    + esc(msg).replace(/\n/g,'<br>') + '</div>'
+    + (files ? '<div style="font-size:12.5px;color:var(--mut);margin-top:4px;">'+files+'</div>' : '')
+    + '<div style="display:flex;align-items:center;gap:10px;margin-top:7px;">'
+    + '<span class="qpos" style="font-size:12.5px;color:var(--amb,#b7791f);">⏳ 排队中（第 '+position+' 位）</span>'
+    + '<button type="button" class="qcancel" onclick="cancelQueuedTurn(\''+esc(ticket)+'\')"'
+    + ' style="font-size:12px;padding:2px 9px;border:1px solid var(--line);border-radius:6px;background:transparent;color:var(--mut);cursor:pointer;">撤回</button>'
+    + '</div></div></div>';
+}
+async function cancelQueuedTurn(ticket){
+  const cid = currentConvId;
+  const el = document.getElementById('queued-'+ticket)
+          || document.querySelector('[data-ticket="'+ticket+'"]');
+  try{
+    const r = await api('/api/conversations/'+cid+'/queue/'+encodeURIComponent(ticket), {method:'DELETE'});
+    if(r && r.ok === false) throw new Error(r.error || '撤回失败');
+    if(el) el.remove();
+    toast('已撤回该排队任务（未开始执行）');
+    refreshQueueBadges();
+  }catch(e){
+    toast('撤回失败：'+(e && (e.message||e)), 5000);
+  }
+}
+async function refreshQueueBadges(){
+  if(!currentConvId) return;
+  try{
+    const r = await api('/api/conversations/'+currentConvId+'/queue');
+    const items = (r && r.items) || [];
+    items.forEach((it,i)=>{
+      const el = document.getElementById('queued-'+it.ticket_id);
+      const pos = el && el.querySelector('.qpos');
+      if(pos) pos.textContent = '⏳ 排队中（第 '+(i+1)+' 位）';
+    });
+  }catch(_e){}
+}
+let _queueDraining = false;
+const _drainedTickets = new Set();   // 防 /queue/next 重放同一票 ⇒ 同一指令被执行多次
+function _scheduleQueueDrain(cid){ setTimeout(()=>{ drainQueuedTurns(cid).catch(()=>{}); }, 0); }
+async function drainQueuedTurns(cid){
+  if(!cid || _queueDraining) return;
+  _queueDraining = true;
+  try{
+    // 一票一轮：循环接续，直到队列空；每轮都开**新 SSE**，不复用上一轮的 run_id。
+    while(true){
+      const r = await api('/api/conversations/'+cid+'/queue/next', {method:'POST', body:JSON.stringify({})});
+      const item = r && r.item;
+      if(!item) break;
+      const ticket = item.ticket_id;
+      // 幂等：同一票只能接续一次。重复回包/网络重试都不得把同一指令再跑一遍。
+      if(!ticket || _drainedTickets.has(ticket)) break;
+      _drainedTickets.add(ticket);
+      if(_drainedTickets.size > 200) _drainedTickets.clear();
+      const body = item.body || {};
+      const old = document.getElementById('queued-'+ticket);
+      if(old) old.remove();
+      const area = document.getElementById('chat-area');
+      if(!area) break;
+      const msg = body.message || '请查看我附加的材料，并据此继续。';
+      const atts = body.attachments || [];
+      area.insertAdjacentHTML('beforeend', renderMessage({role:'user', content:esc(msg), attachments:atts}));
+      const aiBox = document.createElement('div');
+      aiBox.className = 'msg ai';
+      aiBox.id = 'stream-ai';
+      aiBox.dataset.convId = String(cid);
+      aiBox.innerHTML = '<span class="who">AI</span><div class="msg-inner"><div class="proc" id="proc-box"></div><div class="body streaming"><span class="typing"></span></div></div>';
+      area.appendChild(aiBox);
+      scrollChatToBottom();
+      requestAnimationFrame(scrollChatToBottom);
+      resetPipeline();
+      const cs = document.getElementById('chat-status'); if(cs) cs.textContent = '正在执行排队任务…';
+      await pumpStream(aiBox, msg, atts, undefined, ticket, {
+        team: body.team, skill_name: body.skill_name, branch: body.branch,
+        provider_id: body.provider_id, intent_override: body.intent_override,
+        scope_ids: body.scope_ids || []
+      });
+    }
+  } finally { _queueDraining = false; }
+}
+
 async function sendChat() {
   const input = document.getElementById('chat-input');
   // ★★ 2026-10-30（用户报「从产物加入会话后发送异常，附件消失、输入框还在、会话没发起」）：
@@ -343,39 +428,52 @@ async function sendChat() {
   const _liveCid = (_el && _el.dataset && _el.dataset.convId) ? String(_el.dataset.convId) : '';
   const _sameConv = !!_liveCid && _liveCid === String(currentConvId);
   if(_streaming && _sameConv){
+    // ★ 2026-11-26：同会话连发改为**排队下一轮**（不再是补充指令 / abort 重发）。
+    //   旧路径带附件会 abort 旧 SSE 再起新流 —— abort 只断浏览器侧，服务端旧任务照跑，
+    //   于是两轮并行；且两轮按 MAX(user id) 算出同一 finalize_key，落库还会互相吞。
+    //   新路径把完整 ChatIn（含附件）交给服务端队列，**不动当前流**；上一轮收口后
+    //   由 pumpStream 的 drain 自动开新 SSE 执行，未开始前可撤回。
     const _fc = currentConvId;
-    // ★ G-3：follow-up 分支**同样不得吞附件** —— 原实现只发 {message}，附件静默消失，
-    //   且上屏渲染不带 attachments ⇒ 用户看到自己发了文件、AI 却"没收到"。
-    //   改法：带附件时**不走 followup**（follow-up 接口只吃纯文本补充指令），
-    //   落到下方正常发送路径 —— 上一轮会被 abort 并固化（原回退语义），附件随新消息完整送达。
-    if(_fc && !(pendingAttachments && pendingAttachments.length)){
-      try{
-        const r = await api(`/api/conversations/${_fc}/followup`,
-                            {method:'POST', body: JSON.stringify({message: msg})});
-        if(r && r.ok !== false){
-          input.value = '';
-          _chatInputAutoGrow();
-          try{ localStorage.removeItem('mbse_draft_input'); }catch(e){}
-          const area0 = document.getElementById('chat-area');
-          if(area0){
-            area0.insertAdjacentHTML('beforeend', renderMessage({role:'user', content:esc(msg)}));
-            scrollChatToBottom();
-          }
-          toast((r && r.pending > 1)
-            ? `已作为补充指令提交（待处理 ${r.pending} 条），本轮结束后并入处理`
-            : '已作为补充指令提交，本轮结束后并入处理');
-          return;                        // ★ 不 abort、不重发，直接返回
-        }
-        toast((r && r.error) || '补充指令提交失败');
-        return;
-      }catch(e){
-        //投递失败 ⇒ **回退到旧行为**（abort + 当新消息重发），不能静默吞掉用户输入
-        toast('补充指令提交失败：' + (e && (e.message || e)));
-      }
+    const _attsQ = (typeof pendingAttachments!=='undefined' && pendingAttachments.length)
+                   ? pendingAttachments.slice() : [];
+    const _refsQ = (typeof chatRefs!=='undefined' && chatRefs.length)
+                   ? (chatRefs||[]).splice(0, chatRefs.length) : [];
+    let _msgQ = msg;
+    if(_refsQ.length){
+      _msgQ = _refsQ.map(r=>'【引用 · '+r.label+'】\n'+r.text+'\n【引用结束】').join('\n\n') + '\n\n' + _msgQ;
+      renderRefBar();
     }
-    // 回退路径：维持原语义（固化上一轮 + abort + 作为新消息）
-    await commitPartialStream(_el);
-    if(_streamAbort) _streamAbort.abort();
+    const _payloadQ = {
+      message: _msgQ, attachments: _attsQ,
+      scope_ids: (typeof activeScopes!=='undefined' ? activeScopes : []).map(s=>s.id),
+      branch: getCurrentBranch(),
+      intent_override: window._intentOverride || '',
+      skill_name: document.getElementById('quick-skill')?.value || '',
+      team: document.getElementById('quick-team')?.value || '',
+      provider_id: Number(document.getElementById('llm-providers')?.value) || undefined,
+    };
+    try{
+      const r = await api(`/api/conversations/${_fc}/queue`,
+                          {method:'POST', body: JSON.stringify(_payloadQ)});
+      if(!r || r.ok === false) throw new Error((r && r.error) || '排队失败');
+      input.value = '';
+      _chatInputAutoGrow();
+      try{ localStorage.removeItem('mbse_draft_input'); }catch(e){}
+      pendingAttachments = []; renderAttachBar();
+      if(_skillMentioned){ _skillMentioned = false; const qs=document.getElementById('quick-skill'); if(qs) qs.value=''; }
+      renderChips();
+      const areaQ = document.getElementById('chat-area');
+      if(areaQ){
+        areaQ.insertAdjacentHTML('beforeend',
+          renderQueuedTurn(_msgQ, _attsQ, r.ticket_id, r.position, _fc));
+        scrollChatToBottom();
+      }
+      toast(`已排队（第 ${r.position} 位）：前一条完成后自动执行，开始前可撤回`);
+      return;    // ★ 绝不 abort 当前流，也不另起 SSE
+    }catch(e){
+      toast('排队失败（未打断当前任务）：' + (e && (e.message||e)), 6000);
+      return;    // ★ 排队失败也不回退到 abort 重发，避免重新引入并行
+    }
   }
   // 走到这里：① 本会话无流 ② follow-up 投递失败走回退 ③ **别的会话在跑**（本会话按新消息正常发）。
   // 情况③ 绝不能 abort —— 那会掐断别的会话正在跑的流（2026-11-06 多会话实测症状）。
@@ -829,7 +927,7 @@ async function _resumeLiveStream(convId, area){
   }
 }
 
-async function pumpStream(aiBox, msg, atts, resumeOf){
+async function pumpStream(aiBox, msg, atts, resumeOf, ticketId, turnOpts){
   // ★ 2026-11-06：开流前记进程身份 + 清终态标记（handleSSE 收到 done/error 会置位）
   window._sseTerminal = 0;
   let _bootAtStart = '';
@@ -845,8 +943,21 @@ async function pumpStream(aiBox, msg, atts, resumeOf){
   //   finishStream 的 reuseForPick 检查挡掉 ⇒ **永远不收口**（停留在
   //   「执行中…N 个环节」live 条；刷新后才变 hist 收口条）。
   try{ if(aiBox) aiBox.dataset.reuseForPick = ''; }catch(_e){}
-  const _selTeam = document.getElementById('quick-team')?.value || '';   // 主 Agent（执行主体唯一入口）
-  const _selSkill = document.getElementById('quick-skill')?.value || '';
+  // ★ 2026-11-26：排队任务带 turnOpts（提交那一刻的参数），不读当前 DOM ——
+  //   用户在等待期间切换模型/主 Agent 不应改变已排队指令的执行条件。
+  const _opt = turnOpts || {};
+  const _selTeam = Object.prototype.hasOwnProperty.call(_opt,'team') ? (_opt.team||'')
+                   : (document.getElementById('quick-team')?.value || '');
+  const _selSkill = Object.prototype.hasOwnProperty.call(_opt,'skill_name') ? (_opt.skill_name||'')
+                    : (document.getElementById('quick-skill')?.value || '');
+  const _optBranch = Object.prototype.hasOwnProperty.call(_opt,'branch') ? (_opt.branch||'')
+                     : getCurrentBranch();
+  const _optProvider = Object.prototype.hasOwnProperty.call(_opt,'provider_id')
+                       ? (Number(_opt.provider_id)||undefined)
+                       : (Number(document.getElementById('llm-providers')?.value) || undefined);
+  const _optScopes = Array.isArray(_opt.scope_ids) ? _opt.scope_ids
+                     : (typeof activeScopes!=='undefined' ? activeScopes.map(s=>s.id) : []);
+  if(Object.prototype.hasOwnProperty.call(_opt,'intent_override')) window._intentOverride = _opt.intent_override || '';
   const _cid = aiBox.dataset.convId || currentConvId;
   try {
     const resp = await fetch(`/api/conversations/${_cid}/chat/stream`, {
@@ -856,12 +967,13 @@ async function pumpStream(aiBox, msg, atts, resumeOf){
       headers: streamHeaders(),
       body: JSON.stringify({
         message:msg, attachments:atts||[],
-        scope_ids: (typeof activeScopes!=='undefined'? activeScopes:[]).map(s=>s.id),   // 建模范围（可多选，全局）硬锁
-        branch: getCurrentBranch(),   // AI 建模输出侧工作分支（默认 dev；release 只读不可作工作分支）
+        scope_ids: _optScopes,   // 建模范围（可多选，全局）硬锁
+        branch: _optBranch,      // AI 建模输出侧工作分支（默认 dev；release 只读不可作工作分支）
         intent_override: window._intentOverride || '',
         skill_name: _selSkill,
         team: _selTeam,                // 主 Agent：负责意图识别/任务拆分/计划制定/任务分派/内容整合输出
-        provider_id: Number(document.getElementById('llm-providers')?.value) || undefined,
+        provider_id: _optProvider,
+        queue_ticket_id: ticketId || undefined,   // 会话串行位：与 /queue/next 发出的票一致
         // ★ 2026-10-31（按米爸澄清的语义修正）：**会话维度**参数由后端读
         //   `conversations.llm_overrides` 自动生效，前端**不需要**每轮发送。
         //   这正是与上一版的本质差别：上一版靠前端每轮带 o_*（= 单轮语义，
@@ -892,6 +1004,17 @@ async function pumpStream(aiBox, msg, atts, resumeOf){
       let idx;
       while((idx = buf.indexOf('\n\n')) !== -1) {
         const _fr = buf.slice(0, idx);
+        // ★ 2026-11-26：会话位被占时服务端自动排队并发 queued 帧 —— 这条流没有执行任务，
+        //   不能当异常断流处理；用户已有消息气泡，只补一条排队提示即可。
+        if(_fr.indexOf('event: queued') >= 0){
+          try{
+            const _qd = JSON.parse(_fr.slice(_fr.indexOf('data:')+5).trim());
+            toast('⏳ '+(_qd.message||'已自动排队')+'（第 '+_qd.position+' 位）', 5000);
+          }catch(_e){}
+          window._sseTerminal = 1;
+          buf = buf.slice(idx+2);
+          continue;
+        }
         // ★ 2026-11-23：记最后一帧游标（id: run-seq）。终态帧到达即清 —— 本轮已收口，
         //   不再需要续显；只有"流被掐断且未收口"才会留下游标供刷新后续接。
         try{
@@ -908,6 +1031,7 @@ async function pumpStream(aiBox, msg, atts, resumeOf){
     showStopBtn(false);
     _streaming = false;
     if(_streamAbort === myAbort) _streamAbort = null;
+    _scheduleQueueDrain(_cid);   // 2026-11-26：本轮收口 → 自动接续下一条排队指令
     // ★ 2026-11-06：流读完了但**从未收到 done/error** ⇒ 服务端没正常收口。
     //   这种情况旧实现什么都不说（用户以为"跑完了"），现在按进程身份给出准确原因。
     if(!window._sseTerminal){ try{ await _annotateAbnormalEnd(aiBox, _bootAtStart); }catch(e){} try{ await _recoverTurnContent(aiBox); }catch(_r){ } }
@@ -923,6 +1047,7 @@ async function pumpStream(aiBox, msg, atts, resumeOf){
     showStopBtn(false);
     _streaming = false;
     if(_streamAbort === myAbort) _streamAbort = null;
+    _scheduleQueueDrain(_cid);   // 异常/停止收口同样接续队列（服务端会话位已释放）
     if(e && e.name === 'AbortError') {   // P1-1 停止/换发：将已生成内容固化为消息（保留执行过程）
       _clearLiveRun(_cid);               // 主动停止：后端不会续跑，游标作废
       finalizeStopped(aiBox);

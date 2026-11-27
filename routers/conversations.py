@@ -12,6 +12,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from core.deps import db_session, current_user
 from core.config import STATIC_DIR
 from core import runtime_state as _runtime_state   # 2026-10-30：关闭/并发闸/墙钟
+from core import conversation_queue as _convq      # 2026-11-26：同会话串行轮次队列
 from database import db_conn   # B2-11：事件落库用**独立连接**（请求级 conn 在流式循环里会抢写锁）
 from repositories.conversation_repo import ConversationRepo, conv_visible_to
 from repositories.studio_repo import StudioRepo
@@ -95,6 +96,7 @@ def _finalize_key_for_turn(conn, conv_id):
 #   GET /api/upload/capabilities?model_id=… → 能力与格式清单（前端渲染/预检）
 #   POST /api/upload?model_id=…             → 真正执行同一判据（不可被前端绕过）
 # 图片放行 = vision.enabled(true) AND 所选模型声明视觉能力；二者缺一即拒。
+IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"}
 # 可直接内联进会话正文的文本格式（与 history.py::_load_attachment_text 的解码分支同口径）
 TEXT_INLINE_EXTS = {".txt", ".md", ".csv", ".json", ".xml", ".log", ".sysml", ".yaml", ".yml"}
 # 可入文档库并走知识库引用的格式（与 knowledge_pipeline/extract.py::extract_text_ex 同口径）
@@ -104,8 +106,8 @@ DOC_INGEST_EXTS = {".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx",
 INLINE_ONLY_EXTS = {".sysml"}
 ALLOWED_EXTS = IMAGE_EXTS | DOC_INGEST_EXTS | INLINE_ONLY_EXTS
 SUPPORTED_FORMATS = sorted(ALLOWED_EXTS)
-IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"}
 MAX_UPLOAD_BYTES = 20 * 1024 * 1024  # 20MB
+
 
 def upload_capabilities(provider_id=None, conn=None) -> dict:
     """当前上传能力的**唯一真源**：模型是否可看图 + 各格式桶 + 可操作原因。
@@ -141,7 +143,6 @@ def upload_capabilities(provider_id=None, conn=None) -> dict:
         "document_formats": sorted(DOC_INGEST_EXTS | INLINE_ONLY_EXTS),
         "supported_formats": SUPPORTED_FORMATS,
     }
-
 
 
 def _resolve_work_branch(conn, branch: str | None) -> str:
@@ -500,6 +501,7 @@ def delete_conversation(conv_id: int, conn=Depends(db_session),
     repo = ConversationRepo(conn)
     _own_conv(conn, conv_id, user)
     repo.delete_conversation(conv_id)
+    _convq.drop_conv(conv_id)   # 2026-11-26：排队票是内存态，也要跟着会话级联清理
     # P1-4（2026-10-02）：级联清理该会话的工具结果 offload（会话没了，全文引用失去意义）
     # ★ 2026-11-02：必须传入请求连接 conn —— 上面的 repo.delete_conversation 已在本连接
     #   开了写事务（未提交）；不传 conn 时 cleanup 会开第二条连接抢写锁 = 自己等自己
@@ -512,12 +514,12 @@ def delete_conversation(conv_id: int, conn=Depends(db_session),
     audit(audit_user(user), "conversation_delete", f"删除对话#{conv_id}", conn=conn)
     return {"ok": True}
 
+
 @router.get("/api/upload/capabilities")
 def upload_capabilities_api(model_id: int | None = Query(None),
                             conn=Depends(db_session), u=Depends(current_user)):
     """上传能力查询：前端据此禁用图片入口、填充 accept 与提示，不靠本地模型名猜测。"""
     return upload_capabilities(model_id, conn)
-
 
 
 @router.post("/api/upload")
@@ -558,12 +560,13 @@ def upload_file(file: UploadFile = File(...), model_id: int | None = Form(None),
     os.makedirs(upload_dir, exist_ok=True)
     with open(os.path.join(upload_dir, name), "wb") as f:
         f.write(content)
-    inline_supported = ext in (TEXT_INLINE_EXTS | IMAGE_EXTS)
 
+    inline_supported = ext in (TEXT_INLINE_EXTS | IMAGE_EXTS)
     resp = {
         "url": f"/static/uploads/{name}",
         "filename": file.filename,
         "size": len(content),
+        "is_image": ext in IMAGE_EXTS,
         # mode 让前端按「实际消费方式」提示，而不是上传完再猜：
         #   image_vision      → 图像已可随消息送入模型
         #   document_inline   → 文本可直接注入正文
@@ -572,7 +575,6 @@ def upload_file(file: UploadFile = File(...), model_id: int | None = Form(None),
                  ("document_inline" if ext in TEXT_INLINE_EXTS else "document_ingested")),
         "inline_supported": inline_supported,
         "capabilities": caps,
-        "is_image": ext in IMAGE_EXTS,
     }
     # ── AI 建模：文档类附件自动进入文档管理（解析→分块→向量化→落库）──
     # 逻辑与「文件管理上传」完全一致（ingest_upload_document 共用入口）；
@@ -1971,18 +1973,38 @@ async def chat_stream(conv_id: int, body: ChatIn, conn=Depends(db_session),
             yield _err_frame("服务正在重启，请稍后重新发送这条消息。", "draining")
             return
 
-        # ② 并发名额（排队 `runtime.queue_wait_s` 后仍无 ⇒ 快速失败）
+        # ② 同会话串行位（2026-11-26）：全局闸只限总并发，不限同一会话。
+        #    带附件连发时前端会 abort 旧 SSE，但 abort 不停服务端任务 ⇒ 两轮并行、
+        #    且两轮按 MAX(user id) 算出同一个 finalize_key。这里在会话维度只放一轮进来；
+        #    后来的消息应通过 /queue 排队，前一轮 end() 后由前端 /queue/next 接续。
+        _ticket = str(getattr(body, "queue_ticket_id", "") or "")
+        if not _convq.begin(conv_id, _ticket):
+            # 会话位已被占（多标签页 / 直接调 API / 前端竞态）：不拒绝、不并行，
+            # 自动按原请求体排到队尾，前一轮 end() 后由 /queue/next 接续。
+            _q = _convq.enqueue(conv_id, audit_user(user), body.model_dump(), body.message)
+            if _q.get("ok"):
+                yield "event: queued\ndata: %s\n\n" % _j.dumps({
+                    "type": "queued", "ticket_id": _q["ticket_id"],
+                    "position": _q["position"], "pending": _q["pending"],
+                    "message": "本会话已有任务执行中，这条已自动排队，前一条完成后执行"
+                }, ensure_ascii=False)
+            else:
+                yield _err_frame(_q.get("error", "排队失败"), "queue_full", retry_after=5)
+            return
+
+        # ③ 并发名额（排队 `runtime.queue_wait_s` 后仍无 ⇒ 快速失败）
         _gate = _runtime_state.stream_gate()
         try:
             await _gate.__aenter__()
         except _runtime_state.GateBusy:
+            _convq.end(conv_id, _ticket)   # 会话位必须跟着释放，否则本会话队列永久卡死
             yield _err_frame(
                 "当前并发会话已达上限（%d 路），请稍后重试。"
                 % int(_runtime_state.stats().get("gate_limit") or 0),
                 "busy", retry_after=5)
             return
 
-        # ③ 整轮墙钟起点（拿到名额之后才算 —— 排队时间不该计入用户预算）
+        # ④ 整轮墙钟起点（拿到名额之后才算 —— 排队时间不该计入用户预算）
         _deadline = _runtime_state.compute_deadline()
 
         # ★ 2026-11-19：持有内层生成器引用，CancelledError 时主动 aclose ——
@@ -2004,6 +2026,7 @@ async def chat_stream(conv_id: int, body: ChatIn, conn=Depends(db_session),
                 pass
             raise
         finally:
+            _convq.end(conv_id, _ticket)   # 会话串行位：所有终态（含断连/取消/异常）都要释放
             await _gate.__aexit__(None, None, None)
 
     return StreamingResponse(
@@ -2320,6 +2343,59 @@ def post_followup(conv_id: int, body: dict = None, conn=Depends(db_session),
     audit(audit_user(user), "conversation_followup",
           "会话#%d 投递 follow-up（%d 字，待处理 %d 条）" % (conv_id, len(msg), pending), conn=conn)
     return {"ok": True, "pending": pending}
+
+
+# ── 2026-11-26 同会话串行队列：前一轮未结束 ⇒ 后续排队；未开始可撤回 ──────────
+# 与 followup 的区别：followup 是「并入当前轮」的纯文本补充；这里的每条是**独立下一轮**，
+# 携带完整 ChatIn（含附件、主 Agent、建模范围），1 票 = 1 条 SSE = 1 个 finalize_key。
+@router.post("/api/conversations/{conv_id}/queue")
+def post_turn_queue(conv_id: int, body: ChatIn, conn=Depends(db_session),
+                    user=Depends(current_user)):
+    _own_conv(conn, conv_id, user)
+    # 纯文本为空时只有带附件才合法（前端「只传了文件」会给中性指令，但仍允许旧客户端只带附件）
+    if not str(body.message or "").strip() and not (body.attachments or []):
+        return JSONResponse({"error": "排队任务不能为空"}, 400)
+    payload = body.model_dump()
+    payload["queue_ticket_id"] = None   # 票号只由服务端发放，不接受客户端自带
+    r = _convq.enqueue(conv_id, audit_user(user), payload, body.message)
+    if not r.get("ok"):
+        return JSONResponse({"error": r.get("error", "排队失败")}, 400)
+    audit(audit_user(user), "conversation_turn_queued",
+          "会话#%d 排队 %s（第 %d 位）" % (conv_id, r["ticket_id"], r["position"]), conn=conn)
+    return {"ok": True, "ticket_id": r["ticket_id"], "position": r["position"],
+            "pending": r["pending"]}
+
+
+@router.get("/api/conversations/{conv_id}/queue")
+def get_turn_queue(conv_id: int, conn=Depends(db_session), user=Depends(current_user)):
+    _own_conv(conn, conv_id, user)
+    return {"items": _convq.pending(conv_id), "active": _convq.is_active(conv_id)}
+
+
+@router.post("/api/conversations/{conv_id}/queue/next")
+def next_turn_queue(conv_id: int, conn=Depends(db_session), user=Depends(current_user)):
+    """上一轮收口后取下一票；前端拿到 body 才开新的 SSE，保证 1 票 1 轮。"""
+    _own_conv(conn, conv_id, user)
+    if _convq.is_active(conv_id):
+        return {"item": None, "reason": "active"}
+    item = _convq.claim_next(conv_id)
+    return {"item": item, "reason": "" if item else "empty"}
+
+
+@router.delete("/api/conversations/{conv_id}/queue/{ticket_id}")
+def cancel_turn_queue(conv_id: int, ticket_id: str, conn=Depends(db_session),
+                      user=Depends(current_user)):
+    """只撤回未开始的票；已进入执行返回 409，引导改用 /interrupt。"""
+    _own_conv(conn, conv_id, user)
+    r = _convq.cancel(conv_id, ticket_id, audit_user(user))
+    if r.get("started"):
+        return JSONResponse({"ok": False, "started": True,
+                             "error": "该任务已开始执行，请使用「停止」中断"}, 409)
+    if not r.get("ok"):
+        return JSONResponse({"ok": False, "error": r.get("error", "任务不存在")}, 404)
+    audit(audit_user(user), "conversation_turn_cancelled",
+          "会话#%d 撤回排队任务 %s" % (conv_id, ticket_id), conn=conn)
+    return {"ok": True, "started": False, "pending": r.get("pending", 0)}
 
 
 @router.post("/api/conversations/{conv_id}/redraw-confirm")
