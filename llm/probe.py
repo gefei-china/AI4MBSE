@@ -20,6 +20,11 @@
 每项给独立判据 + 实际回显片段，`ok` 只由**必需项**决定。可选能力不支持记 `warn`
 （不判失败，但明确写出"该能力不可用，Agent 相关功能会退化"）。
 
+向量模型（`model_type='embedding'`）同理逐项真跑：**直连向量化 → 语义区分度 →
+与库内索引维度一致 → 平台真实的 Embedder 通路**。只判"有没有向量"等于对话侧只看
+HTTP 200：常量向量、维度与存量不一致（检索侧静默 0 命中）、熔断期静默降级 bigram
+这三种"有向量但检索废掉"的形态都会判绿。见本文件 `_check_embed_*`。
+
 ## 与业务统计的关系
 
 探针本身的 token 是**真实成本**，但不应污染"每轮业务成本"口径。
@@ -29,6 +34,7 @@
 from __future__ import annotations
 
 import json
+import math
 import time
 from typing import Any, Optional
 
@@ -351,26 +357,26 @@ def _run(client, cfg: dict, model: str, mtype: str, deep: bool) -> dict:
     t0 = time.time()
 
     if mtype == "embedding":
-        return _run_embedding(client, cfg, model, t0)
-
-    checks = [_check_chat(client, cfg, headers, model)]
-    if deep:
-        checks.append(_check_stream(client, cfg, headers, model))
-        tags = cfg.get("tags")
-        if isinstance(tags, str):
-            try:
-                tags = json.loads(tags)
-            except Exception:
-                tags = []
-        tags = [str(t).lower() for t in (tags or [])]
-        checks.append(_check_tools(client, cfg, headers, model,
-                                   required=("tools" in tags or "function_call" in tags)))
-        checks.append(_check_json(client, cfg, headers, model))
-        if mtype == "multimodal":
-            checks.append(_check_vision(client, cfg, headers, model))
-        # 核对实际模型名（用基础对话返回的 model 字段 —— 不从文案里反解析）
-        checks.append(_check_model_name(checks[0]["level"] == "pass",
-                                        checks[0].get("returned_model") or "", model))
+        checks = _embedding_checks(client, cfg, model, deep)
+    else:
+        checks = [_check_chat(client, cfg, headers, model)]
+        if deep:
+            checks.append(_check_stream(client, cfg, headers, model))
+            tags = cfg.get("tags")
+            if isinstance(tags, str):
+                try:
+                    tags = json.loads(tags)
+                except Exception:
+                    tags = []
+            tags = [str(t).lower() for t in (tags or [])]
+            checks.append(_check_tools(client, cfg, headers, model,
+                                       required=("tools" in tags or "function_call" in tags)))
+            checks.append(_check_json(client, cfg, headers, model))
+            if mtype == "multimodal":
+                checks.append(_check_vision(client, cfg, headers, model))
+            # 核对实际模型名（用基础对话返回的 model 字段 —— 不从文案里反解析）
+            checks.append(_check_model_name(checks[0]["level"] == "pass",
+                                            checks[0].get("returned_model") or "", model))
 
     fails = [c for c in checks if c["level"] == "fail"]
     warns = [c for c in checks if c["level"] == "warn"]
@@ -395,38 +401,229 @@ def _summary(checks: list, ok: bool) -> str:
     return f"{head}（{p} 项通过 / {w} 项告知 / {f} 项失败）" + (f"：{tail}" if tail else "")
 
 
-def _run_embedding(client, cfg: dict, model: str, t0: float) -> dict:
-    c = _mk("embedding", "向量化（embedding 必须返回非空向量）")
+# ── 向量模型：判据不是「有没有向量」，而是「能不能检索」─────────────────────
+# 2026-11-27 补：此前 embedding 只判「非空 + 维度一致」，等价于对话侧只看 HTTP 200。
+# 实测三种「有向量但检索废掉」的形态会被判绿：
+#   ① 常量向量（每句一样）⇒ 余弦恒为 1，排序无意义（返回 200、条数、维度全对）；
+#   ② 维度与已入库向量不同 ⇒ `knowledge_pipeline/search.py` 里 `len(vec) != len(q)` 直接
+#      continue ⇒ 向量通道**静默 0 命中**，不报错、不掉日志，用户只看到「知识库明明有」；
+#   ③ 上游通但平台通路挂了（模型名带空格 / 熔断期 / 静默降级 bigram TF）⇒ 测的是 API，
+#      不是本平台 —— 这类才是「点了测试说可用，用起来检索不到」的主因。
+# 所以：E1 直连向量化 → E2 语义区分度 → E3 与库内索引维度一致 → E4 走平台 Embedder 真通路。
+_EMB_PROBES = [
+    ("q", "需求工程里的黑盒活动图怎么画"),
+    ("rel", "黑盒活动图描述系统与外部参与者的交互，不展示内部实现细节"),
+    ("neg1", "红烧肉要先焯水，再用小火慢炖一小时"),
+    ("neg2", "足球比赛下半场补时三分钟"),
+]
+_EMB_MARGIN = 0.10          # 相关句余弦须比无关句高出这么多，否则判「无区分度」
+_EMB_REL_FLOOR = 0.30       # 相关句绝对相似度下限（低于此只告知，不判死）
+
+
+def _vec_cos(a, b) -> float:
+    """余弦相似度（全零向量返回 0，不产生除零）。"""
+    if not a or not b or len(a) != len(b):
+        return 0.0
+    d = sum(float(x) * float(y) for x, y in zip(a, b))
+    na = math.sqrt(sum(float(x) * float(x) for x in a))
+    nb = math.sqrt(sum(float(x) * float(x) for x in b))
+    if not na or not nb:
+        return 0.0
+    return d / (na * nb)
+
+
+def _check_embed_api(client, cfg: dict, model: str):
+    """E1 直连向量化：条数对应、非空、维度一致、非全零。返回 (check, vectors)。"""
+    c = _mk("embedding", "向量化（条数/维度/非零向量）")
     url = str(cfg["base_url"]).rstrip("/") + "/embeddings"
+    texts = [t for _, t in _EMB_PROBES]
+    t0 = time.time()
     try:
         r = client.post(url, headers={"Authorization": f"Bearer {cfg['api_key']}"},
-                        json={"model": model, "input": ["需求工程", "ping"]}, timeout=45)
+                        json={"model": model, "input": texts}, timeout=45)
     except Exception as e:
-        _done(c, "fail", f"请求异常：{type(e).__name__}: {e}", latency_ms=int((time.time() - t0) * 1000))
-        return {"ok": False, "level": "fail", "checks": [c],
-                "latency_ms": int((time.time() - t0) * 1000), "model": model,
-                "summary": _summary([c], False)}
+        return _done(c, "fail", f"请求异常：{type(e).__name__}: {e}",
+                     latency_ms=int((time.time() - t0) * 1000)), []
     lat = int((time.time() - t0) * 1000)
     if r.status_code != 200:
-        _done(c, "fail", f"HTTP {r.status_code}: {_err_text(r)}", latency_ms=lat)
-        return {"ok": False, "level": "fail", "checks": [c], "latency_ms": lat,
-                "model": model, "summary": _summary([c], False)}
+        return _done(c, "fail", f"HTTP {r.status_code}: {_err_text(r)}", latency_ms=lat), []
     try:
         j = r.json()
         vecs = [d.get("embedding") for d in (j.get("data") or [])]
     except Exception:
-        vecs = []
+        j, vecs = {}, []
     if not vecs or not all(isinstance(v, list) and v for v in vecs):
-        _done(c, "fail", "HTTP 200 但没有向量（data/embedding 为空）——不能用于检索", latency_ms=lat)
-        return {"ok": False, "level": "fail", "checks": [c], "latency_ms": lat,
-                "model": model, "summary": _summary([c], False)}
+        return _done(c, "fail", "HTTP 200 但没有向量（data/embedding 为空）——不能用于检索",
+                     latency_ms=lat), []
     dims = {len(v) for v in vecs}
-    if len(vecs) >= 2 and len(dims) > 1:
-        _done(c, "fail", f"同一批输入的向量维度不一致 {sorted(dims)}", latency_ms=lat)
-        return {"ok": False, "level": "fail", "checks": [c], "latency_ms": lat,
-                "model": model, "summary": _summary([c], False)}
+    if len(dims) > 1:
+        return _done(c, "fail", f"同一批输入的向量维度不一致 {sorted(dims)}", latency_ms=lat), []
+    if len(vecs) < len(texts):
+        return _done(c, "fail",
+                     f"发 {len(texts)} 条只回 {len(vecs)} 条向量：入库/检索的条与条会错位",
+                     latency_ms=lat), []
+    if all(max(abs(float(x)) for x in v) < 1e-9 for v in vecs):
+        return _done(c, "fail", "返回全零向量：余弦恒为 0，检索无意义", latency_ms=lat), []
     u = j.get("usage") or {}
     _record(cfg, "chat_probe", u.get("prompt_tokens") or 0, 0, lat, True)
-    _done(c, "pass", f"维度 {sorted(dims)[0]}，返回 {len(vecs)} 条", latency_ms=lat)
-    return {"ok": True, "level": "pass", "checks": [c], "latency_ms": lat,
-            "model": model, "summary": _summary([c], True)}
+    dim = sorted(dims)[0]
+    _done(c, "pass", f"维度 {dim}，{len(texts)} 条输入全部返回", latency_ms=lat)
+    return c, vecs
+
+
+def _check_embed_semantics(vecs: list) -> dict:
+    """E2 语义区分度：相关句必须比无关句更近，且不能是常量向量。"""
+    c = _mk("embed_semantics", "语义区分度（相关句须比无关句更近）")
+    if len(vecs) < 4:
+        return _done(c, "warn", "向量化未通过，未做区分度判定")
+    q, rel, n1, n2 = vecs[0], vecs[1], vecs[2], vecs[3]
+    s_rel = _vec_cos(q, rel)
+    s_neg = max(_vec_cos(q, n1), _vec_cos(q, n2))
+    s_cross = _vec_cos(rel, n1)
+    nums = (f"相关 {s_rel:.3f} / 无关 {s_neg:.3f}（差 {s_rel - s_neg:+.3f}）"
+            f"，相关-无关句 {s_cross:.3f}")
+    # 先判"两类文本根本不可分"（共线），再判"能分但分反了"——两者文案不同，用户该做的事也不同
+    if s_cross > 0.99:
+        return _done(c, "fail", f"向量几乎共线（{nums}）——疑似常量向量，任何排序都无意义，不能用于检索")
+    if s_rel - s_neg < _EMB_MARGIN:
+        return _done(c, "fail",
+                     f"无区分度：相关句不比无关句更近（要求差 ≥ {_EMB_MARGIN}；{nums}）——不能用于检索")
+    if s_rel < _EMB_REL_FLOOR:
+        return _done(c, "warn",
+                     f"能区分但相关句绝对相似度偏低（< {_EMB_REL_FLOOR}；{nums}），"
+                     f"排序可能仍可用，建议用真实语料复核")
+    return _done(c, "pass", f"相关句显著更近，向量具备语义检索能力（{nums}）")
+
+
+def _index_vector_dim():
+    """库内已入库向量的维度（取众数，避免个别脏行影响判定）。返回 (dim, 条数)。"""
+    try:
+        from database import db_conn
+        with db_conn() as conn:
+            row = conn.execute(
+                "SELECT json_array_length(embedding) AS d, count(*) AS n FROM document_chunks "
+                "WHERE embedding IS NOT NULL AND json_valid(embedding) "
+                "GROUP BY d ORDER BY n DESC LIMIT 1").fetchone()
+        if row and row[0]:
+            return int(row[0]), int(row[1])
+    except Exception:
+        pass
+    try:                                    # 无 JSON1 时的兜底：抽样算长度
+        from database import db_conn
+        with db_conn() as conn:
+            cnt: dict = {}
+            for (v,) in conn.execute(
+                    "SELECT embedding FROM document_chunks WHERE embedding IS NOT NULL LIMIT 500"):
+                try:
+                    d = len(json.loads(v))
+                except Exception:
+                    continue
+                cnt[d] = cnt.get(d, 0) + 1
+        if cnt:
+            d = max(cnt, key=cnt.get)
+            return d, cnt[d]
+    except Exception:
+        pass
+    return 0, 0
+
+
+def _check_embed_index(dim: int, is_effective: bool) -> dict:
+    """E3 与库内索引维度一致：维度不符时检索侧静默跳过，向量通道 0 命中。"""
+    c = _mk("embed_index", "与已入库向量维度一致")
+    if not dim:
+        return _done(c, "warn", "向量化未通过，未核对索引维度")
+    idx_dim, n = _index_vector_dim()
+    if not idx_dim:
+        return _done(c, "warn", "库内暂无可核对的已入库向量（新库/空知识库），无法判断换模型的影响")
+    if idx_dim == dim:
+        return _done(c, "pass", f"与库内 {n} 条向量一致（{dim} 维）")
+    msg = (f"库内 {n} 条向量为 {idx_dim} 维，本模型 {dim} 维 —— 检索侧 "
+           f"`len(vec)!=len(q)` 会直接跳过，向量通道会**静默 0 命中**（不报错、不掉日志）")
+    if is_effective:
+        return _done(c, "fail", msg + "；该模型正是平台当前默认向量模型 ⇒ 现在就已经检索不到")
+    return _done(c, "warn", msg + "；改为默认前必须全量重建索引（知识库重索引）")
+
+
+def _effective_embed_provider():
+    """平台真正会用的向量 provider（与 `Embedder._probe_api` 的选择口径一致）。"""
+    try:
+        from database import db_conn
+        with db_conn() as conn:
+            row = conn.execute(
+                "SELECT id, base_url, model_name FROM llm_providers "
+                "WHERE status='active' AND api_key != '' AND model_type='embedding' "
+                "ORDER BY is_default DESC, id LIMIT 1").fetchone()
+        return dict(row) if row else None
+    except Exception:
+        return None
+
+
+def _check_embed_platform(cfg: dict, dim: int, is_effective: bool) -> dict:
+    """E4 平台真实通路：经 Embedder 取向量，确认不是 bigram 降级、不是熔断期。"""
+    c = _mk("embed_platform", "平台真实通路（Embedder → 真向量，非 bigram 降级）")
+    if not dim:
+        return _done(c, "warn", "向量化未通过，未验证平台通路")
+    if not is_effective:
+        return _done(c, "warn", "非平台当前默认向量模型，未验证平台通路（设为默认后再测才真跑）")
+    try:
+        from database import db_conn
+        from knowledge_pipeline.embedder import Embedder, EmbedQuotaExceeded
+    except Exception as e:                       # noqa: BLE001
+        return _done(c, "warn", f"未加载到 Embedder：{type(e).__name__}: {e}")
+
+    # 探针不得改变运行时状态：熔断窗口与探活缓存先快照、跑完还原
+    # （否则「点一次测试」就会让服务进入 10 分钟 bigram 降级态，这是测试本身制造的故障）。
+    snap = (Embedder._PROBE_CACHE, Embedder._PROBE_STAMP,
+            Embedder._QUOTA_BLOCK_UNTIL, Embedder._UNAVAIL_BLOCK_UNTIL, Embedder.LAST_QUOTA_ERROR)
+    t0 = time.time()
+    try:
+        Embedder._PROBE_CACHE = None
+        Embedder._PROBE_STAMP = 0.0
+        with db_conn() as conn:
+            # 两条文本：单条会命中 _QUERY_CACHE，测到的可能不是本次网络结果
+            vecs, ver = Embedder(conn).embed_with_version(
+                [_EMB_PROBES[0][1], _EMB_PROBES[1][1]])
+    except EmbedQuotaExceeded as e:
+        return _done(c, "fail", f"平台通路被阻断：{str(e)[:220]}",
+                     latency_ms=int((time.time() - t0) * 1000))
+    except Exception as e:                       # noqa: BLE001
+        return _done(c, "fail", f"平台通路异常：{type(e).__name__}: {str(e)[:200]}",
+                     latency_ms=int((time.time() - t0) * 1000))
+    finally:
+        (Embedder._PROBE_CACHE, Embedder._PROBE_STAMP,
+         Embedder._QUOTA_BLOCK_UNTIL, Embedder._UNAVAIL_BLOCK_UNTIL,
+         Embedder.LAST_QUOTA_ERROR) = snap
+    lat = int((time.time() - t0) * 1000)
+    if ver != "openai-compat":
+        return _done(c, "fail",
+                     f"平台实际返回 {ver}（词面 bigram 降级向量）——检索会退化成字面匹配", latency_ms=lat)
+    got = len(vecs[0]) if vecs else 0
+    if got != dim:
+        return _done(c, "fail",
+                     f"平台通路维度 {got} ≠ 直连测试 {dim}（模型名/路由不一致，检查尾随空格与默认模型）",
+                     latency_ms=lat)
+    if all(abs(float(x)) < 1e-9 for x in vecs[0]):
+        return _done(c, "fail", "平台通路返回全零向量", latency_ms=lat)
+    return _done(c, "pass", f"经 Embedder 取到 {dim} 维真向量（{ver}）", latency_ms=lat)
+
+
+def _embedding_checks(client, cfg: dict, model: str, deep: bool) -> list:
+    c, vecs = _check_embed_api(client, cfg, model)
+    checks = [c]
+    if not deep:
+        return checks
+    dim = len(vecs[0]) if vecs else 0
+    eff = _effective_embed_provider()
+    if eff and cfg.get("id"):
+        is_eff = str(cfg.get("id")) == str(eff.get("id"))
+    elif eff:                                     # 表单测试（未保存）：按 URL + 模型名对齐
+        is_eff = (str(cfg.get("base_url") or "").rstrip("/")
+                  == str(eff.get("base_url") or "").rstrip("/")
+                  and str(cfg.get("model_name") or "").strip()
+                  == str(eff.get("model_name") or "").strip())
+    else:
+        is_eff = False
+    checks.append(_check_embed_semantics(vecs))
+    checks.append(_check_embed_index(dim, is_eff))
+    checks.append(_check_embed_platform(cfg, dim, is_eff))
+    return checks

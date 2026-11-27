@@ -2492,7 +2492,7 @@ async function _showProbeResult(title, r){
   await confirmDialog(_formatProbeResult(r || {}), {title, hideCancel: true, okText: '知道了'});
 }
 async function testLLM(id) {
-  toast('正在做功能自检（对话/流式/工具/JSON，约 5~30 秒）…');
+  toast('正在做功能自检（按模型类型逐项真跑：对话/流式/工具/JSON/向量，约 5~30 秒）…');
   try {
     const r = await api(`/api/llm/providers/${id}/test`, {method:'POST'});
     await _showProbeResult('模型功能自检', r);
@@ -2508,7 +2508,7 @@ async function testLLMFromForm() {
   const api_key = keyInput.disabled ? '' : keyInput.value.trim();
   const model_name = document.getElementById('f-model').value.trim();
   if(!name || !base_url || !model_name) { toast('请先填写必填项：名称 / Base URL / 模型名'); return; }
-  toast('正在做功能自检（对话/流式/工具/JSON，约 5~30 秒）…');
+  toast('正在做功能自检（按模型类型逐项真跑：对话/流式/工具/JSON/向量，约 5~30 秒）…');
   try {
     let r;
     if(id && !api_key) {

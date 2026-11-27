@@ -17,6 +17,10 @@
 | no_stream（忽略 stream，返回普通 JSON） | 通过 | stream **fail** |
 | no_json（response_format 400） | 通过 | json **warn**（可降级，不判死） |
 | multimodal 拒绝图片（400） | 通过 | vision **fail** |
+| emb_const（向量恒定） | 通过 | embed_semantics **fail**（排序无意义） |
+| emb_zero（返回全零向量） | 通过 | embedding **fail**（余弦恒 0） |
+| emb_short（回包条数不足） | 通过 | embedding **fail**（条与条错位） |
+| emb_bad（data 为空） | 通过 | embedding **fail** |
 
 另有两条口径断言：
   P1 · `deep=True` 必须真的发出 ≥3 次请求（不是"看起来跑了"）；
@@ -85,10 +89,33 @@ class Handler(BaseHTTPRequestHandler):
         mode = MODE["v"]
 
         if self.path.rstrip("/").endswith("/embeddings"):
+            inp = body.get("input") or []
+            if isinstance(inp, str):
+                inp = [inp]
             if mode == "emb_bad":
                 return self._json(200, {"data": []})
-            return self._json(200, {"data": [{"embedding": [0.1] * 8},
-                                             {"embedding": [0.2] * 8}]})
+            if mode == "emb_short":          # 只回一半条数：入库/检索会错位
+                inp = inp[:2]
+            if mode == "emb_zero":           # 非空但全零：余弦分母为 0
+                return self._json(200, {"data": [{"index": i, "embedding": [0.0] * 8}
+                                                 for i in range(len(inp))]})
+            if mode == "emb_const":          # 常量向量：条数/维度都对，但余弦恒为 1
+                return self._json(200, {"data": [{"index": i, "embedding": [0.1] * 8}
+                                                 for i in range(len(inp))]})
+            if mode == "emb_nodisc":         # 非退化但无关句更近：能排序也排不对
+                data = []
+                for i in range(len(inp)):
+                    v = [0.0] * 8
+                    v[0 if i % 2 == 0 else 1] = 1.0     # q 与 neg 同向、与 rel 正交
+                    data.append({"index": i, "embedding": v})
+                return self._json(200, {"data": data})
+            # ok：含「活动图」的落第 0 维，其余落第 1 维 ⇒ 相关句必然比无关句更近
+            data = []
+            for i, t in enumerate(inp):
+                v = [0.0] * 8
+                v[0 if "活动图" in str(t) else 1] = 1.0
+                data.append({"index": i, "embedding": v})
+            return self._json(200, {"data": data})
 
         has_image = any(isinstance(m.get("content"), list) for m in (body.get("messages") or []))
         if has_image and mode == "no_vision":
@@ -190,6 +217,35 @@ def g9_endpoint(base_fake: str):
         fail_keys = [x.get("key") for x in (r2.get("checks") or []) if x.get("level") == "fail"]
         chk("G9.4 不支持工具 ⇒ 判不可用", r2.get("ok") is False and "tools" in fail_keys,
             "ok=%s fail=%s" % (r2.get("ok"), fail_keys))
+
+        # 向量模型端到端：E4 必须真的经平台 Embedder 通路（不是只直连 API 就算过）
+        c = sqlite3.connect(srv.db)
+        # 快照库里的向量 provider 也带 is_default=1，而平台按 `is_default DESC, id LIMIT 1` 选
+        # ⇒ 不先清标记，新插入的 provider 永远不是"平台实际在用的那个"，E4 会被正确跳过。
+        c.execute("update llm_providers set is_default=0 where model_type='embedding'")
+        c.execute(
+            "insert into llm_providers (name, provider_type, base_url, api_key, model_name, "
+            "max_tokens, temperature, is_default, status, model_params, model_type, "
+            "context_window, tags, priority, budget_tokens, description) "
+            "values (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            ("__probe_fake_emb__", "openai_compat", base_fake, "sk-test", "fake-emb",
+             512, 0.3, 1, "active", "{}", "embedding", 8192, "[]", 0, 0, "gate"))
+        c.commit()
+        epid = c.execute("select id from llm_providers where name='__probe_fake_emb__'").fetchone()[0]
+        c.close()
+        MODE["v"] = "ok"
+        r3 = httpx.post(srv.base + "/api/llm/providers/%d/test" % epid, headers=H, timeout=120).json()
+        ekeys = [x.get("key") for x in (r3.get("checks") or [])]
+        chk("G9.5 向量自检返回 4 项判据（含平台通路）",
+            {"embedding", "embed_semantics", "embed_index", "embed_platform"} <= set(ekeys), str(ekeys))
+        pf = _by_key(r3, "embed_platform")
+        chk("G9.6 默认向量模型 ⇒ 平台 Embedder 通路真跑通",
+            pf.get("level") == "pass" and "openai-compat" in (pf.get("detail") or ""),
+            pf.get("detail", "")[:90])
+        chk("G9.7 默认向量模型 + 维度与存量不符 ⇒ 判不可用（不再只看「有向量」）",
+            r3.get("ok") is False and _by_key(r3, "embed_index").get("level") == "fail"
+            and "静默 0 命中" in (_by_key(r3, "embed_index").get("detail") or ""),
+            _by_key(r3, "embed_index").get("detail", "")[:90])
         MODE["v"] = "ok"
     finally:
         srv.stop()
@@ -264,12 +320,56 @@ def main() -> int:
         print("\n== G8 embedding ==")
         MODE["v"] = "ok"
         rep = _probe(base, mtype="embedding")
-        chk("G8.1 向量可返回 ⇒ pass", rep.get("ok") is True and _by_key(rep, "embedding").get("level") == "pass",
+        keys = [c.get("key") for c in (rep.get("checks") or [])]
+        chk("G8.1 向量可返回 ⇒ pass",
+            rep.get("ok") is True and _by_key(rep, "embedding").get("level") == "pass",
             _by_key(rep, "embedding").get("detail", ""))
+        chk("G8.2 深度自检含 4 项判据（不是只看有没有向量）",
+            {"embedding", "embed_semantics", "embed_index", "embed_platform"} <= set(keys), str(keys))
+        chk("G8.3 语义区分度 pass（相关句显著更近）",
+            _by_key(rep, "embed_semantics").get("level") == "pass",
+            _by_key(rep, "embed_semantics").get("detail", "")[:110])
+        # 假上游是 8 维，库内向量是 1024 维 ⇒ 必须指出"维度不符会静默 0 命中"，但不判死
+        c_idx = _by_key(rep, "embed_index")
+        chk("G8.4 维度与库内索引不符 ⇒ 指出后果且不误判为可用",
+            c_idx.get("level") in ("warn", "fail")
+            and ("维" in (c_idx.get("detail") or ""))
+            and ("静默 0 命中" in (c_idx.get("detail") or "") or "暂无可核对" in (c_idx.get("detail") or "")),
+            c_idx.get("detail", "")[:110])
+        c_pf = _by_key(rep, "embed_platform")
+        chk("G8.5 非默认向量模型 ⇒ 平台通路明确跳过（不假装已验证）",
+            c_pf.get("level") == "warn" and "非平台当前默认" in (c_pf.get("detail") or ""),
+            c_pf.get("detail", "")[:90])
+
         MODE["v"] = "emb_bad"
         rep = _probe(base, mtype="embedding")
-        chk("G8.2 200 但无向量 ⇒ fail", rep.get("ok") is False,
+        chk("G8.6 200 但无向量 ⇒ fail", rep.get("ok") is False,
             _by_key(rep, "embedding").get("detail", "")[:60])
+
+        MODE["v"] = "emb_const"
+        rep = _probe(base, mtype="embedding")
+        chk("G8.7 常量向量（有向量但毫无区分度）⇒ 判不可用",
+            rep.get("ok") is False and _by_key(rep, "embed_semantics").get("level") == "fail",
+            _by_key(rep, "embed_semantics").get("detail", "")[:110])
+
+        MODE["v"] = "emb_zero"
+        rep = _probe(base, mtype="embedding")
+        chk("G8.8 全零向量 ⇒ fail", rep.get("ok") is False
+            and "全零" in (_by_key(rep, "embedding").get("detail") or ""),
+            _by_key(rep, "embedding").get("detail", "")[:60])
+
+        MODE["v"] = "emb_short"
+        rep = _probe(base, mtype="embedding")
+        chk("G8.9 回包条数少于输入 ⇒ fail（否则条与条错位）",
+            rep.get("ok") is False and "只回" in (_by_key(rep, "embedding").get("detail") or ""),
+            _by_key(rep, "embedding").get("detail", "")[:70])
+
+        MODE["v"] = "emb_nodisc"
+        rep = _probe(base, mtype="embedding")
+        chk("G8.10 非退化但无关句更近 ⇒ 判无区分度（不能只靠「不是常量」）",
+            rep.get("ok") is False and _by_key(rep, "embed_semantics").get("level") == "fail"
+            and "无区分度" in (_by_key(rep, "embed_semantics").get("detail") or ""),
+            _by_key(rep, "embed_semantics").get("detail", "")[:110])
 
         print("\n== P1 深度自检真的发了多次请求 ==")
         MODE["v"] = "ok"

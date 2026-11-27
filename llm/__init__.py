@@ -1224,7 +1224,8 @@ class LLMClient:
     def test_connection(self, provider_id, deep: bool = False):
         """连通性测试：经注册表 provider 实现（P1-3）。
 
-        `deep=True` 走 `llm.probe` 的**功能自检**（真实跑对话/流式/工具/JSON/视觉逐项判据），
+        `deep=True` 走 `llm.probe` 的**功能自检**（真实跑对话/流式/工具/JSON/视觉逐项判据；
+        向量模型则跑 向量化→语义区分度→与库内索引维度一致→平台 Embedder 通路），
         回答的是"这个模型本平台能不能用"，而不是"HTTP 200 了没有"。见 llm/probe.py 文件头。
         """
         provider = self.get_provider(provider_id)
