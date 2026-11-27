@@ -136,6 +136,9 @@ function onStageEvent(ev){
 function _newProcState(){
   return {timeline: [], thinking: '', thinkingRounds: {}, thinkingOrder: [], dag: {nodes:{}, order:[]}, dagDirty: false,
           startTime: null, endTime: null, summaryCollapsed: false, done: false, tokens: '', subChildren: {}, keyMarked: {},
+          // ★ 2026-11-27（方案 A）：系统进度提示统一收编到一张「执行说明」卡。
+          //   每条同时保留分组键，展开时按来源分组折叠；不再一条 delta 一张卡。
+          notices: [],
           // ★ F-1：子任务实时输出缓冲 {task_key: 文本}。
           //   子任务的 token **绝不能**流进正文区（米爸需求3：最终输出正文在流程执行
           //   完成后再输出）—— 后端 subtask token 带 `key`、最终正文 token 不带，
@@ -235,7 +238,9 @@ function procUpsert(id, patch){
     if(!s._userCollapsed && !s._userExpanded) s.collapsed = true;
     if(!s.sub && !s.subHtml && s.detail) s.sub = _procSumText(String(s.detail));
   } else {
-    s.collapsed = !!s._userCollapsed;   // 用户收起的运行中环节不再被弹开
+    // ★ 2026-11-27（方案 A）：思考节点默认收起 —— 不再让 36vh 内滚块常驻页面顶部。
+    //   用户手动展开过（_userExpanded）仍保持展开；其他环节的旧语义逐字不变。
+    s.collapsed = s.type === 'thinking' ? !s._userExpanded : !!s._userCollapsed;
   }
   procRender();
 }
@@ -360,12 +365,31 @@ function procRender(){
 //   run/done 生命周期、有固定图标语义）；混进 stage 会让"生成与校验"这类真实阶段
 //   的完成判定受影响。独立行 + 顺序追加，最小侵入且不参与阶段状态机。
 //   合并同一文案（planner 可能重复发同一句）⇒ 用文案做 key，重复则只更新不新增行。
-function procAddSystemNotice(text){
+function procAddSystemNotice(text, meta){
+  // ★ 2026-11-27（方案 A）：整段自包含 —— verify_reasoning_kind.py 会**单独抽取本函数**执行，
+  //   任何外部辅助函数（如 _noticeGroupOf）在它的沙箱里都不存在，必须内联。
   const t = String(text || '').trim();
   if(!t) return;
-  const id = 'notice_' + t.slice(0, 24);
-  procUpsert(id, {type:'notice', icon:'ℹ️', title:'系统提示', status:'done',
-    statusText:'提示', sub: t, detail: t});
+  if(!_procS.notices) _procS.notices = [];
+  // 同一来源收进同一组：优先文案里的「（自动编排）/（续跑）」前缀，其次 kind/phase。
+  const m = t.match(/^\s*（([^）]{1,12})）/);
+  const group = m ? ('（' + m[1] + '）')
+                  : ((meta && (meta.phase || meta.kind)) ? String(meta.phase || meta.kind) : '其他提示');
+  // 同一文案只留一条（planner 会重复发同一句）；位置仍按首次出现时间。
+  if(_procS.notices.some(n=>n.text === t)) return;
+  _procS.notices.push({text:t, group});
+  const _e = s => String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  const groups = {};
+  _procS.notices.forEach(n=>{
+    const k = n.group || '其他提示';
+    (groups[k] = groups[k] || []).push(n.text);
+  });
+  const detail = Object.keys(groups).map(k=>{
+    const lines = groups[k].map(x=>`<div style="padding:2px 0;font-size:12.5px;color:var(--mut);">· ${_e(x)}</div>`).join('');
+    return `<details style="margin:4px 0;"><summary style="cursor:pointer;font-size:12.5px;color:var(--mut);">${_e(k)} · ${groups[k].length} 条</summary>${lines}</details>`;
+  }).join('');
+  procUpsert('notice_digest', {type:'notice', icon:'📌', title:`执行说明（${_procS.notices.length}）`,
+    status:'done', statusText:'已收编', sub:'系统进度提示 · 点击展开明细', detail});
 }
 
 /* ★★ P0（2026-11-25）降级/静默兜底可见化 —— 执行过程卡片
@@ -506,7 +530,14 @@ function procAddThinking(delta, round, key){
   if(!_procS.thinkingRounds) _procS.thinkingRounds = {};
   if(!_procS.thinkingOrder) _procS.thinkingOrder = [];
   if(!_procS.keyMarked) _procS.keyMarked = {};
-  if(!(round in _procS.thinkingRounds)){ _procS.thinkingRounds[round] = ''; _procS.thinkingOrder.push(round); }
+  if(!(round in _procS.thinkingRounds)){
+    _procS.thinkingRounds[round] = ''; _procS.thinkingOrder.push(round);
+    // ★ 2026-11-27（方案 A）：新一轮开始即收口上一轮思考块 —— 时间线上同时只留
+    //   当前一轮展开（且默认收起），不再出现多块「思考中…」并排刷屏。
+    _procS.timeline.filter(x=>x.type==='thinking' && x.status==='run').forEach(x=>{
+      x.status = 'done'; x.statusText = '✓ 已深度思考'; x.collapsed = true;
+    });
+  }
   // V2.6：子任务内部思考标注归属（每个 key 只标一次，避免逐 delta 重复）
   if(key && !_procS.keyMarked[key]){ _procS.thinkingRounds[round] += '【'+key+'】'; _procS.keyMarked[key] = true; }
   _procS.thinkingRounds[round] += delta;
@@ -530,7 +561,7 @@ function procAddThinking(delta, round, key){
   const _title = round > 0 ? ('思考 · 第 ' + round + ' 轮') : '思考过程';
   // detail 只放**本块自己的**文本（原来放的是全部轮次的拼接 —— 这正是"总在一个位置"的根源）
   procUpsert(_id, {type:'thinking', icon:'💭', title:_title, status:'run',
-    statusText:'思考中…', sub: _liveSum ? ('…' + _liveSum) : '', detail: esc(_txt),
+    statusText:'思考中… ' + String(_txt || '').length + ' 字', sub: _liveSum ? ('…' + _liveSum) : '', detail: esc(_txt),
     // raw = 本块**未转义**原文，供收口时提炼首句摘要（从 detail 反解 HTML 不可靠：
     //   esc 后是 &lt; 实体，任何标签剥离都会误伤正文）
     raw: _txt});
@@ -1830,7 +1861,7 @@ function handleSSE(raw) {
     //   事件录制（orch_stream_events）、监控检索全都按 type 走，"事件名即语义"
     //   才能让思考时间线降噪（系统提示不再占用"AI 思考"框）。
     //   老服务端（仍发 reasoning+kind=progress）走下方兼容分支，行为不变。
-    procAddSystemNotice(ev.delta || '');
+    procAddSystemNotice(ev.delta || '', ev);
   } else if(evType === 'reasoning') {
     // ★ B2-10（2026-10-13）：`kind` 区分「模型 CoT」与「系统进度提示」。
     //   此前 26 处 reasoning 里，8 处是系统提示（"（自动编排）检测到多 Agent 协作需求"
@@ -1838,7 +1869,7 @@ function handleSSE(raw) {
     //   用户看到的"AI 思考"里混着系统自述，**分不清哪句是模型想的、哪句是系统说的**。
     //   kind 缺失（老事件 / 未升级的服务端）按 CoT 处理 ⇒ 完全向后兼容。
     if(ev.kind === 'progress'){
-      procAddSystemNotice(ev.delta || '');
+      procAddSystemNotice(ev.delta || '', ev);
     } else {
       procAddThinking(ev.delta || '', ev.round, ev.key);   // V2.4 思考流（V2.6：带子任务归属标记）
     }

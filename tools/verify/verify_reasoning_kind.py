@@ -352,10 +352,13 @@ console.log(JSON.stringify(out));
           "改动等于没做（这类\"只改一端\"的失效从返回值上看不出来）")
 
     # F3：把 procAddSystemNotice 改成写进 _procS.thinking ⇒ D5 必须 FAIL
-    _jmut3 = j_src.replace(
-        "  procUpsert(id, {type:'notice', icon:'ℹ️', title:'系统提示', status:'done',\n"
-        "    statusText:'提示', sub: t, detail: t});",
-        "  _procS.thinking = (_procS.thinking || '') + t;")
+    # ★ 2026-11-27：变异锚点随方案 A 的聚合卡实现同步 —— 旧锚点是「一条提示一张卡」
+    #   时代的字面量，实现改后 replace 不再命中，会伪装成「变异没改到」的假失败。
+    _jmut3, _n3 = re.subn(
+        r"procUpsert\('notice_digest',\s*\{type:'notice'[\s\S]*?\}\);",
+        "_procS.thinking = (_procS.thinking || '') + t;",
+        j_src, count=1)
+    check("F3 前置：变异锚点命中现行实现", _n3 == 1, "命中 %d 处" % _n3)
     _fn3 = _extract_fn(_jmut3, "procAddSystemNotice")
     check("F3 变异体（系统提示写进 thinking）上 D5 必须 FAIL",
           "_procS.thinking" in _fn3,

@@ -38,16 +38,33 @@ function procBlocksHtml(ex, mid){
        · reasoning ⇒ 只在**确实是模型心智链**时渲染，且标题改为「模型思考」以示区分
        · notices   ⇒ 按 kind 收编到对应环节的展开区（不独立成大块） */
   const _notices = Array.isArray(ex.notices) ? ex.notices : [];
-  if(ex.reasoning) steps.push({icon:'💭', title:'模型思考', status:'done', sub:'（模型推理过程）', body: esc(ex.reasoning), cls:'thinking'});
-  // 系统进度提示：收编为**独立的小行「执行说明」**，与模型思考分开、不抢主线
+  // ★ 2026-11-27（方案 A）：思考与系统提示都**默认折叠**，与实时路径同口径。
+  //   原来这里 reasoning 是一整块展开文本、notices 逐条平铺 —— 刷新后依旧"一大片"。
+  if(ex.reasoning){
+    const _rt = String(ex.reasoning);
+    steps.push({icon:'💭', title:'模型思考', status:'done', sub:'（模型推理过程 · 点击展开）',
+      body:`<details style="margin:4px 0;"><summary style="cursor:pointer;font-size:12.5px;color:var(--mut);">展开完整思考（${_rt.length} 字）</summary><div style="white-space:pre-wrap;font-size:12.5px;line-height:1.65;padding:6px 2px;">${esc(_rt)}</div></details>`,
+      cls:'thinking'});
+  }
+  // 系统进度提示：一张「执行说明」卡，按来源分组折叠，不再逐条平铺
   if(_notices.length){
-    const _ntBody = _notices.map(n => {
+    const _ng = {};
+    _notices.forEach(n=>{
       const t = (n && typeof n === 'object') ? (n.text || '') : String(n || '');
-      return t ? `<div style="padding:2px 0;font-size:12.5px;color:var(--mut);">· ${esc(t)}</div>` : '';
+      if(!t) return;
+      const m = t.match(/^\s*（([^）]{1,12})）/);
+      const k = m ? ('（'+m[1]+'）')
+                  : (((n && typeof n === 'object') && (n.kind || n.phase)) ? String(n.kind || n.phase) : '其他提示');
+      (_ng[k] = _ng[k] || []).push(t);
+    });
+    const _ntBody = Object.keys(_ng).map(k=>{
+      const lines = _ng[k].map(t=>`<div style="padding:2px 0;font-size:12.5px;color:var(--mut);">· ${esc(t)}</div>`).join('');
+      return `<details style="margin:4px 0;"><summary style="cursor:pointer;font-size:12.5px;color:var(--mut);">${esc(k)} · ${_ng[k].length} 条</summary>${lines}</details>`;
     }).join('');
     if(_ntBody){
-      steps.push({icon:'📌', title:`执行说明（${_notices.length}）`, status:'done',
-                  sub:'系统进度提示（非模型思考）', body:_ntBody, cls:'notice'});
+      const _nTotal = Object.keys(_ng).reduce((a,k)=>a+_ng[k].length,0);
+      steps.push({icon:'📌', title:`执行说明（${_nTotal}）`, status:'done',
+                  sub:'系统进度提示 · 按来源折叠', body:_ntBody, cls:'notice'});
     }
   }
   /* ★ 2026-11-19（结构对齐标杆）：历次生成尝试收进过程区，**正文一律不折叠**。
