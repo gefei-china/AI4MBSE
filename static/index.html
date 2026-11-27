@@ -284,8 +284,9 @@
                 <div style="display:none;" data-page-node-id="P0p2m1TicBq7gZM6UzR6ev"><!-- 兼容：@提及 / 澄清改选等强制路由依赖的隐藏选择器 -->
                   <select id="quick-skill" onchange="renderChips()" data-page-node-id="F81jCzGlHVHSAi6Mwt43eX"><option value="" data-page-node-id="kH6b8jsDsxsZ5UslwFrM87">自动匹配</option></select>
                 </div>
-                <input type="file" id="file-input" style="display:none;" multiple onchange="uploadFiles(this,'file')" data-page-node-id="YYqNXOr4cnwYFlWoqk0sXQ">
-                <input type="file" id="img-input" style="display:none;" accept="image/*" multiple onchange="uploadFiles(this,'image')" data-page-node-id="RdyWfPjzvnXu00Fbi9d1kK">
+                <!-- 2026-11-26：accept 与后端 ALLOWED_EXTS 同口径；图片走独立入口并受模型视觉能力门禁 -->
+                <input type="file" id="file-input" style="display:none;" multiple accept=".txt,.md,.csv,.json,.xml,.yaml,.yml,.log,.sysml,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx" onchange="uploadFiles(this,'file')" data-page-node-id="YYqNXOr4cnwYFlWoqk0sXQ">
+                <input type="file" id="img-input" style="display:none;" accept=".png,.jpg,.jpeg,.gif,.webp,.bmp" multiple onchange="uploadFiles(this,'image')" data-page-node-id="RdyWfPjzvnXu00Fbi9d1kK">
               </div>
             </div>
           </div>
@@ -1887,6 +1888,9 @@
 <!-- 2026-09-04 附件菜单：锚定 ＋ 按钮右上方（Trae 风格） -->
 <div id="attach-menu" style="display:none;position:fixed;z-index:270;min-width:200px;background:var(--panel,#fff);border:1px solid var(--line);border-radius:12px;box-shadow:0 8px 28px rgba(0,0,0,.18);padding:6px;" onclick="event.stopPropagation()" data-page-node-id="ndMD2mCAdglbARQJuFMFhu">
   <div class="am-item" onclick="pickLocalFile()" style="display:flex;align-items:center;gap:10px;padding:9px 12px;border-radius:8px;cursor:pointer;font-size:14.5px;color:var(--txt);" data-page-node-id="tma8o2DeosVskyBR2Gwfzo">📎<span data-page-node-id="8NpkxGDmXZK0yN5T1NkrlE">上传附件</span></div>
+  <!-- 2026-11-26：图片单独入口；不支持当前模型时置灰并在点击时给出可操作原因 -->
+  <div id="am-image" class="am-item" onclick="pickImageFile()" style="display:flex;align-items:center;gap:10px;padding:9px 12px;border-radius:8px;cursor:pointer;font-size:14.5px;color:var(--txt);">🖼<span>上传图片</span></div>
+  <div id="am-cap-hint" style="padding:6px 12px 8px;font-size:12px;color:var(--mut,#888);line-height:1.4;">能力检测中…</div>
   <!-- 2026-09-28（用户反馈）：# 引用知识库文件入口从「打字触发」移入 ＋ 菜单（打字 # 触发仍保留作快捷方式） -->
   <div id="am-kb" class="am-item" onclick="toggleAttachKb(event)" style="display:flex;align-items:center;gap:10px;padding:9px 12px;border-radius:8px;cursor:pointer;font-size:14.5px;color:var(--txt);">📚<span style="flex:1;">引用知识库文件</span><span style="color:var(--mut);font-size:12.5px;">›</span></div>
   <div id="am-project" class="am-item" onclick="toggleAttachProject(event)" style="display:flex;align-items:center;gap:10px;padding:9px 12px;border-radius:8px;cursor:pointer;font-size:14.5px;color:var(--txt);" data-page-node-id="ZpgIqy1F7qX2WaKKcPEt4U">🗂<span style="flex:1;" data-page-node-id="Yt6tHsBBTGa1fKLH5lqFJC">当前会话的文件</span><span style="color:var(--mut);font-size:12.5px;" data-page-node-id="hAku2t9Kd0EiZxe8SVuag4">›</span></div>

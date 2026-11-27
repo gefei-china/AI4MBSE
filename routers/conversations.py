@@ -6,7 +6,7 @@ import json
 import asyncio
 from typing import Optional
 
-from fastapi import APIRouter, Depends, UploadFile, File, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, UploadFile, File, Form, HTTPException, Query, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from core.deps import db_session, current_user
@@ -86,12 +86,62 @@ def _finalize_key_for_turn(conn, conv_id):
     except Exception:
         return ""
 
-# 附件上传：允许类型与大小限制（V2.3 优化：会话窗口富输入）
-ALLOWED_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp",
-                ".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx",
-                ".txt", ".md", ".csv", ".json", ".xml", ".zip"}
+# ── 附件上传能力与格式白名单（2026-11-26 重构）────────────────────────────────
+# 旧实现两个问题：
+#   ① 图片无条件收 —— 当前模型不支持视觉时，图在 _prepare_attachment_vision 被丢弃，
+#      模型.Answer 变成「没收到任何附件」。用户明明传了，却被告知没传。
+#   ② .zip 等格式在白名单里，但既不能解析入库也不能内联注入 —— 收了等于白收。
+# 现在按「能力 + 格式」两类确定性判据在**上传入口**拦截，前后端共用同一份结论：
+#   GET /api/upload/capabilities?model_id=… → 能力与格式清单（前端渲染/预检）
+#   POST /api/upload?model_id=…             → 真正执行同一判据（不可被前端绕过）
+# 图片放行 = vision.enabled(true) AND 所选模型声明视觉能力；二者缺一即拒。
+# 可直接内联进会话正文的文本格式（与 history.py::_load_attachment_text 的解码分支同口径）
+TEXT_INLINE_EXTS = {".txt", ".md", ".csv", ".json", ".xml", ".log", ".sysml", ".yaml", ".yml"}
+# 可入文档库并走知识库引用的格式（与 knowledge_pipeline/extract.py::extract_text_ex 同口径）
+DOC_INGEST_EXTS = {".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx",
+                   ".txt", ".md", ".csv", ".json", ".xml", ".yaml", ".yml", ".log"}
+# 只在会话内联、不走入库（extract_text_ex 不认 .sysml，但 history.py 能直接解码）
+INLINE_ONLY_EXTS = {".sysml"}
+ALLOWED_EXTS = IMAGE_EXTS | DOC_INGEST_EXTS | INLINE_ONLY_EXTS
+SUPPORTED_FORMATS = sorted(ALLOWED_EXTS)
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"}
 MAX_UPLOAD_BYTES = 20 * 1024 * 1024  # 20MB
+
+def upload_capabilities(provider_id=None, conn=None) -> dict:
+    """当前上传能力的**唯一真源**：模型是否可看图 + 各格式桶 + 可操作原因。
+
+    与 agent/pipeline_parts/history.py::_prepare_attachment_vision 使用同一组判据
+    （core.config.vision.enabled + llm.provider_supports_vision），不允许两套口径。
+    返回给前端渲染菜单提示，并在 POST /api/upload 里再次执行 —— 前端提示与后端行为
+    必须先天地一致，否则就退回「界面说能传、传上去模型看不见」的老问题。
+    """
+    from core import config as _cfg
+    from llm import resolve_provider_cfg, provider_supports_vision
+
+    enabled = bool(_cfg.as_bool("vision", "enabled", False))
+    cfg = resolve_provider_cfg(provider_id, conn=conn)
+    vision_ok = provider_supports_vision(cfg)
+    model_name = (cfg.get("name") or cfg.get("model_name")
+                  or (f"provider#{cfg.get('id')}" if cfg.get("id") else "当前模型"))
+    if not enabled:
+        reason = ("视觉通道未启用，已禁止上传图片。开启路径：右上角头像 →「设置」→"
+                  "「🧠 AI 上下文」→「🖼 会话图片附件（视觉通道）」→ 开启。")
+    elif not vision_ok:
+        reason = (f"当前模型「{model_name}」未声明图片理解能力，已禁止上传图片。"
+                  "请在会话模型选择器切换到勾选了「支持图片理解」的模型。")
+    else:
+        reason = ""
+    return {
+        "vision_enabled": enabled,
+        "provider_vision": vision_ok,
+        "model_name": str(model_name),
+        "image_upload_allowed": bool(enabled and vision_ok),
+        "image_reason": reason,
+        "image_formats": sorted(IMAGE_EXTS),
+        "document_formats": sorted(DOC_INGEST_EXTS | INLINE_ONLY_EXTS),
+        "supported_formats": SUPPORTED_FORMATS,
+    }
+
 
 
 def _resolve_work_branch(conn, branch: str | None) -> str:
@@ -462,18 +512,39 @@ def delete_conversation(conv_id: int, conn=Depends(db_session),
     audit(audit_user(user), "conversation_delete", f"删除对话#{conv_id}", conn=conn)
     return {"ok": True}
 
+@router.get("/api/upload/capabilities")
+def upload_capabilities_api(model_id: int | None = Query(None),
+                            conn=Depends(db_session), u=Depends(current_user)):
+    """上传能力查询：前端据此禁用图片入口、填充 accept 与提示，不靠本地模型名猜测。"""
+    return upload_capabilities(model_id, conn)
+
+
 
 @router.post("/api/upload")
-def upload_file(file: UploadFile = File(...), conn=Depends(db_session),
-                u=Depends(current_user)):
+def upload_file(file: UploadFile = File(...), model_id: int | None = Form(None),
+                conn=Depends(db_session), u=Depends(current_user)):
     """通用附件/图片上传（V2.3 优化：会话窗口富输入）。落盘 static/uploads/,返回可访问 URL。
     AI 建模：文档类附件自动进入文档管理（解析→分块→向量化→落库），逻辑同文件管理上传；
     响应携带 doc_id/parse_status/chunk_count/kb，前端据此展示入库状态。
     注意：必须为同步 def —— db_session 连接在线程池创建,async 端点跨线程使用会抛 sqlite3.ProgrammingError。
-    ★ 2026-10-23：补 current_user 依赖 —— 此前上传归属恒为「未登录」，审计不可追责。"""
+    ★ 2026-10-23：补 current_user 依赖 —— 此前上传归属恒为「未登录」，审计不可追责。
+    ★ 2026-11-26：上传入口执行能力门禁 —— 不支持的图片直接 400（不再"收下后丢弃"），
+      不支持的格式直接 400 并列出支持清单。"""
     ext = os.path.splitext(file.filename or "")[1].lower()
     if ext not in ALLOWED_EXTS:
-        return JSONResponse({"error": f"不支持的文件类型: {ext or 'unknown'}"}, 400)
+        return JSONResponse({
+            "error": (f"不支持的文件类型 {ext or '(无扩展名)'}；支持："
+                      + "、".join(SUPPORTED_FORMATS)),
+            "code": "UNSUPPORTED_FORMAT",
+            "supported_formats": SUPPORTED_FORMATS,
+        }, 400)
+    caps = upload_capabilities(model_id, conn)
+    if ext in IMAGE_EXTS and not caps["image_upload_allowed"]:
+        return JSONResponse({
+            "error": caps["image_reason"],
+            "code": "IMAGE_NOT_ALLOWED",
+            "capabilities": caps,
+        }, 400)
     try:
         content = file.file.read()
     except Exception as e:
@@ -487,17 +558,26 @@ def upload_file(file: UploadFile = File(...), conn=Depends(db_session),
     os.makedirs(upload_dir, exist_ok=True)
     with open(os.path.join(upload_dir, name), "wb") as f:
         f.write(content)
+    inline_supported = ext in (TEXT_INLINE_EXTS | IMAGE_EXTS)
 
     resp = {
         "url": f"/static/uploads/{name}",
         "filename": file.filename,
         "size": len(content),
+        # mode 让前端按「实际消费方式」提示，而不是上传完再猜：
+        #   image_vision      → 图像已可随消息送入模型
+        #   document_inline   → 文本可直接注入正文
+        #   document_ingested → 已入文档库，靠知识引用消费（不一定能内联读全文）
+        "mode": ("image_vision" if ext in IMAGE_EXTS else
+                 ("document_inline" if ext in TEXT_INLINE_EXTS else "document_ingested")),
+        "inline_supported": inline_supported,
+        "capabilities": caps,
         "is_image": ext in IMAGE_EXTS,
     }
     # ── AI 建模：文档类附件自动进入文档管理（解析→分块→向量化→落库）──
     # 逻辑与「文件管理上传」完全一致（ingest_upload_document 共用入口）；
     # 图片附件不参与（无文本可抽取，保持会话内联展示）。失败不阻断附件主流程。
-    if ext not in IMAGE_EXTS:
+    if ext in DOC_INGEST_EXTS:
         try:
             from knowledge_pipeline import ingest_upload_document
             file_type = file.filename.split(".")[-1] if "." in file.filename else ""

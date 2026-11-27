@@ -22,6 +22,8 @@ function toggleAttachMenu(btn){
       : String(window._pendingProjectId || '');
     eng.style.display = pid ? 'flex' : 'none';
   }
+  // 每次打开菜单都按「当前所选模型」刷新上传能力提示（模型切换后不会沿用旧结论）
+  refreshUploadCapabilityHint();
   const r = btn.getBoundingClientRect();
   const mw = menu.offsetWidth, mh = menu.offsetHeight;
   let left = r.left, top = r.top - mh - 8;
@@ -457,10 +459,12 @@ function fileIcon(name){
 let pendingAttachments = [];  // V2.3 富输入：待发送附件 [{url, filename, size, is_image}]
 // 2026-08-28 补齐附件上传链路（函数历史丢失）：上传 → /api/upload（文档类自动入资料库，
 // ingest_upload_document 共用入口）→ attach-bar chips（文件名+入库标记+可移除）→ 随消息发送
-// ── 2026-09-04 模型能力判断：上传后按当前对话模型是否支持该格式给出提示反馈 ──
-const IMG_EXTS = ['png','jpg','jpeg','gif','webp','bmp','svg'];
-const ARCHIVE_EXTS = ['zip','rar','7z','tar','gz'];
-const PARSE_DOC_EXTS = ['txt','md','csv','json','xml','yaml','yml','log','docx','doc','pdf','xlsx','xls','pptx','ppt'];
+// ── 2026-11-26 上传能力门禁：判据全部来自服务端，不再按模型名在本地猜 ──
+// 唯一真源：GET /api/upload/capabilities?model_id=…
+// （后端用 core.config.vision.enabled + llm.provider_supports_vision，与实际注入图片的是同一判据）。
+// 旧前端有模型名正则（如 kimi/gpt-4o 一律算「支持」），会出现"界面说支持、后端静默丢弃"，
+// 正是用户传了图却被答复「没收到附件」的成因。此处只做展示与预检，拒绝权在后端。
+let _uploadCapsCache = {key:'', data:null};
 function currentChatProvider(){
   const id = Number(document.getElementById('llm-providers')?.value) || 0;
   if(id) return _chatProvidersCache.find(p=>p.id===id) || null;
@@ -470,60 +474,94 @@ function currentChatProvider(){
   return _chatProvidersCache.find(p=>(p.model_type==='chat'||p.model_type==='multimodal') && p.is_default===1)
       || _chatProvidersCache.find(p=>p.model_type==='chat'||p.model_type==='multimodal') || null;
 }
-// ⚠️ 2026-09-21 修：API 返回的 tags 是**数组**（如 ['chinese','fast']），原实现对数组做 JSON.parse ——
-//    JSON.parse(String(['vision'])) === JSON.parse('vision') → 抛 SyntaxError → 恒返回 []。
-//    结果是下面 modelSupportsVision 的 tags 分支**从未生效**，一直静默只靠模型名启发式。
-function providerProviderTags(p){
-  try{
-    let t = (p && p.tags);
-    if(typeof t === 'string') t = JSON.parse(t || '[]');   // 兼容字符串形态
-    if(!Array.isArray(t)) t = t ? [t] : [];
-    return t;
-  }catch(e){ return []; }
+function _currentModelId(){
+  const p = currentChatProvider();
+  return p && p.id ? Number(p.id) : 0;
 }
-function modelSupportsVision(p){
-  if(!p) return true;  // 无 provider 配置（Mock 兜底）：无法判定，不拦截
-  if(String(p.model_type||'')==='multimodal') return true;  // 多模态类型本身就具备图像输入能力（与后端 provider_supports_vision 同套）
-  const tags = providerProviderTags(p);
-  // 字符集与后端 llm/__init__.py 的 VISION_TAG_RE 同套（用户标 'vision' 或 '多模态' 两侧都认）
-  if(tags.some(t=>/vision|image|multimodal|多模态|图片/i.test(String(t)))) return true;
-  // 模型名启发式：常见多模态 chat 模型（仅用于「善意提示」，私有部署命名可能漏判，故以 tags 为准）
-  return /gpt-4o|gpt-4\.1|gpt-5|o[34]|vision|qwen[22?.]*vl|glm-4v|glm-5v|claude|gemini|doubao.*vision|grok-[24]|kimi/i.test(String(p.model_name||''));
+async function fetchUploadCapabilities(force){
+  const mid = _currentModelId();
+  const key = mid ? String(mid) : 'default';
+  if(!force && _uploadCapsCache.key === key && _uploadCapsCache.data) return _uploadCapsCache.data;
+  const q = mid ? ('?model_id=' + encodeURIComponent(mid)) : '';
+  const r = await fetch('/api/upload/capabilities' + q).then(x => x.json());
+  if(!r || r.error) throw new Error((r && r.error) || '上传能力查询失败');
+  _uploadCapsCache = {key, data:r};
+  return r;
+}
+function refreshUploadCapabilityHint(){
+  const el = document.getElementById('am-cap-hint');
+  if(!el) return;
+  fetchUploadCapabilities().then(c => {
+    el.textContent = c.image_upload_allowed
+      ? ('当前模型支持图片 · 可传图片与文档（' + c.supported_formats.length + ' 种格式）')
+      : ('当前模型不支持图片 · 仅可传文档（' + c.document_formats.length + ' 种格式）');
+    el.title = c.image_reason || '';
+    el.style.color = c.image_upload_allowed ? 'var(--grn,#2f855a)' : 'var(--amb,#b7791f)';
+    const img = document.getElementById('am-image');
+    if(img){
+      img.style.opacity = c.image_upload_allowed ? '1' : '.45';
+      img.title = c.image_reason || '上传图片';
+    }
+  }).catch(e => {
+    el.textContent = '无法确认当前模型的附件能力';
+    el.title = (e && e.message) || '上传能力查询失败';
+    el.style.color = 'var(--amb,#b7791f)';
+  });
+}
+function pickImageFile(){
+  // 菜单打开时已异步取过能力，这里同步读缓存：不支持时不打开文件选择器。
+  const c = _uploadCapsCache.data;
+  if(c && !c.image_upload_allowed){ toast('⛔ '+c.image_reason, 6000); return; }
+  document.getElementById('img-input').click();
+  closeAttachMenu();
 }
 function attachFormatFeedback(f, r){
-  const p = currentChatProvider();
-  const mName = p ? (p.name+' · '+(p.model_name||'')) : '默认模型';
-  const ext = (String(f.name).split('.').pop()||'').toLowerCase();
-  if(IMG_EXTS.includes(ext)){
-    if(!modelSupportsVision(p)){
-      toast('⚠ 当前模型「'+mName+'」未标记支持图片理解，图片可能无法被直接识别'+(r&&r.doc_id?'（已按文档解析入库）':''), 5000);
-    }
-  } else if(ARCHIVE_EXTS.includes(ext)){
-    if(!(r&&r.doc_id)) toast('⚠ 压缩包无法解析入库，将作为内联附件随消息发送，模型可能无法读取其内容', 5000);
-  } else if(PARSE_DOC_EXTS.includes(ext)){
-    if(!(r&&r.doc_id)) toast('⚠ 该文档未成功解析入库，将作为内联附件发送', 4000);
-  } else {
-    if(!(r&&r.doc_id)) toast('ℹ 「.'+ext+'」格式不在常规解析列表，将作为内联附件发送', 4000);
+  if(r && r.mode === 'image_vision'){ toast('🖼 '+f.name+' 已随消息提供给模型识别', 3500); return; }
+  if(r && r.inline_supported === false){
+    toast('⚠ '+f.name+' 已入文档库，可作为知识引用；该格式不能作为会话正文直接读取', 5000); return;
   }
+  if(r && r.mode === 'document_inline'){ toast('📎 '+f.name+' 已作为会话正文附件就绪', 3000); return; }
+  if(r && r.doc_id){ toast('📎 '+f.name+' 已入文档库（解析 '+(r.chunk_count||0)+' 块）', 3500); return; }
+  toast('⚠ '+f.name+' 已上传，但未确认可消费方式', 4000);
 }
 // ★ 2026-11-06：把「上传循环」抽成可复用函数 —— 粘贴/拖入的文件没有 <input> 元素，
 //   若继续只认 input.files，Ctrl+V 贴图片、拖文档进输入框就永远无处落地。
 //   三种入口（文件选择 / 粘贴 / 拖放）共用这一条链路 ⇒ 产物形态（url/doc_id/is_image）
 //   与既有后端注入逻辑完全一致，不会引入「贴进来了但模型读不到」的新形态（历史坑）。
 async function uploadFileObjects(files){
+  // 能力预检：不支持的图片在发请求前就挡住，不再"传上去再让 AI 说没收到"。
+  let caps = null;
+  try{ caps = await fetchUploadCapabilities(); }
+  catch(e){ caps = null; }
+  if(!caps){
+    toast('⛔ 无法确认当前模型的附件能力，已阻止上传（避免文件传上去却读不到）', 6000);
+    return;
+  }
+  const mid = _currentModelId();
+  const allowed = new Set(caps.supported_formats || []);
+  const imageSet = new Set(caps.image_formats || []);
+  let blocked = 0;
   for(const f of files){
+    const ext = '.' + (String(f.name).split('.').pop()||'').toLowerCase();
+    if(imageSet.has(ext) && !caps.image_upload_allowed){
+      toast('⛔ '+f.name+'：'+caps.image_reason, 6000); blocked++; continue;
+    }
+    if(!allowed.has(ext)){
+      toast('⛔ '+f.name+'：不支持的格式 '+ext+'。支持：'+caps.supported_formats.join('、'), 6000);
+      blocked++; continue;
+    }
     const fd = new FormData();
     fd.append('file', f);
+    if(mid) fd.append('model_id', String(mid));
     try{
       const r = await fetch('/api/upload', {method:'POST', body: fd}).then(x=>x.json());
-      if(r.error){ toast('上传失败：'+r.error); continue; }
-      pendingAttachments.push({url:r.url, filename:r.filename, size:r.size, is_image:r.is_image, doc_id:r.doc_id, parse_status:r.parse_status});
+      if(r.error){ toast('上传失败：'+r.error, r.code==='IMAGE_NOT_ALLOWED' ? 6000 : 4000); blocked++; continue; }
+      pendingAttachments.push({url:r.url, filename:r.filename, size:r.size, is_image:r.is_image, doc_id:r.doc_id, parse_status:r.parse_status, mode:r.mode, inline_supported:r.inline_supported});
       renderAttachBar();
-      if(r.doc_id) toast('📎 '+r.filename+' 已入文档库（解析 '+(r.chunk_count||0)+' 块）');
-      else toast('📎 '+r.filename+' 已就绪（会话内联附件）');
-      attachFormatFeedback(f, r);   // 2026-09-04：按当前模型能力对格式给出提示
-    }catch(e){ toast('上传失败：'+(e.message||e)); }
+      attachFormatFeedback(f, r);   // 按服务端判定的实际消费方式提示
+    }catch(e){ toast('上传失败：'+(e.message||e)); blocked++; }
   }
+  if(blocked) toast('已阻止 '+blocked+' 个不支持的附件（未上传）', 5000);
 }
 async function uploadFiles(input, kind){
   const files = Array.from(input.files || []);
