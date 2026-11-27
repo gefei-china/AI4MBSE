@@ -67,7 +67,8 @@ def draft_from_text(conn, text: str, operator: str = "知识工程师") -> dict:
     try:
         from core import config as _cfg
         from llm import llm_client
-        if not _cfg.as_bool("llm", "force_mock", False):
+        from core.test_mode import force_mock_active as _fm
+        if not _fm():
             prompt = (
                 "你是本体建模专家。请从以下业务文本中提炼知识图谱本体草案（实体类型/关系类型/属性），"
                 "仅输出 JSON 数组：\n"

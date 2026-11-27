@@ -224,7 +224,8 @@ def _gen_llm_summary(text: str, filename: str, max_chars: int = 4000) -> str:
     try:
         from core import config as _cfg
         from llm import llm_client
-        if _cfg.as_bool("llm", "force_mock", False):
+        from core.test_mode import force_mock_active as _fm
+        if _fm():
             return ""
         clean = re.sub(r"```.*?```", " ", text or "", flags=re.S)
         clean = re.sub(r"\s+", " ", clean).strip()

@@ -74,11 +74,16 @@ def _audit_best_effort(user, event: str, detail: str, conn) -> None:
 @router.get("/api/system/config")
 def get_system_config(conn=Depends(db_session), user=Depends(CFG_READ)):
     """当前生效配置：静态（脱敏）+ 动态（settings）+ 配置来源说明。"""
+    from core import test_mode
     return {
         "ok": True,
         "static": config.dump(mask_secrets=True),
         "runtime": config.runtime_settings(conn),
         "config_path": config.CONFIG_PATH,
+        # ★ 2026-11-27：本进程是否测试态、force_mock 到底生不生效。
+        #   需求原话「mock 数据在真实使用中不要使用」——这里给出**可核的生效口径**，
+        #   避免"配置文件里写着 true"被当成"真的在用 Mock"（反之亦然）。
+        "guards": test_mode.describe(),
         "levels": ["shadow(MBSE_SHADOW_CONFIG, 仅沙箱子进程)", "env", "system_config_file", "defaults"],
         "note": "host/port/database.path 为启动级参数，修改后需重启服务完全生效；其余项即时生效",
     }
@@ -117,6 +122,28 @@ def update_static_config(body: StaticConfigIn, conn=Depends(db_session),
     被掩码护栏跳过的键记 applied=0，台账与真实落盘状态一致。
     """
     keys = [str(k) for k in (body.updates or {})]
+    # ★ 2026-11-27（P0）：**服务态进程禁止**把 llm.force_mock 写成 true。
+    #   事故复盘（conv 1000000246）：验证脚本在用户正在跑真实任务的服务上开了这个开关，
+    #   该会话其后 11 次 LLM 调用全部变成 Mock 样板，用户拿到 841 字无关内容。
+    #   开关没有作用域就是缺陷本身 ⇒ 此处在写入侧直接拒绝（生效侧 llm.chat 另有第二道闸）。
+    #   需要 Mock 的场景（回归/门禁）请以 MBSE_TEST_MODE=1 启独立实例。
+    from core import test_mode
+    _bad = []
+    for _k in keys:
+        if _k.strip() != "llm.force_mock":
+            continue
+        _v = (body.updates or {}).get(_k)
+        if str(_v).strip().lower() in ("1", "true", "yes", "on") and not test_mode.is_test_mode():
+            _bad.append(_k)
+    if _bad:
+        return JSONResponse({
+            "ok": False,
+            "error": ("拒绝在服务态进程开启 llm.force_mock：Mock 内容一旦进入真实用户请求，"
+                      "等于交付编造内容（2026-11-27 已发生一次：11 次真实调用被替换成固定样板）。"
+                      "回归/门禁请以 MBSE_TEST_MODE=1 启动独立实例后测试。"),
+            "rejected": _bad,
+            "guards": test_mode.describe(),
+        }, 409)
     before = {d: _mask(d, config.get(*d.split(".", 1))) if "." in d else ""
               for d in keys}
     try:

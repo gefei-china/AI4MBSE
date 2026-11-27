@@ -15,6 +15,10 @@ class MockLLM(BaseLLM):
 
     name = "mock"
 
+    #: Mock 内容的统一标记。**必须**出现在每一段 Mock 正文最前面 ——
+    #: 事故教训（2026-11-27）：四个非 chat 模板产出的正文与真实方案无从区分。
+    _MOCK_BANNER = "（Mock 内容 · 非真实模型输出 · 不得作为交付依据）"
+
     def chat(self, messages, model=None, temperature=0.3, max_tokens=4096, stream=False, tools=None, thinking=False, **kwargs):
         # P2 视觉通道（2026-09-21）兼容：多模态 user 消息的 content 是 list（[text, image_url]…），
         # 直接拿它 .lower() 会 AttributeError。Mock 是 llm.force_mock 与回归测试的**必经降级路径**，
@@ -36,6 +40,14 @@ class MockLLM(BaseLLM):
             content = self._mock_review(user_msg)
         else:
             content = self._mock_chat(user_msg)
+        # ★ 2026-11-27：**所有** Mock 模板统一打标。
+        #   此前只有 `_mock_chat` 带「（Mock 回答）」，design/requirement/impact/review
+        #   四个模板产出的是一段**看起来完全正常**的方案正文 —— 实测事故里那段
+        #   「3 个方案对比」846 字，从内容上根本看不出是假的，用户只能从"跟需求无关"去猜。
+        #   打标后：Mock 一旦出现在任何交付物里，肉眼即可识别（这是第二道防线；
+        #   第一道是 core.test_mode 的作用域限制，见 verify_mock_scope.py）。
+        if not content.startswith(self._MOCK_BANNER):
+            content = self._MOCK_BANNER + "\n" + content
 
         if stream:
             return self._stream(content, thinking=thinking)
@@ -168,8 +180,8 @@ connector 载荷 to 转发器;
     def _mock_chat(self, text):
         return (
             f"（Mock 回答）已收到你的消息：{text[:60]}{'…' if len(text) > 60 else ''}\n"
-            "当前为 Mock 降级模式（未配置真实 LLM API Key）。"
-            "可在「AI 设计工坊 → LLM 配置」添加 provider 后获得真实回答。"
+            "当前进程处于**测试态**且开启了 llm.force_mock，因此返回 Mock 内容。"
+            "真实使用（服务态进程）不会走到这里 —— 开关只在测试态生效。"
         )
 
     def _stream(self, content, thinking=False):

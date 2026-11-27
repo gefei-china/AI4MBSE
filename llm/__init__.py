@@ -28,6 +28,10 @@ _log = logging.getLogger("mbse.llm")
 #: 但一次都不报则会让"成本看板数字静默偏小"完全不可见（2026-11-26 修）。
 _ACC_FAIL_ONCE = False
 
+#: 「配置开了 force_mock 但本进程是服务态，已拒绝生效」是否已报过（每进程一次）。
+#: 见 `chat()` 里的 core.test_mode 判定 —— 静默拒绝会让运维以为开关坏了。
+_FORCE_MOCK_BLOCKED_ONCE = False
+
 # P1-5：上下文占用告警去重（(窗口, 10% 分桶) → 同一档只报一次）
 _CTX_UTIL_WARNED = set()
 
@@ -689,8 +693,26 @@ class LLMClient:
             pass   # 观测装配失败绝不阻断 LLM 调用
 
         # 测试确定性：llm.force_mock 强制 Mock（回归测试不依赖外部网络；兼容 MBSE_LLM_FORCE_MOCK）
+        #
+        # ★ 2026-11-27（P0，事故驱动）：**开关必须同时满足"进程处于测试态"**。
+        #   此前只看配置 ⇒ 任何人（含验证脚本）在**生产进程**上 PUT 一次就能让真实用户
+        #   的请求拿到 Mock 内容。实测事故：conv 1000000246 有 11 次真实调用被替换成
+        #   固定样板，模型因此无法产生任何进展，闸门判定"卡死"，646 字正文作废。
+        #   判定集中在 core/test_mode（启动即定死，运行期不可变），此处只消费结论。
         from core import config as _cfg
-        if _cfg.as_bool("llm", "force_mock", False):
+        from core.test_mode import allow_force_mock as _allow_mock
+        _force_mock_cfg = _cfg.as_bool("llm", "force_mock", False)
+        if _force_mock_cfg and not _allow_mock():
+            # 配置声称要 Mock，但本进程是服务态 ⇒ **不生效**，且必须留痕（每进程一次）。
+            # 不静默：否则"我明明开了 force_mock 怎么还是真调用"会变成新的归因难题。
+            global _FORCE_MOCK_BLOCKED_ONCE
+            if not _FORCE_MOCK_BLOCKED_ONCE:
+                _FORCE_MOCK_BLOCKED_ONCE = True
+                _log.warning(
+                    "[llm] 配置 llm.force_mock=true 但本进程**非测试态** ⇒ 拒绝生效，"
+                    "继续走真实模型调用。真实使用中绝不产出 Mock 内容（2026-11-27 事故约束）；"
+                    "确需 Mock 请以 MBSE_TEST_MODE=1 启动独立实例，不要在服务进程上开。")
+        if _force_mock_cfg and _allow_mock():
             self._assert_request(_ticket, messages, tools)
             resp = self.mock.chat(messages, stream=stream, tools=tools, thinking=thinking, **kwargs)
             self.stats["mock"] += 1
@@ -1199,13 +1221,25 @@ class LLMClient:
                 f"LLM 流式调用中断，本次未生成完整内容。原因：{type(e).__name__}: {str(e)[:200]}",
                 reason="stream_failed", provider=provider_name, model=model_name) from e
 
-    def test_connection(self, provider_id):
-        """连通性测试：经注册表 provider 实现（P1-3）。"""
+    def test_connection(self, provider_id, deep: bool = False):
+        """连通性测试：经注册表 provider 实现（P1-3）。
+
+        `deep=True` 走 `llm.probe` 的**功能自检**（真实跑对话/流式/工具/JSON/视觉逐项判据），
+        回答的是"这个模型本平台能不能用"，而不是"HTTP 200 了没有"。见 llm/probe.py 文件头。
+        """
         provider = self.get_provider(provider_id)
         if not provider:
             return {"ok": False, "error": "Provider not found"}
         if not provider.get("api_key"):
             return {"ok": False, "error": "API key not configured", "mock": True}
+        if deep:
+            try:
+                from llm.probe import probe as _probe
+                rep = _probe(provider, deep=True)
+                rep["provider_id"] = provider_id
+                return rep
+            except Exception as e:                      # noqa: BLE001
+                return {"ok": False, "error": f"功能自检异常：{type(e).__name__}: {e}"}
         ptype = provider.get("provider_type") or "openai_compat"
         if not ProviderRegistry.has(ptype):
             ptype = "openai_compat"

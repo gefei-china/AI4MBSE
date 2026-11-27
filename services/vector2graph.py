@@ -759,7 +759,8 @@ def extract_candidates(conn, query: str, chunk_ids: list | None = None,
             from core import config as _cfg
             from llm import llm_client
             extracted = None
-            if not _cfg.as_bool("llm", "force_mock", False):
+            from core.test_mode import force_mock_active as _fm
+            if not _fm():
                 prompt = (
                     f"{schema}\n"
                     "从以下文档片段中抽取知识图谱候选实体与关系，仅输出 JSON："
