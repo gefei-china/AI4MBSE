@@ -1851,6 +1851,19 @@ def init_db():
         created_at TEXT DEFAULT CURRENT_TIMESTAMP
     )""")
 
+    # ── 2026-11-27 会话排队任务持久化：进程重启后未开始的票仍可接续 ──
+    # 只持久化「未开始」的票；出队执行时立即删行（避免重启后重复执行已开始的轮次）。
+    c.execute("""CREATE TABLE IF NOT EXISTS conversation_turn_queue (
+        ticket_id TEXT PRIMARY KEY,
+        conversation_id INTEGER NOT NULL,
+        user_key TEXT DEFAULT '',
+        payload TEXT NOT NULL DEFAULT '{}',
+        message TEXT DEFAULT '',
+        created_at REAL NOT NULL
+    )""")
+    c.execute("""CREATE INDEX IF NOT EXISTS ix_turn_queue_conv
+        ON conversation_turn_queue(conversation_id, created_at)""")
+
     conn.commit()
 
     # ── 幂等列迁移（老库补 P0-1 新增的 project_id 列，回填默认项目）──

@@ -68,6 +68,15 @@ from routers import (
 async def lifespan(app: FastAPI):
     """应用生命周期（替代已弃用的 @app.on_event("startup")，语义等价）。"""
     init_db()
+    # ★ 2026-11-27：会话排队任务在 init_db 之后恢复（表刚建好）——
+    #   只恢复「未开始」的票；出队时已删行，故重启不会重复执行已开始的轮次。
+    try:
+        from core import conversation_queue as _cq
+        _n_q = _cq.restore()
+        if _n_q:
+            print("[startup] 排队任务恢复：%d 条未开始的票" % _n_q, flush=True)
+    except Exception as _e_q:
+        print("[startup] 排队任务恢复跳过：%s" % str(_e_q)[:120], flush=True)
     # ★ 2026-11-22（P1-2 收尾）：Fuseki（SPARQL CQ 档）随主服务受管自拉起。
     #   `graph_db.fuseki_autostart` 默认 False ⇒ 这里瞬时返回 disabled，零副作用。
     #   打开后：幂等（已有实例只核对数据集）、持久（--update --loc）、

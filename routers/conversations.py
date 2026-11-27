@@ -501,7 +501,9 @@ def delete_conversation(conv_id: int, conn=Depends(db_session),
     repo = ConversationRepo(conn)
     _own_conv(conn, conv_id, user)
     repo.delete_conversation(conv_id)
-    _convq.drop_conv(conv_id)   # 2026-11-26：排队票是内存态，也要跟着会话级联清理
+    # ★ 2026-11-27：必须复用请求级 conn —— repo.delete_conversation 已在本连接开了写事务，
+    #   另开连接会自己等自己 30s（真机实测删会话超时）。
+    _convq.drop_conv(conv_id, conn=conn)
     # P1-4（2026-10-02）：级联清理该会话的工具结果 offload（会话没了，全文引用失去意义）
     # ★ 2026-11-02：必须传入请求连接 conn —— 上面的 repo.delete_conversation 已在本连接
     #   开了写事务（未提交）；不传 conn 时 cleanup 会开第二条连接抢写锁 = 自己等自己
