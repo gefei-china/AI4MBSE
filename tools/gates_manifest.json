@@ -267,6 +267,12 @@
    "timeout": 120
   },
   {
+   "script": "verify_clarify_resume_route.py",
+   "tier": "pr",
+   "timeout": 60,
+   "reason": "澄清续答路由门禁（2026-11-27 会话 1000000254：用户回答澄清后页面停在旧确认卡）。根因：`/clarify-answer` 把回答只放在 resume_text 元指令文本里，团队路由 LLM 判「团队暂不支持该能力」⇒ stream.py reject 分支 5 帧 return、不落库。判据：两种真实续答格式都必须路由到成员；噪声/越界行为不变（防拆闸）；变异自证去掉剥离后中性续答必须 reject。零写库、不调 LLM，实测 10/10。"
+  },
+  {
    "script": "verify_delivery_contract.py",
    "tier": "pr",
    "timeout": 120,

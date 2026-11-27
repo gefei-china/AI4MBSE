@@ -302,6 +302,27 @@ def decide(user_input: str, team_def: dict, provider_id=None, llm_client=None,
     """
     members = (team_def or {}).get("members") or []
     q = (user_input or "").strip()
+    # ★ 2026-11-27（会话 1000000254 确认后流程中断）：澄清续答轮的输入是
+    #   「【澄清补充】用户已补充以下建模信息（请据此继续，无需再确认）：…\n\n原请求：继续」
+    #   这种**元指令**——路由 LLM 看到「请据此继续 / 原请求：继续」会判成
+    #   「团队暂不支持该能力」⇒ reject 分支 5 帧即 return、不落库
+    #   ⇒ 前端停在旧确认卡，用户看到"确认后没有后续流程"。
+    #   修法：路由前剥掉元指令外壳，只拿真实补充诉求参与路由。
+    #   通用性：不绑定某个工程名，任何 `【澄清补充】` 续答都适用。
+    _clarify_resume = "【澄清补充】" in q
+    if _clarify_resume:
+        _real = q.split("【澄清补充】", 1)[1]
+        # 去掉「请据此继续…」提示与「原请求：…」尾巴（都是系统壳，不是用户诉求）
+        _real = re.split(r"\n\s*原请求[:：]", _real)[0]
+        _real = re.sub(r"^\s*用户已补充以下[^：:\n]*[:：]\s*", "", _real)
+        # 真实格式：`问题「…」→ 回答：<真实诉求>` —— 问题部分是系统复述，
+        # 只保留「回答：」之后的用户原话（否则路由 LLM 会把问题复述当成新请求）。
+        _ans = re.split(r"→\s*回答[:：]\s*", _real, maxsplit=1)
+        if len(_ans) == 2:
+            _real = _ans[1]
+        _real = _real.strip()
+        if _real:
+            q = _real
     if not members:
         # ★ 2026-10-16（米爸决策 R2）：**主 Agent 无成员不是错误**。
         #   改前是一个静默分支：返回 direct/None → 调用方 team_forced=False，
