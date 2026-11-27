@@ -549,7 +549,7 @@ class AutoPilotMixin:
             if decision.get("force_release"):
                 notice = _hg.build_force_release_notice(
                     decision["remaining"], decision["blocks_used"],
-                    decision["max_blocks"])
+                    decision["max_blocks"], stalled=bool(decision.get("stalled")))
             # ⚠️ force_release 必须**透传** decision 的值 ——
             #   写死 False 会让"已达上限"这种情况被当成普通放行
             #   （真机 E2E 实测抓到：notice 里有「达到上限 8」但 force_release=False）。
@@ -600,7 +600,7 @@ class AutoPilotMixin:
                 if decision2.get("force_release"):
                     notice = _hg.build_force_release_notice(
                         decision2["remaining"], decision2["blocks_used"],
-                        decision2["max_blocks"])
+                        decision2["max_blocks"], stalled=bool(decision2.get("stalled")))
                 # 同上：验收实际已过 ⇒ 这是"该拦但重判后放行"的样本，也是分母的一部分
                 self._harness_observe(conversation_id, "enforce", decision2, False,
                                       self._verify_stats(conversation_id))

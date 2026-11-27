@@ -309,15 +309,29 @@ def build_block_feedback(remaining, blocks_used: int, max_blocks: int,
     return "\n".join(lines)
 
 
-def build_force_release_notice(remaining, blocks_used: int, max_blocks: int) -> str:
+def build_force_release_notice(remaining, blocks_used: int, max_blocks: int,
+                               stalled: bool = False) -> str:
     """构造强制放行时的**如实告知**（设计第 3 条：不得伪装成完成）。
 
     ⚠️ 必须含 `HARNESS_FORCE_NOTICE_MARK`（「未完成」）—— 门禁据此断言
        "没有把未完成说成完成"。
+
+    ★ 2026-11-27：`stalled` 决定文案分支。强制放行有**两条**触发路径，
+    原实现只有一句"已连续 {blocks_used} 次阻断…达到上限 {max_blocks}"：
+      · 无进展检测（stall）：blocks_used=2 / max_blocks=8 —— **并未到上限**
+      · 次数上限：blocks_used=8 / max_blocks=8
+    前者会输出"已连续 2 次阻断…达到上限 8"，自相矛盾。真机代价：
+    用户看到"2 次就到上限 8"，误以为闸门计数坏了，实际是卡死提前放行。
     """
     items = [str(x) for x in (remaining or []) if str(x).strip()]
+    if stalled:
+        head = (f"⚠️ 本任务**未完成**（连续 {blocks_used} 次阻断后待办无任何变化 ⇒ "
+                f"判定卡死，提前放行；未到次数上限 {max_blocks}）。")
+    else:
+        head = (f"⚠️ 本任务**未完成**（已连续 {blocks_used} 次阻断未通过验收，"
+                f"达到上限 {max_blocks}）。")
     lines = [
-        f"⚠️ 本任务**未完成**（已连续 {blocks_used} 次阻断未通过验收，达到上限 {max_blocks}）。",
+        head,
         f"仍未通过的待办 {len(items)} 项：",
     ]
     for i, it in enumerate(items, 1):
