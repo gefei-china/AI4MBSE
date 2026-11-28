@@ -77,7 +77,10 @@ function graphTok(name){
       edgeImp:   '#B9C2CE',   // 影响图常规边
       amberEdge: '#F5A623',   // 影响图中风险边
       // 焦点压暗强度：三套画布**同一权重**（原 SysML 0.18 / 影响图 0.12 各写一份 ⇒ 语义漂移）
-      dimOpacity: 0.18
+      // 取值 0.30 有真机对照：本系统节点是「白底 + 类型色描边」的浅填充，
+      // 0.18 时非邻域节点整块结构基本消失（截图 focus_ab_018 vs focus_ab_030），
+      // 0.30 既保住全局脉络又能明确读出焦点；深色填充的图库用 0.15~0.2 才够，此图不适用。
+      dimOpacity: 0.30
     };
   }
   return name ? _gvTokens[name] : _gvTokens;
