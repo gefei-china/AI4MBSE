@@ -1161,17 +1161,9 @@ function gvTypeFamily(name){
   }
   return fam;
 }
-/* 节点半径：基础 + 度数加成（/计数加成），选中再乘 nodeSelScale。
-   抽成独立函数而不是内联在 renderGraph 里，理由是**可测**：内联表达式只能靠
-   「在测试里复刻一遍」来断言，而复刻不随源码变化 —— P3 门禁第一版就是这么自欺的
-   （变异「去掉选中放大」后判据仍绿）。抽出来后门禁 exec 的就是真代码。
-   尺寸全部来自 graphTok（P0-1 单一真源），改 tokens.css 一处即可全局生效。 */
-function gvNodeRadius(n, deg, sel){
-  const rBase = n._skel
-    ? graphTok('skelBaseR') + Math.min((n._count||1) * graphTok('skelCountStep'), graphTok('skelCountCap'))
-    : graphTok('nodeBaseR') + Math.min((deg[n.id]||0) * graphTok('nodeDegStep'), graphTok('nodeDegCap'));
-  return sel ? Math.round(rBase * graphTok('nodeSelScale')) : rBase;
-}
+/* 节点半径 gvNodeRadius 已下移到 24-graph.js（2026-11-28）——
+   布局层（graphCollide / graphSettleOverlaps）也要按半径算碰撞距离，必须共用同一实现。
+   此处不再定义副本：两处定义会让布局与渲染各用一份，改一处另一处不跟。 */
 /* ══ 点节点查看：居中 + 拉到可读缩放（2026-11-28） ══
    为什么不直接用 gvCenterOnNode：它只居中、不改缩放。而整图 fitView 后 scale 常只有
    0.5~0.6（实测 61 节点 = 0.591），居中后节点屏幕直径仍不足 25px，"移到中间"也看不清。

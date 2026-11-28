@@ -734,17 +734,41 @@ document.addEventListener('click', function(e){
 });
 
 // 布局算法：分层（拓扑层级，适合需求金字塔/系统分解/ 力导向（F-R 简碰撞避免/ 环形（按类型分组
-function graphCollide(nodes, minD){
-  // 碰撞避免：重叠节点沿连线推开（布局后消除节点重叠）
+/* ══ 节点半径（尺寸语义的唯一实现处，2026-11-28 从 25-graphview.js 下移）══
+   下移理由：布局层（graphCollide / graphSettleOverlaps）也必须知道半径 ——
+   碰撞判定要按「两节点半径之和」算，而不是固定 minD。若半径只定义在渲染层，
+   布局层就只能猜一个固定值，这正是残留重叠的根因（见 graphCollide 注释）。
+   依赖只有 graphTok，无副作用；渲染层调用同一函数，尺寸不会两处漂移。 */
+function gvNodeRadius(n, deg, sel){
+  const rBase = n._skel
+    ? graphTok('skelBaseR') + Math.min((n._count||1) * graphTok('skelCountStep'), graphTok('skelCountCap'))
+    : graphTok('nodeBaseR') + Math.min(((deg && deg[n.id]) || 0) * graphTok('nodeDegStep'), graphTok('nodeDegCap'));
+  return sel ? Math.round(rBase * graphTok('nodeSelScale')) : rBase;
+}
+/* 碰撞消除（环形/力导向/分层布局共用）。
+   ⚠ 2026-11-28 修：原签名 graphCollide(nodes, minD) 用**固定**最小中心距，
+   而节点半径是 17–33 ⇒ 两个最大节点需要 66 才不重叠，固定 56 时
+   **有 10–12 对在数学上不可能被消掉**（真机连跑 6 轮仍停在 10 对，不再下降）。
+   现在改为半径感知：每对实际需要的中心距 = max(minD, r_i + r_j + gap)。
+   仍兼容旧的 graphCollide(nodes, 56) 调用形态（传数字时按固定值，但同样叠加半径约束）。
+   返回被移动的节点对数 —— 外层据此判断是否收敛，不再靠固定轮数猜。 */
+function graphCollide(nodes, opts){
+  const o = (typeof opts === 'number') ? {minD: opts} : (opts || {});
+  const minD = +o.minD || 0;
+  const gap = (o.gap == null) ? 6 : +o.gap;
+  const radiusOf = (typeof o.radiusOf === 'function') ? o.radiusOf : null;
+  let movedPairs = 0;
   for(let i=0;i<nodes.length;i++) for(let j=i+1;j<nodes.length;j++){
     const dx=nodes[i].x-nodes[j].x, dy=nodes[i].y-nodes[j].y;
     const d=Math.sqrt(dx*dx+dy*dy);
+    // 半径感知：两个大圆需要更远的中心距
+    const need = radiusOf ? Math.max(minD, radiusOf(nodes[i]) + radiusOf(nodes[j]) + gap) : minD;
     /* 完全重合时推力方向未定义（原写 `||0.1` 只兜住了分母，但分子 dx=0 ⇒ 位移恒为 0，
        这对节点会永远叠在一起；真机实测出现过中心距 2.3~4.2px、其中一个根本点不到）。
        修法要分清两件事：**方向**在重合时按索引给一个确定值（黄金角，不用随机数），
        **推力**仍按真实距离 d 算 —— 若把「定方向用的 0.5」当成真实距离参与推力，
-       会少推一半，最终只到 minD-0.5（真机门禁 C3 就是这么抓到的）。 */
-    if(d<minD){
+       会少推一半，最终只到 need-0.5（真机门禁 C3 就是这么抓到的）。 */
+    if(d<need){
       let ux, uy;
       if(d < 1e-6){
         const a = ((i * 2.3999632 + j * 1.6180340) % (Math.PI * 2));
@@ -752,11 +776,71 @@ function graphCollide(nodes, minD){
       } else {
         ux = dx/d; uy = dy/d;
       }
-      const push=(minD-d)/2;
+      const push=(need-d)/2;
       nodes[i].x+=ux*push; nodes[i].y+=uy*push;
       nodes[j].x-=ux*push; nodes[j].y-=uy*push;
+      movedPairs++;
     }
   }
+  return movedPairs;
+}
+/* 重叠消除的**收敛式**解法（彻底版，2026-11-28）。
+   三件事必须一起做，缺一个就还会残留重叠：
+   ① 迭代到收敛：collide 返回 movedPairs，为 0 即无重叠；上限 40 轮防死循环。
+   ② 边界处理用**整体平移**，不用逐点夹紧 —— 逐点夹紧会改变节点间距离：
+      真机实测「夹紧一次把最小中心距 53.9 压回 46.6」，等于把刚推开的又压回去，
+      于是 collide → 夹紧 → 再重叠 反复振荡，永远收敛不了。
+      整体平移只改全局偏移不改相对距离，因此不会破坏任何一对的间距。
+   ③ 平移后若包围盒仍超出画布（说明画布塞不下），**扩大画布**后重来，
+      而不是把节点硬夹回去 —— 这样也不会因此缩小缩放（节点不会变小）。
+   返回 {overlaps, minCenterDist, expanded}，供门禁与排障使用。 */
+function graphSettleOverlaps(nodes, edges, W, H){
+  if(!nodes || !nodes.length) return { overlaps: 0, minCenterDist: null, expanded: 0 };
+  const deg = graphDegreeMap(nodes, edges || []);
+  const radiusOf = n => gvNodeRadius(n, deg, false);
+  const countOverlaps = () => {
+    let c = 0;
+    for(let i=0;i<nodes.length;i++) for(let j=i+1;j<nodes.length;j++){
+      const d = Math.hypot(nodes[i].x-nodes[j].x, nodes[i].y-nodes[j].y);
+      if(d < radiusOf(nodes[i]) + radiusOf(nodes[j])) c++;
+    }
+    return c;
+  };
+  const minPairDist = () => {
+    let m = Infinity;
+    for(let i=0;i<nodes.length;i++) for(let j=i+1;j<nodes.length;j++){
+      m = Math.min(m, Math.hypot(nodes[i].x-nodes[j].x, nodes[i].y-nodes[j].y));
+    }
+    return m === Infinity ? null : m;
+  };
+  let expanded = 0, Wc = W, Hc = H;
+  const maxR = nodes.reduce((m, n)=> Math.max(m, radiusOf(n)), 0);
+  const pad = Math.ceil(maxR + 10);          // 边界留白必须 ≥ 最大半径，否则节点被画框切掉
+  const opt = { minD: graphTok('nodeCollideMinD'), gap: 6, radiusOf };
+
+  for(let pass = 0; pass < 3; pass++){
+    for(let it = 0; it < 40; it++){
+      if(graphCollide(nodes, opt) === 0) break;   // 无对可推 ⇒ 收敛
+    }
+    // 整体平移进画布（不改变任何节点间距离）
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    nodes.forEach(n=>{ minX=Math.min(minX,n.x); maxX=Math.max(maxX,n.x); minY=Math.min(minY,n.y); maxY=Math.max(maxY,n.y); });
+    const boxW = (maxX - minX) + 2*pad, boxH = (maxY - minY) + 2*pad;
+    if(boxW > Wc || boxH > Hc){
+      /* 画布塞不下：把坐标整体缩到能装的尺度再收敛（等比缩放不改变「是否重叠」的拓扑，
+         但会缩小间距 ⇒ 必须重跑 collide 才能再次满足半径约束）。扩大画布由调用方同步。 */
+      expanded++;
+      Wc = Math.max(Wc, Math.ceil(boxW));
+      Hc = Math.max(Hc, Math.ceil(boxH));
+      continue;                                 // 用更大的画布重新收敛
+    }
+    const dx = pad - minX + Math.max(0, (Wc - boxW)/2);
+    const dy = pad - minY + Math.max(0, (Hc - boxH)/2);
+    if(Math.abs(dx) > 0.01 || Math.abs(dy) > 0.01) nodes.forEach(n=>{ n.x += dx; n.y += dy; });
+    // 平移不改变距离 ⇒ 平移前无重叠则平移后也无重叠；再确认一次以防浮点/边界效应
+    if(countOverlaps() === 0) break;
+  }
+  return { overlaps: countOverlaps(), minCenterDist: minPairDist(), expanded, W: Wc, H: Hc };
 }
 // 拓扑分层坐标：层自上而下（入0 的根在顶层，沿边逐层下推，环兜底），同层节点横向居中排列—
 // 需求金字塔（利益相关方→系统→子系统→单元）与系统分解（卫星→平台/载荷→分系统/设备）的天然结构
@@ -865,25 +949,42 @@ function graphLayout(){
   if(graphState.view.layout==='ring'){
     const R = Math.min(W,H)/2 - 70;
     order.forEach((n,i)=>{ n.x = cx + R*Math.cos(2*Math.PI*i/order.length); n.y = cy + R*Math.sin(2*Math.PI*i/order.length); });
-    graphCollide(nodes, graphTok('nodeCollideMinD'));
+    // 环形布局同样要收敛式消除重叠（原来只跑一轮 collide，节点变大后不够）
+    const st = graphSettleOverlaps(nodes, edges, W, H);
+    if(st.expanded) graphState.svgH = Math.max(graphState.svgH, st.H);
     return;
   }
   if(graphState.view.layout==='layered'){
     // 成熟分层布局（dagre 离屏）→ 归一；失败回退手写 graphLayeredPos
     if(!gvLayoutWith('dagre', nodes, edges)) graphLayeredPos(nodes, edges, W, H);
     gvNormalize(nodes, W, H);
+    /* ⚠ 原实现这里直接 return，**完全没做重叠消除** —— dagre 按节点宽度排版，
+       而画布上画的是半径 17–33 的圆，切到「分层」布局就会出现整片贴压。
+       现在与力导向走同一条收敛式消除。 */
+    const st = graphSettleOverlaps(nodes, edges, W, H);
+    if(st.expanded) graphState.svgH = Math.max(graphState.svgH, st.H);
     return;
   }
   // 成熟力导向（cose 离屏）→ 碰撞清除 + 边界夹紧；失败回退手写 graphForcePos
   if(!gvLayoutWith('cose', nodes, edges)){ graphForcePos(nodes, edges, W, H); }
   else { gvNormalize(nodes, W, H); }
-  /* 碰撞消除 + 边界夹紧：轮数从 6 提到 12 —— 节点半径上调到 17–33 后单轮推开量
-     相对更小，6 轮会残留贴压（真机实测最小中心距 24.8，明显小于 nodeCollideMinD）。
-     每轮都要重新夹紧，否则被推出去的节点会留在画布外。 */
-  for(let r=0; r<12; r++){
-    graphCollide(nodes, graphTok('nodeCollideMinD'));
-    nodes.forEach(n=>{ n.x=Math.max(30,Math.min(W-30,n.x)); n.y=Math.max(30,Math.min(H-30,n.y)); });
+  /* 重叠消除（2026-11-28 彻底版）：原实现是「12 轮 collide + 每轮逐点夹紧」，
+     两个缺陷叠加导致永远残留 10–12 对重叠：
+     ① collide 用固定 minD=56，而两个最大节点需要 66 ⇒ 数学上消不掉；
+     ② 每轮都逐点夹紧，把刚推开的节点又压回边界 ⇒ 振荡，收敛不了。
+     现在交给 graphSettleOverlaps：半径感知 + 迭代到收敛 + 整体平移（不是逐点夹）。
+     若画布塞不下会扩大画布（只增不减），不会把节点硬夹回去。 */
+  const settled = graphSettleOverlaps(nodes, edges, W, H);
+  if(settled.expanded){
+    graphState.svgH = Math.max(graphState.svgH, settled.H);
+    // 画布变大后重新归一化一次，让图均匀铺开（否则会挤在左上角）
+    gvNormalize(nodes, W, graphState.svgH);
+    const again = graphSettleOverlaps(nodes, edges, W, graphState.svgH);
+    if(again.expanded) graphState.svgH = Math.max(graphState.svgH, again.H);
   }
+  // 诊断用：终态重叠数（0 才算真的解决了；门禁与真机都读这个值）
+  graphState._layoutOverlaps = settled.overlaps;
+  graphState._layoutMinDist = settled.minCenterDist;
 }
 // 公共力导向布局：分层坐标初始化 斥力+引力迭代（引力按节点对去重，高密度约束图不会重复拉近）→ 画布归一
 function graphForcePos(nodes, edges, W, H){

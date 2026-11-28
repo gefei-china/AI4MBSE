@@ -52,6 +52,10 @@ EXPECTED_HARNESS = {
     "R1_base_radius", "R2_sel_enlarged", "R3_degree_growth", "R4_degree_capped",
     "R5_skel_radius", "R6_sel_scale_gt_1", "R7_formula_single_impl",
     "C1_coincident_pushed", "C2_deterministic", "C3_reaches_minD", "C4_no_false_move",
+    "C5_radius_aware", "C6_returns_moved_count", "C7_zero_when_converged",
+    "W1_all_coincident_settled", "W2_near_coincident_settled", "W3_dense_settled",
+    "W4_idempotent", "W5_degenerate_ok",
+    "L1_ring_settles", "L2_layered_settles", "L3_force_settles", "L4_no_per_node_clamp",
 }
 
 
@@ -152,7 +156,8 @@ def evaluate(mods_dir: str):
     check("S2_no_hardcoded_radius", "25-graphview.js 不再有写死的半径公式（改 token 后才换得动）",
           not stale, ",".join(stale) or "none")
 
-    radius_body = _body(src25, "function gvNodeRadius(")
+    # gvNodeRadius 已下移到 24-graph.js（布局层也要按半径算碰撞距离）
+    radius_body = _body(src24, "function gvNodeRadius(")
     check("S3_sel_scales_radius", "选中放大作用在半径上（不是只加粗描边），且渲染处调用该函数",
           "graphTok('nodeSelScale')" in radius_body
           and re.search(r"sel \? Math\.round\(rBase \* graphTok\('nodeSelScale'\)\)", radius_body) is not None
@@ -202,10 +207,40 @@ def evaluate(mods_dir: str):
     check("S12_reveal_single_impl", "gvRevealNode 只有一处实现",
           sum(s.count("function gvRevealNode(") for s in allsrc) == 1)
 
-    check("S14_radius_single_impl", "半径公式只有一处实现（gvNodeRadius，渲染处复用）",
+    check("S14_radius_single_impl", "半径公式只有一处实现（在 24，布局层与渲染层共用）",
           sum(x.count("function gvNodeRadius(") for x in allsrc) == 1
+          and "function gvNodeRadius(" in src24 and "function gvNodeRadius(" not in src25
           and "const r = gvNodeRadius(n, deg, sel);" in _code_only(src25),
-          "impl=%d" % sum(x.count("function gvNodeRadius(") for x in allsrc))
+          "impl=%d in24=%s dup25=%s" % (sum(x.count("function gvNodeRadius(") for x in allsrc),
+                                        "function gvNodeRadius(" in src24,
+                                        "function gvNodeRadius(" in src25))
+
+    # ── 2026-11-28 彻底解决遗留重叠：结构与单一实现 ──
+    settle_body = _body(src24, "function graphSettleOverlaps(")
+    collide_body2 = _body(src24, "function graphCollide(")
+    check("S15_settle_single_impl", "收敛式消除只有一处实现（graphSettleOverlaps）",
+          sum(x.count("function graphSettleOverlaps(") for x in allsrc) == 1,
+          str(sum(x.count("function graphSettleOverlaps(") for x in allsrc)))
+
+    check("S16_collide_radius_aware", "碰撞判定按「半径和 + 间隙」，不是固定 minD",
+          "radiusOf(nodes[i]) + radiusOf(nodes[j]) + gap" in collide_body2,
+          "radius-aware=%s" % ("radiusOf(nodes[i]) + radiusOf(nodes[j]) + gap" in collide_body2))
+
+    check("S17_settle_translate_not_clamp", "边界用整体平移（不改变间距），不用逐点夹紧",
+          "nodes.forEach(n=>{ n.x += dx; n.y += dy; })" in settle_body
+          and "Math.max(pad, Math.min(W-pad" not in settle_body
+          and "Math.min(Wc" not in settle_body,
+          "translate=%s perNodeClamp=%s" % ("n.x += dx" in settle_body,
+                                            "Math.min(W-pad" in settle_body))
+
+    check("S18_settle_iterates_to_converge", "迭代到 collide 返回 0 才停（不靠固定轮数）",
+          "graphCollide(nodes, opt) === 0" in settle_body, "converge-check=%s" % ("=== 0" in settle_body))
+
+    check("S19_settle_expands_canvas", "画布塞不下时扩大画布，而不是把节点硬夹回去",
+          "expanded++" in settle_body and "expanded" in settle_body, "expanded-tracked=%s" % ("expanded++" in settle_body))
+
+    check("S20_layout_reports_overlaps", "布局把终态重叠数写进 state（排障与门禁可读）",
+          "graphState._layoutOverlaps" in _code_only(src24), "命中")
 
     check("S13_old_center_kept", "既有 gvCenterOnNode 未被替换（树定位等调用方行为不变）",
           "function gvCenterOnNode(" in src25 and "function gvRevealNode(" in src25,
@@ -219,7 +254,7 @@ MUTATIONS = [
      "  graphState.multiSel = new Set();   // P1-1：单选与多选互斥，点节点即退出框选态",
      "  graphState.multiSel = new Set(); gvRevealNode(id);",
      "S4_center_in_up_not_down"),
-    ("M2_选中不再放大", "25-graphview.js",
+    ("M2_选中不再放大", "24-graph.js",
      "return sel ? Math.round(rBase * graphTok('nodeSelScale')) : rBase;",
      "return rBase;",
      "R2_sel_enlarged"),
@@ -235,6 +270,19 @@ MUTATIONS = [
      "  const s = Math.max(s0, graphTok('nodeFocusScale'));",
      "  const s = s0;",
      "N1_low_scale_raised_and_centered"),
+    # ── 2026-11-28 彻底解决遗留重叠：这三条锁住新能力 ──
+    ("M6_碰撞退回固定minD", "24-graph.js",
+     "    const need = radiusOf ? Math.max(minD, radiusOf(nodes[i]) + radiusOf(nodes[j]) + gap) : minD;",
+     "    const need = minD;",
+     "C5_radius_aware"),
+    ("M7_分层分支不消除重叠", "24-graph.js",
+     "    if(!gvLayoutWith('dagre', nodes, edges)) graphLayeredPos(nodes, edges, W, H);\n    gvNormalize(nodes, W, H);",
+     "    if(!gvLayoutWith('dagre', nodes, edges)) graphLayeredPos(nodes, edges, W, H);\n    gvNormalize(nodes, W, H); return;",
+     "L2_layered_settles"),
+    ("M8_收敛改成单轮", "24-graph.js",
+     "      if(graphCollide(nodes, opt) === 0) break;   // 无对可推 ⇒ 收敛",
+     "      graphCollide(nodes, opt); break;",
+     "W2_near_coincident_settled"),
 ]
 
 

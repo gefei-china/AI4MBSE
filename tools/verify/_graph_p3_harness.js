@@ -196,7 +196,9 @@ try {
   /* exec **真函数** gvNodeRadius（不是复刻公式）。
      第一版是按「同一表达式」在测试里重写了一遍 —— 变异「去掉选中放大」后判据仍绿，
      因为改的是源码、测试里那份没变。这是 P0「桩照抄错误假设」的同族错误。 */
-  vm.runInContext(extractFn(SRC25, "gvNodeRadius"), ctx, { filename: "f:gvNodeRadius" });
+  /* gvNodeRadius 在 24-graph.js（2026-11-28 从 25 下移）：
+     布局层 graphCollide / graphSettleOverlaps 也要按半径算碰撞距离，必须共用同一实现。 */
+  vm.runInContext(extractFn(SRC24, "gvNodeRadius"), ctx, { filename: "f:gvNodeRadius" });
   const expr = (n, deg, sel) => ({ r: ctx.gvNodeRadius(n, deg, sel) });
   // rBase 单独取：把 sel 传 false 再算一次，即为未放大半径
   const rBaseOf = (n, deg) => ctx.gvNodeRadius(n, deg, false);
@@ -223,18 +225,21 @@ try {
 
   // 选中的放大必须「真的变大」而不是变小
   rec("R6_sel_scale_gt_1", "nodeSelScale > 1（选中必须变大）", t("nodeSelScale") > 1, String(t("nodeSelScale")));
-  rec("R7_formula_single_impl", "半径公式只有一处实现（gvNodeRadius），渲染处调它",
-    SRC25.indexOf("function gvNodeRadius(") >= 0
+  rec("R7_formula_single_impl", "半径公式只有一处实现（在 24-graph.js），25 渲染处调它、不另写副本",
+    SRC24.indexOf("function gvNodeRadius(") >= 0
+      && SRC25.indexOf("function gvNodeRadius(") < 0
       && /const r = gvNodeRadius\(n, deg, sel\);/.test(SRC25)
       && !/13 \+ Math\.min/.test(SRC25),
-    `fn=${SRC25.indexOf("function gvNodeRadius(") >= 0} call=${/const r = gvNodeRadius\(/.test(SRC25)}`);
+    `in24=${SRC24.indexOf("function gvNodeRadius(") >= 0} dup25=${SRC25.indexOf("function gvNodeRadius(") >= 0} call=${/const r = gvNodeRadius\(/.test(SRC25)}`);
 } catch (e) {
   rec("R0_runtime", "R 组可执行", false, e.message);
 }
 
-/* ══════════ C 组：graphCollide 完全重合的确定性散开 ══════════ */
+/* ══════════ C 组：graphCollide（完全重合散开 + 半径感知宽度） ══════════ */
 try {
   const ctx = mkCtx();
+  // C5 要用真实半径函数算「两个大节点需要多宽」，必须一并注入（否则测的是猜的数）
+  vm.runInContext(extractFn(SRC24, "gvNodeRadius"), ctx, { filename: "f:gvNodeRadius" });
   vm.runInContext(extractFn(SRC24, "graphCollide"), ctx, { filename: "f:graphCollide" });
 
   // ① 两节点完全重合 ⇒ 必须被推开（原实现 dx/d = 0/0.1 = 0 ⇒ 推不动）
@@ -261,8 +266,145 @@ try {
   ctx.graphCollide(far, 56);
   rec("C4_no_false_move", "距离足够远时坐标不被改动",
     far[0].x === bx[0] && far[1].x === bx[1], `${far[0].x}/${far[1].x}`);
+
+  /* ⑤ 半径感知（2026-11-28 的真缺陷）：两个大节点需要 r_i+r_j+gap，
+     固定 minD=56 时 33+33=66 > 56 ⇒ 数学上永远消不掉。
+     这里用两个「半径 33」的节点，中心距 60（>56 但 <66）：修好后必须被推开。 */
+  const big = [{ id: "b1", x: 0, y: 0 }, { id: "b2", x: 60, y: 0 }];
+  // 给 b1/b2 都设成最大度数（deg=99 → 半径被 cap 到 33）
+  const bigDeg = { b1: 99, b2: 99 };
+  const radiusOf = (n) => ctx.gvNodeRadius(n, bigDeg, false);
+  const moved = ctx.graphCollide(big, { minD: 56, gap: 6, radiusOf });
+  const dBig = Math.abs(big[0].x - big[1].x);
+  rec("C5_radius_aware", "碰撞按「半径和+间隙」判定（半径 33 的两个节点需 72，不是 56）",
+    moved === 1 && dBig >= 33 + 33 + 6 - 1e-6,
+    `moved=${moved} dist=${dBig.toFixed(2)} 期望≥72`);
+
+  /* ⑥ 返回被移动对数：外层靠它判断收敛，返回 undefined 会让循环提前退出 */
+  const mv = ctx.graphCollide([{ id: "x", x: 0, y: 0 }, { id: "y", x: 10, y: 0 }], { minD: 56 });
+  rec("C6_returns_moved_count", "collide 返回被移动的对数（收敛判断依据）",
+    typeof mv === "number" && mv === 1, `${typeof mv}:${mv}`);
+
+  /* ⑦ 无重叠时必须返回 0（否则外层会误判未收敛，白跑 40 轮） */
+  const mv0 = ctx.graphCollide([{ id: "x", x: 0, y: 0 }, { id: "y", x: 500, y: 0 }], { minD: 56 });
+  rec("C7_zero_when_converged", "无重叠时返回 0（收敛信号）", mv0 === 0, String(mv0));
 } catch (e) {
   rec("C0_runtime", "C 组可执行", false, e.message);
+}
+
+/* ══════════ W 组：graphSettleOverlaps 收敛到「任意两节点不重叠」 ══════════ */
+try {
+  const ctx = mkCtx();
+  ["gvNodeRadius", "graphDegreeMap", "graphCollide", "graphSettleOverlaps"].forEach((n) =>
+    vm.runInContext(extractFn(SRC24, n), ctx, { filename: "f:" + n }));
+
+  const mkGraph = (N, seed) => {
+    const nodes = [], edges = [];
+    for (let i = 0; i < N; i++) nodes.push({ id: "n" + i, entity_type: "T" });
+    let ei = 0;
+    for (let i = 1; i < N; i++) edges.push({ id: "e" + (ei++), source_id: "n" + Math.floor(i / 3), target_id: "n" + i });
+    for (let i = 0; i < 30; i++) {
+      const a = (i * 17 + seed) % N, b = (i * 29 + 7) % N;
+      if (a !== b) edges.push({ id: "e" + (ei++), source_id: "n" + a, target_id: "n" + b });
+    }
+    return { nodes, edges };
+  };
+  const measure = (nodes, edges) => {
+    const deg = ctx.graphDegreeMap(nodes, edges);
+    const r = (n) => ctx.gvNodeRadius(n, deg, false);
+    let ov = 0, minGap = Infinity;
+    for (let i = 0; i < nodes.length; i++) for (let j = i + 1; j < nodes.length; j++) {
+      const d = Math.hypot(nodes[i].x - nodes[j].x, nodes[i].y - nodes[j].y);
+      const g = d - (r(nodes[i]) + r(nodes[j]));
+      if (g < 0) ov++;
+      minGap = Math.min(minGap, g);
+    }
+    return { ov, minGap: minGap === Infinity ? null : +minGap.toFixed(2) };
+  };
+
+  // ① 20 节点完全重合（最恶劣，190 对重叠）⇒ 必须归零
+  const g1 = mkGraph(20, 3);
+  g1.nodes.forEach((n) => { n.x = 400; n.y = 300; });
+  const b1 = measure(g1.nodes, g1.edges);
+  const s1 = ctx.graphSettleOverlaps(g1.nodes, g1.edges, 880, 560);
+  const a1 = measure(g1.nodes, g1.edges);
+  rec("W1_all_coincident_settled", "20 节点完全重合 → 收敛到 0 对重叠",
+    b1.ov === 190 && a1.ov === 0 && s1.overlaps === 0,
+    `before=${b1.ov} after=${a1.ov} minGap=${a1.minGap} expanded=${s1.expanded}`);
+
+  // ② 40 节点近重合（780 对）⇒ 归零，且间隙非负
+  const g2 = mkGraph(40, 5);
+  g2.nodes.forEach((n, i) => { n.x = 400 + (i % 3); n.y = 300 + (i % 2); });
+  const b2 = measure(g2.nodes, g2.edges);
+  const s2 = ctx.graphSettleOverlaps(g2.nodes, g2.edges, 880, 560);
+  const a2m = measure(g2.nodes, g2.edges);
+  rec("W2_near_coincident_settled", "40 节点近重合 → 0 对重叠且最小间隙 ≥0",
+    b2.ov > 500 && a2m.ov === 0 && a2m.minGap >= -1e-6,
+    `before=${b2.ov} after=${a2m.ov} minGap=${a2m.minGap}`);
+
+  // ③ 100 节点超密（画布塞不下）⇒ 仍要归零，并如实报告 expanded
+  const g3 = mkGraph(100, 9);
+  g3.nodes.forEach((n, i) => { n.x = (i % 5) * 40; n.y = Math.floor(i / 5) * 30; });
+  const s3 = ctx.graphSettleOverlaps(g3.nodes, g3.edges, 880, 560);
+  const a3 = measure(g3.nodes, g3.edges);
+  rec("W3_dense_settled", "100 节点超密 → 0 对重叠（画布不够则扩大，不硬夹）",
+    s3.overlaps === 0 && a3.ov === 0 && s3.expanded >= 1,
+    `after=${a3.ov} expanded=${s3.expanded} H=${s3.H}`);
+
+  // ④ 已无重叠时不得乱动（幂等）：坐标应保持不变
+  const g4 = mkGraph(12, 1);
+  g4.nodes.forEach((n, i) => { n.x = 100 + i * 90; n.y = 200 + (i % 2) * 120; });
+  ctx.graphSettleOverlaps(g4.nodes, g4.edges, 880, 560);
+  const posA = g4.nodes.map((n) => [Math.round(n.x * 100), Math.round(n.y * 100)]);
+  ctx.graphSettleOverlaps(g4.nodes, g4.edges, 880, 560);
+  const posB = g4.nodes.map((n) => [Math.round(n.x * 100), Math.round(n.y * 100)]);
+  rec("W4_idempotent", "已无重叠时重复调用不再移动（幂等，避免每次刷新都漂移）",
+    JSON.stringify(posA) === JSON.stringify(posB), posA.length + " 节点");
+
+  // ⑤ 单节点/空图不崩
+  const s5 = ctx.graphSettleOverlaps([{ id: "only", x: 0, y: 0 }], [], 880, 560);
+  const s6 = ctx.graphSettleOverlaps([], [], 880, 560);
+  rec("W5_degenerate_ok", "单节点与空图不崩且返回 overlaps=0",
+    s5.overlaps === 0 && s6.overlaps === 0, JSON.stringify([s5.overlaps, s6.overlaps]));
+} catch (e) {
+  rec("W0_runtime", "W 组可执行", false, e.message);
+}
+
+/* ══════════ L 组：graphLayout 三分支都必须消除重叠 ══════════ */
+try {
+  const body = extractFn(SRC24, "graphLayout");
+  /* 判据必须基于**去注释**的代码：本分支的注释里就写着「原实现这里直接 return」，
+     拿含注释的切片去 indexOf("return") 会命中注释（实测 settle@332 / return@205 ⇒ 假红）。
+     这是 P0「S2 假红」的同一形态，教训已有：判据扫代码，不扫注释。 */
+  const stripComments = (s) => s.split(/\r?\n/)
+    .filter((ln) => {
+      const t = ln.trim();
+      return !(t.startsWith("//") || t.startsWith("/*") || t.startsWith("*"));
+    }).join("\n");
+  const code = stripComments(body);
+  // 三个分支各自都要调用 settle（dagre 分支原本直接 return，完全没做重叠消除）
+  const ringPart = code.slice(code.indexOf("layout==='ring'"), code.indexOf("layout==='layered'"));
+  const layPart = code.slice(code.indexOf("layout==='layered'"), code.indexOf("// 成熟力导向") < 0
+    ? code.indexOf("gvLayoutWith('cose'") : code.indexOf("// 成熟力导向"));
+  const forcePart = code.slice(code.indexOf("// 成熟力导向") >= 0
+    ? code.indexOf("// 成熟力导向") : code.indexOf("gvLayoutWith('cose'"));
+  rec("L1_ring_settles", "环形分支调用 graphSettleOverlaps",
+    ringPart.indexOf("graphSettleOverlaps(") >= 0);
+  /* 判据必须要求「settle 出现在分支内任何 return 之前」。
+     只断言「调用了 settle」的话，在 gvNormalize 后插一个 return 仍能通过 ⇒ 判据没有鉴别力
+     （变异 M7 第一版就是这么漏掉的：flipped=False 却仍报绿）。 */
+  rec("L2_layered_settles", "分层分支在 return 之前调用 graphSettleOverlaps（原实现直接 return，完全不消除）",
+    layPart.indexOf("graphSettleOverlaps(") >= 0
+      && (layPart.indexOf("return") < 0 || layPart.indexOf("graphSettleOverlaps(") < layPart.indexOf("return")),
+    `settle@${layPart.indexOf("graphSettleOverlaps(")} return@${layPart.indexOf("return")}`);
+  rec("L3_force_settles", "力导向分支调用 graphSettleOverlaps",
+    forcePart.indexOf("graphSettleOverlaps(") >= 0);
+  // 边界不得再用逐点夹紧（那会把刚推开的节点压回去，与碰撞消除振荡）
+  rec("L4_no_per_node_clamp", "布局里不再逐点夹紧（原 n.x=Math.max(30,Math.min(W-30,...)) 会撤销推开）",
+    code.indexOf("Math.max(30,Math.min(W-30") < 0 && code.indexOf("Math.max(30, Math.min(W-30") < 0,
+    code.indexOf("Math.max(30,Math.min(W-30") >= 0 ? "仍有逐点夹紧" : "none");
+} catch (e) {
+  rec("L0_runtime", "L 组可执行", false, e.message);
 }
 
 process.stdout.write(JSON.stringify({ checks: checks }) + "\n");
