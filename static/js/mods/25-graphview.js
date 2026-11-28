@@ -48,35 +48,41 @@ function closeSysmlViewPreview() {
   document.getElementById('svm-mask').classList.remove('show');
   document.getElementById('svm-panel').classList.remove('show');
 }
-// 视图元素 kind → 节点渲染参数
-const SVM_NODE_STYLE = {
-  block:    {shape:'rect',  fill:'#EAF3DE', stroke:'#3B6D11', w:120, h:44},
-  part:     {shape:'rect',  fill:'#E6F1FB', stroke:'#185FA5', w:120, h:44},
-  requirement:{shape:'req', fill:'#FFF7E0', stroke:'#BA7517', w:140, h:52},
-  actor:    {shape:'actor', fill:'#5F5E5A', stroke:'#5F5E5A', w:34, h:56},
-  usecase:  {shape:'ellipse',fill:'#F1E8F9', stroke:'#6B4FA1', w:120, h:46},
-  action:   {shape:'round', fill:'#F1E8F9', stroke:'#6B4FA1', w:130, h:46},
-  state:    {shape:'round', fill:'#FDF0F0', stroke:'#A32D2D', w:130, h:46},
-  constraint:{shape:'para', fill:'#F2F4F8', stroke:'#5F5E5A', w:150, h:48},
-  package:  {shape:'pkg',  fill:'#E6F1FB', stroke:'#185FA5', w:150, h:52},
-  port:     {shape:'rect',  fill:'#fff',   stroke:'#185FA5', w:70, h:28},
-};
+// 视图元素 kind → 节点渲染参数（P0-1：色值全部取自 graphTok()，见 24-graph.js）
+const SVM_NODE_STYLE = (function(){
+  const k = graphTok();
+  return {
+    block:    {shape:'rect',  fill:k.greenL,   stroke:k.green,   w:120, h:44},
+    part:     {shape:'rect',  fill:k.primaryL, stroke:k.primary, w:120, h:44},
+    requirement:{shape:'req', fill:k.reqFill,  stroke:k.amber,   w:140, h:52},
+    actor:    {shape:'actor', fill:k.neutral,  stroke:k.neutral, w:34, h:56},
+    usecase:  {shape:'ellipse',fill:k.purpleL, stroke:k.purple,  w:120, h:46},
+    action:   {shape:'round', fill:k.purpleL,  stroke:k.purple,  w:130, h:46},
+    state:    {shape:'round', fill:k.stateFill,stroke:k.red,     w:130, h:46},
+    constraint:{shape:'para', fill:k.neutralL, stroke:k.neutral, w:150, h:48},
+    package:  {shape:'pkg',  fill:k.primaryL,  stroke:k.primary, w:150, h:52},
+    port:     {shape:'rect',  fill:k.canvas,   stroke:k.primary, w:70, h:28},
+  };
+})();
 // 视图边 kind → 线型（OMG SysML 规范：composition 源端实心菱形+实线无箭头；generalization 空心三角）
-const SVM_EDGE_STYLE = {
-  composition:{stroke:'#3B6D11', dash:'',      marker:'',        diamond:true},
-  dependency: {stroke:'#5F5E5A', dash:'6 3',   marker:'svm-arrow',     diamond:false},
-  satisfy:    {stroke:'#185FA5', dash:'6 4',   marker:'svm-arrow-blu', diamond:false},
-  derive:     {stroke:'#BA7517', dash:'6 3',   marker:'svm-arrow-amb', diamond:false},
-  conflict:   {stroke:'#A32D2D', dash:'4 3',   marker:'svm-arrow-red', diamond:false},
-  include:    {stroke:'#6B4FA1', dash:'6 3',   marker:'svm-arrow-pur', diamond:false},
-  extend:     {stroke:'#6B4FA1', dash:'6 3',   marker:'svm-arrow-pur', diamond:false},
-  allocate:   {stroke:'#185FA5', dash:'8 4',   marker:'svm-arrow-blu', diamond:false},
-  flow:       {stroke:'#185FA5', dash:'',      marker:'svm-arrow-blu', diamond:false},
-  connect:    {stroke:'#185FA5', dash:'',      marker:'',             diamond:false},
-  message:    {stroke:'#185FA5', dash:'',      marker:'svm-arrow-blu', diamond:false},
-  transition: {stroke:'#A32D2D', dash:'',      marker:'svm-arrow-red', diamond:false},
-  bind:       {stroke:'#5F5E5A', dash:'2 2',   marker:'svm-arrow',     diamond:false},
-};
+const SVM_EDGE_STYLE = (function(){
+  const k = graphTok();
+  return {
+    composition:{stroke:k.green,   dash:'',    marker:'',            diamond:true},
+    dependency: {stroke:k.neutral, dash:'6 3', marker:'svm-arrow',   diamond:false},
+    satisfy:    {stroke:k.primary, dash:'6 4', marker:'svm-arrow-blu', diamond:false},
+    derive:     {stroke:k.amber,   dash:'6 3', marker:'svm-arrow-amb', diamond:false},
+    conflict:   {stroke:k.red,     dash:'4 3', marker:'svm-arrow-red', diamond:false},
+    include:    {stroke:k.purple,  dash:'6 3', marker:'svm-arrow-pur', diamond:false},
+    extend:     {stroke:k.purple,  dash:'6 3', marker:'svm-arrow-pur', diamond:false},
+    allocate:   {stroke:k.primary, dash:'8 4', marker:'svm-arrow-blu', diamond:false},
+    flow:       {stroke:k.primary, dash:'',    marker:'svm-arrow-blu', diamond:false},
+    connect:    {stroke:k.primary, dash:'',    marker:'',             diamond:false},
+    message:    {stroke:k.primary, dash:'',    marker:'svm-arrow-blu', diamond:false},
+    transition: {stroke:k.red,     dash:'',    marker:'svm-arrow-red', diamond:false},
+    bind:       {stroke:k.neutral, dash:'2 2', marker:'svm-arrow',     diamond:false},
+  };
+})();
 // OMG 规范边标签（双尖括号）——无标准标签的关系回退显示原类型
 const SVM_EDGE_LABEL = {
   composition: '', dependency: '', satisfy: '«satisfy»', derive: '«deriveReqt»',
@@ -175,16 +181,17 @@ function renderSysmlView(vm) {
   const warn = document.getElementById('svm-warn');
   warn.style.display = (vm.warnings&&vm.warnings.length)?'block':'none';
   warn.innerHTML = '⚠️ ' + (vm.warnings||[]).map(esc).join('<br>⚠️ ');
-  // 图例
+  // 图例（P0-1：色值取自 graphTok，与画布/影响图同源；P0-4：前置统一交互提示条）
   document.getElementById('svm-legend').innerHTML = `
+    ${gvHintBar('sysml')}
     <span class="lg"><span class="lsw lbl fill"></span>块/部件</span>
     <span class="lg"><span class="lsw lbl req"></span>需求</span>
     <span class="lg"><span class="lsw lbl act"></span>用例/动作</span>
     <span class="lg"><span class="lsw lbl st"></span>状态</span>
-    <span class="lg"><span class="lsw" style="border-color:#3B6D11;"></span>组合 composition</span>
-    <span class="lg"><span class="lsw" style="border-color:#185FA5;"></span>满足/连接 satisfy</span>
-    <span class="lg"><span class="lsw dash" style="border-color:#BA7517;"></span>派生/依赖 derive</span>
-    <span class="lg"><span class="lsw dash" style="border-color:#A32D2D;"></span>冲突/迁移</span>`;
+    <span class="lg"><span class="lsw" style="border-color:${graphTok('green')};"></span>组合 composition</span>
+    <span class="lg"><span class="lsw" style="border-color:${graphTok('primary')};"></span>满足/连接 satisfy</span>
+    <span class="lg"><span class="lsw dash" style="border-color:${graphTok('amber')};"></span>派生/依赖 derive</span>
+    <span class="lg"><span class="lsw dash" style="border-color:${graphTok('red')};"></span>冲突/迁移</span>`;
   canvas.innerHTML = buildSvmSvg(vm);
   // P0-视图升级：右侧面板优先用 Cytoscape 渲染（旧 SVG 作为回退）
   if(window.cytoscape){
@@ -203,12 +210,12 @@ function buildSvmSvg(vm) {
   const {pos, W, H} = svmLayout(nodes, edges);
   const markers = `
     <defs>
-      <marker id="svm-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#5F5E5A"/></marker>
-      <marker id="svm-arrow-grn" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#3B6D11"/></marker>
-      <marker id="svm-arrow-blu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#185FA5"/></marker>
-      <marker id="svm-arrow-amb" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#BA7517"/></marker>
-      <marker id="svm-arrow-red" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#A32D2D"/></marker>
-      <marker id="svm-arrow-pur" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#6B4FA1"/></marker>
+      <marker id="svm-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="${graphTok('neutral')}"/></marker>
+      <marker id="svm-arrow-grn" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="${graphTok('green')}"/></marker>
+      <marker id="svm-arrow-blu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="${graphTok('primary')}"/></marker>
+      <marker id="svm-arrow-amb" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="${graphTok('amber')}"/></marker>
+      <marker id="svm-arrow-red" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="${graphTok('red')}"/></marker>
+      <marker id="svm-arrow-pur" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="${graphTok('purple')}"/></marker>
     </defs>`;
   // 边（先画线）
   let es = '';
@@ -233,7 +240,7 @@ function buildSvmSvg(vm) {
   let ns = nodes.map(nd=>svmNodeSvg(nd, pos[nd.id])).join('');
   const title = esc(vm.view.name);
   return `<svg viewBox="0 0 ${W+20} ${H+36}" xmlns="http://www.w3.org/2000/svg" style="min-width:700px;min-height:460px;">
-    <text x="${W/2+10}" y="16" font-size="12" font-weight="700" fill="#0C447C" text-anchor="middle">${title}（${vm.view.v1}）</text>
+    <text x="${W/2+10}" y="16" font-size="12" font-weight="700" fill="${graphTok('primaryD')}" text-anchor="middle">${title}（${vm.view.v1}）</text>
     ${markers}${es}${ns}
   </svg>`;
 }
@@ -404,14 +411,15 @@ function svmRenderCytoscape(container, vm) {
   // P0 性能修复：渲染热路径不打日志（多图挂载时 console 输出本身即显著开销）
   // dagre roots：找无 parent 的最顶层节点（system/根包），让 dagre 树状自顶向下排
   const hierRoots = (vm.nodes||[]).filter(n => !n.parent).map(n => n.id);
+  const k = graphTok();   // P0-1：样式单一真源（见 24-graph.js），本文件的样式表不再写死色值
   const cy = cytoscape({
     container,
     elements: {nodes, edges},
     style: [
       {selector:'node', style:{
         'content':'data(label)',
-        'background-color':'#EAF3DE','border-color':'#3B6D11','border-width':1.5,
-        'color':'#1F2D3D','font-size':12,'text-valign':'center','text-halign':'center',
+        'background-color':k.greenL,'border-color':k.green,'border-width':1.5,
+        'color':k.nodeText,'font-size':12,'text-valign':'center','text-halign':'center',
         'text-wrap':'wrap','text-max-width':function(el){
           // 长名自适应：宽度跟随节点实际宽度（留 12px 内边距），不再固定 130 截断
           return Math.max(90, (el.data('svmW')||150) - 12);
@@ -423,62 +431,66 @@ function svmRenderCytoscape(container, vm) {
       // 复合节点（父节点：包住子节点，SysML BDD/PKG 标准层级视觉）
       {selector:'node:parent', style:{
         'content':'data(label)',
-        'background-color':'#F5F8FC','background-opacity':0.4,
-        'border-color':'#185FA5','border-width':1.2,'border-style':'solid',
+        'background-color':k.parentFill,'background-opacity':0.4,
+        'border-color':k.primary,'border-width':1.2,'border-style':'solid',
         'padding':'14px','shape':'round-rectangle',
-        'text-valign':'top','text-halign':'center','font-size':10.5,'color':'#185FA5',
+        'text-valign':'top','text-halign':'center','font-size':10.5,'color':k.primary,
         'font-weight':'700','text-margin-y':-6
       }},
-      {selector:'node[?isPort]', style:{'background-color':'#fff','border-color':'#185FA5','shape':'round-rectangle','font-size':9,'content':'data(label)'}},
+      {selector:'node[?isPort]', style:{'background-color':k.canvas,'border-color':k.primary,'shape':'round-rectangle','font-size':9,'content':'data(label)'}},
       // 按 kind 配色（尺寸统一走基础规则的 data(svmW/svmH)，此处只管配色/形状）
-      {selector:'.n-requirement', style:{'background-color':'#FFF7E0','border-color':'#BA7517','shape':'round-rectangle'}},
-      {selector:'.n-part', style:{'background-color':'#E6F1FB','border-color':'#185FA5','shape':'round-rectangle'}},
-      {selector:'.n-block', style:{'background-color':'#EAF3DE','border-color':'#3B6D11','shape':'round-rectangle'}},
+      {selector:'.n-requirement', style:{'background-color':k.reqFill,'border-color':k.amber,'shape':'round-rectangle'}},
+      {selector:'.n-part', style:{'background-color':k.primaryL,'border-color':k.primary,'shape':'round-rectangle'}},
+      {selector:'.n-block', style:{'background-color':k.greenL,'border-color':k.green,'shape':'round-rectangle'}},
       {selector:'.n-actor', style:{
         'background-color':'transparent','border-width':0,
         'background-image':'url("data:image/svg+xml;utf8,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 48 64%27%3E%3Ccircle cx=%2724%27 cy=%2711%27 r=%277%27 fill=%27%235F5E5A%27/%3E%3Cline x1=%2724%27 y1=%2718%27 x2=%2724%27 y2=%2744%27 stroke=%27%235F5E5A%27 stroke-width=%273%27/%3E%3Cline x1=%2724%27 y1=%2726%27 x2=%279%27 y2=%2738%27 stroke=%27%235F5E5A%27 stroke-width=%273%27/%3E%3Cline x1=%2724%27 y1=%2726%27 x2=%2739%27 y2=%2738%27 stroke=%27%235F5E5A%27 stroke-width=%273%27/%3E%3Cline x1=%2724%27 y1=%2744%27 x2=%2711%27 y2=%2761%27 stroke=%27%235F5E5A%27 stroke-width=%273%27/%3E%3Cline x1=%2724%27 y1=%2744%27 x2=%2737%27 y2=%2761%27 stroke=%27%235F5E5A%27 stroke-width=%273%27/%3E%3C/svg%3E")',
         'background-fit':'contain','background-repeat':'no-repeat',
         'shape':'rectangle',
-        'color':'#5F5E5A','text-valign':'bottom','text-halign':'center','font-size':10,'text-margin-y':2,'text-wrap':'wrap','text-max-width':90
+        'color':k.neutral,'text-valign':'bottom','text-halign':'center','font-size':10,'text-margin-y':2,'text-wrap':'wrap','text-max-width':90
       }},
-      {selector:'.n-usecase', style:{'background-color':'#F1E8F9','border-color':'#6B4FA1','shape':'ellipse'}},
-      {selector:'.n-action', style:{'background-color':'#F1E8F9','border-color':'#6B4FA1','shape':'round-rectangle'}},
-      {selector:'.n-state', style:{'background-color':'#FDF0F0','border-color':'#A32D2D','shape':'round-rectangle'}},
-      {selector:'.n-constraint', style:{'background-color':'#F2F4F8','border-color':'#5F5E5A','shape':'round-rectangle'}},
-      {selector:'.n-package', style:{'background-color':'#E6F1FB','border-color':'#185FA5','shape':'round-rectangle'}},
+      {selector:'.n-usecase', style:{'background-color':k.purpleL,'border-color':k.purple,'shape':'ellipse'}},
+      {selector:'.n-action', style:{'background-color':k.purpleL,'border-color':k.purple,'shape':'round-rectangle'}},
+      {selector:'.n-state', style:{'background-color':k.stateFill,'border-color':k.red,'shape':'round-rectangle'}},
+      {selector:'.n-constraint', style:{'background-color':k.neutralL,'border-color':k.neutral,'shape':'round-rectangle'}},
+      {selector:'.n-package', style:{'background-color':k.primaryL,'border-color':k.primary,'shape':'round-rectangle'}},
       // 边：默认灰虚线
       {selector:'edge', style:{
-        'curve-style':'bezier','width':1.4,'line-color':'#5F5E5A','line-style':'dashed',
-        'target-arrow-shape':'triangle','target-arrow-color':'#5F5E5A',
+        'curve-style':'bezier','width':1.4,'line-color':k.neutral,'line-style':'dashed',
+        'target-arrow-shape':'triangle','target-arrow-color':k.neutral,
         'content':function(el){return el.data('label')||'';},'font-size':9,'text-rotation':'autorotate',
-        'text-background-color':'#fff','text-background-opacity':0.7,'color':'#555'
+        'text-background-color':k.canvas,'text-background-opacity':0.7,'color':k.edgeText
       }},
       // 按 kind 线型（对齐 SVM_EDGE_STYLE）
-      {selector:'.e-composition', style:{'line-color':'#3B6D11','line-style':'solid','target-arrow-shape':'triangle','target-arrow-color':'#3B6D11'}},
-      {selector:'.e-satisfy', style:{'line-color':'#185FA5','line-style':'dashed','target-arrow-shape':'triangle','target-arrow-color':'#185FA5'}},
-      {selector:'.e-connect', style:{'line-color':'#185FA5','line-style':'solid','target-arrow-shape':'none'}},
-      {selector:'.e-flow', style:{'line-color':'#185FA5','line-style':'solid','target-arrow-shape':'triangle','target-arrow-color':'#185FA5'}},
-      {selector:'.e-derive', style:{'line-color':'#BA7517','line-style':'dashed','target-arrow-shape':'triangle','target-arrow-color':'#BA7517'}},
-      {selector:'.e-conflict', style:{'line-color':'#A32D2D','line-style':'dashed','target-arrow-shape':'triangle','target-arrow-color':'#A32D2D'}},
-      {selector:'.e-include', style:{'line-color':'#6B4FA1','line-style':'dashed','target-arrow-shape':'triangle','target-arrow-color':'#6B4FA1'}},
-      {selector:'.e-extend', style:{'line-color':'#6B4FA1','line-style':'dashed','target-arrow-shape':'triangle','target-arrow-color':'#6B4FA1'}},
-      {selector:'.e-allocate', style:{'line-color':'#185FA5','line-style':'dashed','target-arrow-shape':'triangle','target-arrow-color':'#185FA5'}},
-      {selector:'.e-transition', style:{'line-color':'#A32D2D','line-style':'solid','target-arrow-shape':'triangle','target-arrow-color':'#A32D2D'}},
-      {selector:'.e-bind', style:{'line-color':'#5F5E5A','line-style':'dotted','target-arrow-shape':'triangle','target-arrow-color':'#5F5E5A'}},
-      {selector:'.e-assoc', style:{'line-color':'#5F5E5A','line-style':'solid','target-arrow-shape':'none','width':1.6}},
-      // 选中高亮 + 标签溢出保护
-      {selector:':selected', style:{'border-width':3,'border-color':'#185FA5','opacity':1}},
+      {selector:'.e-composition', style:{'line-color':k.green,'line-style':'solid','target-arrow-shape':'triangle','target-arrow-color':k.green}},
+      {selector:'.e-satisfy', style:{'line-color':k.primary,'line-style':'dashed','target-arrow-shape':'triangle','target-arrow-color':k.primary}},
+      {selector:'.e-connect', style:{'line-color':k.primary,'line-style':'solid','target-arrow-shape':'none'}},
+      {selector:'.e-flow', style:{'line-color':k.primary,'line-style':'solid','target-arrow-shape':'triangle','target-arrow-color':k.primary}},
+      {selector:'.e-derive', style:{'line-color':k.amber,'line-style':'dashed','target-arrow-shape':'triangle','target-arrow-color':k.amber}},
+      {selector:'.e-conflict', style:{'line-color':k.red,'line-style':'dashed','target-arrow-shape':'triangle','target-arrow-color':k.red}},
+      {selector:'.e-include', style:{'line-color':k.purple,'line-style':'dashed','target-arrow-shape':'triangle','target-arrow-color':k.purple}},
+      {selector:'.e-extend', style:{'line-color':k.purple,'line-style':'dashed','target-arrow-shape':'triangle','target-arrow-color':k.purple}},
+      {selector:'.e-allocate', style:{'line-color':k.primary,'line-style':'dashed','target-arrow-shape':'triangle','target-arrow-color':k.primary}},
+      {selector:'.e-transition', style:{'line-color':k.red,'line-style':'solid','target-arrow-shape':'triangle','target-arrow-color':k.red}},
+      {selector:'.e-bind', style:{'line-color':k.neutral,'line-style':'dotted','target-arrow-shape':'triangle','target-arrow-color':k.neutral}},
+      {selector:'.e-assoc', style:{'line-color':k.neutral,'line-style':'solid','target-arrow-shape':'none','width':1.6}},
+      // 选中高亮 + 1-hop 焦点（P0-2：与主画布/影响图同一套「邻域亮、其余暗」语义）+ 标签溢出保护
+      {selector:':selected', style:{'border-width':3,'border-color':k.primary,'opacity':1}},
+      {selector:'.dimmed', style:{'opacity':k.dimOpacity}},
+      {selector:'.focus-hi', style:{'border-width':3.5,'border-color':k.primary,
+        'overlay-color':k.primary,'overlay-opacity':0.14,'overlay-padding':6}},
     ],
     layout: {name:'preset', animate:false},  // 《视图规范》布局引擎已在 svmToElements 预计算位置，preset 保留
     wheelSensitivity: 0.2,
     minZoom: 0.2, maxZoom: 2.5,
   });
   // BDD/PKG：用 dagre 层级布局（composition 边驱动节点层级排序）
-  // 交互：节点点击 → 属性浮层（attrs 展示）
+  // 交互：节点点击 → 1-hop 邻域高亮（P0-2）+ 属性浮层；点空白取消高亮
   cy.on('tap', 'node', evt=>{
     const d = evt.target.data();
+    applyGraphFocus(cy, evt.target.id());
     const attrs = d.attrs || {};
-    const lines = Object.keys(attrs).filter(k=>attrs[k]).map(k=>`<b>${esc(k)}</b>: ${esc(String(attrs[k]))}`).join('<br>');
+    const lines = Object.keys(attrs).filter(kk=>attrs[kk]).map(kk=>`<b>${esc(kk)}</b>: ${esc(String(attrs[kk]))}`).join('<br>');
     const html = `<b>${esc(d.label)}</b> <span style="color:var(--mut);font-size:12px;">[${esc(d.kind||'block')}${d.type?' · '+esc(d.type):''}]</span><br>${lines||'<span style="color:var(--mut);">无附加属性</span>'}`;
     toastHtml(html);
   });
@@ -486,6 +498,7 @@ function svmRenderCytoscape(container, vm) {
     const d = evt.target.data();
     toastHtml(`<b>${esc(d.kind||'relation')}</b>${d.label?'：'+esc(d.label):''}`);
   });
+  cy.on('tap', evt=>{ if(evt.target === cy) applyGraphFocus(cy, null); });   // 点画布空白 ⇒ 统一取消高亮
   _cyInstances[key] = cy;
   if (container.id) window['cy_' + container.id] = cy;  // 调试/自动化引用
   svmElkRelayout(cy, vm);  // ELK 精排（异步、不阻断；不适用类型内部直接返回）
@@ -611,7 +624,7 @@ function gvEdgeMid(x1,y1,x2,y2,off){
 // ── 2026-09-12 颜色/动效增强：类型色转 rgba 淡底 + hover 邻域高亮/目标光晕 ──
 function hexToRgba(hex, alpha){
   const m = /^#?([a-f\d]{3}|[a-f\d]{6})$/i.exec(hex || '');
-  if(!m) return '#E6F1FB';
+  if(!m) return graphTok('primaryL');
   let h = m[1]; if(h.length === 3) h = h.split('').map(x=>x+x).join('');
   const n = parseInt(h, 16), r = (n>>16)&255, g = (n>>8)&255, b = n&255;
   return `rgba(${r},${g},${b},${alpha})`;
@@ -621,11 +634,13 @@ let _gvTipEl = null;
 let _gvHoverStyle = null;
 function gvEnsureHoverStyle(){
   if(_gvHoverStyle) return;
+  const k = graphTok();   // P0-1：hover/选中光晕与画布同源
   _gvHoverStyle = document.createElement('style');
   _gvHoverStyle.textContent =
     '.gv-node{transition:opacity .12s ease;}' +
     '.gv-hov-dim{opacity:.25 !important;}' +
-    '.gv-hov-ring > circle:first-of-type{stroke-width:3.4;stroke:#185FA5;filter:drop-shadow(0 0 4px rgba(24,95,165,.75));}' +
+    '.gv-hov-ring > circle:first-of-type{stroke-width:3.4;stroke:' + k.primary +
+      ';filter:drop-shadow(0 0 4px ' + hexToRgba(k.primary, .75) + ');}' +
     '.gv-hov-ring > circle:nth-of-type(2){opacity:.45;}' +
     '.gv-sel-node > circle:first-of-type{filter:drop-shadow(0 0 8px rgba(250,199,117,.95)) drop-shadow(0 1px 2px rgba(0,0,0,.18));}' +
     // 选中节点关系方向流动（蚂蚁线沿 source→target 流动；入边反向流动以示关系方向）
@@ -726,6 +741,7 @@ function renderGraph() {
   if(!el) return;
   gvEnsureHoverStyle();   // 注入边方向流动等 CSS（幂等）
   const W = graphState.svgW, H = graphState.svgH;
+  const k = graphTok();   // P0-1：本函数所有色值取自单一真源
   // UI 清单③：空态引导（当前分支无图数据 → 下一步动作）
   if(!graphState.all.nodes.length){
     el.innerHTML = `<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;color:var(--mut);font-size:13.5px;gap:8px;text-align:center;padding:30px;">
@@ -775,7 +791,7 @@ function renderGraph() {
         </select>
         <button class="btn sm ghost" ${graphState.sk.on?'style="background:var(--blue-l);color:var(--blue-d);font-weight:600;"':''} onclick="gvToggleSkeleton()" title="骨架模式（万级图谱三级下钻）：L1 类型聚合 → 点击类型下钻 L2 实例束 → 点击实例下钻 L3 邻域">🦴 骨架</button>
         <button class="btn sm ghost" id="gv-link-btn" onclick="gvToggleLinkMode()" title="连线模式：点源节点 → 点目标节点 → 选择关系类型建立边">🔗 连关系</button>
-        <button class="btn sm ghost" id="gv-link-cancel" onclick="gvLinkCancel()" style="display:none;color:#A32D2D;" title="退出连线模式">✕ 取消</button>
+        <button class="btn sm ghost" id="gv-link-cancel" onclick="gvLinkCancel()" style="display:none;color:${graphTok('red')};" title="退出连线模式">✕ 取消</button>
       </span>
       <!-- 2026-09-10：搜索按钮已删（顶部搜索框唯一入口，快捷键 /） -->
       <span class="gv-dd" style="position:relative;">
@@ -790,7 +806,7 @@ function renderGraph() {
       <span style="flex:1;"></span>
       <!-- ⇵ 同步基线 2026-09-14 迁移至顶部分支切换入口右侧（index.html #hdr-sync-baseline，仅个人分支显示） -->
       <span id="gv-link-tip" style="display:none;color:var(--blue-d);font-weight:600;font-size:12px;">🔗 连线模式：点源节点 → 点目标节点 → 右栏选关系类型（Esc 退出）</span>
-      <span style="color:var(--mut);font-size:12px;">滚轮缩放 · 空白拖动平移 · 节点拖拽调整布局</span>
+      ${gvHintBar('kg')}
     </div>
     <!-- 2026-09-04 优化：筛选 + 缩放 + 类型图例 全部迁移至画布内 absolute 浮层，避免误关联左栏实体树 -->
   </div>
@@ -807,7 +823,7 @@ function renderGraph() {
   <div id="gv-legend-fab" style="position:absolute;left:14px;bottom:14px;z-index:6;background:rgba(255,255,255,.94);border:1px solid var(--line);border-radius:8px;padding:5px 8px;font-size:12.5px;color:var(--mut);box-shadow:0 1px 4px rgba(0,0,0,.08);max-width:420px;max-height:160px;overflow-y:auto;">
     <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">${legend||'<span style="color:var(--mut);">暂无类型</span>'}</div>
   </div>
-  <svg id="gv-svg" width="${W}" height="${H}" style="background:#fff;display:block;width:100%;height:calc(100% - 36px);touch-action:none;"
+  <svg id="gv-svg" width="${W}" height="${H}" style="background:${k.canvas};display:block;width:100%;height:calc(100% - 36px);touch-action:none;"
     onmousedown="graphSvgDown(event)" onmousemove="graphSvgMove(event)" onmouseup="graphSvgUp(event)" onwheel="graphSvgWheel(event)">
   <rect x="-200" y="-200" width="${W+400}" height="${H+400}" fill="url(#gv-grid)" pointer-events="none"/>
   <g id="gv-inner" transform="translate(${graphState.vp.panX} ${graphState.vp.panY}) scale(${graphState.vp.scale})">`;
@@ -826,29 +842,32 @@ function renderGraph() {
   }
   const dim = !!(actNode || actEdge);  // 存在选中元素时其余元素淡出
   // edges —— 2026-09-12 展示优化：贝塞尔曲线边（gvEdgePath）＋ 同对多重边曲率偏移防重叠 ＋ 边标签取曲线中垂线
-  const _eb={}, _ed={};
-  graphState.edges.forEach(e=>{ const k=[e.source_id,e.target_id].sort().join('|'); _eb[k]=(_eb[k]||0)+1; });
+  // P0-3（2026-11-28）：把每条边几何（两端 + 曲率偏移）记入 graphState._edgeGeom，
+  //   拖拽时只按此表重算**相邻边**的 d 与标签坐标，不再整图 innerHTML 重建（见 gvPatchNode）。
+  const _eb={}, _ed={}, _geom = graphState._edgeGeom = {};
+  graphState.edges.forEach(e=>{ const kk=[e.source_id,e.target_id].sort().join('|'); _eb[kk]=(_eb[kk]||0)+1; });
   graphState.edges.forEach(e=>{
     const sN = graphState.nodes.find(n=>n.id===e.source_id);
     const tN = graphState.nodes.find(n=>n.id===e.target_id);
     if(!sN||!tN) return;
     const x1=sN.x, y1=sN.y, x2=tN.x, y2=tN.y;
-    const k=[e.source_id,e.target_id].sort().join('|');
-    const total=_eb[k]||1, idx=(_ed[k]=(_ed[k]||0))+1;
+    const kk=[e.source_id,e.target_id].sort().join('|');
+    const total=_eb[kk]||1, idx=(_ed[kk]=(_ed[kk]||0))+1;
     const off = total<=1 ? 0.22 : ((idx - (total+1)/2) * 0.5);
     const d = gvEdgePath(x1,y1,x2,y2,off);
     const md = gvEdgeMid(x1,y1,x2,y2,off);
     const isAct = actNode ? actEdgeIds.has(String(e.id)) : (actEdge ? String(e.id)===actEdge : false);
+    _geom[String(e.id)] = {a:String(e.source_id), b:String(e.target_id), off:off};
     // 选中关联边方向动效：出边(success→target)正向流动、入边(target→选中)反向流动
     // 方向必须准确：流动恒沿边的真实方向 source->target（正向），不随选中端点改变
     const flowCls = isAct ? 'gv-flow-out' : '';
     const eo = isAct ? 1 : (dim ? 0.12 : 1);
     const inf = !!e._inferred;   // 推断边（推理叠加）：橙色虚线 + 橙色箭头，与原始边明确区分
-    const eStroke = isAct ? '#D85A30' : (inf ? '#E8912D' : '#B4B2A9');
+    const eStroke = isAct ? k.edgeActive : (inf ? k.edgeInfer : k.edge);
     const eDash = inf ? ' stroke-dasharray="6 4"' : '';
     const eMarker = inf ? 'url(#gv-arrow-inf)' : 'url(#gv-arrow)';
     s += `<path id="gv-edge-${e.id}" d="${d}" fill="none" stroke="${eStroke}" stroke-width="${isAct?2.2:1.3}"${eDash} opacity="${eo}" marker-end="${eMarker}"${flowCls ? ' class="'+flowCls+'"' : ''} style="cursor:pointer;filter:drop-shadow(0 .5px 1px rgba(0,0,0,.08));" onclick="event.stopPropagation();graphEdgeClick('${e.id}')"/>`;
-    s += `<text x="${md.x}" y="${md.y+3}" font-size="10" fill="${inf?'#E8912D':'#5F5E5A'}" text-anchor="middle" opacity="${eo}" pointer-events="none">${e.relation_type}${inf?' ⇢':''}</text>`;
+    s += `<text id="gv-elabel-${e.id}" x="${md.x}" y="${md.y+3}" font-size="10" fill="${inf?k.edgeInfer:k.edgeLabel}" text-anchor="middle" opacity="${eo}" pointer-events="none">${e.relation_type}${inf?' ⇢':''}</text>`;
   });
   // nodes（节点半径按关系度：连通度越大越显著；选中/邻居高亮）—— 2026-09-12 展示优化：径向高光＋阴影光晕＋类型标签移入圆内＋hover 提示
   const deg = graphDegreeMap(graphState.nodes, graphState.edges);
@@ -859,7 +878,7 @@ function renderGraph() {
     const nb = dim && neighbor.has(n.id);
     const linkHi = (typeof gvLinkMode!=='undefined') && gvLinkMode && gvLinkSrc===n.id;   // 连线模式源点高亮
     const tint = gvTypeTint(c);
-    const fill = n._skel ? '#FFF9EC' : (linkHi ? '#CFE8FF' : (sel ? '#FAC775' : (nb ? '#FFF1B8' : tint)));
+    const fill = n._skel ? k.skelFill : (linkHi ? k.linkFill : (sel ? k.selFill : (nb ? k.nbrFill : tint)));
     const sw = linkHi ? 4 : (sel ? 3 : (nb ? 2.5 : 1.5));
     const no = (dim && !sel && !nb) ? 0.22 : 1;
     const r = n._skel ? 20 + Math.min((n._count||1)*0.9, 13) : 13 + Math.min((deg[n.id]||0)*1.7, 13);   // 2026-09-13 节点加大更醒目
@@ -867,22 +886,63 @@ function renderGraph() {
     s += `<g class="gv-node${sel?' gv-sel-node':''}" data-nid="${esc(n.id)}" transform="translate(${n.x},${n.y})" style="cursor:pointer;opacity:${no};"
       onmousedown="event.stopPropagation();graphNodeDown(event,'${esc(n.id)}')"
       onmouseenter="gvNodeHover('${esc(n.id)}')" onmouseleave="gvNodeHoverEnd()">
-      <circle r="${r}" fill="${fill}" stroke="${nb?'#D85A30':c}" stroke-width="${sw}" ${n._skel?'stroke-dasharray="4 2"':''} style="filter:drop-shadow(0 1px 2px rgba(0,0,0,.16));"/>
+      <circle r="${r}" fill="${fill}" stroke="${nb?k.nbrStroke:c}" stroke-width="${sw}" ${n._skel?'stroke-dasharray="4 2"':''} style="filter:drop-shadow(0 1px 2px rgba(0,0,0,.16));"/>
       ${n._skel
         ? `<text y="4" font-size="10.5" fill="${c}" text-anchor="middle" font-weight="700">×${n._count}</text>`
-        : `<circle r="${hiR}" fill="#ffffff" opacity="0.36" pointer-events="none"/>
-           ${r >= 16 ? `<text y="${Math.min(2, r*0.3)}" font-size="9.5" fill="#ffffff" text-anchor="middle" font-weight="700" pointer-events="none">${esc(n.entity_type)}</text>` : ''}
-           <text y="${r+14}" font-size="11.5" fill="#444441" text-anchor="middle" font-weight="600" pointer-events="none">${esc(n.name.length>10?n.name.slice(0,10)+'…':n.name)}</text>`}
+        : `<circle r="${hiR}" fill="${k.canvas}" opacity="0.36" pointer-events="none"/>
+           ${r >= 16 ? `<text y="${Math.min(2, r*0.3)}" font-size="9.5" fill="${k.canvas}" text-anchor="middle" font-weight="700" pointer-events="none">${esc(n.entity_type)}</text>` : ''}
+           <text y="${r+14}" font-size="11.5" fill="${k.text}" text-anchor="middle" font-weight="600" pointer-events="none">${esc(n.name.length>10?n.name.slice(0,10)+'…':n.name)}</text>`}
     </g>`;
   });
-  s += `<defs><marker id="gv-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 0L10 5L0 10z" fill="#B4B2A9"/></marker>
-  <marker id="gv-arrow-inf" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 0L10 5L0 10z" fill="#E8912D"/></marker>
-  <pattern id="gv-grid" width="26" height="26" patternUnits="userSpaceOnUse"><path d="M 26 0 L 0 0 0 26" fill="none" stroke="#ECEDE7" stroke-width="1"/></pattern></defs>`;
+  s += `<defs><marker id="gv-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 0L10 5L0 10z" fill="${k.edge}"/></marker>
+  <marker id="gv-arrow-inf" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 0L10 5L0 10z" fill="${k.edgeInfer}"/></marker>
+  <pattern id="gv-grid" width="26" height="26" patternUnits="userSpaceOnUse"><path d="M 26 0 L 0 0 0 26" fill="none" stroke="${k.grid}" stroke-width="1"/></pattern></defs>`;
   s += '</g></svg>';
     el.innerHTML = s;
     const _mmEl = document.getElementById('gv-minimap'); if(_mmEl) el.appendChild(_mmEl);   // 2026-09-12 minimap 挂回（renderGraph 内 innerHTML 会清空画布容器）
   gvUpdateStatusPill(); gvRenderFilterBadge();
   if(typeof gvStatusUpdate==='function') gvStatusUpdate();
+}
+/* ══ P0-3（2026-11-28）拖拽增量重绘 ══
+   原实现每次 mousemove 都调 renderGraph()（el.innerHTML 全量重建整图，大图掉帧）。
+   现在拖拽期间只改被拖节点的 <g transform> 与其相邻边的 d / 标签坐标（rAF 合帧），
+   落位后由 mouseup 统一 renderGraph() 一次。依赖 renderGraph 写入的 graphState._edgeGeom。 */
+let _gvPatchRaf = 0, _gvPatchNid = null;
+function gvPatchNodeSoon(nid){
+  _gvPatchNid = nid;
+  if(_gvPatchRaf) return;
+  _gvPatchRaf = requestAnimationFrame(()=>{ _gvPatchRaf = 0; gvPatchNode(_gvPatchNid); });
+}
+function gvPatchNode(nid){
+  const svg = document.getElementById('gv-svg');
+  if(!svg || nid == null) return;
+  const nodes = graphState.nodes || [];
+  const byId = new Map(nodes.map(x=>[String(x.id), x]));
+  const n = byId.get(String(nid));
+  if(!n) return;
+  // 1) 节点本体：只改 transform（不重建 <g>，事件绑定与过渡动画都保住）
+  const gs = svg.querySelectorAll('.gv-node');
+  for(let i=0;i<gs.length;i++){
+    if(gs[i].getAttribute('data-nid') === String(nid)){
+      gs[i].setAttribute('transform', `translate(${n.x},${n.y})`);
+      break;
+    }
+  }
+  // 2) 相邻边：按缓存几何重算贝塞尔路径与标签位置（非相邻边一字不改）
+  const geom = graphState._edgeGeom || {};
+  for(const eid in geom){
+    const gm = geom[eid];
+    if(gm.a !== String(nid) && gm.b !== String(nid)) continue;
+    const sN = byId.get(gm.a), tN = byId.get(gm.b);
+    if(!sN || !tN) continue;
+    const path = document.getElementById('gv-edge-' + eid);
+    if(path) path.setAttribute('d', gvEdgePath(sN.x, sN.y, tN.x, tN.y, gm.off));
+    const lb = document.getElementById('gv-elabel-' + eid);
+    if(lb){
+      const md = gvEdgeMid(sN.x, sN.y, tN.x, tN.y, gm.off);
+      lb.setAttribute('x', md.x); lb.setAttribute('y', md.y + 3);
+    }
+  }
 }
 // ── 左栏实体树（三栏化 2026-09-03）：类型继承树（ontology parent_id）+ 实例挂载 + 折叠/过滤 + 双向联动 ──
 // 树数据 = 本体类型树（复用 ontTypeTree，与 kb-c 同构）+ graphState.all.nodes 按 entity_type 挂载；

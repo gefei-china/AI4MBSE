@@ -60,34 +60,35 @@ function renderImpactGraph(gid, cd){
       const gap = Math.min(88, 500/Math.max(col.length,1));
       col.forEach((n,i)=>{ n.position = {x: (+d)*230 + 60, y: 90 + (i - (col.length-1)/2)*gap}; });
     });
+    const k = graphTok();   // P0-1：影响图与主画布/ SysML 视图同源取色（见 24-graph.js）
     const cy = cytoscape({
       container,
       elements:{nodes, edges},
       style:[
       {selector:'node', style:{'content':'data(name)','text-wrap':'wrap','text-max-width':110,
-        'color':'#1F2D3D','font-size':11,'text-valign':'center','text-halign':'center',
+        'color':k.nodeText,'font-size':11,'text-valign':'center','text-halign':'center',
         'width':110,'height':44,'border-width':2}},
-      {selector:'.imp-src', style:{'background-color':'#A32D2D','border-color':'#7a1f1f',
-        'shape':'diamond','width':92,'height':92,'color':'#fff','font-weight':700,'font-size':12}},
-      {selector:'.imp-direct', style:{'background-color':'#F8B24B','border-color':'#D98E10','shape':'round-rectangle'}},
-      {selector:'.imp-indirect', style:{'background-color':'#C7CFDA','border-color':'#8A94A2','shape':'ellipse','width':104,'height':40}},
-      {selector:'.imp-trace', style:{'background-color':'#EDF1F6','border-color':'#9AA7B5','border-style':'dashed',
-        'shape':'ellipse','width':96,'height':38,'color':'#5a6678','font-size':10}},
-      {selector:'.lv-hi', style:{'border-color':'#A32D2D','border-width':3}},
-      {selector:'.lv-mi', style:{'border-color':'#D98E10','border-width':2.5}},
-      {selector:'node:selected', style:{'border-width':4,'border-color':'#185FA5'}},
-      {selector:'edge', style:{'curve-style':'bezier','width':1.6,'line-color':'#B9C2CE',
-        'target-arrow-shape':'triangle','target-arrow-color':'#B9C2CE',
+      {selector:'.imp-src', style:{'background-color':k.red,'border-color':k.redDeep,
+        'shape':'diamond','width':92,'height':92,'color':k.canvas,'font-weight':700,'font-size':12}},
+      {selector:'.imp-direct', style:{'background-color':k.amberSoft,'border-color':k.amberBd,'shape':'round-rectangle'}},
+      {selector:'.imp-indirect', style:{'background-color':k.slateLight,'border-color':k.slateMid,'shape':'ellipse','width':104,'height':40}},
+      {selector:'.imp-trace', style:{'background-color':k.traceFill,'border-color':k.traceLine,'border-style':'dashed',
+        'shape':'ellipse','width':96,'height':38,'color':k.muted,'font-size':10}},
+      {selector:'.lv-hi', style:{'border-color':k.red,'border-width':3}},
+      {selector:'.lv-mi', style:{'border-color':k.amberBd,'border-width':2.5}},
+      {selector:'node:selected', style:{'border-width':4,'border-color':k.primary}},
+      {selector:'edge', style:{'curve-style':'bezier','width':1.6,'line-color':k.edgeImp,
+        'target-arrow-shape':'triangle','target-arrow-color':k.edgeImp,
         'content':'data(label)','font-size':9,'text-rotation':'autorotate',
-        'text-background-color':'#fff','text-background-opacity':0.75,'color':'#555'}},
+        'text-background-color':k.canvas,'text-background-opacity':0.75,'color':k.edgeText}},
       {selector:'.e-direct', style:{'line-style':'solid'}},
       {selector:'.e-indirect', style:{'line-style':'dashed','width':1.3}},
-      {selector:'.e-hi', style:{'line-color':'#A32D2D','target-arrow-color':'#A32D2D'}},
-      {selector:'.e-mi', style:{'line-color':'#F5A623','target-arrow-color':'#F5A623'}},
-      {selector:'.e-trace', style:{'line-style':'dotted','width':1.2,'line-color':'#9AA7B5',
-        'target-arrow-color':'#9AA7B5','label':'data(label)','font-size':8}},
-      {selector:'.dimmed', style:{'opacity':0.12}},
-      {selector:'.focus-hi', style:{'border-width':4,'border-color':'#185FA5'}}
+      {selector:'.e-hi', style:{'line-color':k.red,'target-arrow-color':k.red}},
+      {selector:'.e-mi', style:{'line-color':k.amberEdge,'target-arrow-color':k.amberEdge}},
+      {selector:'.e-trace', style:{'line-style':'dotted','width':1.2,'line-color':k.traceLine,
+        'target-arrow-color':k.traceLine,'label':'data(label)','font-size':8}},
+      {selector:'.dimmed', style:{'opacity':k.dimOpacity}},
+      {selector:'.focus-hi', style:{'border-width':4,'border-color':k.primary}}
     ],
     layout:{name:'preset', animate:false},
     wheelSensitivity:0.25, minZoom:0.15, maxZoom:3,
@@ -112,8 +113,10 @@ function renderImpactGraph(gid, cd){
     const d = evt.target.data();
     const imp = d.impact==='source'?'变更源':(d.impact==='direct'?'直接影响':(d.impact==='trace_hint'?'追溯性关联（仅提示，不计入影响）':'间接影响'));
     const lv = d.level==='high'?'高':(d.level==='mid'?'中':'低');
+    applyGraphFocus(cy, evt.target.id());   // P0-2：点节点 = 1-hop 邻域高亮（与主画布/ SysML 同一语义）
     toast(`[${imp}] ${d.name}（${d.type}）· 深度 ${d.depth} · ${lv}影响 ${d.score}`);
   });
+  cy.on('tap', evt=>{ if(evt.target === cy) applyGraphFocus(cy, null); });   // 点空白 ⇒ 取消高亮
   // v6.4：fit 在第二次 idle 兜底（cytoscape init 已在 idle 内完成；fit 再延一帧避免 layout 期间干扰）
   window.__cyIdleRun(()=>{ try{ cy.fit(undefined, 30); }catch(e){} });
   return cy;
@@ -122,12 +125,12 @@ function renderImpactGraph(gid, cd){
 function impactLegendHtml(){
   return `<div style="display:flex;flex-wrap:wrap;gap:12px;align-items:center;">
     <span class="rc-chip b">🗺 影响拓扑图谱</span>
-    <span><i style="display:inline-block;width:10px;height:10px;background:#A32D2D;transform:rotate(45deg);margin-right:4px;"></i>变更源</span>
-    <span><i style="display:inline-block;width:10px;height:10px;background:#F8B24B;border-radius:3px;margin-right:4px;"></i>直接影响</span>
-    <span><i style="display:inline-block;width:10px;height:10px;background:#C7CFDA;border-radius:50%;margin-right:4px;"></i>间接影响</span>
+    <span><i style="display:inline-block;width:10px;height:10px;background:${graphTok('red')};transform:rotate(45deg);margin-right:4px;"></i>变更源</span>
+    <span><i style="display:inline-block;width:10px;height:10px;background:${graphTok('amberSoft')};border-radius:3px;margin-right:4px;"></i>直接影响</span>
+    <span><i style="display:inline-block;width:10px;height:10px;background:${graphTok('slateLight')};border-radius:50%;margin-right:4px;"></i>间接影响</span>
     <span>— 实线=直接 / 虚线=间接，红=高影响 橙=中 灰=低</span>
-    <span><i style="display:inline-block;width:10px;height:10px;background:#EDF1F6;border:1px dashed #9AA7B5;border-radius:50%;margin-right:4px;"></i>追溯提示（不计入影响）</span>
-    <span style="color:var(--mut);font-size:12.5px;">可缩放 / 拖拽 / 点节点查看详情</span></div>`;
+    <span><i style="display:inline-block;width:10px;height:10px;background:${graphTok('traceFill')};border:1px dashed ${graphTok('traceLine')};border-radius:50%;margin-right:4px;"></i>追溯提示（不计入影响）</span>
+    ${gvHintBar('impact')}</div>`;
 }
 /* ═══ 2026-09-15 报告 2.0 P2：交互仪表板（三视图 tab + 清单联动高亮）═══ */
 function impactDashTab(gid, key){
@@ -149,12 +152,10 @@ function impactFocusNode(gid, nodeId, name){
   impactDashTab(gid, 'graph');
   const cy = _cyInstances[gid]; if(!cy) return;
   try{
-    cy.elements().removeClass('dimmed focus-hi');
     const el = cy.getElementById(String(nodeId));
     if(el.length){
+      applyGraphFocus(cy, String(nodeId));   // P0-2：定位 = 统一焦点（先清后加，语义与三画布一致）
       const nb = el.closedNeighborhood();
-      cy.elements().not(nb).addClass('dimmed');
-      el.addClass('focus-hi');
       cy.animate({fit:{eles: nb, padding: 70}}, {duration: 280});
       toast(`🎯 已定位「${name||el.data('name')}」及其上下游链路（点画布空白处取消高亮）`);
     }
@@ -271,8 +272,7 @@ function impactViewerEvents(gid){
   const cy = _cyInstances[gid]; if(!cy) return;
   cy.on('tap','node', evt=>{
     const node = evt.target, d = node.data();
-    node.closedNeighborhood().addClass('focus-hi');
-    cy.elements().not(node.closedNeighborhood()).addClass('dimmed');
+    applyGraphFocus(cy, node.id());   // P0-2：全屏影响图也走统一焦点（不再手写 addClass，避免同语义两处实现）
     const imp = d.impact==='source'?'变更源':(d.impact==='direct'?'直接影响':'间接影响');
     const lv = d.level==='high'?'高':(d.level==='mid'?'中':'低');
     const info = document.getElementById('impact-viewer-info');
@@ -280,7 +280,7 @@ function impactViewerEvents(gid){
   });
   cy.on('tap', evt=>{
     if(evt.target === cy){
-      cy.elements().removeClass('dimmed focus-hi');
+      applyGraphFocus(cy, null);      // 点空白 ⇒ 统一取消高亮
       const info = document.getElementById('impact-viewer-info');
       if(info) info.textContent = '点击节点查看详情并高亮其上下游影响链路';
     }

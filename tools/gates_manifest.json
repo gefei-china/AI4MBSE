@@ -3226,6 +3226,12 @@
    "tier": "pr",
    "timeout": 60,
    "reason": "统计固化门禁（2026-11-27）：token 入/出口径（prompt+completion）、stream/execute 两条主落库路径全覆盖、execute 落库前 attach usage。源码覆盖范围断言+变异自证，实测 13/13。"
+  },
+  {
+   "script": "verify_graph_p0_render.py",
+   "tier": "pr",
+   "timeout": 180,
+   "reason": "图谱前端 P0 优化门禁（2026-11-28，方案 docs/图谱前端样式与交互优化方案-20261127.md）：A 单一真源（真读 CSS 变量、类型色由 token 派生、换品牌色跟着变、未知类型仍稳定色带）；B 拖拽增量（真跑 gvPatchNode：只动被拖节点与相邻边、非相邻边一字不改，且 graphSvgMove 不得再调 renderGraph）；C 统一焦点（真跑 applyGraphFocus：压暗非邻域、点亮焦点、点空白只清不加）；D 统一提示（三 mode 齐备、明确「点空白取消」、不预告未落地能力）；S 结构（四文件内 graphTok/applyGraphFocus 各只有一处实现；两处 Cytoscape 都声明 .dimmed/.focus-hi；三处提示已接线）；M 变异自证 4 条（色彩不再来自 token / 拖拽退回整图重建 / 焦点不压暗 / 影响图丢 dimmed），锚点唯一且变异体真的变了。判据 exec 真函数（Node + DOM stub，不复刻渲染逻辑），零写库、不调 LLM，实测 34/34。"
   }
  ]
 }

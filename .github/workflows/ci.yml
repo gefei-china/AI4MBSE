@@ -1661,6 +1661,12 @@ jobs:
         if: ${{ !cancelled() }}
         run: python tools/verify/verify_clarify_resume_route.py
 
+      # 图谱 P0（2026-11-28）：判据 exec 24-graph.js / 25-graphview.js 的真函数（Node + DOM stub），
+      # 不复刻渲染逻辑；需要 node（CI ubuntu runner 自带，与 verify_doc_trace_ui 同款依赖）。
+      - name: Guard 图谱前端 P0 —— 单一真源 / 拖拽增量 / 统一焦点（34 条 + 4 变异）
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_graph_p0_render.py
+
       - name: Guard ask_user 多题与去重 —— 答案不丢、不重复问（会话 1000000254，17 条 + 1 变异）
         if: ${{ !cancelled() }}
         run: python tools/verify/verify_ask_user_multi_question.py

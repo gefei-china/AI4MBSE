@@ -633,7 +633,10 @@ function gvMiniSync(){
     const wx0=(-pw)/s, wy0=(-ph)/s, ww=svw/s, wh=svh/s;
     const dX=(bb.x2-bb.x1)||1, dY=(bb.y2-bb.y1)||1;
     const l=((wx0-bb.x1)/dX)*vw, t=((wy0-bb.y1)/dY)*vh, w=(ww/dX)*vw, h=(wh/dY)*vh;
-    if(!_gvMiniBox){ _gvMiniBox=document.createElement('div'); _gvMiniBox.id='gv-minimap-box'; _gvMiniBox.style.cssText='position:absolute;border:1.5px solid #185FA5;border-radius:2px;background:rgba(24,95,165,.12);box-sizing:border-box;pointer-events:none;'; _gvMiniEl.appendChild(_gvMiniBox); }
+    if(!_gvMiniBox){ _gvMiniBox=document.createElement('div'); _gvMiniBox.id='gv-minimap-box';
+      const _k=graphTok();   // P0-1：视口框与主画布主色同源
+      _gvMiniBox.style.cssText='position:absolute;border:1.5px solid '+_k.primary+';border-radius:2px;background:'+hexToRgba(_k.primary,.12)+';box-sizing:border-box;pointer-events:none;';
+      _gvMiniEl.appendChild(_gvMiniBox); }
     _gvMiniBox.style.left=Math.max(0,l)+'px'; _gvMiniBox.style.top=Math.max(0,t)+'px';
     _gvMiniBox.style.width=Math.min(vw,Math.max(6,w))+'px'; _gvMiniBox.style.height=Math.min(vh,Math.max(6,h))+'px';
   }catch(e){ console.error('[gvMiniSync]', e); }
@@ -672,9 +675,10 @@ function gvEnsureMinimap(nodes, edges){
       host.appendChild(_gvMiniEl);   // renderGraph 清空容器后重新挂回
     }
     if(!_gvMini && window.cytoscape){
+      const k = graphTok();   // P0-1：minimap 与主画布同源取色
       _gvMini = cytoscape({container:_gvMiniEl, style:[
-        {selector:'node', style:{'width':8,'height':8,'background-color':'#9DB8D8','border-width':0,'overlay-opacity':0}},
-        {selector:'edge', style:{'width':1,'line-color':'#C9CCC4','curve-style':'bezier','target-arrow-shape':'triangle','target-arrow-color':'#C9CCC4','target-arrow-marker-size':4,'overlay-opacity':0}}
+        {selector:'node', style:{'width':8,'height':8,'background-color':k.miniNode,'border-width':0,'overlay-opacity':0}},
+        {selector:'edge', style:{'width':1,'line-color':k.miniEdge,'curve-style':'bezier','target-arrow-shape':'triangle','target-arrow-color':k.miniEdge,'target-arrow-marker-size':4,'overlay-opacity':0}}
       ], layout:{name:'preset', animate:false}, minZoom:0.05, maxZoom:4});
     }
     if(_gvMini){
@@ -826,7 +830,9 @@ function graphSvgMove(ev) {
       const p = gvToUser(ev);
       if(p) { n.x = p.x - graphState.drag.ox; n.y = p.y - graphState.drag.oy; }
     }
-    renderGraph();
+    // P0-3：拖拽期间只做增量 patch（节点 transform + 相邻边路径），rAF 合帧；
+    //       不再 renderGraph() 全量重建 innerHTML —— 大图掉帧的根因就在这里。
+    gvPatchNodeSoon(graphState.drag.id);
   } else if(graphState.pan) {
     graphState.vp.panX = graphState.pan.px + (ev.clientX - graphState.pan.sx);
     graphState.vp.panY = graphState.pan.py + (ev.clientY - graphState.pan.sy);
@@ -838,6 +844,7 @@ async function graphSvgUp(ev) {
     const n = graphState.nodes.find(x=>x.id===graphState.drag.id);
     if(n) saveNodePos(n);
     graphState.drag = null;
+    renderGraph();   // P0-3：落位后统一刷新一次（选中态/光晕/边层级），拖拽期间零重建
   }
   if(graphState.pan) {
     graphState.pan = null;

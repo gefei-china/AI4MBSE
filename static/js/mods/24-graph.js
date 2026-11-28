@@ -2,14 +2,105 @@
  * static/index.html 巨型 inline script 机械切分而来
  * 原行13272-13690  ·  全局作用域（module），内联 onclick 依赖全局函数
  */
-const GRAPH_COLORS = {'需求':'#185FA5','利益相关方需求':'#185FA5','系统需求':'#185FA5','子系统需求':'#185FA5','单元需求':'#185FA5',
-'部件':'#0F6E56','载荷':'#0F6E56','通信载荷':'#0F6E56','转发器':'#0F6E56','天线':'#0F6E56','相控阵天线':'#0F6E56','功率放大器':'#0F6E56','变频器':'#0F6E56','滤波器':'#0F6E56','TWTA':'#0F6E56',
-'卫星系统':'#2E7D32','卫星平台':'#2E7D32','电源分系统':'#2E7D32','姿轨控分系统':'#2E7D32','测控分系统':'#2E7D32','热控分系统':'#2E7D32',
-'地面段':'#00796B','信关站':'#00796B','测控站':'#00796B','地面站':'#00796B','用户段':'#00838F','用户终端':'#00838F',
-'通信链路':'#7F77DD','上行链路':'#7F77DD','下行链路':'#7F77DD','连接':'#7F77DD','接口':'#7F77DD',
-'功能':'#BA7517','用例':'#BA7517','利益相关方':'#BA7517','验证活动':'#993C1D','约束':'#993C1D',
-'系统元素':'#5E7A99'};
-// 与既有色系和谐的低饱12 色，取代未覆盖一律落
+/* ══ P0-1（2026-11-28）图谱样式单一真源 ══
+   Cytoscape 的 style 数组不接受 var()，所以首次取色时把 CSS 变量实值读一次、
+   缓存进 _gvTokens；主画布 SVG / SysML Cytoscape / 影响图 Cytoscape / minimap 全从这里取色。
+   —— 换品牌色只改 tokens.css 一处；未覆盖类型仍走稳定色带 GRAPH_PALETTE。
+
+   ⚠ 只读 --graph-*（图谱专用色板），**不得读 --color-***
+   图谱画布是固定白纸面，不随 UI 主题明暗切换；--color-primary 在
+   [data-theme="dark"] 里被覆盖成 #5b9ce6，读它会让白底画布出现色差。
+   测试位：verify_graph_p0_render.py E 组（图谱色不随 data-theme 变化）。 */
+let _gvTokens = null;
+function graphTok(name){
+  if(!_gvTokens){
+    const pick = (v, fb) => {
+      try{
+        const got = getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+        return got || fb;
+      }catch(e){ return fb; }
+    };
+    _gvTokens = {
+      // 品牌 / 语义（tokens.css 的 --graph-* 专用色板；fallback 与 :root 同值）
+      primary:   pick('--graph-primary',   '#185FA5'),
+      primaryD:  pick('--graph-primary-d', '#0C447C'),
+      primaryL:  pick('--graph-primary-l', '#E6F1FB'),
+      green:     pick('--graph-green',     '#3B6D11'),
+      greenL:    pick('--graph-green-l',   '#EAF3DE'),
+      amber:     pick('--graph-amber',     '#BA7517'),
+      amberL:    pick('--graph-amber-l',   '#FAEEDA'),
+      red:       pick('--graph-red',       '#A32D2D'),
+      redL:      pick('--graph-red-l',     '#FCEBEB'),
+      ink:       pick('--graph-ink',       '#1a2332'),
+      muted:     pick('--graph-muted',     '#5a6678'),
+      line:      pick('--graph-line',      '#d5dce6'),
+      // 图谱专用（tokens.css 无同名变量，集中在此；其它文件禁止再写死）
+      canvas:    '#ffffff',
+      grid:      '#ECEDE7',
+      edge:      '#B4B2A9',
+      edgeActive:'#D85A30',
+      edgeInfer: '#E8912D',
+      edgeLabel: '#5F5E5A',
+      text:      '#444441',
+      nodeSub:   '#888888',
+      teal:      '#0F6E56',
+      greenDeep: '#2E7D32',
+      ground:    '#00796B',
+      userSeg:   '#00838F',
+      link:      '#7F77DD',
+      rust:      '#993C1D',
+      slate:     '#5E7A99',
+      purple:    '#6B4FA1',
+      purpleL:   '#F1E8F9',
+      neutral:   '#5F5E5A',
+      neutralL:  '#F2F4F8',
+      selFill:   '#FAC775',
+      nbrStroke: '#D85A30',
+      nbrFill:   '#FFF1B8',
+      skelFill:  '#FFF9EC',
+      linkFill:  '#CFE8FF',
+      miniNode:  '#9DB8D8',
+      miniEdge:  '#C9CCC4',
+      // 视图专用深浅（同一语义的多档色阶，集中在此避免各文件各写一份）
+      reqFill:   '#FFF7E0',   // SysML 需求框底
+      stateFill: '#FDF0F0',   // 状态/迁移底
+      parentFill:'#F5F8FC',   // SysML 复合节点（父包）底
+      nodeText:  '#1F2D3D',   // Cytoscape 节点文字
+      edgeText:  '#555555',   // Cytoscape 边标签
+      redDeep:   '#7A1F1F',   // 影响图变更源描边
+      amberSoft: '#F8B24B',   // 影响图直接影响
+      amberBd:   '#D98E10',
+      slateLight:'#C7CFDA',   // 影响图间接影响
+      slateMid:  '#8A94A2',
+      traceFill: '#EDF1F6',   // 影响图追溯提示
+      traceLine: '#9AA7B5',
+      edgeImp:   '#B9C2CE',   // 影响图常规边
+      amberEdge: '#F5A623',   // 影响图中风险边
+      // 焦点压暗强度：三套画布**同一权重**（原 SysML 0.18 / 影响图 0.12 各写一份 ⇒ 语义漂移）
+      dimOpacity: 0.18
+    };
+  }
+  return name ? _gvTokens[name] : _gvTokens;
+}
+// 实体类型 → 语义色：全部由 token 派生（同一语义只有一处定义）
+let _gvColorTable = null;
+function graphColorTable(){
+  if(_gvColorTable) return _gvColorTable;
+  const k = graphTok();
+  _gvColorTable = {
+    '需求':k.primary,'利益相关方需求':k.primary,'系统需求':k.primary,'子系统需求':k.primary,'单元需求':k.primary,
+    '部件':k.teal,'载荷':k.teal,'通信载荷':k.teal,'转发器':k.teal,'天线':k.teal,'相控阵天线':k.teal,'功率放大器':k.teal,'变频器':k.teal,'滤波器':k.teal,'TWTA':k.teal,
+    '卫星系统':k.greenDeep,'卫星平台':k.greenDeep,'电源分系统':k.greenDeep,'姿轨控分系统':k.greenDeep,'测控分系统':k.greenDeep,'热控分系统':k.greenDeep,
+    '地面段':k.ground,'信关站':k.ground,'测控站':k.ground,'地面站':k.ground,
+    '用户段':k.userSeg,'用户终端':k.userSeg,
+    '通信链路':k.link,'上行链路':k.link,'下行链路':k.link,'连接':k.link,'接口':k.link,
+    '功能':k.amber,'用例':k.amber,'利益相关方':k.amber,
+    '验证活动':k.rust,'约束':k.rust,
+    '系统元素':k.slate
+  };
+  return _gvColorTable;
+}
+// 12 色稳定色带：未覆盖类型的确定性散列色（非品牌色，不随 token 变）
 const GRAPH_PALETTE = ['#3F7CB8','#4E9A7A','#B0813C','#9C6BD6','#C36A9E','#5B8FB5',
 '#8FA653','#C2764F','#6E6FC4','#4FA3A5','#A5679B','#7A8E6B'];
 function graphHashColor(type){
@@ -20,16 +111,64 @@ function graphHashColor(type){
 }
 function graphColor(type){
   const t = type || '';
+  const T = graphColorTable();
   // 1) 精确匹配（本体类型名动态注册优先）
-  if(GRAPH_COLORS[t]) return GRAPH_COLORS[t];
-  // 2) 最长子串匹配（消除includes 顺序歧义系统需不再需抢先
+  if(T[t]) return T[t];
+  // 2) 最长子串匹配（消除 includes 顺序歧义，系统需求/系统元素不再互相抢先）
   let best = null;
-  for(const k in GRAPH_COLORS){
+  for(const k in T){
     if(t.indexOf(k) >= 0 && (best===null || k.length > best.length)) best = k;
   }
-  if(best) return GRAPH_COLORS[best];
-  // 3) 未知类型 稳定动态色（不再落灰）
+  if(best) return T[best];
+  // 3) 未知类型 → 稳定动态色（不再一律落灰）
   return graphHashColor(t);
+}
+/* ══ P0-2（2026-11-28）三套画布统一邻域高亮 ══
+   同一语义：选中/聚焦节点 ⇒ 1-hop 闭邻域保持清晰、其余压暗、焦点节点加光晕；
+   点空白 ⇒ 全部恢复。Cytoscape 用 .dimmed / .focus-hi（三处样式表各自声明，色值同源）；
+   手写 SVG 主画布复用既有 gvNodeHover / gvNodeHoverEnd（hover 与选中同一套视觉）。
+   target：Cytoscape 实例，或 'svg'（主知识图谱画布）；id 为 null/'' 表示取消聚焦。
+
+   ⚠ 能力判定只用 **Cytoscape core 真实存在**的方法
+   2026-11-28 真机实测缺陷：原判定写作 `typeof target.closedNeighborhood === 'function'`，
+   但 closedNeighborhood 是 **collection/元素** 的方法，core 上没有 ⇒ isCy 恒 false ⇒
+   三个 Cytoscape 画布的焦点高亮全部静默失效（真机 dimmedCount 恒为 0）。
+   现在按 core 的组合特征判定（elements + nodes + getElementById 三者同时存在）。
+   测试位：verify_graph_p0_render.py C 组（桩必须与真实 API 一致，且不得自带 closedNeighborhood）。 */
+function applyGraphFocus(target, id){
+  if(!target) return;
+  // Cytoscape core 的真实特征：elements()/nodes()/getElementById() 都是 core 方法
+  const isCy = typeof target === 'object'
+    && typeof target.elements === 'function'
+    && typeof target.nodes === 'function'
+    && typeof target.getElementById === 'function';
+  if(isCy){
+    try{
+      target.elements().removeClass('dimmed focus-hi');
+      if(id == null || id === '') return;
+      const el = target.getElementById(String(id));
+      if(!el || !el.length) return;
+      target.elements().not(el.closedNeighborhood()).addClass('dimmed');
+      el.addClass('focus-hi');
+    }catch(e){}
+    return;
+  }
+  try{
+    if(id == null || id === ''){ if(typeof gvNodeHoverEnd === 'function') gvNodeHoverEnd(); return; }
+    if(typeof gvNodeHover === 'function') gvNodeHover(id);
+  }catch(e){}
+}
+/* ══ P0-4（2026-11-28）三画布统一交互提示 ══
+   文案只描述**已实现**能力（P1 的框选/双击展开未落地，不得预告）。
+   mode：'kg' 主知识图谱 | 'sysml' SysML 视图 | 'impact' 影响拓扑图 */
+function gvHintBar(mode){
+  const T = {
+    kg:     '滚轮缩放 · 空白拖动平移 · 节点拖拽调整布局 · 点节点高亮上下游（点空白取消）',
+    sysml:  '滚轮缩放 · 空白拖动平移 · 节点可拖动 · 点节点高亮 1-hop 邻域（点空白取消）',
+    impact: '滚轮缩放 · 画布拖拽平移 · 节点可拖动 · 点节点高亮上下游（点空白取消）'
+  };
+  const m = T[mode] ? mode : 'kg';   // 未知 mode 归一为 kg（data-mode 恒可枚举，便于样式/门禁）
+  return `<span class="gv-hint" data-mode="${m}" style="color:${graphTok('muted')};font-size:12px;line-height:1.6;">💡 ${T[m]}</span>`;
 }
 // ── 图谱视图筛选（对齐行业图数据平台：状孤立/类型过滤 + 布局算法 + 类型图例）──
 function graphDegreeMap(nodes, edges){
