@@ -659,6 +659,10 @@ function gvEnsureHoverStyle(){
     '.gv-ms-node > circle:first-of-type{fill:' + k.primaryL + ';stroke:' + k.primary + ';stroke-width:3.2;}' +
     // P1-4 路径节点：深主色描边 + 光晕，与「普通邻居」区分开
     '.gv-path-node > circle:first-of-type{stroke:' + k.primaryD + ';stroke-width:3.4;filter:drop-shadow(0 0 6px ' + hexToRgba(k.primary, .8) + ');}' +
+    // P2-4 键盘焦点环：SVG <g tabindex> 的默认 outline 各浏览器不一致（有的完全不画），
+    //      统一成「描边加粗 + 主色光晕」，保证 Tab/方向键移动时看得见落点。
+    '.gv-node:focus{outline:none;}' +
+    '.gv-node:focus > circle:first-of-type{stroke-width:3.6;filter:drop-shadow(0 0 5px ' + hexToRgba(k.primary, .65) + ');}' +
     // P1-5 标签密度：按缩放级别切 class。大图里字号随 transform 一起缩，硬缩小字号只会更糊，
     //        直接隐标签（信息暂时隐藏，图例提示条已声明）比堆叠遮挡更可读。
     '#gv-svg.gv-far .gv-elabel{opacity:0;}' +
@@ -756,6 +760,54 @@ function gvImpactFocus(){
   }
   toast(`🕸 已高亮影响子图（${p.ids.length} 节点）· 变更源：${p.name||'—'}；重新加载图谱即恢复`);
 }
+/* ══ P2-2 视角下拉（渲染与交互；数据层在 24-graph.js 的 gvSnapshotView / gvApplySnapshot） ══
+   与后端「已存子图」（gvLoadViews）区分：视角 = 本机的看法（筛选/布局/缩放/骨架），不改数据。 */
+function gvViewMenuHtml(){
+  const br = getCurrentBranch();
+  const items = gvListSavedViews(br);
+  const rows = items.length ? items.map((it, i)=>{
+    const d = new Date(it.ts);
+    const when = isNaN(d.getTime()) ? '' : ((d.getMonth()+1) + '/' + d.getDate() + ' ' + String(d.getHours()).padStart(2,'0') + ':' + String(d.getMinutes()).padStart(2,'0'));
+    const bits = [];
+    if(it.view && it.view.colorBy === 'community') bits.push('社区色');
+    if(it.view && it.view.layout) bits.push(({layered:'分层',force:'力导向',ring:'环形'})[it.view.layout] || it.view.layout);
+    if(it.sk && it.sk.on) bits.push('骨架');
+    return `<div style="display:flex;align-items:center;gap:6px;padding:5px 8px;border-radius:6px;">
+      <span style="flex:1;min-width:0;cursor:pointer;font-size:12.5px;color:var(--blue-d);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" onclick="gvApplySavedView(${i})" title="恢复该视角（${esc(bits.join(' · ') || '默认')}）">${esc(it.name)}</span>
+      <span style="font-size:11px;color:var(--mut);flex:none;">${esc(bits.join('·'))}</span>
+      <span style="font-size:11px;color:var(--mut);flex:none;">${esc(when)}</span>
+      <span style="cursor:pointer;color:${graphTok('red')};font-weight:700;flex:none;" onclick="gvRemoveSavedView(${i})" title="删除该视角">✕</span>
+    </div>`;
+  }).join('') : `<div style="padding:6px 8px;font-size:12px;color:var(--mut);">当前分支还没有保存的视角</div>`;
+  return `<div style="padding:4px 8px;font-size:12px;color:var(--mut);border-bottom:1px solid var(--line);margin-bottom:4px;">仅本机 · 按分支「${esc(br)}」独立保存（上限 ${GV_VIEW_LIMIT} 个）</div>
+    <div style="display:flex;gap:4px;padding:0 8px 6px;">
+      <input id="gv-view-name" placeholder="视角名称（留空自动命名）" maxlength="24" style="flex:1;min-width:0;border:1px solid var(--line);border-radius:6px;padding:3px 7px;font-size:12.5px;">
+      <button class="btn sm" onclick="gvSaveViewFromInput()" title="保存当前筛选 + 布局 + 缩放 + 骨架状态为新视角">💾 保存</button>
+    </div>${rows}`;
+}
+function gvRefreshViewMenu(){
+  const dd = document.getElementById('gv-view-dd');
+  if(dd) dd.innerHTML = gvViewMenuHtml();
+}
+function gvSaveViewFromInput(){
+  const el = document.getElementById('gv-view-name');
+  const snap = gvSaveCurrentView(el ? el.value : '');
+  if(snap && el) el.value = '';
+  gvRefreshViewMenu();
+}
+function gvApplySavedView(i){
+  const it = gvListSavedViews()[i];
+  if(!it){ toast('视角不存在（可能已被删除）'); return; }
+  gvApplySnapshot(it);
+  gvCloseMenu('gv-view-dd');
+}
+function gvRemoveSavedView(i){
+  const it = gvListSavedViews()[i];
+  if(!it) return;
+  const n = gvDeleteSavedView(it.name);
+  toast(n ? ('已删除视角「' + it.name + '」') : '删除失败：视角不存在');
+  gvRefreshViewMenu();
+}
 function renderGraph() {
   const el = document.getElementById('gv-graph-area');
   if(!el) return;
@@ -775,14 +827,27 @@ function renderGraph() {
     return;
   }
   const v = graphState.view;
-  // 类型图例（当前视图）—— 2026-09-04 优化：每项可点击切换类型可见性 + 不可见类型透明度 0.4
-  const legend = graphTypeStats().slice(0,9).map(([t,c])=>{
-    const v = graphState.view;
-    const on = !v.types.length || v.types.includes(t);
-    return `<span style="display:inline-flex;align-items:center;gap:3px;cursor:pointer;opacity:${on?1:.4};user-select:none;padding:1px 3px;border-radius:4px;" onclick="graphToggleType('${esc(t)}')" title="点击切换「${esc(t)}」类型的可见性">
-      <span style="width:9px;height:9px;border-radius:50%;background:${graphColor(t)};display:inline-block;border:1px solid rgba(0,0,0,.1);"></span>${esc(t)} ${c}
-    </span>`;
-  }).join('');
+  /* P2-1：社区模式下的图例必须换成「社区 + 规模」，否则用户会拿类型色去对社区色。
+     社区项**不可点击**（点它切换类型可见性会误伤：社区与类型是两个正交维度），
+     改为末端给一个「按类型」回切入口。 */
+  const colorByCommunity = (v.colorBy === 'community');
+  const commStats = colorByCommunity ? graphCommunityStats() : [];
+  const legend = colorByCommunity
+    ? (commStats.length
+        ? commStats.slice(0,8).map(g=>`<span style="display:inline-flex;align-items:center;gap:3px;padding:1px 3px;" title="社区 ${esc(g.label)}（${g.count} 个节点）">
+            <span style="width:9px;height:9px;border-radius:50%;background:${g.color};display:inline-block;border:1px solid rgba(0,0,0,.1);"></span>社区 ${g.count}
+          </span>`).join('')
+          + (commStats.length > 8 ? `<span style="color:var(--mut);">+${commStats.length-8} 个社区</span>` : '')
+          + `<span style="cursor:pointer;color:var(--blue-d);text-decoration:underline;" onclick="graphSetColorBy(false)" title="切回按实体类型着色">按类型</span>`
+        : `<span style="color:var(--mut);">当前视图没有可聚类的连接（全是孤立节点）</span>
+           <span style="cursor:pointer;color:var(--blue-d);text-decoration:underline;" onclick="graphSetColorBy(false)">按类型</span>`)
+    : graphTypeStats().slice(0,9).map(([t,c])=>{
+        const v = graphState.view;
+        const on = !v.types.length || v.types.includes(t);
+        return `<span style="display:inline-flex;align-items:center;gap:3px;cursor:pointer;opacity:${on?1:.4};user-select:none;padding:1px 3px;border-radius:4px;" onclick="graphToggleType('${esc(t)}')" title="点击切换「${esc(t)}」类型的可见性">
+          <span style="width:9px;height:9px;border-radius:50%;background:${graphColor(t)};display:inline-block;border:1px solid rgba(0,0,0,.1);"></span>${esc(t)} ${c}
+        </span>`;
+      }).join('') + `<span style="cursor:pointer;color:var(--blue-d);text-decoration:underline;margin-left:2px;" onclick="graphSetColorBy(true)" title="按社区/模块着色（纯前端模块度聚类，与类型色互斥）">按社区</span>`;
   // P1-3 布局参数的当前值（滑杆初值与标签用；未设过则用默认）
   const lo = graphState.view.layoutOpts || {sep:80, rep:26000, iters:500};
   // P1-2 折叠状态 chip：折叠后画布节点数骤减，必须给出「为什么少」和「怎么恢复」
@@ -812,6 +877,9 @@ function renderGraph() {
           <div style="font-weight:700;font-size:13.5px;color:var(--blue-d);margin-bottom:6px;">筛选 · 仅作用于画布</div>
           <div style="font-size:12.5px;margin-bottom:4px;color:var(--mut);">说明：左栏实体树不受此筛选影响，便于跨视图查找</div>
           <label style="display:flex;align-items:center;gap:5px;cursor:pointer;font-size:12.5px;margin-bottom:10px;"><input type="checkbox" ${v.hideIsolated?'checked':''} onchange="graphToggleIsolated(this)" style="vertical-align:middle;"> 隐藏孤立节点</label>
+          <!-- P2-1 社区/模块聚类着色（与类型色互斥；默认关，仍是类型色） -->
+          <label style="display:flex;align-items:center;gap:5px;cursor:pointer;font-size:12.5px;margin-bottom:4px;"><input type="checkbox" ${v.colorBy==='community'?'checked':''} onchange="graphSetColorBy(this.checked)" style="vertical-align:middle;"> 按社区着色<span id="gv-comm-n" style="color:var(--mut);font-size:11.5px;"></span></label>
+          <div style="font-size:11.5px;color:var(--mut);margin-bottom:10px;line-height:1.5;">纯前端模块度聚类（同一份数据结果确定）；孤立节点不分社区，保持类型色。与类型色互斥。</div>
           <!-- P1-3 布局参数（受硬上限夹紧：间距 40–200 / 斥力 10000–60000 / 迭代 100–800） -->
           <div style="border-top:1px solid var(--line);margin:2px 0 8px;"></div>
           <div style="font-weight:700;font-size:13px;color:var(--blue-d);margin-bottom:2px;">布局参数</div>
@@ -848,10 +916,21 @@ function renderGraph() {
       <span class="gv-dd" style="position:relative;">
         <button class="btn sm ghost" onclick="gvToggleMenu('gv-export-dd',event)">导出 ▾</button>
         <div id="gv-export-dd" class="gv-dd-panel" style="display:none;position:absolute;top:100%;left:0;z-index:30;min-width:250px;background:#fff;border:1px solid var(--line);border-radius:8px;box-shadow:0 4px 16px rgba(0,0,0,.12);padding:6px;">
-          <div style="padding:4px 8px;font-size:12px;color:var(--mut);border-bottom:1px solid var(--line);margin-bottom:4px;">范围：当前分支<b>全量</b>实体与关系（含未在画布显示的节点），非当前筛选视图</div>
+          <!-- P2-3：把「全量数据」与「当前视野」两类导出分开标注，避免用户以为 PNG 是全图 -->
+          <div style="padding:4px 8px;font-size:12px;color:var(--mut);border-bottom:1px solid var(--line);margin-bottom:4px;">全量数据（含未在画布显示的节点，非当前筛选视图）</div>
           <div class="gv-dd-item" onclick="graphExport('json')" title="当前分支全量实体+关系（JSON，程序互操作 / 备份）">📦 图谱数据 (JSON)</div>
           <div class="gv-dd-item" onclick="graphExport('graphml')" title="GraphML——Gephi / yEd / Cytoscape 等图分析工具通用 interchange 格式">🔀 GraphML（Gephi/yEd）</div>
           <div class="gv-dd-item" onclick="exportSysmlModel()" title="按本体约束把当前分支图谱导出为 SysML V2 (KerML) 模型文本">📄 SysML V2 模型 (KerML)</div>
+          <div style="padding:4px 8px;font-size:12px;color:var(--mut);border-top:1px solid var(--line);border-bottom:1px solid var(--line);margin:4px 0;">当前视野（所见即所得，含筛选/折叠/高亮/缩放）</div>
+          <div class="gv-dd-item" onclick="gvExportView('svg')" title="导出当前视野为矢量 SVG（可再编辑，适合放进 PPT/文档）">✒ 当前视野 SVG</div>
+          <div class="gv-dd-item" onclick="gvExportView('png')" title="导出当前视野为 PNG（2 倍像素；超大图自动降采样）">🖼 当前视野 PNG</div>
+        </div>
+      </span>
+      <!-- P2-2：视角/场景（仅本机、按分支独立）。与后端「已存子图」不是一回事，命名上区分为「视角」 -->
+      <span class="gv-dd" style="position:relative;">
+        <button class="btn sm ghost" onclick="gvToggleMenu('gv-view-dd',event)" title="视角：保存/恢复当前筛选、布局、缩放与骨架状态（仅本机 · 按分支独立）">👁 视角 ▾</button>
+        <div id="gv-view-dd" class="gv-dd-panel" style="display:none;position:absolute;top:100%;left:0;z-index:30;min-width:280px;background:#fff;border:1px solid var(--line);border-radius:8px;box-shadow:0 4px 16px rgba(0,0,0,.12);padding:6px;">
+          ${gvViewMenuHtml()}
         </div>
       </span>
       <span style="flex:1;"></span>
@@ -941,7 +1020,10 @@ function renderGraph() {
   const ro = isReleaseBranch(getCurrentBranch());   // release 只读：禁删除/拖拽（不影响展示）
   graphState.nodes.forEach(n=>{
     if(_hidden && _hidden.has(String(n.id))) return;   // P1-2：折叠域外的节点不渲染
-    const c = graphColor(n.entity_type);
+    // P2-1：社区模式下描边取社区色（与类型色互斥）；未分社区（孤立节点）退回类型色，
+    //       不凭空造一个「灰色社区」——那等于把噪声画成一类。
+    const cType = graphColor(n.entity_type);
+    const c = (colorByCommunity && n._community) ? gvCommunityColor(n._community) : cType;
     const sel = graphState.sel&&graphState.sel.type==='node'&&graphState.sel.id===n.id;
     const nb = dim && neighbor.has(n.id);
     const onPath = pathOn && _P.nodeIds.has(String(n.id));               // P1-4 路径节点
@@ -955,6 +1037,8 @@ function renderGraph() {
     const hiR = Math.max(5, r*0.42);
     const foldHere = !!(_hidden && _fold && String(_fold.nid)===String(n.id));
     s += `<g class="gv-node${sel?' gv-sel-node':''}${isMs?' gv-ms-node':''}${onPath?' gv-path-node':''}" data-nid="${esc(n.id)}" transform="translate(${n.x},${n.y})" style="cursor:pointer;opacity:${no};"
+      tabindex="0" role="button" aria-label="${esc(n.name)}（${esc(n.entity_type||'未分类')}），关系 ${deg[n.id]||0} 条，回车查看详情，方向键移到相邻节点"
+      onkeydown="gvNodeKey(event,'${esc(n.id)}')" onfocus="gvNodeFocus('${esc(n.id)}')" onblur="gvNodeBlur()"
       onmousedown="event.stopPropagation();graphNodeDown(event,'${esc(n.id)}')"
       ondblclick="graphNodeDblClick(event,'${esc(n.id)}')"
       onmouseenter="gvNodeHover('${esc(n.id)}')" onmouseleave="gvNodeHoverEnd()">
@@ -978,7 +1062,12 @@ function renderGraph() {
     el.innerHTML = s;
     const _mmEl = document.getElementById('gv-minimap'); if(_mmEl) el.appendChild(_mmEl);   // 2026-09-12 minimap 挂回（renderGraph 内 innerHTML 会清空画布容器）
   gvUpdateStatusPill(); gvRenderFilterBadge();
+  // P2-1：筛选面板里的社区数提示（与图例同一数据源，避免两处口径不一）
+  const _cn = document.getElementById('gv-comm-n');
+  if(_cn){ const _st = graphCommunityStats(); _cn.textContent = _st.length ? ('（' + _st.length + ' 个社区）') : '（无连接，不聚类）'; }
   gvSyncLabelDensity();   // P1-5：上面重建了 #gv-svg，缩放档位的 class 必须重新施加
+  // P2-4：键盘焦点保持 —— innerHTML 重建会丢掉 DOM 焦点，重建后按 focusNid 复位
+  if(graphState.focusNid != null) gvRestoreFocus(document.getElementById('gv-svg'));
   if(typeof gvStatusUpdate==='function') gvStatusUpdate();
 }
 /* ══ P0-3（2026-11-28）拖拽增量重绘 ══

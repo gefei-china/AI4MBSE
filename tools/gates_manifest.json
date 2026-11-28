@@ -3238,6 +3238,12 @@
    "tier": "pr",
    "timeout": 300,
    "reason": "图谱前端 P1 交互门禁（2026-11-28，方案 §P1 五条）：P 路径 BFS（真跑 gvPathBFS：跳数最短/无向/不可达返回 null/同层关系类型字典序可复现/自环与多重边不失控，调用带 3s vm 超时防变异体死循环挂死门禁）；Q 框选命中（真跑 gvBoxCommit：必须用视口坐标而非世界坐标——漏换算会把视口外节点误选进来；误触<4px 不选、折叠域内不可选）；R 布局参数（真跑 gvLayoutWith：间距 40-200/斥力 10000-60000/迭代 100-800 上下限夹紧、dagre 也吃参、未传时读 state）；F 框选接线（Shift 手势/rect 取 token 且不吃事件/move-up 闭环/多选类与 chip）；G 路径接线（按钮/模式分流/并入同一套高亮集合/Esc 可退/右栏摘要）；H 折叠接线（dblclick 真的绑上/节点与边都过滤/+N 徽标/状态 chip/取景只按可见节点）；I 标签密度（阈值数字只在 24-graph.js 定义一次、两画布都切 class、renderGraph 重建 svg 后重新施加）；J 布局参数接线（三滑杆/防抖/局部重排只动 1-hop 且不回写坐标）；K 压暗单一真源回归（P0-2 收口：renderGraph 内不得再出现硬编码 0.22/0.12）；S 同语义单一实现 + 阈值单源；H1 harness 完整性（少跑一条即红）；M 变异自证 5 条（BFS 不排序/折叠不过滤/阈值写死/框选漏换算/压暗退回硬编码），锚点唯一且变异体真的变了。判据 exec 真函数（Node + DOM stub），零写库、不调 LLM，实测 68/68。"
+  },
+  {
+   "script": "verify_graph_p2_render.py",
+   "tier": "pr",
+   "timeout": 420,
+   "reason": "图谱前端 P2 门禁（2026-11-28，方案 §P2 四条）：C 社区聚类（真跑 gvDetectCommunities：两个全连接团必须分成两个社区——实测标签传播会把整张连通图塌成 1 个社区，故改用模块度局部移动；输入顺序反转结果逐节点相同；孤立节点 _community=null 不造噪声社区；components 退化模式；色带 12 色且 HSL 饱和度≤0.45；社区身份取组内最小 id ⇒ 加成员不换色；结果写回 n._community）；V 视角保存（真跑 gvSnapshotView/gvSanitizeSnapshot/gvApplySnapshot：schema 版本 + 分支绑定 + 坐标快照；按分支隔离；悬空类型/骨架焦点/坐标逐项清洗并夹紧缩放 0.3–3；跨分支快照拒绝；坐标齐全则精确复原、缺失则重排且如实标记 exact=false；上限 12 且同名覆盖；删除生效）；X 导出当前视野（真跑 gvExportBBox/gvExportSvgSource/gvExportPngScale：包围盒把 #gv-inner 局部坐标乘 scale 加 pan 换算到视口；PNG 单边 4096 / 面积 2400 万双上限降采样；SVG 补 xmlns、尺寸、viewBox、中文字体栈、画布底色 rect、内联类样式并剥掉 tabindex —— 少任一项导出的就是打不开或透明底的图）；K 键盘可达性（真跑 gvNeighborInDirection/gvNodeKey/gvRestoreFocus：四向选邻且优先正对、无邻返回 null、Enter 选中并 preventDefault、方向键移焦点且防页面滚动、Esc 清除、innerHTML 重建后按 focusNid 复位焦点）；S 结构与单一实现（社区配色一处/与类型色互斥/图例随维度切换/视角只落 localStorage/快照 schema+分支/清洗夹紧/导出区分全量与视野/PNG 倍率走函数/ARIA 属性/重建后恢复焦点/色带不散落）；H1 完整性（少跑一条即红）；M 变异自证 5 条（孤立节点也分社区/视角不分分支/不清洗悬空焦点/导出缺 xmlns/方向键忽略横偏），锚点唯一、变异体真的变了，且每组只让目标判据翻红（其余 45–46 项仍绿）。判据 exec 真函数（Node + DOM/localStorage 桩），零写库、不调 LLM，实测 53/53。"
   }
  ]
 }

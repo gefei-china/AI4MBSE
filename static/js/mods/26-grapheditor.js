@@ -1174,6 +1174,86 @@ if(!window.__gvP1EscBound){
   });
 }
 
+/* ══ P2-4（2026-11-28）键盘可达性 ══
+   目标：不用鼠标也能读图 —— Tab 进画布、方向键在 1-hop 邻居间移动、Enter 看详情、Esc 取消。
+   两条硬约束：
+   ① renderGraph 用 innerHTML 重建整图 ⇒ **DOM 焦点必丢**。焦点不靠浏览器记忆，
+      而是记在 graphState.focusNid，重建后由 gvRestoreFocus 复位 ——
+      否则按一次方向键焦点就掉到 body，键盘导航无法连续。
+   ② 方向键绝不能变成页面滚动：命中方向键一律 preventDefault。
+   方向选邻：轴向投影 >1（确实在该方向上前进）且横偏越小越优先（score = along - across*2）；
+   平票取 id 字典序小者 —— 与社区/路径同一确定性约定，同一张图同一按键必到同一节点。
+   测试位：verify_graph_p2_render.py K 组。 */
+const GV_DIRS = {ArrowRight:[1,0], ArrowLeft:[-1,0], ArrowUp:[0,-1], ArrowDown:[0,1]};
+function gvNeighborInDirection(nodes, edges, fromId, dir){
+  const d = GV_DIRS[dir];
+  if(!d) return null;
+  const from = (nodes||[]).find(n=> n && String(n.id) === String(fromId));
+  if(!from || from.x == null || from.y == null) return null;
+  const ids = new Set();
+  (edges||[]).forEach(e=>{
+    if(String(e.source_id) === String(fromId)) ids.add(String(e.target_id));
+    if(String(e.target_id) === String(fromId)) ids.add(String(e.source_id));
+  });
+  const ax = d[0], ay = d[1];
+  let best = null, bestScore = -Infinity;
+  (nodes||[]).forEach(n=>{
+    if(!n || !ids.has(String(n.id)) || n.x == null || n.y == null) return;
+    const dx = n.x - from.x, dy = n.y - from.y;
+    const along = dx * ax + dy * ay;              // 轴向投影：<=1 视为「不在那个方向」
+    if(along <= 1) return;
+    const across = Math.abs(dx * ay - dy * ax);   // 横向偏移
+    const score = along - across * 2;             // 越正对越优先
+    if(score > bestScore || (score === bestScore && String(n.id) < String(best))){ bestScore = score; best = String(n.id); }
+  });
+  return best;
+}
+function gvNodeFocus(id){ graphState.focusNid = String(id); }
+function gvNodeBlur(){ /* 仅失去 DOM 焦点：保留 focusNid，供 renderGraph 重建后复位 */ }
+function gvRestoreFocus(svg){
+  const nid = graphState.focusNid;
+  if(!svg || nid == null) return false;
+  const list = svg.querySelectorAll ? svg.querySelectorAll('.gv-node') : [];
+  for(let i=0;i<list.length;i++){
+    const g = list[i];
+    if(String(g.getAttribute('data-nid')) !== String(nid)) continue;
+    try{ if(g.focus) g.focus({preventScroll:true}); }catch(e){ try{ g.focus(); }catch(_){} }
+    return true;
+  }
+  return false;
+}
+function gvNodeActivate(id){
+  const nid = String(id);
+  graphState.sel = {type:'node', id:nid};
+  graphState.focusNid = nid;
+  graphState.path = null;
+  renderGraph();
+  try{ showGraphDetail(nid); }catch(e){}
+}
+function gvNodeKey(ev, id){
+  if(!ev) return;
+  const key = ev.key;
+  if(key === 'Enter' || key === ' ' || key === 'Spacebar'){
+    if(ev.preventDefault) ev.preventDefault();
+    if(ev.stopPropagation) ev.stopPropagation();
+    gvNodeActivate(id);
+    return;
+  }
+  if(key === 'Escape'){
+    if(ev.preventDefault) ev.preventDefault();
+    graphState.sel = null; graphState.focusNid = null;
+    renderGraph();
+    toast('已取消选中（Esc）');
+    return;
+  }
+  if(GV_DIRS[key]){
+    if(ev.preventDefault) ev.preventDefault();   // 方向键不得滚动页面
+    if(ev.stopPropagation) ev.stopPropagation();
+    const to = gvNeighborInDirection(graphState.nodes, graphState.edges, id, key);
+    if(to){ graphState.focusNid = to; renderGraph(); }
+    else toast('该方向没有相邻节点');
+  }
+}
 function graphEdgeClick(id) {
   graphState.sel = {type:'edge', id:String(id)};
   graphState.drag = null; graphState.pan = null;
@@ -1202,6 +1282,123 @@ async function saveNodePos(n) {
   } catch(e) {}
 }
 // 2026-09-10 米爸裁剪：graphDeleteNode 已删——实例不允许直接删除（画布右键入口同步移除）；下线走审核驳回（deprecated）流程
+/* ══ P2-3（2026-11-28）导出当前视野 SVG / PNG ══
+   与既有「全量数据导出」（JSON / GraphML / SysML）互补：那两个导出的是**分支数据**，
+   与画布当前所见无关；这两个导出的是**画面上这一张**（含筛选/折叠/高亮/缩放）。
+   坑位（都在真机上踩过或已知会踩）：
+   ① 页面里的 <svg> 是用 innerHTML 造的，**没有 xmlns** —— 序列化成独立文件后浏览器不认，直接打不开；
+   ② 画布白底来自 CSS background，**序列化不带走** ⇒ 必须补一块 <rect> 底，否则导出透明底；
+   ③ 选中光晕/多选/路径/标签密度都写在外部样式表的 class 里，**序列化不带走** ⇒ 需内联必要规则；
+   ④ hover 压暗（.gv-hov-dim）是鼠标位置的一次性产物，导出前必须剥掉，否则导出的图会「有块地方莫名变淡」；
+   ⑤ 中文字体：SVG 文本靠系统字体渲染，显式写字体栈（雅黑/苹方）避免栅格化时退化成衬线；
+   ⑥ PNG 用 canvas 光栅化，单边 >4096 或总面积 >2400 万像素时多数浏览器会返回空白 ⇒ 先降采样。
+   测试位：verify_graph_p2_render.py X 组（含变异：删掉 xmlns 必须翻红）。 */
+function gvExportBBox(){
+  const svg = document.getElementById('gv-svg');
+  const inner = document.getElementById('gv-inner');
+  if(!svg) return null;
+  const vp = graphState.vp || {scale:1, panX:0, panY:0};
+  const s = +vp.scale || 1, px = +vp.panX || 0, py = +vp.panY || 0;
+  let bb = null;
+  try{
+    if(inner && typeof inner.getBBox === 'function'){
+      const b = inner.getBBox();
+      // getBBox 返回的是 #gv-inner **自身局部坐标**（不含它自己的 transform），
+      // 而 viewBox 要用视口坐标 ⇒ 必须再乘 scale、加 pan 换算一次。
+      if(b && b.width > 0 && b.height > 0) bb = {x: b.x * s + px, y: b.y * s + py, width: b.width * s, height: b.height * s};
+    }
+  }catch(e){}
+  if(!bb){   // 退化：getBBox 不可用（无布局/空图）时按当前视口裁
+    const vw = svg.clientWidth || graphState.svgW || 880, vh = svg.clientHeight || graphState.svgH || 460;
+    bb = {x: 0, y: 0, width: vw, height: vh};
+  }
+  const pad = 18;
+  return {x: Math.round(bb.x - pad), y: Math.round(bb.y - pad),
+          width: Math.max(40, Math.ceil(bb.width + pad * 2)), height: Math.max(40, Math.ceil(bb.height + pad * 2))};
+}
+function gvExportSvgSource(){
+  const svg = document.getElementById('gv-svg');
+  const bb = gvExportBBox();
+  if(!svg || !bb) return null;
+  const k = graphTok();
+  const NS = 'http://www.w3.org/2000/svg';
+  const clone = svg.cloneNode(true);
+  // ① hover 态是一次性产物，剥掉（保留选中/多选/路径/折叠等有意的态）
+  clone.querySelectorAll('.gv-hov-dim, .gv-hov-ring').forEach(el=>{
+    el.classList.remove('gv-hov-dim'); el.classList.remove('gv-hov-ring');
+  });
+  // ② 根元素补全：xmlns / 尺寸 / viewBox / 字体栈
+  clone.setAttribute('xmlns', NS);
+  clone.setAttribute('xmlns:xlink', 'http://www.w3.org/1999/xlink');
+  clone.setAttribute('width', String(bb.width));
+  clone.setAttribute('height', String(bb.height));
+  clone.setAttribute('viewBox', bb.x + ' ' + bb.y + ' ' + bb.width + ' ' + bb.height);
+  clone.setAttribute('style', 'background:' + k.canvas + ";font-family:'Microsoft YaHei','PingFang SC','Segoe UI',sans-serif;");
+  // ③ 画布底色（CSS 背景不会被序列化带走）
+  const bg = document.createElementNS(NS, 'rect');
+  bg.setAttribute('x', String(bb.x)); bg.setAttribute('y', String(bb.y));
+  bg.setAttribute('width', String(bb.width)); bg.setAttribute('height', String(bb.height));
+  bg.setAttribute('fill', k.canvas);
+  clone.insertBefore(bg, clone.firstChild);
+  // ④ 类样式内联（外部样式表不进序列化结果）
+  const st = document.createElementNS(NS, 'style');
+  st.textContent = '.gv-flow-out,.gv-flow-in{stroke-dasharray:8 8;stroke-width:2.6}'
+    + '#gv-svg.gv-far .gv-elabel{opacity:0}#gv-svg.gv-farther .gv-nlabel{opacity:0}'
+    + '.gv-ms-node>circle:first-of-type{fill:' + k.primaryL + ';stroke:' + k.primary + ';stroke-width:3.2}'
+    + '.gv-path-node>circle:first-of-type{stroke:' + k.primaryD + ';stroke-width:3.4}'
+    + '.gv-sel-node>circle:first-of-type{stroke-width:3}';
+  clone.insertBefore(st, bg.nextSibling);
+  // ⑤ 导出图不该带焦点/内联交互
+  clone.querySelectorAll('[tabindex]').forEach(el=> el.removeAttribute('tabindex'));
+  const src = new XMLSerializer().serializeToString(clone);
+  return {src, w: bb.width, h: bb.height, box: bb};
+}
+/* PNG 光栅化倍率：默认 2 倍；单边 4096 / 总面积 2400 万像素是多数浏览器的安全上限，
+   超出会得到空白图（不是画得慢，是直接没有内容），必须提前降采样。 */
+function gvExportPngScale(w, h, max){
+  const cap = max || 4096, areaCap = 24e6;
+  let s = Math.min(2, cap / Math.max(1, w), cap / Math.max(1, h), Math.sqrt(areaCap / Math.max(1, w * h)));
+  return Math.max(0.25, Math.round(s * 100) / 100);
+}
+function gvDownloadBlob(blob, name){
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = name;
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  setTimeout(()=>{ try{ URL.revokeObjectURL(a.href); }catch(e){} }, 1500);
+}
+function gvExportView(fmt){
+  const got = gvExportSvgSource();
+  if(!got){ toast('当前没有可导出的画布'); return; }
+  const br = String(getCurrentBranch() || 'graph').replace(/[^\w.-]+/g, '_');
+  const d = new Date(), p2 = (n)=> String(n).padStart(2, '0');
+  const stamp = d.getFullYear() + p2(d.getMonth()+1) + p2(d.getDate()) + '-' + p2(d.getHours()) + p2(d.getMinutes());
+  if(fmt === 'svg'){
+    gvDownloadBlob(new Blob([got.src], {type:'image/svg+xml;charset=utf-8'}), 'graph-view-' + br + '-' + stamp + '.svg');
+    toast('✒ 已导出当前视野 SVG（' + got.w + '×' + got.h + '）');
+    return;
+  }
+  const scale = gvExportPngScale(got.w, got.h);
+  const tw = Math.max(1, Math.round(got.w * scale)), th = Math.max(1, Math.round(got.h * scale));
+  toast('🖼 正在生成 PNG（' + tw + '×' + th + '）…');
+  const img = new Image();
+  img.onload = ()=>{
+    try{
+      const cv = document.createElement('canvas');
+      cv.width = tw; cv.height = th;
+      const ctx = cv.getContext('2d');
+      ctx.fillStyle = graphTok('canvas'); ctx.fillRect(0, 0, tw, th);
+      ctx.drawImage(img, 0, 0, tw, th);
+      cv.toBlob((b)=>{
+        if(!b){ toast('PNG 生成失败：画布过大或内存不足'); return; }
+        gvDownloadBlob(b, 'graph-view-' + br + '-' + stamp + '.png');
+        toast('🖼 已导出当前视野 PNG（' + tw + '×' + th + '）');
+      }, 'image/png');
+    }catch(e){ toast('PNG 生成失败：' + (e.message || e)); }
+  };
+  img.onerror = ()=> toast('PNG 生成失败：SVG 光栅化失败');
+  img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(got.src);
+}
 function graphExport(fmt) {
   // 2026-09-10 修复：补 branch 参数（原实现后端默认 dev，personal 分支下会导出错分支数据）
   const br = getCurrentBranch();

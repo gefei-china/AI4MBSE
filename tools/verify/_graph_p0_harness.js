@@ -219,6 +219,9 @@ if (ctx) {
       ["双击", /function graphNodeDblClick\(/],
       ["隐藏关系标签", /function gvSyncLabelDensity\(/],
       ["路径", /function gvPathBFS\(/],
+      // P2-4：提示里承诺键盘导航，就必须真的有两个落点（方向键选邻 + 重建后焦点复位）
+      ["方向键", /function gvNeighborInDirection\(/],
+      ["Tab", /function gvRestoreFocus\(/],
     ];
     const unimplemented = CAP_EVIDENCE
       .filter(([word, re]) => [kg, svm, imp].some((h) => h.includes(word)) && !re.test(SRC26))

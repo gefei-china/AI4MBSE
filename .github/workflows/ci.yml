@@ -1673,6 +1673,12 @@ jobs:
         if: ${{ !cancelled() }}
         run: python tools/verify/verify_graph_p1_interact.py
 
+      # 图谱 P2（2026-11-28）：社区聚类 / 视角保存 / 导出当前视野 / 键盘可达性。
+      # 视角只落 localStorage；导出只读画布 DOM，均不写库、不调 LLM。
+      - name: Guard 图谱前端 P2 —— 社区聚类 / 视角 / 导出视野 / 键盘（53 条 + 5 变异）
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_graph_p2_render.py
+
       - name: Guard ask_user 多题与去重 —— 答案不丢、不重复问（会话 1000000254，17 条 + 1 变异）
         if: ${{ !cancelled() }}
         run: python tools/verify/verify_ask_user_multi_question.py

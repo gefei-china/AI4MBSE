@@ -130,6 +130,330 @@ function graphColor(type){
   // 3) 未知类型 → 稳定动态色（不再一律落灰）
   return graphHashColor(t);
 }
+/* ══ P2-1（2026-11-28）社区/模块聚类着色 ══
+   目标：一眼看出图谱的「模块结构」，而不是只有类型色（同类型节点散落各处时看不出组团）。
+   做法：纯 JS 模块度优化（Louvain 的 phase-1 局部移动），不引新库；
+        另留「连通分量」作为退化/诊断模式（method='components'）。
+
+   ⚠ 为什么不是方案原文写的「轻量标签传播（LPA）」
+   实测：两个 4 节点团 + 一座桥，LPA 会把**整张连通图塌成 1 个社区**（标签沿桥传播后
+   全图同标签），这正好是「模块结构」要解决的问题。LPA 只在**非连通图**上碰巧可用。
+   改用模块度局部移动（Gephi 的「Modularity」同类算法）：以 ΔQ ∝ w_iC − tot_C·k_i/2m
+   判断是否移动，桥上的权重打不过团内权重，两个团自然分开。
+
+   确定性（关键）：
+   - 每轮按 **节点 id 字典序** 轮转更新；候选社区也按字典序评估，平票取最小标签。
+     （原版 Louvain 的节点顺序随机，同一份数据每次着色不同，用户会以为数据变了，
+       门禁也无法断言。）
+   - 迭代上限 20 轮或全图无人移动即停。
+   - 社区身份 = 社区内**字典序最小的节点 id**（'c:'+minId）⇒ 成员增删时颜色不跳，
+     与「按社区大小重新编号」相反（后者一加节点全图换色，视觉噪声极大）。
+
+   孤立节点（度 0）：_community = null（不分社区）。
+   —— 否则每个孤立点自成一个社区，图例被噪声淹没，也违背「模块」语义。
+
+   与类型色**互斥**：view.colorBy === 'community' 时节点描边取社区色、类型色让位；
+   默认 colorBy === 'type'，仍是白底 + 类型色框（方案 §P2-1 的「默认仍白底蓝框」）。
+   测试位：verify_graph_p2_render.py C 组。 */
+const GV_COMMUNITY_PALETTE = [
+  '#5C7FA8', '#6E9C6B', '#B08A4F', '#8B7BB0', '#4F9A9A', '#B0757A',
+  '#7A8FA0', '#A39A5A', '#6A86B8', '#9A7FA8', '#5F9C85', '#A8826A'
+];
+function gvCommunityColor(label){
+  const s = String(label || '');
+  let h = 0;
+  for(let i=0;i<s.length;i++) h = (h*33 + s.charCodeAt(i)) >>> 0;
+  return GV_COMMUNITY_PALETTE[h % GV_COMMUNITY_PALETTE.length];
+}
+/* 无向邻接表：多重边按条数累加权重（同一对节点两条不同关系 = 更强的连接）。
+   返回 Map(id → [[nbrId, weight], ...])，邻居按 id 升序（保证遍历确定性）。 */
+function gvAdjacency(nodes, edges){
+  const adj = new Map();
+  (nodes||[]).forEach(n=>adj.set(String(n.id), new Map()));
+  (edges||[]).forEach(e=>{
+    const a = String(e.source_id), b = String(e.target_id);
+    if(a===b || !adj.has(a) || !adj.has(b)) return;
+    adj.get(a).set(b, (adj.get(a).get(b)||0) + 1);
+    adj.get(b).set(a, (adj.get(b).get(a)||0) + 1);
+  });
+  const out = new Map();
+  adj.forEach((m, id)=>out.set(id, [...m.entries()].sort((x,y)=> x[0] < y[0] ? -1 : x[0] > y[0] ? 1 : 0)));
+  return out;
+}
+/* 连通分量：BFS（确定性：起点与邻居均按 id 字典序） */
+function gvComponents(nodes, edges){
+  const adj = gvAdjacency(nodes, edges);
+  const seen = new Set(), groups = [];
+  [...adj.keys()].sort().forEach(start=>{
+    if(seen.has(start)) return;
+    const q = [start], mem = [];
+    seen.add(start);
+    while(q.length){
+      const cur = q.shift();
+      mem.push(cur);
+      (adj.get(cur)||[]).forEach(([nx])=>{
+        if(!seen.has(nx)){ seen.add(nx); q.push(nx); }
+      });
+    }
+    groups.push(mem);
+  });
+  return groups;
+}
+function gvDetectCommunities(nodes, edges, opts){
+  const o = opts || {};
+  const method = o.method === 'components' ? 'components' : 'modularity';
+  const maxIter = Math.max(1, Math.min(60, o.maxIter || 20));
+  const list = (nodes||[]).filter(n=>n && n.id != null).map(n=>String(n.id));
+  const adj = gvAdjacency(nodes, edges);
+  const wdegOf = id => { let s = 0; (adj.get(id)||[]).forEach(([,w])=> s += w); return s; };
+  const label = new Map();
+  list.forEach(id=>label.set(id, id));
+
+  if(method === 'components'){
+    gvComponents(nodes, edges).forEach(mem=>{
+      const anchor = mem.slice().sort()[0];
+      mem.forEach(id=>label.set(id, 'c:' + anchor));
+    });
+  } else {
+    // 模块度局部移动：只让「有边」的节点参与；孤立节点最后置 null
+    const active = list.filter(id=>wdegOf(id) > 0).sort();
+    if(active.length){
+      // m2 = 2m（无向边在两侧邻接表各记一次，故邻接权重和即为 2m）
+      let m2 = 0;
+      active.forEach(id=>{ (adj.get(id)||[]).forEach(([,w])=> m2 += w); });
+      const comm = new Map(active.map(id=>[id, id]));
+      const tot = new Map();                       // 社区 → 加权度之和
+      active.forEach(id=> tot.set(id, wdegOf(id)));
+      for(let it=0; it<maxIter; it++){
+        let moved = 0;
+        active.forEach(id=>{
+          const ci = comm.get(id), ki = wdegOf(id);
+          tot.set(ci, (tot.get(ci)||0) - ki);      // 先把自己从原社区摘出
+          const wc = new Map();                    // 邻居社区 → 连边权重和
+          (adj.get(id)||[]).forEach(([nx, w])=>{
+            const c = comm.get(nx);
+            wc.set(c, (wc.get(c)||0) + w);
+          });
+          let best = ci, bestGain = 0;
+          [...wc.keys()].sort().forEach(c=>{
+            // ΔQ ∝ w_iC − tot_C·k_i / 2m（分母为 0 时不可能发生，防御一下）
+            const gain = wc.get(c) - (tot.get(c)||0) * ki / (m2 || 1);
+            if(gain > bestGain + 1e-12) { best = c; bestGain = gain; }
+            else if(Math.abs(gain - bestGain) <= 1e-12 && gain > 0 && String(c) < String(best)) best = c;
+          });
+          tot.set(best, (tot.get(best)||0) + ki);
+          if(best !== ci){ comm.set(id, best); moved++; }
+        });
+        if(!moved) break;                          // 无人移动 ⇒ 已收敛
+      }
+      // 规范化：社区身份 = 组内字典序最小节点 id（成员增删不换色）
+      const groups = new Map();
+      comm.forEach((lb, id)=>{ if(!groups.has(lb)) groups.set(lb, []); groups.get(lb).push(id); });
+      groups.forEach((mem)=>{ const anchor = mem.slice().sort()[0]; mem.forEach(id=>label.set(id, 'c:' + anchor)); });
+    }
+  }
+
+  list.forEach(id=>{ if(wdegOf(id) === 0) label.set(id, null); });
+  const groups2 = new Map();
+  label.forEach((lb, id)=>{
+    if(lb == null) return;
+    if(!groups2.has(lb)) groups2.set(lb, []);
+    groups2.get(lb).push(id);
+  });
+  const out = [...groups2.entries()].map(([lb, mem])=>({ label: lb, size: mem.length, anchor: mem.slice().sort()[0], members: mem.slice().sort() }))
+    .sort((a,b)=> b.size - a.size || (a.anchor < b.anchor ? -1 : a.anchor > b.anchor ? 1 : 0));
+  return { method, of: label, list: out };
+}
+/* 把结果写回节点（doc 约定的 n._community）；返回统计供图例使用 */
+function gvAssignCommunities(nodes, edges, opts){
+  const r = gvDetectCommunities(nodes, edges, opts);
+  (nodes||[]).forEach(n=>{ n._community = r.of.has(String(n.id)) ? r.of.get(String(n.id)) : null; });
+  return r;
+}
+function graphCommunityStats(){
+  const m = new Map();
+  (graphState.nodes||[]).forEach(n=>{
+    if(!n._community) return;
+    if(!m.has(n._community)) m.set(n._community, 0);
+    m.set(n._community, m.get(n._community) + 1);
+  });
+  return [...m.entries()].map(([label, count])=>({label, count, color: gvCommunityColor(label)}))
+    .sort((a,b)=> b.count - a.count || (a.label < b.label ? -1 : 1));
+}
+function graphSetColorBy(on){
+  const v = graphState.view;
+  v.colorBy = on ? 'community' : 'type';
+  // 首次开启时确保社区已算（通常 graphApplyView 已算过；此处防御 renderGraph 之外的调用）
+  if(on && (graphState.nodes||[]).some(n=>n._community === undefined)) {
+    gvAssignCommunities(graphState.nodes, graphState.edges);
+  }
+  renderGraph();
+}
+/* ══ P2-2（2026-11-28）视角/场景保存 ══
+   存哪里：localStorage（**仅本机**，不上后端、不跨用户）——视角是个人工作习惯，
+          放服务端反而引入「谁的视角覆盖谁的」问题。
+   按什么分组：**分支名**。不同分支的图谱数据完全不同，同一份筛选/缩放在别的分支没有意义。
+   存什么：view（筛选/布局/参数/着色维度）+ vp（缩放与平移）+ sk（骨架层级）
+          + pos（节点坐标）。
+   —— pos 是对方案原文的一处**补充**，理由：力导向布局每次重算都会得到不同坐标，
+      只存 vp 会出现「恢复了缩放却对着另一张图」。带上坐标才能做到「恢复即所见」；
+      坐标仅在 ≤400 节点时随快照保存（约 8KB，localStorage 5MB 配额下可接受）。
+   恢复到「另一个数据集」时：逐项清洗（悬空类型/骨架焦点丢弃）+ 夹紧（缩放 0.3–3），
+   并用返回值如实报告 applied/dropped，不静默假装成功。
+   测试位：verify_graph_p2_render.py V 组。 */
+const GV_VIEW_STORE_KEY = 'mbse_graph_views_v1';
+const GV_VIEW_LIMIT = 12;
+const GV_VIEW_POS_CAP = 400;
+function gvViewStoreRead(){
+  try{
+    const raw = localStorage.getItem(GV_VIEW_STORE_KEY);
+    const o = raw ? JSON.parse(raw) : null;
+    return (o && typeof o === 'object' && !Array.isArray(o)) ? o : {};
+  }catch(e){ return {}; }
+}
+function gvViewStoreWrite(store){
+  // 返回是否真的写进去了：隐私模式 / 配额满 时 setItem 会抛异常，
+  // 此时必须告知用户「没保存」，不能静默成功。
+  try{ localStorage.setItem(GV_VIEW_STORE_KEY, JSON.stringify(store || {})); return true; }
+  catch(e){ return false; }
+}
+function gvListSavedViews(branch){
+  const br = branch || getCurrentBranch();
+  const items = (gvViewStoreRead()[br] || {}).items;
+  return Array.isArray(items) ? items.filter(v=> v && v.schema===1 && v.name) : [];
+}
+function gvSnapshotView(name){
+  const v = graphState.view || {}, vp = graphState.vp || {}, sk = graphState.sk || {};
+  const nodes = graphState.nodes || [];
+  const pos = {};
+  if(nodes.length <= GV_VIEW_POS_CAP){
+    nodes.forEach(n=>{
+      if(n && n.id != null && n.x != null && n.y != null && !n._skel) pos[String(n.id)] = [Math.round(n.x), Math.round(n.y)];
+    });
+  }
+  return {
+    schema: 1,
+    name: String(name || '').trim(),
+    branch: getCurrentBranch(),
+    ts: Date.now(),
+    view: {
+      hideIsolated: !!v.hideIsolated,
+      types: (v.types || []).slice(),
+      layout: v.layout || 'force',
+      layoutOpts: v.layoutOpts ? {sep:+v.layoutOpts.sep||80, rep:+v.layoutOpts.rep||26000, iters:+v.layoutOpts.iters||500} : null,
+      colorBy: v.colorBy === 'community' ? 'community' : 'type'
+    },
+    vp: {scale:+(vp.scale||1), panX:+(vp.panX||0), panY:+(vp.panY||0)},
+    sk: {on: !!sk.on, drill: sk.drill || null, focus: sk.focus || null},
+    pos
+  };
+}
+function gvSaveCurrentView(name){
+  const nm = String(name || '').trim().slice(0, 24)
+    || ('视角 ' + new Date().toLocaleTimeString('zh-CN', {hour:'2-digit', minute:'2-digit'}));
+  const br = getCurrentBranch();
+  const store = gvViewStoreRead();
+  const bucket = (store[br] && typeof store[br] === 'object') ? store[br] : (store[br] = {});
+  const items = Array.isArray(bucket.items) ? bucket.items : (bucket.items = []);
+  const snap = gvSnapshotView(nm);
+  const i = items.findIndex(x=> x && x.name === nm);
+  if(i >= 0) items.splice(i, 1);
+  items.unshift(snap);
+  if(items.length > GV_VIEW_LIMIT) items.length = GV_VIEW_LIMIT;   // 上限：下拉过长不可用，且 localStorage 有配额
+  const ok = gvViewStoreWrite(store);
+  toast(ok
+    ? ('💾 已保存视角「' + nm + '」（分支 ' + br + ' · 仅本机）')
+    : '⚠ 视角未能写入本机存储（隐私模式或存储配额已满）');
+  return ok ? snap : null;
+}
+function gvDeleteSavedView(name){
+  const br = getCurrentBranch();
+  const store = gvViewStoreRead();
+  const bucket = store[br];
+  if(!bucket || !Array.isArray(bucket.items)) return 0;
+  const before = bucket.items.length;
+  bucket.items = bucket.items.filter(x=> !(x && x.name === name));
+  gvViewStoreWrite(store);
+  return before - bucket.items.length;
+}
+/* 清洗快照：把「对当前数据集无意义」的部分丢掉，并夹紧数值。
+   返回 {ok, reason, snap, dropped:{types, focus, drill, pos}} —— 调用方据此如实提示。 */
+function gvSanitizeSnapshot(snap, nodes, allNodes){
+  const dropped = {types: 0, focus: 0, drill: 0, pos: 0};
+  if(!snap || snap.schema !== 1) return {ok:false, reason:'快照版本不兼容（schema≠1）', dropped};
+  const br = getCurrentBranch();
+  if(snap.branch && snap.branch !== br) return {ok:false, reason:'视角属于分支「'+snap.branch+'」，当前分支「'+br+'」不适用', dropped};
+  const clamp = (v, lo, hi, fb) => { const n = Number(v); return Math.max(lo, Math.min(hi, isFinite(n) ? n : fb)); };
+  const sv = snap.view || {}, svp = snap.vp || {}, ssk = snap.sk || {};
+  const all = allNodes || nodes || [];
+  const typesNow = new Set(all.map(n=>n && n.entity_type).filter(Boolean));
+  const types = (sv.types || []).filter(t=> typesNow.has(t));
+  dropped.types = (sv.types || []).length - types.length;
+  const layout = ['layered','force','ring'].includes(sv.layout) ? sv.layout : 'force';
+  const lo = sv.layoutOpts
+    ? {sep: clamp(sv.layoutOpts.sep, 40, 200, 80), rep: clamp(sv.layoutOpts.rep, 10000, 60000, 26000), iters: clamp(sv.layoutOpts.iters, 100, 800, 500)}
+    : null;
+  const idsNow = new Set(all.map(n=> String(n && n.id)));
+  let focus = ssk.focus ? String(ssk.focus) : null;
+  if(focus && !idsNow.has(focus)){ dropped.focus = 1; focus = null; }
+  let drill = ssk.drill ? String(ssk.drill) : null;
+  if(drill && !typesNow.has(drill)){ dropped.drill = 1; drill = null; }
+  const pos = {};
+  const srcPos = snap.pos && typeof snap.pos === 'object' ? snap.pos : {};
+  Object.keys(srcPos).forEach(id=>{
+    const p = srcPos[id];
+    if(!Array.isArray(p) || p.length < 2 || !isFinite(+p[0]) || !isFinite(+p[1])) return;
+    if(!idsNow.has(String(id))){ dropped.pos++; return; }
+    pos[String(id)] = [+p[0], +p[1]];
+  });
+  return {
+    ok: true, dropped,
+    snap: {
+      schema: 1, name: String(snap.name || '').slice(0,24), branch: br, ts: snap.ts || Date.now(),
+      view: {hideIsolated: !!sv.hideIsolated, types, layout, layoutOpts: lo,
+             colorBy: sv.colorBy === 'community' ? 'community' : 'type'},
+      vp: {scale: clamp(svp.scale, 0.3, 3, 1), panX: Number(svp.panX)||0, panY: Number(svp.panY)||0},
+      sk: {on: !!ssk.on && all.length > 0, drill, focus},
+      pos
+    }
+  };
+}
+/* 应用快照：坐标齐全 ⇒ 精确复原（含缩放平移）；坐标不全 ⇒ 重排 + 自适应，并如实告知 */
+function gvApplySnapshot(snap){
+  const s = gvSanitizeSnapshot(snap, graphState.nodes, graphState.all.nodes);
+  if(!s.ok){ toast('视角未恢复：' + s.reason); return {ok:false, exact:false, reason:s.reason}; }
+  const c = s.snap, v = graphState.view, sk = graphState.sk;
+  v.hideIsolated = c.view.hideIsolated;
+  v.types = c.view.types.slice();
+  v.layout = c.view.layout;
+  if(c.view.layoutOpts) v.layoutOpts = c.view.layoutOpts;
+  v.colorBy = c.view.colorBy;
+  sk.on = c.sk.on; sk.drill = c.sk.drill; sk.focus = c.sk.focus;
+  // 临时态（折叠/路径/框选/当前选中）不随视角保存：它们绑具体节点，恢复意义不大且易串味
+  graphState.fold = null; graphState.path = null; graphState.multiSel = new Set();
+  graphState.sel = null; graphState.focusNid = null;
+  graphApplyView();     // 过滤 + 骨架 + 社区（坐标此时还是旧值/默认值）
+  const nodes = graphState.nodes || [];
+  const missing = nodes.filter(n=> !c.pos[String(n.id)]).length;
+  let exact = false;
+  if(nodes.length && missing === 0){
+    nodes.forEach(n=>{ const p = c.pos[String(n.id)]; n.x = p[0]; n.y = p[1]; });
+    graphState.vp = {scale: c.vp.scale, panX: c.vp.panX, panY: c.vp.panY};
+    exact = true;
+  } else {
+    graphLayout();
+    graphState.vp = {scale: 1, panX: 0, panY: 0};
+  }
+  renderGraph();
+  if(exact) gvApplyView(true); else gvFitView();
+  gvEnsureMinimap(graphState.nodes, graphState.edges);
+  const notes = [];
+  if(s.dropped.types) notes.push('丢弃 ' + s.dropped.types + ' 个已不存在的类型筛选');
+  if(s.dropped.focus || s.dropped.drill) notes.push('骨架焦点已失效');
+  if(!exact) notes.push('数据集已变化，按新布局自适应');
+  toast('✅ 已恢复视角「' + c.name + '」' + (notes.length ? '（' + notes.join('；') + '）' : ''));
+  return {ok:true, exact, dropped: s.dropped, notes};
+}
 /* ══ P0-2（2026-11-28）三套画布统一邻域高亮 ══
    同一语义：选中/聚焦节点 ⇒ 1-hop 闭邻域保持清晰、其余压暗、焦点节点加光晕；
    点空白 ⇒ 全部恢复。Cytoscape 用 .dimmed / .focus-hi（三处样式表各自声明，色值同源）；
@@ -170,7 +494,7 @@ function applyGraphFocus(target, id){
    mode：'kg' 主知识图谱 | 'sysml' SysML 视图 | 'impact' 影响拓扑图 */
 function gvHintBar(mode){
   const T = {
-    kg:     '滚轮缩放 · 空白拖动平移 · 节点拖拽调整布局 · 点节点高亮上下游（点空白取消） · Shift+拖动框选 · 双击节点只看直接关联 · 缩小到 60% 以下隐藏关系标签',
+    kg:     '滚轮缩放 · 空白拖动平移 · 节点拖拽调整布局 · 点节点高亮上下游（点空白取消） · Shift+拖动框选 · 双击只看直接关联 · Tab+方向键导航 · 缩小到 60% 以下隐藏关系标签',
     sysml:  '滚轮缩放 · 空白拖动平移 · 节点可拖动 · 点节点高亮 1-hop 邻域（点空白取消）',
     impact: '滚轮缩放 · 画布拖拽平移 · 节点可拖动 · 点节点高亮上下游（点空白取消）'
   };
@@ -210,6 +534,9 @@ function graphApplyView(){
   });
   graphState.nodes = nodes; graphState.edges = edges;
   graphSkeletonApply();   // 骨架模式开启时，把过滤结果替换L1 类型聚合 / L2 实例
+  // P2-1：社区聚类在「本次可见数据集」上算一次，结果写 n._community（渲染期零计算）。
+  //       放在 skeletonApply 之后 —— 骨架会把 nodes 换成聚合节点，必须对最终渲染集算。
+  gvAssignCommunities(graphState.nodes, graphState.edges);
 }
 // ── 骨架模式（万级图谱三级下钻）：L1 类型聚合点击类型节点下钻 L2 实例点击实例下钻 L3 邻域 ──
 function graphSkeletonApply(){
@@ -593,6 +920,7 @@ async function loadBranchMaturity(branch){
 async function loadGraph() {
   // 按所选分支（图谱页分支选择器优先，缺省回退工作分支）加载图谱（后端 LIMIT 200 兜底大图谱）
   const br = getCurrentBranch();   // 2026-09-11 单源收口：分支唯一来源 = localStorage.mbse_branch（gv-branch 已下线，graphState.branch 字段同步删除）
+  const _prevBranch = graphState._viewBranch;   // P2-2：用于「视角按分支独立」的切换提示
   // 2026-09-10 状态机收口：图谱 = 确认后的数据。画布固定只拉 reviewed（入图即已审核）
   // candidate 在数据整理·审核队列确认后入图，raw_chunk 是抽取管道中间态——两者均不出现在画布
   const g = await api('/api/knowledge/graph?branch=' + encodeURIComponent(br) + '&status=reviewed');
@@ -604,6 +932,12 @@ async function loadGraph() {
   graphState.fold = null; graphState.path = null; graphState.multiSel = new Set(); graphState.sel = null;
   graphApplyView(); graphLayout(); renderGraph(); gvFitView(); gvEnsureMinimap(graphState.nodes, graphState.edges);   // 限高画布 + 缩略图总览同步
   gvLoadViews();  // 子图下拉（模板来源文档/已存子图）随图谱加载刷新
+  // P2-2：视角按分支独立保存 —— 切分支时如实提示上一个分支还存着 N 个，避免用户以为「视角丢了」
+  graphState._viewBranch = br;
+  if(_prevBranch && _prevBranch !== br){
+    const _n = gvListSavedViews(_prevBranch).length;
+    if(_n) toast('ℹ 分支已切到「' + br + '」：视角按分支独立保存（「' + _prevBranch + '」有 ' + _n + ' 个，切回后可恢复）');
+  }
   loadBranchMaturity(br);  // P1-②：按分支展示成熟度统计联动
   loadBranchCtxBar();      // GitHub 式分支上下文条：ahead/behind + 最近提交 + 进行 MR + 发起 MR
   renderEntityTree();      // 三栏化：左栏实体树随图谱数据刷新（类型继承树 + 实例挂载）
