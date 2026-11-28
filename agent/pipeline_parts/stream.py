@@ -4738,9 +4738,67 @@ class StreamMixin:
                             and len(_lc.strip()) >= 200:
                         # 前一条是本内容的**前缀**（截断后补写）⇒ 同样不重复写
                         return
-                _cur = conn.execute(
-                    "INSERT INTO messages (conversation_id, role, content, msg_type, card_data) VALUES (?,?,?,?,?)",
-                    (conversation_id, "assistant", text, "text", _card_json))
+                # ★★ 2026-11-28（真机 run 205 复盘：消息落库了，界面却提示"未落库"）：
+                #   本条 INSERT 原来**不写 finalize_key**，而 /recovery 正是按
+                #   `finalize_key` 反查本轮是否已固化（见 routers/conversations.py::get_turn_recovery）。
+                #   于是形成最难查的那种不一致：**正文在库里（实测 14781 字）、
+                #   recovery 却返回 found=False** ⇒ 前端每次打开该会话都弹
+                #   「上一轮有 N 帧输出未落库 / 回放上一轮输出」，用户再点回放还会与
+                #   库里已有内容重复。用户视角就是"内容不见了，还提示没存下来"。
+                #   口径必须与 routers/conversations.py::_finalize_key_for_turn 完全一致
+                #   （会话末条 user 消息 id），两处只要有一处漂移，本条缺陷就会复活。
+                #   配合唯一索引 ux_messages_finalize（finalize_key<>''）
+                #   实现 DB 级幂等：同一轮无论谁先落，都只会有一条固化消息。
+                _fkey = ""
+                try:
+                    _r_uid = conn.execute(
+                        "SELECT COALESCE(MAX(id),0) FROM messages "
+                        "WHERE conversation_id=? AND role='user'", (conversation_id,)).fetchone()
+                    _uid = int((_r_uid[0] if _r_uid else 0) or 0)
+                    if _uid > 0:
+                        _fkey = "%s:%d" % (conversation_id, _uid)
+                except Exception as _fk_err:      # noqa: BLE001
+                    print("[_persist_partial_stream] finalize_key 计算失败（退化为不复用幂等键）：%r"
+                          % (_fk_err,), flush=True)
+                # ★ 2026-11-28 缺列兼容（纪律：加列/加依赖必须带缺列兼容 + warning）：
+                #   `finalize_key` 是后续迁移加的列，旧库 / 门禁夹具库（如 tmp/uisafe_r5.db）
+                #   上可能不存在。裸写该列会抛 `no such column` ⇒ 整条固化失败
+                #   （实测把 verify_partial_persist 的 4 条判据打红：内容本来能保住，却被我改坏）。
+                #   降级策略：缺列 ⇒ 退回旧的 5 列写法（"内容一定保住"是最高优先级），
+                #   但**必须打 warning 说清代价**（该轮 /recovery 会判为未落库）。
+                #   绝不静默退回 —— 静默退回等于"留痕悄悄失效"。
+                _has_fk = False
+                try:
+                    for _c in conn.execute("PRAGMA table_info(messages)").fetchall():
+                        _nm = _c["name"] if hasattr(_c, "keys") else _c[1]
+                        if _nm == "finalize_key":
+                            _has_fk = True
+                            break
+                except Exception as _pc_err:      # noqa: BLE001
+                    print("[_persist_partial_stream] 读表结构失败（按缺列处理）：%r"
+                          % (_pc_err,), flush=True)
+                if _has_fk:
+                    _cur = conn.execute(
+                        "INSERT OR IGNORE INTO messages "
+                        "(conversation_id, role, content, msg_type, card_data, finalize_key) "
+                        "VALUES (?,?,?,?,?,?)",
+                        (conversation_id, "assistant", text, "text", _card_json, _fkey))
+                    if not _cur.rowcount:
+                        # 唯一索引挡下 = 本轮已有固化消息（正常完成路径先落了）。
+                        # 不能继续往下归档，否则会把同一轮产物归档两次。
+                        print("[_persist_partial_stream] 未写入：本轮已有固化消息（finalize_key 唯一）"
+                              " conv=%s key=%s" % (conversation_id, _fkey), flush=True)
+                        return
+                else:
+                    print("[_persist_partial_stream] ⚠ messages 表缺 finalize_key 列（旧库/夹具库）："
+                          "本次固化仍会落库，但**不写幂等键** ⇒ /recovery 会把该轮判为「未落库」，"
+                          "且同轮可能双写。请执行数据库迁移补齐该列。conv=%s" % (conversation_id,),
+                          flush=True)
+                    _cur = conn.execute(
+                        "INSERT INTO messages "
+                        "(conversation_id, role, content, msg_type, card_data) "
+                        "VALUES (?,?,?,?,?)",
+                        (conversation_id, "assistant", text, "text", _card_json))
                 try:
                     from core.write_log import wrote as _wlog
                     _wlog("msg_partial_freeze", msg_id=_cur.lastrowid,

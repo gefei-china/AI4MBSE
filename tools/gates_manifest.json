@@ -3256,6 +3256,12 @@
    "tier": "pr",
    "timeout": 120,
    "reason": "顶部 Tab 行 / 工具行不得变形折行（2026-11-28 米爸反馈「本体模型页面顶部的操作入口变形了，都换行了」）：真机实测根因是 .subtab 既没 flex-wrap 也没 white-space、子项默认 flex-shrink:1，本体顶栏自然宽 1510 > 容器 1356 ⇒ 每一项被压窄到小于自身文字宽度 ⇒ 文字在项内折行（Tab 高 41→64、按钮 29→47、出现 8 个不同 top 值 = 竖向错位）；另一诱因是行内 flex:1 占位 span 在 flex-wrap 容器里先吃掉本行空间（实测 225px）把版本徽标挤到第二行（行高 93、Tab 下划线脱离行底）。本门禁检查结构不变量：H1 .subtab 有 flex-wrap:wrap；H2 子项 flex:0 0 auto 不被压缩；H3 子项 white-space:nowrap 文字不折行；H4 三件套同时成立（缺一即复现变形）；H5 本体顶栏隐藏 flex:1 占位项；H6 改用首个下拉 margin-left:auto 推到右侧；H7 仍保留 align-items:flex-end（Tab 选中下划线要贴行底）；H8 未靠隐藏关键入口消掉折行（CQ/运行期语义仍在 HTML）；H9 未用水平滚动条掩盖（那会藏住右侧入口）。读文件与还原一律 newline='' 保留原行尾，避免变异自证把整文件换行符改掉。M 变异自证 3 条（去掉 flex-wrap / 子项重新可收缩 / 占位项不再隐藏），锚点唯一、变异体真的变了，每组只让目标判据翻红（其余 6–8 项仍绿）。真实像素测量在 verify_ont_runtime_browser.js 的 B8/B9（tier=local：单行 rowH=50=maxH41+padTop6、按钮 6 个高度差 0px、Tab 4 个高度差 0px、文字溢出 0）。实测 13/13。"
+  },
+  {
+   "script": "verify_partial_finalize_key.py",
+   "tier": "pr",
+   "timeout": 600,
+   "reason": "中断固化必须写 finalize_key（2026-11-28 真机 run 205 复盘）：用户反馈「切换到其他页面回来后 AI 内容不见了，刷新提示上一轮有 309 帧输出未落库」。日志链证明：整页重载 → SSE 断开 → 转后台续跑 → 60s 内无订阅认领 → grace_expired 取消 → _persist_partial_stream 落了 14781 字正文，但**该 INSERT 不写 finalize_key**，而 /recovery 正是按 finalize_key 反查 ⇒ 正文在库里、recovery 却返回 found=False ⇒ 前端弹「回放上一轮输出」，用户以为内容丢了。判据：S1 INSERT 含 finalize_key；S2 键口径与路由层一致（<conv>:<末条 user id>）；S3 用 INSERT OR IGNORE；S4 rowcount=0 时不再归档；S5 写库前 PRAGMA 探测列存在；P0 夹具库 schema 就绪（CI 空库就地 init_db）；P1 落库消息的 finalize_key 等于期望键；P2 用 /recovery 的同一条 SQL 能命中（跨边界可用，不只断言源码字符串）；P3 同轮重复固化仍 1 条；P4 新一轮允许再落 1 条；P4b 不同轮键互不相同；P5 部分唯一索引 ux_messages_finalize(finalize_key<>'') 存在；P6 缺 finalize_key 列的旧库必须**降级不崩且内容仍落库**（纪律：加列必须带缺列兼容——实测裸写新列会把 verify_partial_persist 的 4 条判据打红，内容本来能保住却丢了）；P7 缺列时必须打 warning 说明代价（不许静默退回）。判据走真实 StreamMixin._persist_partial_stream + 整库副本临时库（零污染生产库），零 LLM、不联网。变异自证 2 条：写入键改成空串（P1/P2/P4b 红，其余 11 绿）、去掉缺列探测（P6/P7 红，其余 12 绿）。实测 14/14。"
   }
  ]
 }

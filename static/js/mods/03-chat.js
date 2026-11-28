@@ -896,8 +896,9 @@ async function selectConv(id) {
     area.innerHTML = '<div style="text-align:center;color:var(--mut);padding:40px;">开始输入以启动 AI 建模…</div>';
     // 活跃流保护③兜底：流式现场属于本会话却拿到空消息（后端入口落库失效时）→ 现场挂回，别显示空态
     _reattachLiveStream(area, id);
-    // ★ 2026-11-23：空会话也可能是"刷新前刚发消息、后台还在跑"⇒ 同样探测续显
-    try{ if(typeof _resumeLiveStream === 'function') _resumeLiveStream(id, area); }catch(_e){}
+    // ★ 2026-11-28：空会话同样可能是"刷新前刚发消息、后台还在跑"⇒ 走统一入口
+    //   （内含 sessionStorage 游标快速路径 + /recovery 权威兜底，游标丢了也接得上）
+    try{ if(typeof _autoResumeRun === 'function') _autoResumeRun(id, area); }catch(_e){}
   }
   else {
     area.innerHTML = msgs.length < _convMsgTotal
@@ -915,14 +916,18 @@ async function selectConv(id) {
       _bindStickDetach();
       _reattachLiveStream(area, id);
       pinChatBottom(area, 8000);
-      // ★ 2026-11-19 方案B P1：末条是用户消息=上一轮没有任何回应 ⇒ 帧日志可能是唯一副本，
-      //   给一个「回放上一轮输出」的入口（不自动回放）。必须放在全部消息渲染完之后，
-      //   否则 `area.querySelectorAll('.msg')` 拿不到末条，判据会静默失效。
+      // ★ 2026-11-19 方案B P1：末条是用户消息=上一轮没有任何回应 ⇒ 帧日志可能是唯一副本。
+      //   必须放在全部消息渲染完之后，否则 `area.querySelectorAll('.msg')` 拿不到末条，判据会静默失效。
+      //   ★ 2026-11-28：由"只给手动按钮"改为"先自动续显、失败才给按钮"（见 _autoResumeRun）。
       try{ if(typeof maybeOfferRunReplay === 'function') maybeOfferRunReplay(id, area); }catch(_e){}
       // ★ 2026-11-23 第二档：探测本会话是否有刷新前转入后台的生成轮。
       //   有 ⇒ 带游标订阅续显（不重跑流程）；无 ⇒ 什么都不做。必须放在渲染 done 里，
       //   保证续显的临时盒追加在所有历史消息之后、不会被后续分片覆盖。
-      try{ if(typeof _resumeLiveStream === 'function') _resumeLiveStream(id, area); }catch(_e){}
+      // ★ 2026-11-28：续显探测已收敛进 maybeOfferRunReplay → _autoResumeRun（单一入口）。
+      //   原来这里再单独调一次 _resumeLiveStream，两个函数各自探测同一 run，
+      //   一旦前者内部也开始自动续显，就会对同一 run 起两个 SSE 连接（token 重复追加）。
+      //   现在只保留上面那次 maybeOfferRunReplay —— 它内部先试游标、再用 recovery 兜底、
+      //   都不成立才落手动回放按钮。
     });
   }
   // 2026-09-29（用户反馈）：状态栏不再写「已加载」——零信息量却让蓝色状态条常驻不消失

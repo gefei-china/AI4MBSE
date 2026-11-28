@@ -1691,6 +1691,12 @@ jobs:
         if: ${{ !cancelled() }}
         run: python tools/verify/verify_ont_header_layout.py
 
+      # 中断固化必须写 finalize_key（2026-11-28 run 205：正文在库里、recovery 却说未落库）。
+      # 走真实 _persist_partial_stream + 临时库副本，零 LLM、不联网。
+      - name: Guard 中断固化幂等键 —— finalize_key / recovery 可命中 / 缺列降级（14 条 + 2 变异）
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_partial_finalize_key.py
+
       - name: Guard ask_user 多题与去重 —— 答案不丢、不重复问（会话 1000000254，17 条 + 1 变异）
         if: ${{ !cancelled() }}
         run: python tools/verify/verify_ask_user_multi_question.py

@@ -126,17 +126,38 @@ def main():
     rec("F7 错误文案不再断言后台必停", "本轮可能在后台继续执行" in send_src)
     chat_src = open(os.path.join(ROOT, "static", "js", "mods", "03-chat.js"),
                     encoding="utf-8").read()
+    # ★ 2026-11-28 判据升级（run 205 真机复盘）：续显探测已收敛为单一入口 _autoResumeRun。
+    #   原判据断言 "_resumeLiveStream(id, area)" 出现 ≥2 次 —— 那是**实现细节**，
+    #   重构后次数变 0 就误报。现按语义断言：两个入口（空消息分支 / 渲染完成分支）
+    #   都必须挂上探测，且只能有一个入口负责“要不要续”，避免同一 run 起两个 SSE。
     rec("F8 会话加载后挂载续显探测",
-        chat_src.count("_resumeLiveStream(id, area)") >= 2)
-    rec("F9 自动续显以 live 游标为触发依据（非末条消息猜测）",
+        "function _autoResumeRun(" in send_src
+        and "_autoResumeRun(id, area)" in chat_src
+        and "maybeOfferRunReplay(id, area)" in chat_src)
+    rec("F9 自动续显以游标或服务端帧日志为触发依据（非末条消息猜测）",
         "const rec = _getLiveRun(convId);" in send_src
-        and "if(!rec || !(Number(rec.run_id)>0)) return;" in send_src)
+        and "if(!rec || !(Number(rec.run_id)>0)) return" in send_src
+        and "seed && Number(seed.run_id) > 0" in send_src)
     rec("F10 正文已固化⇒重载历史（不弹按钮/不重复）",
         "if(rc && rc.found)" in send_src and "_clearLiveRun(convId);" in send_src)
     rec("F11 active=false 不再直接 return（消除手动按钮根因）",
         "if(!info || !info.active){" not in send_src)
-    rec("F12 有 live 游标时手动回放入口自动让位",
-        "if(_liveRec && Number(_liveRec.run_id)>0) return;" in send_src)
+    # ★ 2026-11-28 判据升级：由“有游标时让位”升级为“**能自动续就不许弹按钮**”。
+    #   原判据只覆盖“有 sessionStorage 游标”这一种情况，漏掉“游标丢了但服务端帧日志还在”
+    #   —— 那正是真机 run 205 的现场（第二次刷新后游标被清 ⇒ 退化成手动按钮 ⇒
+    #   无人认领 ⇒ 60s grace 到期 ⇒ 该轮被 cancelled）。
+    rec("F12 能自动续显时手动回放入口必须让位（含游标丢失、靠 recovery 兜底的路径）",
+        "if(await _autoResumeRun(convId, area)) return;" in send_src)
+    # ★ 2026-11-28 新增：三条防回归判据（run 205 的根因与修复点）
+    rec("F20 续显异常不得清游标（根因：一次刷新失败即永久失去续订凭据）",
+        "console.warn('[live-resume] 续显中断，保留游标待下次校正" in send_src
+        and "续显失败静默收口" not in send_src)
+    rec("F21 续显探测只有单一入口（防同一 run 起两个 SSE 重复追加 token）",
+        chat_src.count("_resumeLiveStream(id, area)") == 0
+        and "_autoResumeRun" in send_src)
+    rec("F22 recovery 作为权威兜底（用 stream_run_id + stream_last_seq 重建游标）",
+        "stream_run_id" in send_src and "stream_last_seq" in send_src
+        and "_resumeLiveStream(convId, area, {run_id: rid" in send_src)
 
     # ── 刷新后停留在原会话（不回欢迎页）─────────────────────────────
     rec("F13 selectConv 记住最后会话", "localStorage.setItem('mbse_last_conv_id'" in chat_src)

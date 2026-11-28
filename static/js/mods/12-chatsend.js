@@ -758,16 +758,44 @@ async function _renderRunReplay(convId, runId, aiBox, opts){
   return true;
 }
 
+/* ══ 统一入口：打开会话时"能不能自动接上上一轮"只在这里判断（2026-11-28）══
+   为什么要收敛成一个入口：原来渲染 done 回调里**先后调两个函数**
+   （`maybeOfferRunReplay` 然后 `_resumeLiveStream`），各自独立探测、靠调用时序
+   才不打架 —— 前者内部若要自动续显，就会与后者重复订阅同一 run（两个 SSE 同时追加 token）。
+   现在：
+     ① 快速路径：sessionStorage 游标（正常刷新，无需任何网络探测就能续）
+     ② 权威兜底：`/recovery` 的 run_id + last_seq（游标丢了也能续，服务端帧日志才是真源）
+     ③ 都不成立 ⇒ 返回 false，由调用方决定是否给手动入口
+   返回 true = 已接管（或本来就在跑，现场优先）。 */
+async function _autoResumeRun(convId, area){
+  if(!convId || !area) return false;
+  if(_streaming) return true;                                  // 本轮正在跑：现场优先，别动
+  // ① 快速路径（有游标才动手；函数内部已判空，不会误发请求）
+  if(_getLiveRun(convId)){
+    const ok = await _resumeLiveStream(convId, area);
+    if(ok) return true;
+  }
+  // ② 服务端真源：游标丢失时用帧日志的 run_id/last_seq 重建
+  let r = null;
+  try{ r = await api(`/api/conversations/${convId}/recovery`); }catch(e){}
+  const rid = Number((r && r.stream_run_id) || 0);
+  const seq = Number((r && r.stream_last_seq) || 0);
+  if(!rid || (r && r.found) || seq <= 0) return false;          // 无 run / 已落库 / 无帧
+  return await _resumeLiveStream(convId, area, {run_id: rid, last_seq: seq});
+}
+
 // 会话重新打开时：若末条是"用户说了但没有任何 AI 回应"，说明上一轮没落库 ——
-// 帧日志可能是唯一副本，给一个「回放上一轮输出」的入口（不自动回放，避免打扰）。
+// 帧日志可能是唯一副本。**先尝试自动续显，失败才给手动入口**。
+// ★ 2026-11-28（run 205 复盘）：原实现无条件弹按钮，导致
+//   「第一次刷新能自动续、第二次刷新只能点按钮」的降级体验 —— 而"丢内容"这件事
+//   用户最需要的是**不用操作就恢复**，把恢复责任推给用户点一下是体验缺陷而非安全设计。
 async function maybeOfferRunReplay(convId, area){
   try{
     if(!convId || !area) return;
     if(_streaming) return;                       // 正在跑本轮：现场优先
-    // ★ 2026-11-23：本次刷新有 live 游标 ⇒ 由 _resumeLiveStream 自动接管，绝不再弹手动按钮。
-    //   （它会在 active=false 时重载历史 / active=true 时订阅续显，无需用户点任何东西。）
-    const _liveRec = _getLiveRun(convId);
-    if(_liveRec && Number(_liveRec.run_id)>0) return;
+    // 先走统一入口（内含 sessionStorage 快速路径 + recovery 权威兜底）
+    if(await _autoResumeRun(convId, area)) return;
+    // 自动路径确实接管不了 ⇒ 才落手动入口
     const msgs = area.querySelectorAll('.msg');
     if(!msgs.length) return;
     const last = msgs[msgs.length - 1];
@@ -775,11 +803,24 @@ async function maybeOfferRunReplay(convId, area){
     const r = await api(`/api/conversations/${convId}/recovery`);
     const _rid = Number((r && r.stream_run_id) || 0);
     if(!_rid || (r && r.found)) return;           // 没有 run / 已有固化消息 ⇒ 无需回放
-    if(Number(r.stream_last_seq || 0) <= 0) return;  // 帧日志里也没有内容
+    const _seq = Number(r.stream_last_seq || 0);
+    if(_seq <= 0) return;                         // 帧日志里也没有内容
+
+    /* ① 自动路径：用服务端 run_id/last_seq 重建游标并续显。
+       成功即 return —— 用户不需要点任何东西就能看到那一轮的完整输出。 */
+    try{
+      if(typeof _resumeLiveStream === 'function'){
+        const _ok = await _resumeLiveStream(convId, area, {run_id: _rid, last_seq: _seq});
+        if(_ok) return;
+      }
+    }catch(_e){ /* 自动路径失败 → 落手动入口 */ }
+
+    /* ② 兜底路径：自动续显接管不了（如已在别处订阅 / run 已收口但未落库），
+       给一键回放。文案明确"未落库"与"帧数"，让用户知道这是残留副本而非完整答案。 */
     const wrap = document.createElement('div');
     wrap.style.cssText = 'margin:10px 0;padding:8px 10px;border-left:3px solid #1c7ed6;'
       + 'background:rgba(28,126,214,.08);color:#1864ab;font-size:12.5px;line-height:1.7;';
-    wrap.innerHTML = '上一轮有 <b>' + Number(r.stream_last_seq) + ' 帧</b>输出未落库'
+    wrap.innerHTML = '上一轮有 <b>' + _seq + ' 帧</b>输出未落库'
       + '（服务端中断前已逐帧记录）：';
     const btn = document.createElement('button');
     btn.className = 'btn btn-sm btn-outline-primary';
@@ -808,18 +849,29 @@ function _recordLiveRun(cid, runId, seq){
 function _clearLiveRun(cid){ try{ sessionStorage.removeItem(_liveKey(cid)); }catch(e){} }
 function _getLiveRun(cid){ try{ return JSON.parse(sessionStorage.getItem(_liveKey(cid))||'null'); }catch(e){ return null; } }
 
-// 刷新重载后续显：探测 → 建临时流式盒 → 带游标订阅增量帧 → 收口后重载历史。
-// 为什么最终要 selectConv 重载：后台 run 自然结束时服务端已固化真实 assistant 消息，
-// 重载会用落库消息替换临时盒，避免"续显内容 + 落库消息"两份重复。
-async function _resumeLiveStream(convId, area){
-  // ★ 触发依据 = sessionStorage 里"本轮被我刷新中断"的游标，而非末条消息类型。
+/* 刷新重载后续显：探测 → 建临时流式盒 → 带游标订阅增量帧 → 收口后重载历史。
+   为什么最终要 selectConv 重载：后台 run 自然结束时服务端已固化真实 assistant 消息，
+   重载会用落库消息替换临时盒，避免"续显内容 + 落库消息"两份重复。
+
+   ★ 2026-11-28（真机复盘 run 205）：`seed` 参数 = 由调用方从服务端 `/recovery` 取回的
+   `{run_id, last_seq}`。存在的必要性：sessionStorage 游标会在续显连接被动断开时丢失
+   （浏览器再刷新一次 / 网络抖动），而**服务端帧日志才是权威真源**。
+   只把 sessionStorage 当"快速路径"、recovery 当"兜底真源"，才不会出现
+   「第一次刷新能自动续显、第二次刷新退化成手动点按钮」这种降级。
+   返回 true = 已接管续显（调用方不要再弹手动按钮）。 */
+async function _resumeLiveStream(convId, area, seed){
+  // seed 优先（服务端权威）→ 回填 sessionStorage，后续刷新仍走快速路径
+  if(seed && Number(seed.run_id) > 0){
+    _recordLiveRun(convId, Number(seed.run_id), Number(seed.last_seq) || 0);
+  }
+  // ★ 触发依据 = 游标（"本轮被我刷新中断"），而非末条消息类型。
   //   这样任务在后台跑完（live-run.active 已变 false）后刷新仍能自动收口。
   const rec = _getLiveRun(convId);
-  if(!rec || !(Number(rec.run_id)>0)) return;   // 没记游标 = 不是中断续跑，不打扰
+  if(!rec || !(Number(rec.run_id)>0)) return false;   // 没记游标 = 不是中断续跑，不打扰
   let info = null;
   try{ info = await api(`/api/conversations/${convId}/live-run`); }catch(e){}
   const runId = Number(rec.run_id) || Number(info && info.run_id) || 0;
-  if(!runId) return;
+  if(!runId) return false;
 
   // 正文已固化落库（后台跑完）⇒ 历史消息里已有完整内容，直接重载即可，
   // 既无需订阅也避免与落库消息重复显示。这是活跃会话刷新后最常见的路径。
@@ -828,7 +880,7 @@ async function _resumeLiveStream(convId, area){
     if(rc && rc.found){
       _clearLiveRun(convId);
       try{ if(typeof selectConv==='function' && String(currentConvId)===String(convId)) selectConv(convId); }catch(e){}
-      return;
+      return true;
     }
   }catch(e){}
 
@@ -859,6 +911,10 @@ async function _resumeLiveStream(convId, area){
   const lastEventId = runId + '-' + seq;
   let buf = '';
   let _endStatus = '';    // run_end 事件里的 run 终态（done/cancelled/failed/running=超时）
+  // ★ 2026-11-28：本轮续显**是否真的拿到内容**。用于决定返回值 ——
+  //   返回 true 表示"已接管"，调用方据此**不弹**手动回放按钮；
+  //   若订阅失败（run 不存在 / 无权限 / 网络断）却返回 true，用户就什么都看不到（无内容也无入口）。
+  let _gotFrames = 0;
   try{
     const resp = await fetch(`/api/runs/${runId}/subscribe?last_event_id=${encodeURIComponent(lastEventId)}&tail=1&max_wait_s=180`, {
       headers: streamHeaders(), signal: ac.signal, cache:'no-store'
@@ -874,7 +930,7 @@ async function _resumeLiveStream(convId, area){
         const fr = buf.slice(0, i); buf = buf.slice(i+2);
         try{
           const m = fr.match(/^id:\s*(\d+)-(\d+)/m);
-          if(m) _recordLiveRun(convId, +m[1], +m[2]);
+          if(m){ _recordLiveRun(convId, +m[1], +m[2]); _gotFrames++; }
           const _evm = fr.match(/^event:\s*(done|error|run_end)\b/m);
           if(_evm){
             if(_evm[1] !== 'run_end'){ _clearLiveRun(convId); }
@@ -893,8 +949,17 @@ async function _resumeLiveStream(convId, area){
     }
     try{ _forceFlushTokens(); }catch(_e){}
   }catch(e){
-    // 续显失败静默收口：清游标避免反复重试；历史消息与安全提示仍在
-    _clearLiveRun(convId);
+    /* ★ 2026-11-28（run 205 复盘）：**不许在这里清游标**。
+       原实现无条件 `_clearLiveRun(convId)`，理由是"避免反复重试"。
+       但续显连接被中断最常见的原因恰恰是**用户又刷新了一次**（真机复现：
+       第一次刷新自动续显成功 → 用户再刷一次 → 本 catch 清掉游标 →
+       第二次加载没有任何凭据 → 退化成手动「回放上一轮输出」按钮 → 无人认领 →
+       60s 后 grace_expired，那一轮被服务端取消）。
+       游标留着是安全的：服务端帧日志才是权威真源，下次加载会走
+       `maybeOfferRunReplay` → 用 `/recovery` 的 run_id/last_seq 校正后再续订；
+       真的已收口时 `_resumeLiveStream` 首段 `/recovery` 命中 `found` 会自动清掉它。
+       即"清游标"只应发生在**确认本轮已收口**的地方，不应发生在传输异常上。 */
+    console.warn('[live-resume] 续显中断，保留游标待下次校正：', e && e.message);
   }finally{
     _streaming = false;
     if(_streamAbort===ac) _streamAbort = null;
@@ -925,6 +990,18 @@ async function _resumeLiveStream(convId, area){
     // 后端此刻已把本轮固化为真实消息 → 重载历史，用落库消息替换临时盒（不重复）
     try{ if(typeof selectConv==='function' && String(currentConvId)===String(convId)) selectConv(convId); }catch(e){}
   }
+  /* 只有**真的读到帧**或**收到终态**才算接管：
+     前者=把后台输出接着显示出来了；后者=至少把最终状态（cancelled/failed 时的回放盒 + 一键继续）
+     摆出来了。两者都没有（订阅直接失败）⇒ 返回 false，让调用方退回手动回放入口。 */
+  const _took = (_gotFrames > 0) || !!_endStatus;
+  if(!_took){
+    /* 没接管就必须把自己建的临时盒撤掉：那盒子里是「正在输入…」的打字占位，
+       留着用户会以为 AI 还在生成（真机实测：订阅失败后页面挂着一个永不结束的 AI 盒）。
+       只删本次新建的临时盒（dataset.liveReplay），不碰真正的流式现场。 */
+    try{ if(box && box.dataset && box.dataset.liveReplay && box.parentElement) box.remove(); }catch(_e){}
+    console.warn('[live-resume] 未接管（无帧且无终态），已撤临时盒，交由手动回放：run=', runId);
+  }
+  return _took;
 }
 
 async function pumpStream(aiBox, msg, atts, resumeOf, ticketId, turnOpts){
