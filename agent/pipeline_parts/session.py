@@ -485,7 +485,8 @@ class SessionMixin:
             return False
         return True
 
-    def _llm_intent_confirm_questions(self, user_input, current_intent, conversation_id=None):
+    def _llm_intent_confirm_questions(self, user_input, current_intent, conversation_id=None,
+                                      allow_skip=True):
         """LLM 基于上下文生成「意图确认」题（米爸反馈：「澄清确认卡还是会有系统默认的
         内容，应该是没有基于上下文分析提供准确的确认信息」）。
 
@@ -502,6 +503,8 @@ class SessionMixin:
           （如「方案设计/建模」）关键词层才能稳定命中；纯自由文本会再次落空。
 
         开关：`intent.confirm_llm_dynamic`（默认 True）。
+        `allow_skip=False` 用于上层已判定「必须确认」的弱意图（如 llm_weak）：
+        即使 LLM 回答 need:false 也不放行，返回 None 让调用方走固定列表兜底。
         """
         try:
             from core import config as _cfg
@@ -538,34 +541,59 @@ class SessionMixin:
             except Exception:
                 _ctx_lines = []
         _ctx = "\n".join(_ctx_lines)
-        try:
-            from llm import llm_client
-            resp = llm_client.chat([
-                {"role": "system", "content": (
-                    "你是 MBSE 智能助手的意图澄清模块。系统对用户最新这句话的路由置信度很低。"
-                    "请结合对话上下文判断用户意图：\n"
-                    "1) 若上下文已能明确用户要用哪项能力（含用户正在回答上一轮 AI 的提问/补充"
-                    "上一轮未完成任务的信息），输出 {\"need\":false,\"intent\":\"<意图key>\"}；\n"
-                    "2) 若确实需要用户拍板，输出 {\"need\":true,\"questions\":[{\"id\":\"q1\","
-                    "\"question\":\"<基于上下文的针对性提问>\",\"options\":[\"<中文名：说明>\",...],"
-                    "\"allow_custom\":true}]}——只出 1 题，2-5 个选项，**不同选项应指向不同意图**；\n"
-                    "选项的中文名部分必须出自下方可选意图清单（这样用户选完系统才知道该跑什么）；"
-                    "提问要贴合上下文，点明用户这句话与哪个未决事项相关，"
-                    "禁止输出清单式罗列（如「请选一项」这种没有信息量的话）。\n"
-                    "只输出 JSON，不要其他文字。\n\n可选意图清单（key | 中文名 | 职责）：\n"
-                    + "\n".join(_lines))},
-                {"role": "user", "content": (
-                    (f"最近对话上下文：\n{_ctx}\n\n" if _ctx else "")
-                    + f"用户最新输入：{str(user_input)[:300]}")},
-            ], _intent="clarify_detect")
-            content = (resp.get("choices") or [{}])[0].get("message", {}).get("content") or ""
-            j = self._parse_json_block(content)
-        except Exception:
+        _sys_base = (
+            "你是 MBSE 智能助手的意图澄清模块。系统对用户最新这句话的路由置信度很低。"
+            "请结合对话上下文判断用户意图：\n"
+            "1) 若上下文已能明确用户要用哪项能力（含用户正在回答上一轮 AI 的提问/补充"
+            "上一轮未完成任务的信息），输出 {\"need\":false,\"intent\":\"<意图key>\"}；\n"
+            "2) 若确实需要用户拍板，输出 {\"need\":true,\"questions\":[{\"id\":\"q1\","
+            "\"question\":\"<基于上下文的针对性提问>\",\"options\":[\"<中文名：说明>\",...],"
+            "\"allow_custom\":true}]}——只出 1 题，2-5 个选项，**不同选项应指向不同意图**；\n"
+            "选项的中文名部分必须出自下方可选意图清单（这样用户选完系统才知道该跑什么）；"
+            "提问要贴合上下文，点明用户这句话与哪个未决事项相关，"
+            "禁止输出清单式罗列（如「请选一项」这种没有信息量的话）。\n"
+            "只输出 JSON，不要其他文字。\n\n可选意图清单（key | 中文名 | 职责）：\n"
+            + "\n".join(_lines))
+        _user_msg = ((f"最近对话上下文：\n{_ctx}\n\n" if _ctx else "")
+                     + f"用户最新输入：{str(user_input)[:300]}")
+
+        def _ask_clarify_llm(_sys_text):
+            try:
+                from llm import llm_client
+                resp = llm_client.chat([
+                    {"role": "system", "content": _sys_text},
+                    {"role": "user", "content": _user_msg},
+                ], _intent="clarify_detect")
+                content = (resp.get("choices") or [{}])[0].get("message", {}).get("content") or ""
+                return self._parse_json_block(content)
+            except Exception:
+                return None
+
+        j = _ask_clarify_llm(_sys_base)
+        if j is None:
             return None
+        # ★ 2026-11-28（用户纠正）：弱意图“必须确认”不等于“必须弹通用列表”。
+        # 上层已判 llm_weak ⇒ 不允许 LLM 用 need:false 取消确认；但问题仍要结合上下文。
+        # 做法：再调用一次，明确禁止 need:false，强制输出针对性问题；只有再次失败才回退固定列表。
+        if (not allow_skip) and isinstance(j, dict) and j.get("need") is False:
+            _forced_sys = _sys_base + (
+                "\n\n★ 本轮系统已判定必须向用户确认（路由置信度低）。"
+                "禁止输出 need:false；必须输出 need:true，并结合用户最新输入与上下文"
+                "生成 1 个针对性问题与 2-5 个指向不同意图的选项。"
+            )
+            j = _ask_clarify_llm(_forced_sys)
         if not isinstance(j, dict):
             return None
         if j.get("need") is False:
             _skip_to = str(j.get("intent") or "").strip()
+            # ★ 2026-11-28（会话 1000000264 实证）：动态澄清**不得覆盖**上层硬判据。
+            # 该轮 intent_detect 只给 llm_weak(0.4)，_should_confirm_intent 已判定必须确认，
+            # 但这里 LLM 回答 need:false ⇒ 返回 ("skip", ...) ⇒ 确认卡被静默跳过，
+            # 任务继续落到主 Agent 并产出 V2 代码（llm_usage_stats 38297 有 clarify_detect 调用为证）。
+            # 对 llm_weak 这类“系统自己没把握”的路由，allow_skip=False：
+            # 返回 None 让调用方回退固定意图列表，**必须弹卡**。
+            if not allow_skip:
+                return None
             # 只在 LLM 给出清单内的意图 key 时才敢放行（否则按需确认处理）
             if _skip_to in (getattr(self.router, "_db_intents", {}) or {}):
                 return ("skip", _skip_to)

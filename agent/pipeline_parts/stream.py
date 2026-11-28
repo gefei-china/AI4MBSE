@@ -5724,7 +5724,11 @@ class StreamMixin:
                 _iqs = None
                 _llm_skip_to = ""
                 try:
-                    _llm_r = self._llm_intent_confirm_questions(user_input, intent, conversation_id)
+                    # ★ 2026-11-28：llm_weak 是上层明确判出的“系统没把握”，
+                    # 动态澄清模块不得用 need:false 把它覆盖掉（否则确认卡静默消失）。
+                    _llm_r = self._llm_intent_confirm_questions(
+                        user_input, intent, conversation_id,
+                        allow_skip=(_intent_meta.get("route") != "llm_weak"))
                 except Exception:
                     _llm_r = None
                 if _llm_r and _llm_r[0] == "skip":
