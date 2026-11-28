@@ -806,16 +806,11 @@ async function maybeOfferRunReplay(convId, area){
     const _seq = Number(r.stream_last_seq || 0);
     if(_seq <= 0) return;                         // 帧日志里也没有内容
 
-    /* ① 自动路径：用服务端 run_id/last_seq 重建游标并续显。
-       成功即 return —— 用户不需要点任何东西就能看到那一轮的完整输出。 */
-    try{
-      if(typeof _resumeLiveStream === 'function'){
-        const _ok = await _resumeLiveStream(convId, area, {run_id: _rid, last_seq: _seq});
-        if(_ok) return;
-      }
-    }catch(_e){ /* 自动路径失败 → 落手动入口 */ }
-
-    /* ② 兜底路径：自动续显接管不了（如已在别处订阅 / run 已收口但未落库），
+    /* ★ 2026-11-28 止血：自动续显已由上面的 _autoResumeRun 统一尝试过（游标 + recovery 两条路）。
+       原来这里又用同一个 run_id 再订阅一次，一次刷新最多 3 次 /subscribe，
+       叠加 selectConv 回调即形成自激轮询（29268 次 429）。
+       走到这里说明自动路径确实没接管，直接落手动入口，不再重复订阅。 */
+    /* 兜底路径：自动续显接管不了（如已在别处订阅 / run 已收口但未落库），
        给一键回放。文案明确"未落库"与"帧数"，让用户知道这是残留副本而非完整答案。 */
     const wrap = document.createElement('div');
     wrap.style.cssText = 'margin:10px 0;padding:8px 10px;border-left:3px solid #1c7ed6;'
@@ -987,8 +982,15 @@ async function _resumeLiveStream(convId, area, seed){
       }
     }catch(_e){}
   }else{
-    // 后端此刻已把本轮固化为真实消息 → 重载历史，用落库消息替换临时盒（不重复）
-    try{ if(typeof selectConv==='function' && String(currentConvId)===String(convId)) selectConv(convId); }catch(e){}
+    /* ★ 2026-11-28 止血：这里原先无条件 selectConv，而 selectConv 的渲染完成回调会再走
+       maybeOfferRunReplay → _autoResumeRun → _resumeLiveStream。订阅失败（429 / 网络断 /
+       run 不存在）时 _gotFrames=0、_endStatus 为空，于是形成无限递归轮询：
+       实测 5 个页面端口 13 分钟内打出 29268 次 429，页面数据全部刷不出来。
+       现在只有**真的读到帧**才重载历史收口；无帧且无终态时直接返回 false，
+       由 maybeOfferRunReplay 落手动回放入口，不再自激。 */
+    if(_gotFrames > 0){
+      try{ if(typeof selectConv==='function' && String(currentConvId)===String(convId)) selectConv(convId); }catch(e){}
+    }
   }
   /* 只有**真的读到帧**或**收到终态**才算接管：
      前者=把后台输出接着显示出来了；后者=至少把最终状态（cancelled/failed 时的回放盒 + 一键继续）
