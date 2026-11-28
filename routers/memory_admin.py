@@ -38,6 +38,7 @@ router = APIRouter(tags=["AI 记忆管理"])
 
 @router.get("/api/memory/list")
 def list_memories(agent_id: str = "", tier: str = "", mem_type: str = "", q: str = "",
+                  scope_type: str = "", verify_state: str = "",
                   include_forgotten: int = 0, limit: int = 200, offset: int = 0,
                   conn=Depends(db_session), user=Depends(current_user)):
     """记忆列表 + 统计（页面顶部徽章与筛选器用它，避免前端多次请求）。
@@ -48,9 +49,12 @@ def list_memories(agent_id: str = "", tier: str = "", mem_type: str = "", q: str
     过滤在 `MemoryAdminRepo._viewer_clause` 内按**已认证身份**强制执行，
     **不接受前端传参**（改 URL 也拿不到别人的）。
     """
+    if scope_type == "__global__":   # 前端「全局（无作用域）」筛选项
+        scope_type = ""
     return MemoryAdminRepo(conn).list(
         agent_id=agent_id or None, tier=tier or None, mem_type=mem_type or None,
-        q=q or None, include_forgotten=1 if include_forgotten else 0,
+        q=q or None, scope_type=scope_type or None, verify_state=verify_state or None,
+        include_forgotten=1 if include_forgotten else 0,
         limit=max(1, min(limit, 1000)), offset=max(0, offset), viewer=user)
 
 
@@ -64,6 +68,46 @@ def export_memories(agent_id: str = "", conn=Depends(db_session),
     """
     items = MemoryAdminRepo(conn).export_all(agent_id or None, viewer=user)
     return {"count": len(items), "items": items}
+
+
+@router.get("/api/memory/{mid}")
+def memory_detail(mid: int, conn=Depends(db_session), user=Depends(current_user)):
+    """单条记忆详情（列表字段的子集不够用时，前端详情面板消费）。"""
+    repo = MemoryAdminRepo(conn)
+    row = repo.get(mid)
+    if not row:
+        return JSONResponse({"error": "记忆不存在"}, 404)
+    if not repo._can_touch(row, user):
+        return JSONResponse({"error": "无权查看该记忆（仅可查看自己的 user 记忆）"}, 403)
+    return row
+
+
+@router.put("/api/memory/batch")
+def batch_update_memory(body: dict, conn=Depends(db_session), user=Depends(current_user),
+                        _u=Depends(require_permission("memory", "manage"))):
+    """批量编辑记忆元数据/正文；只改白名单字段，逐条按人过滤。
+
+    body: {"ids":[1,2], "updates":{"mem_type":"fact","tier":"recall", ...}}
+    改 content 会同时清空 embedding / embed_version，交给下一轮检索重建向量。
+    """
+    ids = (body or {}).get("ids") or []
+    updates = (body or {}).get("updates") or {}
+    if not isinstance(ids, list) or not ids:
+        return JSONResponse({"error": "ids 必须是非空数组"}, 400)
+    try:
+        ids = [int(x) for x in ids]
+    except (TypeError, ValueError):
+        return JSONResponse({"error": "ids 必须是整数数组"}, 400)
+    if not isinstance(updates, dict) or not updates:
+        return JSONResponse({"error": "updates 必须是非空对象"}, 400)
+    repo = MemoryAdminRepo(conn)
+    res = repo.batch_update(ids, updates, viewer=user)
+    if res.get("error"):
+        return JSONResponse({"error": res["error"]}, 400)
+    audit(audit_user(user), "memory_batch_update",
+          "批量编辑 %d 条记忆 ids=%s fields=%s" % (res.get("updated", 0), ids[:20], list(updates)),
+          conn=conn)
+    return {"ok": True, **res}
 
 
 @router.delete("/api/memory/{mid}")

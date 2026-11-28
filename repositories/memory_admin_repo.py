@@ -110,6 +110,7 @@ class MemoryAdminRepo:
 
     # ── 查询 ──
     def list(self, agent_id=None, tier=None, mem_type=None, q=None,
+             scope_type=None, verify_state=None,
              include_forgotten=0, limit=200, offset=0, viewer=None) -> dict:
         """分页列表 + 统计。`include_forgotten=0`（默认）只看存活记忆。
 
@@ -139,6 +140,12 @@ class MemoryAdminRepo:
         if mem_type and "mem_type" in cols:
             where.append("mem_type=?")
             args.append(mem_type)
+        if scope_type and "scope_type" in cols:
+            where.append("scope_type=?")
+            args.append(scope_type)
+        if verify_state and "verify_state" in cols:
+            where.append("COALESCE(verify_state,'unverifiable')=?")
+            args.append(verify_state)
         if q and "content" in cols:
             where.append("content LIKE ?")
             args.append("%" + q + "%")
@@ -195,6 +202,10 @@ class MemoryAdminRepo:
             "by_tier": _grp(tier_expr, alive_where) if ("mem_type" in cols or has_tier) else {},
             "by_agent": _grp("agent_id", alive_where) if "agent_id" in cols else {},
             "by_mem_type": _grp("mem_type", alive_where) if "mem_type" in cols else {},
+            "by_scope_type": (_grp("COALESCE(scope_type,'')", alive_where)
+                              if "scope_type" in cols else {}),
+            "by_verify_state": (_grp("COALESCE(verify_state,'unverifiable')", alive_where)
+                                if "verify_state" in cols else {}),
             # 缺列时给 None（而不是 0）——「数据不足不许报 0」是本仓既定纪律
             "accessed": (one("SELECT COUNT(*) FROM agent_memory WHERE access_count>0"
                              + alive_where) if has_ac else None),
@@ -231,6 +242,58 @@ class MemoryAdminRepo:
             "UPDATE agent_memory SET forgotten=0 WHERE id=? AND forgotten=1", (mid,))
         self.conn.commit()
         return cur.rowcount > 0
+
+    # ── 批量编辑（前端「AI 记忆」面板）────────────────────────────────────
+    _EDITABLE = {
+        "content": str, "agent_id": str, "mem_type": str, "tier": str,
+        "scope_type": str, "scope_id": str, "mem_topic": str,
+        "relevance": float, "activation": float, "verify_state": str,
+        "evidence_ref": str, "evidence_note": str, "forgotten": int,
+    }
+
+    def batch_update(self, ids, updates, viewer=None) -> dict:
+        """按白名单批量编辑记忆；逐条按人过滤，绝不执行越权行。"""
+        cols = self._cols()
+        casts = []
+        for k, v in (updates or {}).items():
+            if k not in self._EDITABLE or k not in cols or v is None:
+                continue
+            if k == "tier" and str(v) not in ("core", "recall", "archival"):
+                return {"error": "tier 只能是 core/recall/archival"}
+            if k == "verify_state" and str(v) not in (
+                    "verified", "needs_review", "unverifiable", "contradicted"):
+                return {"error": "verify_state 取值非法"}
+            if k == "forgotten" and int(v) not in (0, 1):
+                return {"error": "forgotten 只能是 0/1"}
+            try:
+                val = self._EDITABLE[k](v)
+            except (TypeError, ValueError):
+                return {"error": "字段 %s 取值无效" % k}
+            casts.append((k, val))
+        if not casts:
+            return {"error": "没有可编辑的字段（或字段在当前库不存在）"}
+        sets, args = [], []
+        for k, val in casts:
+            sets.append("%s=?" % k)
+            args.append(val)
+            # 正文变了 ⇒ 旧向量失效，清空后由检索侧重建
+            if k == "content":
+                if "embedding" in cols:
+                    sets.append("embedding=NULL")
+                if "embed_version" in cols:
+                    sets.append("embed_version=''")
+        updated, skipped = [], []
+        sql = "UPDATE agent_memory SET " + ", ".join(sets) + " WHERE id=?"
+        for mid in (ids or []):
+            row = self.get(mid)
+            if not row or not self._can_touch(row, viewer):
+                skipped.append(mid)
+                continue
+            self.conn.execute(sql, args + [mid])
+            updated.append(mid)
+        self.conn.commit()
+        return {"updated": len(updated), "skipped": skipped, "ids": updated,
+                "fields": [k for k, _ in casts]}
 
     def hard_delete_forgotten(self) -> int:
         """清除全部已软删（forgotten=1）记忆，返回条数。用于「清空已归档」。"""

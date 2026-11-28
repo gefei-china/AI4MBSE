@@ -1577,6 +1577,12 @@
               <option value="archival">已归档</option>
             </select>
             <select id="mem-f-type" onchange="loadMemories()" style="border:1px solid var(--line);border-radius:6px;padding:3px 8px;font-size:12.5px;"><option value="">类型：全部</option></select>
+            <select id="mem-f-scope" onchange="loadMemories()" style="border:1px solid var(--line);border-radius:6px;padding:3px 8px;font-size:12.5px;">
+              <option value="">作用域：全部</option><option value="project">工程</option><option value="user">用户</option><option value="__global__">全局（无作用域）</option>
+            </select>
+            <select id="mem-f-verify" onchange="loadMemories()" style="border:1px solid var(--line);border-radius:6px;padding:3px 8px;font-size:12.5px;">
+              <option value="">校验：全部</option><option value="verified">已证实</option><option value="needs_review">待人工</option><option value="unverifiable">无法验证</option><option value="contradicted">已证伪</option>
+            </select>
             <input id="mem-f-q" placeholder="关键词（匹配记忆内容）" oninput="memFilterQ()" style="border:1px solid var(--line);border-radius:6px;padding:3px 8px;font-size:12.5px;width:180px;">
             <label style="font-size:12.5px;display:flex;align-items:center;gap:4px;cursor:pointer;"><input type="checkbox" id="mem-f-forgotten" onchange="loadMemories()">含已归档</label>
             <button class="btn sm ghost" onclick="loadMemories()">🔄 刷新</button>
@@ -1586,6 +1592,14 @@
           </div>
           <div style="font-size:12.5px;color:var(--mut);margin-bottom:8px;background:var(--amb-l);padding:6px 8px;border-radius:6px;">
             💡 AI 跨会话长期记忆（偏好 / 事实 / 经验）。<b style="color:var(--txt);">删除 = 真删不可恢复</b>（行使被遗忘权）；<b style="color:var(--txt);">归档 = 软删</b>（检索不再注入，可恢复）。
+          </div>
+          <div id="mem-batch-bar" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px;padding:6px 8px;border:1px solid var(--line);border-radius:6px;background:var(--blue-l,#f4f8ff);">
+            <span id="mem-selected" style="font-size:12.5px;color:var(--mut);">已选 0 条</span>
+            <button class="btn sm ghost" onclick="memBatchForget()">📦 批量归档</button>
+            <button class="btn sm ghost" onclick="memBatchRestore()">♻️ 批量恢复</button>
+            <button class="btn sm" onclick="memBatchEdit()">✏️ 批量编辑</button>
+            <button class="btn sm red" onclick="memBatchDelete()">🗑 批量删除</button>
+            <span style="font-size:11.5px;color:var(--mut);">编辑范围：内容、类型、层级、作用域、主题、Agent、校验状态、激活度等；改正文会重置向量。</span>
           </div>
           <div class="panel"><div class="pb" style="padding:0;" id="mem-table"><div class="loading">加载中…</div></div></div>
 
