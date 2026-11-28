@@ -488,13 +488,46 @@ async function fetchUploadCapabilities(force){
   _uploadCapsCache = {key, data:r};
   return r;
 }
+// ★ 2026-11-28：会话图片上传的“最后一米”——开关开了但当前模型不支持时自动切模型。
+// 用户开了 OCR / 视觉开关后仍被前端挡住，根因是默认对话模型（deepseek-v4-flash）
+// 没有 vision 标签；这里从已加载的模型列表里挑一个 chat/多模态且 tags 含 vision 的，
+// 显式切换并提示，避免“开关已开但图片按钮还是不能用”的体验断点。
+// 拒绝权仍在服务端 capabilities / /api/upload，前端只做自动切换与提示。
+function _visionCapableChatProvider(){
+  const arr = _chatProvidersCache || [];
+  return arr.find(p => {
+    if(!p || !Number(p.id)) return false;
+    const mt = String(p.model_type || '');
+    if(mt && mt !== 'chat' && mt !== 'multimodal') return false;
+    let tags = p.tags;
+    if(!Array.isArray(tags)){ try{ tags = JSON.parse(String(tags || '[]')); }catch(e){ tags = []; } }
+    return Array.isArray(tags) && tags.indexOf('vision') !== -1;
+  }) || null;
+}
+async function _ensureVisionModel(){
+  const caps = await fetchUploadCapabilities(true);
+  if(caps && caps.image_upload_allowed) return caps;
+  const vp = _visionCapableChatProvider();
+  const sel = document.getElementById('llm-providers');
+  if(vp && sel && String(sel.value) !== String(vp.id)){
+    sel.value = String(vp.id);
+    try{ sel.dispatchEvent(new Event('change', {bubbles:true})); }catch(e){}
+    const next = await fetchUploadCapabilities(true);
+    try{ refreshUploadCapabilityHint(); }catch(e){}
+    toast('已切换到支持图片的模型：' + (vp.name || vp.model_name || vp.id), 4000);
+    return next;
+  }
+  return caps;
+}
 function refreshUploadCapabilityHint(){
   const el = document.getElementById('am-cap-hint');
   if(!el) return;
   fetchUploadCapabilities().then(c => {
     el.textContent = c.image_upload_allowed
-      ? ('当前模型支持图片 · 可传图片与文档（' + c.supported_formats.length + ' 种格式）')
-      : ('当前模型不支持图片 · 仅可传文档（' + c.document_formats.length + ' 种格式）');
+      ? (c.image_mode === 'vision'
+          ? ('当前模型支持看图 · 可传图片与文档（' + c.supported_formats.length + ' 种格式）')
+          : ('当前模型不直接看图 · 图片将以 OCR 文本提供（' + c.supported_formats.length + ' 种格式）'))
+      : ('图片能力不可用 · 仅可传文档（' + c.document_formats.length + ' 种格式）');
     el.title = c.image_reason || '';
     el.style.color = c.image_upload_allowed ? 'var(--grn,#2f855a)' : 'var(--amb,#b7791f)';
     const img = document.getElementById('am-image');
@@ -508,14 +541,16 @@ function refreshUploadCapabilityHint(){
     el.style.color = 'var(--amb,#b7791f)';
   });
 }
-function pickImageFile(){
-  // 菜单打开时已异步取过能力，这里同步读缓存：不支持时不打开文件选择器。
-  const c = _uploadCapsCache.data;
-  if(c && !c.image_upload_allowed){ toast('⛔ '+c.image_reason, 6000); return; }
+async function pickImageFile(){
+  // 2026-11-28：先按当前模型取能力；若开关已开但模型不支持，自动切到 vision 模型再开选择器。
+  let c = null;
+  try{ c = await _ensureVisionModel(); }catch(e){ c = null; }
+  if(!c || !c.image_upload_allowed){ toast('⛔ '+((c && c.image_reason) || '当前模型不支持图片'), 6000); return; }
   document.getElementById('img-input').click();
   closeAttachMenu();
 }
 function attachFormatFeedback(f, r){
+  if(r && r.mode === 'image_ocr'){ toast('🖼 '+f.name+' 已上传；发送时复用文档库 OCR 转成文本提供（当前模型不直接看图）', 5000); return; }
   if(r && r.mode === 'image_vision'){ toast('🖼 '+f.name+' 已随消息提供给模型识别', 3500); return; }
   if(r && r.inline_supported === false){
     toast('⚠ '+f.name+' 已入文档库，可作为知识引用；该格式不能作为会话正文直接读取', 5000); return;
@@ -530,8 +565,10 @@ function attachFormatFeedback(f, r){
 //   与既有后端注入逻辑完全一致，不会引入「贴进来了但模型读不到」的新形态（历史坑）。
 async function uploadFileObjects(files){
   // 能力预检：不支持的图片在发请求前就挡住，不再"传上去再让 AI 说没收到"。
+  // 2026-11-28：若开关已开但当前模型不支持图片，自动切到 vision 模型（仅当本批含图片）。
+  const _hasImage = Array.from(files || []).some(f => /\.(png|jpe?g|gif|webp|bmp)$/i.test(String(f.name || '')));
   let caps = null;
-  try{ caps = await fetchUploadCapabilities(); }
+  try{ caps = _hasImage ? await _ensureVisionModel() : await fetchUploadCapabilities(); }
   catch(e){ caps = null; }
   if(!caps){
     toast('⛔ 无法确认当前模型的附件能力，已阻止上传（避免文件传上去却读不到）', 6000);

@@ -26,6 +26,63 @@ _ATT_DATE_LINE_RE = re.compile(
 # ★ 2026-11-13（#56）：会话级附件继承的**数量上限**（防一个会话挂几十个文件把 prompt 撑爆）。
 _ATT_INHERIT_MAX = 5
 
+# ★ 2026-11-28：会话图片 OCR 降级 —— 复用文档库同一套 OCR 引擎与质量门禁。
+# 上传时模型不直接看图 → mode=image_ocr → 发送时用 knowledge_pipeline.extract.extract_text_ex
+# 把图片转成正文文本（与文档库同源、同门禁），而不是把图片静默丢弃。
+# 会话级附件会被后续多轮继承，故按 (落盘路径, mtime_ns, size) 做小缓存，避免每轮重复 OCR。
+_OCR_ATT_CACHE = {}
+_OCR_ATT_CACHE_MAX = 32
+
+
+def _ocr_attachment_text(path, fname):
+    """图片附件 → (text, reason)。绝不抛异常；失败时 text='' + 可操作原因。"""
+    try:
+        st = os.stat(path)
+        sig = (st.st_mtime_ns, st.st_size)
+    except Exception as e:
+        return "", f"无法读取图片：{type(e).__name__}: {e}"
+    hit = _OCR_ATT_CACHE.get(path)
+    if hit and hit[0] == sig:
+        return hit[1], hit[2]
+    text, reason = "", ""
+    try:
+        import io as _io
+        from PIL import Image
+        from knowledge_pipeline.extract import extract_text_ex
+        with open(path, "rb") as _f:
+            raw = _f.read()
+        # ★ 实测（doc=真机架构图 11090x5155）：原图 OCR 16.30s；
+        #   等比缩到长边 1280 后 0.99s，且均分 0.721→0.737、低置信行 39.7%→21.7%。
+        #   大图缩放是“又快又好”，聊天轮里必须做（复用 vision.max_side，不新增配置项）。
+        try:
+            from core.config import get as _cfg_get
+            max_side = int(_cfg_get("vision", "max_side", 1280) or 0)
+        except Exception:
+            max_side = 1280
+        try:
+            with Image.open(_io.BytesIO(raw)) as _im:
+                _im.load()
+                if max_side > 0 and max(_im.size) > max_side:
+                    _r = float(max_side) / float(max(_im.size))
+                    _im = _im.resize((max(1, int(_im.width * _r)), max(1, int(_im.height * _r))))
+                    if _im.mode not in ("RGB", "L"):
+                        _im = _im.convert("RGB")
+                    _buf = _io.BytesIO()
+                    _im.save(_buf, format="JPEG", quality=90)
+                    raw = _buf.getvalue()
+        except Exception:
+            pass  # 缩放失败就用原图识别，不阻断
+        text, meta = extract_text_ex(fname, raw)
+        if not meta.get("ok"):
+            reason = meta.get("reason") or "OCR 未识别出可用文本"
+    except Exception as e:
+        text = ""
+        reason = f"OCR 失败：{type(e).__name__}: {e}"
+    if len(_OCR_ATT_CACHE) >= _OCR_ATT_CACHE_MAX:
+        _OCR_ATT_CACHE.clear()
+    _OCR_ATT_CACHE[path] = (sig, text, reason)
+    return text, reason
+
 
 def _is_att_heading(line: str) -> bool:
     """行是否为章节标题：正则命中 + 排除日期行（纯函数，可门禁单测）。"""
@@ -681,7 +738,12 @@ class HistoryMixin:
             ext = os.path.splitext(fname)[1].lower()
             text = ""
             try:
-                if ext in (".txt", ".md", ".csv", ".json", ".xml", ".log", ".sysml", ".yaml", ".yml"):
+                if ext in _IMAGE_EXTS and a.get("mode") in ("image_ocr", "image_ocr_failed"):
+                    text, _ocr_why = _ocr_attachment_text(path, fname)
+                    if not text:
+                        skipped.append(fname + "（" + _ocr_why + "）")
+                        continue
+                elif ext in (".txt", ".md", ".csv", ".json", ".xml", ".log", ".sysml", ".yaml", ".yml"):
                     raw = open(path, "rb").read()
                     for enc in ("utf-8", "gbk", "latin-1"):
                         try:
@@ -766,6 +828,8 @@ class HistoryMixin:
             fname = (a.get("filename") or url.split("/")[-1] or "附件") if isinstance(a, dict) else "附件"
             if os.path.splitext(fname)[1].lower() not in _IMAGE_EXTS:
                 continue  # 非图片附件归文本通道处理，不算「被跳过」
+            if isinstance(a, dict) and a.get("mode") in ("image_ocr", "image_ocr_failed"):
+                continue  # OCR 文本通道已消费，避免同一张图既进正文又进多模态（双份注入）
             if not url.startswith("/static/"):
                 skipped.append(f"{fname}（附件地址非 /static/ 前缀，无法定位落盘副本）")
                 continue

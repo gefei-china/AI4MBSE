@@ -119,25 +119,40 @@ def upload_capabilities(provider_id=None, conn=None) -> dict:
     """
     from core import config as _cfg
     from llm import resolve_provider_cfg, provider_supports_vision
+    from knowledge_pipeline import ocr as _ocr
 
     enabled = bool(_cfg.as_bool("vision", "enabled", False))
     cfg = resolve_provider_cfg(provider_id, conn=conn)
     vision_ok = provider_supports_vision(cfg)
     model_name = (cfg.get("name") or cfg.get("model_name")
                   or (f"provider#{cfg.get('id')}" if cfg.get("id") else "当前模型"))
-    if not enabled:
-        reason = ("视觉通道未启用，已禁止上传图片。开启路径：右上角头像 →「设置」→"
-                  "「🧠 AI 上下文」→「🖼 会话图片附件（视觉通道）」→ 开启。")
-    elif not vision_ok:
-        reason = (f"当前模型「{model_name}」未声明图片理解能力，已禁止上传图片。"
-                  "请在会话模型选择器切换到勾选了「支持图片理解」的模型。")
-    else:
+    # ★ 2026-11-28：图片上传不再只有「视觉模型」一条路。文档库图片走
+    # knowledge_pipeline.ocr（RapidOCR 离线 ONNX）；会话里模型不直接看图时复用
+    # 同一引擎 + 同一套质量门禁，把图片转成正文文本注入，口径与文档库一致。
+    # 复用 extract.ocr_enabled 作总开关：关掉它 = 两条 OCR 路径同时关闭。
+    ocr_ok = bool(_cfg.as_bool("extract", "ocr_enabled", True)) and bool(_ocr.available()[0])
+    vision_mode = bool(enabled and vision_ok)
+    ocr_mode = bool((not vision_mode) and ocr_ok)
+    if vision_mode:
         reason = ""
+    elif ocr_mode:
+        reason = (f"当前模型「{model_name}」不直接看图；图片将复用文档库的 OCR 转成文本随消息提供。"
+                  "若要看图本身，可切换到勾选了「支持图片理解」的模型并开启视觉通道。")
+    elif not enabled:
+        reason = ("视觉通道未启用，且文档 OCR 不可用，已禁止上传图片。"
+                  "可开启视觉通道，或恢复 extract.ocr_enabled 后重试。")
+    elif not vision_ok:
+        reason = (f"当前模型「{model_name}」未声明图片理解能力，且文档 OCR 不可用。"
+                  "可切换到勾选了「支持图片理解」的模型，或恢复 OCR 能力。")
+    else:
+        reason = "图片能力不可用（视觉通道与 OCR 均未就绪）"
     return {
         "vision_enabled": enabled,
         "provider_vision": vision_ok,
+        "ocr_available": ocr_ok,
+        "image_mode": "vision" if vision_mode else ("ocr" if ocr_mode else "none"),
         "model_name": str(model_name),
-        "image_upload_allowed": bool(enabled and vision_ok),
+        "image_upload_allowed": bool(vision_mode or ocr_mode),
         "image_reason": reason,
         "image_formats": sorted(IMAGE_EXTS),
         "document_formats": sorted(DOC_INGEST_EXTS | INLINE_ONLY_EXTS),
@@ -570,17 +585,20 @@ def upload_file(file: UploadFile = File(...), model_id: int | None = Form(None),
         "size": len(content),
         "is_image": ext in IMAGE_EXTS,
         # mode 让前端按「实际消费方式」提示，而不是上传完再猜：
-        #   image_vision      → 图像已可随消息送入模型
+        #   image_vision      → 图像已可随消息送入视觉模型
+        #   image_ocr         → 模型不直接看图，发送时用文档库同一套 OCR 转成正文文本
         #   document_inline   → 文本可直接注入正文
         #   document_ingested → 已入文档库，靠知识引用消费（不一定能内联读全文）
-        "mode": ("image_vision" if ext in IMAGE_EXTS else
-                 ("document_inline" if ext in TEXT_INLINE_EXTS else "document_ingested")),
+        "mode": ("image_vision" if (ext in IMAGE_EXTS and caps["image_mode"] == "vision") else
+                 ("image_ocr" if ext in IMAGE_EXTS else
+                  ("document_inline" if ext in TEXT_INLINE_EXTS else "document_ingested"))),
         "inline_supported": inline_supported,
         "capabilities": caps,
     }
     # ── AI 建模：文档类附件自动进入文档管理（解析→分块→向量化→落库）──
     # 逻辑与「文件管理上传」完全一致（ingest_upload_document 共用入口）；
-    # 图片附件不参与（无文本可抽取，保持会话内联展示）。失败不阻断附件主流程。
+    # 图片附件不入库（image_ocr 在会话发送时按需 OCR，不写向量库、不污染检索）。
+    # 失败不阻断附件主流程。
     if ext in DOC_INGEST_EXTS:
         try:
             from knowledge_pipeline import ingest_upload_document
