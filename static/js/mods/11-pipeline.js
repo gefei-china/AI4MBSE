@@ -1803,12 +1803,28 @@ function procMarkRedrawConfirmed(confirmId, action, failed){
 let _tokBuf = '';
 let _tokRaf = 0;
 let _tokEl = null;
+// ★ 2026-11-28（米爸截图反馈「执行中输出连续堆砌、## 和 ** 都是字面量」）：
+// 原实现 `_tokEl.textContent += txt` + CSS `.msg .body{white-space:normal}` ⇒
+// 模型返回的换行被折叠成空格、Markdown 标记原样显示，整段糊成一坨；
+// 只有流结束 finishStream→renderMessage 才重新按 Markdown 渲染，过程中体验很差。
+// 现在保留**完整累积文本**，每帧用 renderMdLine（与最终渲染同一套行内/标题/列表解析）
+// 重建流式正文；只做行级渲染，不触发代码块折叠/Mermaid，避免高频重建的重副作用。
+let _tokText = '';
+function _renderStreamText(el, text){
+  if(!el) return;
+  if(typeof renderMdLine !== 'function'){ el.textContent = text; return; }
+  const lines = String(text || '').replace(/\r\n/g, '\n').split('\n');
+  let html = '';
+  for(let i = 0; i < lines.length; i++) html += renderMdLine(lines[i], null, null);
+  el.innerHTML = html;
+}
 function _flushTokens(){
   _tokRaf = 0;
   const txt = _tokBuf; _tokBuf = '';
   if(!txt) return;
   if(_tokEl && _tokEl.isConnected){
-    _tokEl.textContent += txt;
+    _tokText += txt;
+    _renderStreamText(_tokEl, _tokText);
     // 2026-09-29：贴底才跟随（原为无条件钉底 → AI 输出期间用户上滑被强行拽回）。
     stickBottom();
   }
@@ -1982,6 +1998,9 @@ function handleSSE(raw) {
     }
     if(bodyEl.querySelector('.typing')) bodyEl.querySelector('.typing').remove();
     // P0-3：合帧渲染（详见 _flushTokens 注释）——不再每 token 写 DOM + 读 scrollHeight
+    // ★ 2026-11-28：换了新的流式盒子（新一轮 / 续显接管）⇒ 清空累积文本，
+    // 否则上一轮正文会被带进本轮的 Markdown 渲染里（重复输出）。
+    if(_tokEl !== bodyEl){ _tokText = ''; _tokBuf = ''; }
     _tokEl = bodyEl;
     _tokBuf += ev.delta || '';
     // 兜底：后台标签页 rAF 不触发，缓冲不能无限增长 → 超阈值直接同步 flush
