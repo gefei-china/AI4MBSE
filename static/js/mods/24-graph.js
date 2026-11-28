@@ -84,7 +84,26 @@ function graphTok(name){
       // P1-5 标签密度阈值（唯一真源：主画布 SVG 与 SysML Cytoscape 共用，避免两侧各写一份）：
       // 缩小到 labelEdgeZoom 以下隐关系标签，labelNodeZoom 以下再隐节点名。
       labelEdgeZoom: 0.6,
-      labelNodeZoom: 0.4
+      labelNodeZoom: 0.4,
+      /* ══ 节点尺寸与聚焦（2026-11-28 米爸反馈「节点有点小，选中后应更大并移到中间」）══
+         原值 base 13 / cap 13（13–26px 半径）。看似不小，但 gvFitView 会把 61 节点
+         的 880×1280 画布压到 900×420 视口里 ⇒ scale≈0.33 ⇒ **屏幕直径只有 8–11px**，
+         这才是「看不清」的真因。所以三件事一起做才有效：
+         ① 半径上调（13→17）；② 选中放大 nodeSelScale；③ 点节点时把缩放拉回可读下限
+         nodeFocusScale（只放大不缩小，见 gvRevealNode）。
+         数值集中在此，渲染处一律 graphTok 取值（P0-1 单一真源）。
+         测试位：verify_graph_p3_focus.py N 组。 */
+      nodeBaseR: 17,          // 基础半径（无关系节点）
+      nodeDegStep: 2.0,       // 每多一条关系增加的半径
+      nodeDegCap: 16,         // 度数加成上限 ⇒ 最大 33
+      skelBaseR: 26,          // 骨架聚合节点基础半径
+      skelCountStep: 1.0,
+      skelCountCap: 16,
+      typeTextMinR: 21,       // 圆内类型文字的最小半径（太小放不下，宁可不画）
+      nodeSelScale: 1.32,     // 选中节点放大系数
+      nodeFocusScale: 0.9,    // 点节点查看时的缩放下限（低于此值看不清，拉回；高于则不动）
+      // 布局碰撞最小中心距：节点变大后必须同步上调，否则会互相压盖（原 44/46 是按 13–26 半径定的）
+      nodeCollideMinD: 56
     };
   }
   return name ? _gvTokens[name] : _gvTokens;
@@ -719,11 +738,23 @@ function graphCollide(nodes, minD){
   // 碰撞避免：重叠节点沿连线推开（布局后消除节点重叠）
   for(let i=0;i<nodes.length;i++) for(let j=i+1;j<nodes.length;j++){
     const dx=nodes[i].x-nodes[j].x, dy=nodes[i].y-nodes[j].y;
-    const d=Math.sqrt(dx*dx+dy*dy)||0.1;
+    const d=Math.sqrt(dx*dx+dy*dy);
+    /* 完全重合时推力方向未定义（原写 `||0.1` 只兜住了分母，但分子 dx=0 ⇒ 位移恒为 0，
+       这对节点会永远叠在一起；真机实测出现过中心距 2.3~4.2px、其中一个根本点不到）。
+       修法要分清两件事：**方向**在重合时按索引给一个确定值（黄金角，不用随机数），
+       **推力**仍按真实距离 d 算 —— 若把「定方向用的 0.5」当成真实距离参与推力，
+       会少推一半，最终只到 minD-0.5（真机门禁 C3 就是这么抓到的）。 */
     if(d<minD){
+      let ux, uy;
+      if(d < 1e-6){
+        const a = ((i * 2.3999632 + j * 1.6180340) % (Math.PI * 2));
+        ux = Math.cos(a); uy = Math.sin(a);
+      } else {
+        ux = dx/d; uy = dy/d;
+      }
       const push=(minD-d)/2;
-      nodes[i].x+=dx/d*push; nodes[i].y+=dy/d*push;
-      nodes[j].x-=dx/d*push; nodes[j].y-=dy/d*push;
+      nodes[i].x+=ux*push; nodes[i].y+=uy*push;
+      nodes[j].x-=ux*push; nodes[j].y-=uy*push;
     }
   }
 }
@@ -813,9 +844,20 @@ function gvLayoutWith(algo, nodes, edges, opts){
 function graphLayout(){
   const nodes = graphState.nodes, edges = graphState.edges;
   if(!nodes.length) return;
-  // 画布高度按节点数自适应（每 4 节点80px，层间距充足不重叠）
-  graphState.svgH = Math.max(460, Math.ceil(nodes.length/4)*80);
-  const W = graphState.svgW, H = graphState.svgH;
+  /* 画布高度自适应（2026-11-28）：原公式「每 4 个节点一排、每排 80px」与画布宽度无关，
+     61 个节点在 880 宽的画布上也被算成 16 排 ⇒ 1280 高。而视口只有 ~848×619，
+     gvFitView 只能压到 scale≈0.6 —— **这才是「节点看着小」的真正主因**（半径只是表象：
+     半径 17 的圆在 0.6 缩放下屏幕直径仅 ~20px）。
+     高度按**密度**反推：每个节点预留 (minD×1.6)² 的面积，再摊到画布宽度。
+     —— 曾试过「每排 N 个」的写法，取 14 个/排时高只有 460、密度接近 collide 饱和，
+        真机出现两节点中心距 2.3px（完全重叠，其中一个点不到）；按面积摊派后
+        61 × (56×1.6)² ≈ 494k → 高 ≈ 561，密度约 39%，既有呼吸感又不至于把缩放压回去。
+     下限保持 460，避免小图被压成一条。 */
+  const _minD = graphTok('nodeCollideMinD');
+  const W = graphState.svgW;                          // 必须先取宽度：下面的面积摊派要用它
+  const _cell = _minD * 1.6;
+  graphState.svgH = Math.max(460, Math.ceil(nodes.length * _cell * _cell / W / 10) * 10);
+  const H = graphState.svgH;
   const cx = W/2, cy = H/2;
   const order = (graphState.view.layout==='ring')
     ? nodes.slice().sort((a,b)=>graphColor(a.entity_type).localeCompare(graphColor(b.entity_type)))
@@ -823,7 +865,7 @@ function graphLayout(){
   if(graphState.view.layout==='ring'){
     const R = Math.min(W,H)/2 - 70;
     order.forEach((n,i)=>{ n.x = cx + R*Math.cos(2*Math.PI*i/order.length); n.y = cy + R*Math.sin(2*Math.PI*i/order.length); });
-    graphCollide(nodes, 44);
+    graphCollide(nodes, graphTok('nodeCollideMinD'));
     return;
   }
   if(graphState.view.layout==='layered'){
@@ -835,8 +877,11 @@ function graphLayout(){
   // 成熟力导向（cose 离屏）→ 碰撞清除 + 边界夹紧；失败回退手写 graphForcePos
   if(!gvLayoutWith('cose', nodes, edges)){ graphForcePos(nodes, edges, W, H); }
   else { gvNormalize(nodes, W, H); }
-  for(let r=0; r<6; r++){
-    graphCollide(nodes, 46);
+  /* 碰撞消除 + 边界夹紧：轮数从 6 提到 12 —— 节点半径上调到 17–33 后单轮推开量
+     相对更小，6 轮会残留贴压（真机实测最小中心距 24.8，明显小于 nodeCollideMinD）。
+     每轮都要重新夹紧，否则被推出去的节点会留在画布外。 */
+  for(let r=0; r<12; r++){
+    graphCollide(nodes, graphTok('nodeCollideMinD'));
     nodes.forEach(n=>{ n.x=Math.max(30,Math.min(W-30,n.x)); n.y=Math.max(30,Math.min(H-30,n.y)); });
   }
 }
@@ -870,7 +915,7 @@ function graphForcePos(nodes, edges, W, H){
       nodes[a].x += dx/d*f; nodes[a].y += dy/d*f;
       nodes[b].x -= dx/d*f; nodes[b].y -= dy/d*f;
     });
-    if(it%6===5) graphCollide(nodes, 44*(1-cool*0.4));
+    if(it%6===5) graphCollide(nodes, graphTok('nodeCollideMinD')*(1-cool*0.4));
   }
   // 画布归一
   const xs = nodes.map(n=>n.x), ys = nodes.map(n=>n.y);

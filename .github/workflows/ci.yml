@@ -1679,6 +1679,12 @@ jobs:
         if: ${{ !cancelled() }}
         run: python tools/verify/verify_graph_p2_render.py
 
+      # 图谱 P3（2026-11-28 米爸反馈）：节点加大 / 选中放大 / 选中自动居中。
+      # 纯前端几何与 DOM，不写库、不调 LLM。
+      - name: Guard 图谱前端 P3 —— 节点尺寸 / 选中放大 / 自动居中（46 条 + 5 变异）
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_graph_p3_focus.py
+
       - name: Guard ask_user 多题与去重 —— 答案不丢、不重复问（会话 1000000254，17 条 + 1 变异）
         if: ${{ !cancelled() }}
         run: python tools/verify/verify_ask_user_multi_question.py

@@ -3244,6 +3244,12 @@
    "tier": "pr",
    "timeout": 420,
    "reason": "图谱前端 P2 门禁（2026-11-28，方案 §P2 四条）：C 社区聚类（真跑 gvDetectCommunities：两个全连接团必须分成两个社区——实测标签传播会把整张连通图塌成 1 个社区，故改用模块度局部移动；输入顺序反转结果逐节点相同；孤立节点 _community=null 不造噪声社区；components 退化模式；色带 12 色且 HSL 饱和度≤0.45；社区身份取组内最小 id ⇒ 加成员不换色；结果写回 n._community）；V 视角保存（真跑 gvSnapshotView/gvSanitizeSnapshot/gvApplySnapshot：schema 版本 + 分支绑定 + 坐标快照；按分支隔离；悬空类型/骨架焦点/坐标逐项清洗并夹紧缩放 0.3–3；跨分支快照拒绝；坐标齐全则精确复原、缺失则重排且如实标记 exact=false；上限 12 且同名覆盖；删除生效）；X 导出当前视野（真跑 gvExportBBox/gvExportSvgSource/gvExportPngScale：包围盒把 #gv-inner 局部坐标乘 scale 加 pan 换算到视口；PNG 单边 4096 / 面积 2400 万双上限降采样；SVG 补 xmlns、尺寸、viewBox、中文字体栈、画布底色 rect、内联类样式并剥掉 tabindex —— 少任一项导出的就是打不开或透明底的图）；K 键盘可达性（真跑 gvNeighborInDirection/gvNodeKey/gvRestoreFocus：四向选邻且优先正对、无邻返回 null、Enter 选中并 preventDefault、方向键移焦点且防页面滚动、Esc 清除、innerHTML 重建后按 focusNid 复位焦点）；S 结构与单一实现（社区配色一处/与类型色互斥/图例随维度切换/视角只落 localStorage/快照 schema+分支/清洗夹紧/导出区分全量与视野/PNG 倍率走函数/ARIA 属性/重建后恢复焦点/色带不散落）；H1 完整性（少跑一条即红）；M 变异自证 5 条（孤立节点也分社区/视角不分分支/不清洗悬空焦点/导出缺 xmlns/方向键忽略横偏），锚点唯一、变异体真的变了，且每组只让目标判据翻红（其余 45–46 项仍绿）。判据 exec 真函数（Node + DOM/localStorage 桩），零写库、不调 LLM，实测 53/53。"
+  },
+  {
+   "script": "verify_graph_p3_focus.py",
+   "tier": "pr",
+   "timeout": 300,
+   "reason": "图谱节点尺寸与聚焦门禁（2026-11-28 米爸反馈「节点有点小，选中后应更大并自动居中」）：N 聚焦（真跑 gvRevealNode：低缩放时拉到 nodeFocusScale 下限并按新 scale 重算 pan 居中；已放大时不得缩回——不抢用户缩放决定；未知节点/无坐标不动 vp 且返回 false；pan 必须随 scale 变化，漏乘 scale 会得到同一个 pan）；U 单击与拖拽分流（真跑 graphSvgUp：单击居中且**不写库**（原实现每次单击都发一次 PUT）、真拖拽写库且**不居中**（用户刚摆好的位置不该被抢走）、2px 抖动算单击、>2px 算拖拽、框选提交优先不误入拖拽）；R 半径（真跑 gvNodeRadius：base/度数加成/加成上限/骨架/选中放大须等于 round(base×nodeSelScale)/系数>1/公式只有一处实现——第一版在测试里复刻公式，变异「去掉选中放大」后判据仍绿，已改为 exec 真函数）；C 碰撞（真跑 graphCollide：完全重合必须被推开——原实现 dx/d=0/0.1=0 位移恒 0、推到 minD 而非 minD-0.5（把定方向用的 0.5 当真实距离参与推力会少推一半）、方向确定不用随机数、距离足够远时不误动）；S 结构（尺寸参数集中 token / 渲染处无写死半径 / 居中只在 up 不在 down 也不在 move / 按下坐标快照 sx0 双向 / 画布高度按密度并用画布宽度摊派（原公式与宽度无关 ⇒ 61 节点算出 1280 高 ⇒ fit 压到 0.6 才是「节点看着小」的真主因）/ 碰撞最小距 token 化 / 类型文字门槛 token 化 / gvCenterOnNode 保持不动）；H1 完整性（少跑一条即红）；M 变异自证 5 条（居中挪到 mousedown / 去掉选中放大 / 不区分单击与拖拽 / 重合不给方向 / 居中不提缩放），锚点唯一、变异体真的变了，每组只让目标判据翻红（其余 36–39 项仍绿）。判据 exec 真函数（Node + DOM 桩），零写库、不调 LLM，实测 46/46。"
   }
  ]
 }

@@ -777,7 +777,9 @@ async function graphNodeDown(ev, id) {
   const ro = isReleaseBranch(getCurrentBranch()) || !!n._skel;
   if(!ro) {
     const p = gvScreenToWorld(ev);   // P1-1 前置：世界坐标（含 vp 反算）
-    graphState.drag = p ? {id, ox: p.x - n.x, oy: p.y - n.y} : {id, ox:0, oy:0};
+    // 记下按下时的世界坐标：mouseup 用它区分「单击」与「拖拽」（决定是否居中/写库）
+    graphState.drag = p ? {id, ox: p.x - n.x, oy: p.y - n.y, sx0: n.x, sy0: n.y}
+                        : {id, ox:0, oy:0, sx0: n.x, sy0: n.y};
   }
   graphState.multiSel = new Set();   // P1-1：单选与多选互斥，点节点即退出框选态
   renderGraph();
@@ -900,10 +902,19 @@ function graphSvgMove(ev) {
 async function graphSvgUp(ev) {
   if(graphState.box) { gvBoxCommit(); return; }
   if(graphState.drag) {
-    const n = graphState.nodes.find(x=>x.id===graphState.drag.id);
-    if(n) saveNodePos(n);
+    /* 区分「单击」与「拖拽」（2026-11-28）：
+       · 位移 < 2px 视为单击 —— 不写坐标（原来每次单击都发一次 PUT，纯属无用写库），
+         并把该节点居中 + 拉到可读缩放（米爸反馈：选中后要看得清、还得自己找位置）。
+       · 真拖拽 —— 保存坐标，且**不居中**（用户刚摆好的位置不该被抢走）。
+       居中放在 up 而不是 down：down 时 drag 的 ox/oy 已按旧 vp 算好，此刻改 vp 会让
+       紧随其后的 mousemove 按新 vp 反算 ⇒ 节点跳飞。 */
+    const d = graphState.drag;
+    const n = graphState.nodes.find(x=>x.id===d.id);
+    const moved = !!n && (Math.abs(n.x - d.sx0) > 2 || Math.abs(n.y - d.sy0) > 2);
+    if(n && moved) saveNodePos(n);
     graphState.drag = null;
     renderGraph();   // P0-3：落位后统一刷新一次（选中态/光晕/边层级），拖拽期间零重建
+    if(n && !moved) gvRevealNode(d.id);
   }
   if(graphState.pan) {
     graphState.pan = null;

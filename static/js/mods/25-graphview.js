@@ -1033,7 +1033,9 @@ function renderGraph() {
     const fill = n._skel ? k.skelFill : (linkHi ? k.linkFill : (sel ? k.selFill : (nb ? k.nbrFill : tint)));
     const sw = linkHi ? 4 : (sel ? 3 : (nb ? 2.5 : 1.5));
     const no = (dim && !sel && !nb && !isMs) ? k.dimOpacity : 1;   // 同上（原硬编码 0.22）
-    const r = n._skel ? 20 + Math.min((n._count||1)*0.9, 13) : 13 + Math.min((deg[n.id]||0)*1.7, 13);   // 2026-09-13 节点加大更醒目
+    /* 节点半径走 gvNodeRadius（单一实现：基础 + 度数加成 + 选中放大）。
+       选中放大是「选了却看不出选了谁」的直接对策，小图上尤其明显。 */
+    const r = gvNodeRadius(n, deg, sel);
     const hiR = Math.max(5, r*0.42);
     const foldHere = !!(_hidden && _fold && String(_fold.nid)===String(n.id));
     s += `<g class="gv-node${sel?' gv-sel-node':''}${isMs?' gv-ms-node':''}${onPath?' gv-path-node':''}" data-nid="${esc(n.id)}" transform="translate(${n.x},${n.y})" style="cursor:pointer;opacity:${no};"
@@ -1046,7 +1048,7 @@ function renderGraph() {
       ${n._skel
         ? `<text y="4" font-size="10.5" fill="${c}" text-anchor="middle" font-weight="700">×${n._count}</text>`
         : `<circle r="${hiR}" fill="${k.canvas}" opacity="0.36" pointer-events="none"/>
-           ${r >= 16 ? `<text y="${Math.min(2, r*0.3)}" font-size="9.5" fill="${k.canvas}" text-anchor="middle" font-weight="700" pointer-events="none">${esc(n.entity_type)}</text>` : ''}
+           ${r >= graphTok('typeTextMinR') ? `<text y="${Math.min(2, r*0.3)}" font-size="9.5" fill="${k.canvas}" text-anchor="middle" font-weight="700" pointer-events="none">${esc(n.entity_type)}</text>` : ''}
            <text class="gv-nlabel" y="${r+14}" font-size="11.5" fill="${k.text}" text-anchor="middle" font-weight="600" pointer-events="none"
              stroke="${k.canvas}" stroke-width="3" stroke-linejoin="round" paint-order="stroke">${esc(n.name.length>10?n.name.slice(0,10)+'…':n.name)}</text>`}
       ${foldHere ? `<g class="gv-fold-badge" style="cursor:pointer;" onmousedown="event.stopPropagation();" onclick="event.stopPropagation();gvUnfold();"
@@ -1158,6 +1160,42 @@ function gvTypeFamily(name){
     });
   }
   return fam;
+}
+/* 节点半径：基础 + 度数加成（/计数加成），选中再乘 nodeSelScale。
+   抽成独立函数而不是内联在 renderGraph 里，理由是**可测**：内联表达式只能靠
+   「在测试里复刻一遍」来断言，而复刻不随源码变化 —— P3 门禁第一版就是这么自欺的
+   （变异「去掉选中放大」后判据仍绿）。抽出来后门禁 exec 的就是真代码。
+   尺寸全部来自 graphTok（P0-1 单一真源），改 tokens.css 一处即可全局生效。 */
+function gvNodeRadius(n, deg, sel){
+  const rBase = n._skel
+    ? graphTok('skelBaseR') + Math.min((n._count||1) * graphTok('skelCountStep'), graphTok('skelCountCap'))
+    : graphTok('nodeBaseR') + Math.min((deg[n.id]||0) * graphTok('nodeDegStep'), graphTok('nodeDegCap'));
+  return sel ? Math.round(rBase * graphTok('nodeSelScale')) : rBase;
+}
+/* ══ 点节点查看：居中 + 拉到可读缩放（2026-11-28） ══
+   为什么不直接用 gvCenterOnNode：它只居中、不改缩放。而整图 fitView 后 scale 常只有
+   0.5~0.6（实测 61 节点 = 0.591），居中后节点屏幕直径仍不足 25px，"移到中间"也看不清。
+   所以这里同时做两件事：
+   ① 缩放拉回 nodeFocusScale 下限 —— **只放大不缩小**：用户已放大到 1.5 就保持 1.5，
+      不能因为点了个节点又被缩回去（那等于抢走用户的缩放决定）。
+   ② 以节点为中心重算 pan，让节点落在画布正中。
+   调用时机：**必须在 mouseup（单击）而不是 mousedown** —— mousedown 时 graphState.drag
+   的 ox/oy 是按当时的 vp 算的，此刻改 vp 会让紧随其后的拖拽按新 vp 反算 ⇒ 节点跳飞。
+   测试位：verify_graph_p3_focus.py N 组（含「拖拽时不得居中」变异）。 */
+function gvRevealNode(id){
+  const n = graphState.nodes.find(x=> String(x.id) === String(id));
+  if(!n || n.x == null || n.y == null) return false;
+  const svg = document.getElementById('gv-svg');
+  if(!svg) return false;
+  // 右栏详情是 display 切换（无过渡），此处读到的 clientWidth 已是展开后的最终宽度
+  const vw = svg.clientWidth || 800, vh = svg.clientHeight || 400;
+  const s0 = graphState.vp.scale || 1;
+  const s = Math.max(s0, graphTok('nodeFocusScale'));
+  graphState.vp.scale = s;
+  graphState.vp.panX = vw/2 - s*n.x;
+  graphState.vp.panY = vh/2 - s*n.y;
+  gvApplyView();   // 无参 = 平滑 220ms 过渡
+  return true;
 }
 // 树选中 → 图视图平移把该节点带到画布中央（配合原生 1-hop 聚焦）
 function gvCenterOnNode(id){
