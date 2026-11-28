@@ -81,9 +81,13 @@ async function openFilePreview(o){
     meta: null, text: '', textLoaded: false, kind: '', tab: o.tab || '', loadErr: '',
   };
   _pvState = st;
+  // ★ 2026-11-28：面板必须**无条件**打开。原实现只在 st.docId 分支里调 openPanel，
+  // 会话图片附件（无 doc_id，原件就是 /static/uploads/...）只更新了 panel-title/body，
+  // 却没加 overlay.show / panel-detail.open ⇒ 用户点击图片后页面毫无反应。
+  // 骨架屏先开，随后 renderPvPanel 覆盖成真实内容；文档库路径也一并统一到此处。
+  openPanel('📖 ' + st.filename, pvSkeleton('正在读取源文件…'));
 
   if(st.docId){
-    openPanel('📖 ' + st.filename, pvSkeleton('正在读取源文件…'));
     try{
       const r = await api('/api/documents/' + st.docId + '/source');
       if(r && r.error){ st.loadErr = r.error; }
