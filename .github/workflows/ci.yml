@@ -1685,6 +1685,12 @@ jobs:
         if: ${{ !cancelled() }}
         run: python tools/verify/verify_graph_p3_focus.py
 
+      # 顶部 Tab 行 / 工具行不得变形折行（2026-11-28：本体模型顶栏 18 个入口被压窄后文字在项内折行）。
+      # 纯 CSS 结构不变量，无需浏览器；真实像素测量在 tier=local 的 verify_ont_runtime_browser.js B8/B9。
+      - name: Guard 顶部 Tab 行不变形 —— 不收缩 / 不折行 / 单行（13 条 + 3 变异）
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_ont_header_layout.py
+
       - name: Guard ask_user 多题与去重 —— 答案不丢、不重复问（会话 1000000254，17 条 + 1 变异）
         if: ${{ !cancelled() }}
         run: python tools/verify/verify_ask_user_multi_question.py

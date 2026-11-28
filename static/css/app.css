@@ -83,7 +83,18 @@ table.t tr:last-child td{border-bottom:none;}
 .page > .pd{display:none;}
 /* 例外：工作台问候语（角色提示）保留可见，避免顶部空白 */
 .page > #home-greeting{display:flex;gap:8px;align-items:center;color:var(--mut);font-size:13.5px;padding:2px 0 8px;}
-.subtab{display:flex;gap:4px;margin-bottom:12px;border-bottom:1px solid var(--line);}
+/* 2026-11-28 修「顶部操作入口变形 / 全部换行」：
+   .subtab 是 flex 但没设 flex-wrap 与 white-space，子项默认 flex-shrink:1。
+   当子项总宽超过容器（本体模型顶栏实测自然宽 1510 > 容器 1356），每一项都被压窄到
+   小于自身文字宽度 ⇒ **文字在每一项内部折行**：Tab 变成 64px 高、按钮 47px 高，
+   且各行高度互不相同导致竖向错位（实测 8 个不同 top 值 115~162）。
+   修法两条缺一不可：
+   ① 子项不收缩 + 文字不折行 —— 任何一项都不会被压成两行；
+   ② 放不下时整行换行（flex-wrap）—— 兜底，避免不收缩后横向溢出撑破布局。
+   注意：不要在这里加 align-items，Tab 的选中下划线依赖 stretch 贴住行底边框
+   （#ont-subtab-row 另行用 flex-end，见下方规则）。 */
+.subtab{display:flex;flex-wrap:wrap;gap:4px;margin-bottom:12px;border-bottom:1px solid var(--line);}
+.subtab > *{flex:0 0 auto;white-space:nowrap;}
 .subtab span{padding:8px 16px;font-size:14.5px;color:var(--mut);cursor:pointer;border-bottom:2px solid transparent;}
 .subtab span .tag{padding:1px 7px;font-size:12.5px;line-height:normal;vertical-align:middle;}
 .subtab span.on{color:var(--blue-d);font-weight:600;border-bottom-color:var(--blue);}
@@ -92,6 +103,29 @@ table.t tr:last-child td{border-bottom:none;}
    统一底对齐（Tab 下划线本就贴行底边框，视觉不变）；小尺寸状态文字/版本徽标改居中免贴底。 */
 #ont-subtab-row{align-items:flex-end;}
 #ont-subtab-row #oe-consistency,#ont-subtab-row #ont-version-badge{align-self:center;}
+/* 2026-11-28 单行紧凑化（配合上方 .subtab 的不折行）：
+   该行有 6 Tab + 9 个按钮 + 3 个占位 span + 版本徽标，实测自然宽 1510px，容器仅 1356px。
+   若靠 wrap 换行，Tab 的选中下划线（贴行底）会浮到第一行底、与行的边框线断开 —— 视觉更糟。
+   因此**逐项收紧**到单行（不隐藏入口、不改信息架构，只是去掉多余留白）：
+     · gap 4→2（16 处）
+     · Tab 左右内边距 16→11（5 个可见 Tab）
+     · 分隔竖线归零内边距 + 左右 6px 外边距
+     · #oe-consistency 是空状态位，默认 16px 内边距白占 32px
+     · 按钮左右内边距 10→7（9 个）
+   合计约省 190px，留 ~36px 余量。新增入口若再次挤爆，由浏览器门禁
+   verify_ont_runtime_browser.js 的「顶栏不变形」判据当场报红。 */
+#ont-subtab-row{gap:2px;}
+#ont-subtab-row > span:not([style*="flex:1"]):not(.tag):not([style*="border-left"]){padding-left:11px;padding-right:11px;}
+#ont-subtab-row > span[style*="border-left"]{padding:0;margin:0 6px;align-self:center;}
+#ont-subtab-row #oe-consistency{padding:0 4px;}
+#ont-subtab-row .btn.sm{padding-left:7px;padding-right:7px;}
+/* 2026-11-28 占位 span 是换行的直接诱因：它是 `flex:1` 的弹性项，
+   在 flex-wrap 容器里会先吃掉本行剩余空间，把后面的版本徽标挤到第二行
+   （实测：占位项被拉到 225px，徽标被挤下去，行高 93 ⇒ 两行且下划线错位）。
+   改为隐藏占位项、把「推到右侧」交给第一个下拉的 margin-left:auto ——
+   参与换行计算的只剩真实控件（自然宽 1260 ≤ 内容宽 1336），一行装得下。 */
+#ont-subtab-row > span[style*="flex:1"]{display:none;}
+#ont-subtab-row > .dd:first-of-type{margin-left:auto;}
 .subpage{display:none;} .subpage.on{display:block;}
 /* v6.3 2026-09-06：以下 #ont-graph.ont-fullscreen 系列已迁移至 static/css/kb.css（kb 模块解耦）。
    保留注释以备回溯，原始行 139-140。 */

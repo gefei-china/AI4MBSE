@@ -75,6 +75,43 @@ async function cdp(ws, method, params, id) {
     const b = JSON.parse(boot.result.result.value);
     check('B1', '新按钮与新函数已加载', b.go && b.open && b.btn, JSON.stringify(b));
 
+    /* 2026-11-28：顶栏「不得变形折行」的真实像素判据。
+       背景：.subtab 曾因缺 flex-wrap + 子项可收缩，把每一项压窄到文字折行
+       （Tab 高 41→64、按钮 29→47、出现 8 个不同 top 值）。CSS 结构判据在
+       verify_ont_header_layout.py（CI 可跑），这里补真实布局测量：
+       单行 + 同类控件高度一致 + 无项内文字溢出。 */
+    const hdr = await cdp(ws, 'Runtime.evaluate', {
+      expression: `(()=>{
+        try{
+          document.body && (window._kbCtxTerms=false);
+          go('kb','kb-c');
+        }catch(e){}
+        const row = document.getElementById('ont-subtab-row');
+        if(!row) return JSON.stringify({missing:true});
+        const kids=[...row.children].filter(el=>el.getBoundingClientRect().width>0);
+        const h=el=>Math.round(el.getBoundingClientRect().height);
+        const btnH=kids.filter(e=>e.tagName==='BUTTON').map(h);
+        const tabH=kids.filter(e=>e.tagName==='SPAN'&&getComputedStyle(e).cursor==='pointer'&&e.classList.contains('on')===false&&e.hasAttribute('data-tabgrp')).map(h);
+        const spread=a=>a.length?Math.max(...a)-Math.min(...a):0;
+        const rowH=Math.round(row.getBoundingClientRect().height);
+        const padTop=parseFloat(getComputedStyle(row).paddingTop)||0;
+        const maxH=Math.max(...kids.map(h));
+        const overflow=kids.filter(e=>e.scrollHeight>e.clientHeight+2).length;
+        const cs=getComputedStyle(row);
+        return JSON.stringify({rowH,maxH,padTop,
+          singleLine: rowH <= maxH+padTop+12,
+          btnCount:btnH.length, btnSpread:spread(btnH), btnMin:btnH.length?Math.min(...btnH):null,
+          tabCount:tabH.length, tabSpread:spread(tabH),
+          overflow, flexWrap:cs.flexWrap, childCount:kids.length});
+      })()`, returnByValue: true }, 41);
+    const H = JSON.parse(hdr.result.result.value);
+    await sleep(300);
+    check('B8', '本体顶栏单行显示（未因挤压换行）', H.singleLine === true,
+      `rowH=${H.rowH} maxH=${H.maxH} padTop=${H.padTop} flexWrap=${H.flexWrap}`);
+    check('B9', '顶栏控件无项内文字折行（同类高度一致 + 无溢出）',
+      H.btnSpread <= 2 && H.tabSpread <= 2 && H.overflow === 0,
+      `按钮 ${H.btnCount} 个高度差 ${H.btnSpread}px / Tab ${H.tabCount} 个高度差 ${H.tabSpread}px / 文字溢出 ${H.overflow}`);
+
     const nav = await cdp(ws, 'Runtime.evaluate', {
       expression: `(()=>{try{go('kb','kb-c');return 'ok'}catch(e){return 'err:'+e.message}})()`, returnByValue: true }, 5);
     check('B2', "能切到本体模型页 go('kb','kb-c')", nav.result.result.value === 'ok', nav.result.result.value);
