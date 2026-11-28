@@ -1667,6 +1667,12 @@ jobs:
         if: ${{ !cancelled() }}
         run: python tools/verify/verify_graph_p0_render.py
 
+      # 图谱 P1（2026-11-28）：框选多选 / 路径高亮 / 双击折叠 / 标签密度 / 布局参数。
+      # 同样 exec 真函数；BFS 调用带 vm 超时，避免「变异体死循环」把门禁挂成环境问题。
+      - name: Guard 图谱前端 P1 —— 框选 / 路径 / 折叠 / 标签密度 / 布局参数（68 条 + 5 变异）
+        if: ${{ !cancelled() }}
+        run: python tools/verify/verify_graph_p1_interact.py
+
       - name: Guard ask_user 多题与去重 —— 答案不丢、不重复问（会话 1000000254，17 条 + 1 变异）
         if: ${{ !cancelled() }}
         run: python tools/verify/verify_ask_user_multi_question.py

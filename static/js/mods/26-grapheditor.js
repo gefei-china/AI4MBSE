@@ -588,6 +588,23 @@ function gvToUser(ev) {
   if(!ctm) return null;
   return new DOMPoint(ev.clientX, ev.clientY).matrixTransform(ctm.inverse());
 }
+/* P1-1 前置（2026-11-28）：屏幕坐标 → **世界坐标**。
+   gvToUser 只反变换到 SVG 视口（getScreenCTM 不含 #gv-inner 的 transform），
+   而 pan/scale 施加在 #gv-inner 上 ⇒ 缩放后拿视口坐标直接减 n.x/n.y 会少除一次 scale。
+   真机取证（scale=2 时拖拽）：鼠标右移屏幕 100px，节点世界坐标也变 100（应为 50），
+   屏幕位移 -1128px，节点直接飞出视口。
+   拖拽定位与框选命中测试都必须走这里。 */
+function gvScreenToWorld(ev) {
+  const p = gvToUser(ev);
+  if(!p) return null;
+  const vp = graphState.vp, s = vp.scale || 1;
+  return { x: (p.x - (vp.panX || 0)) / s, y: (p.y - (vp.panY || 0)) / s };
+}
+/* 世界坐标 → SVG 视口坐标（框选命中测试的反向换算） */
+function gvWorldToScreen(x, y) {
+  const vp = graphState.vp, s = vp.scale || 1;
+  return { x: x * s + (vp.panX || 0), y: y * s + (vp.panY || 0) };
+}
 // ── 2026-09-12 展示优化：gvApplyView 支持【即时】与【平滑过渡】双模式 ──
 // 缩放按钮 / 树定位 gvCenterOnNode / 首次 gvFitView 走 220ms easeOut 过渡；画布平移(graphSvgMove)与滚轮缩放(graphSvgWheel)
 // 走即时，避免节点/视口延迟跟随。gvMiniSync 让缩略图视口框随 vp 同步。
@@ -599,6 +616,7 @@ function gvApplyView(immediate) {
     if(g) g.setAttribute('transform', `translate(${_gvCur.px} ${_gvCur.py}) scale(${_gvCur.s})`);
     const z = document.getElementById('gv-zoom-pct2');
     if(z) z.textContent = Math.round(_gvCur.s * 100) + '%';
+    gvSyncLabelDensity();   // P1-5：缩放级别 → 标签密度
     gvMiniSync();
   };
   if(immediate){ _gvViewTok++; apply(); return; }
@@ -619,6 +637,18 @@ function gvApplyView(immediate) {
   requestAnimationFrame(step);
 }
 function gvZoomReset() { graphState.vp.scale=1; graphState.vp.panX=0; graphState.vp.panY=0; gvApplyView(); }
+/* P1-5 标签密度：阈值取自 graphTok（与 SysML Cytoscape 同一真源，不各写一份）。
+   renderGraph 会重建 #gv-svg（innerHTML），所以 class 不能只在 gvApplyView 里加，
+   渲染结束也要重新施加一次。 */
+function gvSyncLabelDensity() {
+  const svg = document.getElementById('gv-svg');
+  if(!svg) return null;
+  const s = graphState.vp.scale || 1;
+  const far = s < graphTok('labelEdgeZoom'), farther = s < graphTok('labelNodeZoom');
+  svg.classList.toggle('gv-far', far);
+  svg.classList.toggle('gv-farther', farther);
+  return { scale: s, edgeHidden: far, nodeHidden: farther };
+}
 function gvZoomIn() { graphState.vp.scale = Math.min(3, graphState.vp.scale * 1.2); gvApplyView(); }
 function gvZoomOut() { graphState.vp.scale = Math.max(0.3, graphState.vp.scale / 1.2); gvApplyView(); }
 // ── 缩略图（minimap）：只读总览 + 视口框随主视图 vp 移动；异常自动隐藏回退（不动主 SVG 与状态机）──
@@ -710,9 +740,16 @@ function graphSvgWheel(ev) {
 async function graphNodeDown(ev, id) {
   ev.stopPropagation();
   // 图上直接连关系（2026-09-12 连线模式）：开启后 mousedown 转为连线的源/目标选择
-  if(window.gvLinkMode){
+  // 2026-11-28 修：原写 window.gvLinkMode，而 gvLinkMode 是顶层 let（挂在全局词法环境、不挂 window）
+  //   ⇒ 判定恒 false ⇒ 连线模式点节点走的是普通选中，模式开关形同虚设。
+  if(typeof gvLinkMode !== 'undefined' && gvLinkMode){
     if(isReleaseBranch(getCurrentBranch())){ toast('🔒 发布分支只读，不可建立关系'); return; }
     gvLinkPick(id);
+    return;
+  }
+  // P1-4 路径模式：点起点 → 点终点（与连线模式互斥）
+  if(typeof gvPathMode !== 'undefined' && gvPathMode){
+    gvPathPick(id);
     return;
   }
   // 骨架模式分流：L1 类型节点 → 下钻 L2 实例束（不进右栏详情、不拖拽）
@@ -739,9 +776,10 @@ async function graphNodeDown(ev, id) {
   // release 只读：可点击查看详情，但不启用拖拽（禁改坐标）
   const ro = isReleaseBranch(getCurrentBranch()) || !!n._skel;
   if(!ro) {
-    const p = gvToUser(ev);
+    const p = gvScreenToWorld(ev);   // P1-1 前置：世界坐标（含 vp 反算）
     graphState.drag = p ? {id, ox: p.x - n.x, oy: p.y - n.y} : {id, ox:0, oy:0};
   }
+  graphState.multiSel = new Set();   // P1-1：单选与多选互斥，点节点即退出框选态
   renderGraph();
   showGraphDetail(id);
 }
@@ -812,11 +850,26 @@ async function gvLinkCreate(srcId, tgtId, rel){
   }catch(e){ toast('❌ 建立关系失败：'+(e.message || String(e))); }
 }
 function gvLinkCancel(){ gvToggleLinkMode(); }
-if(!window.__gvLinkEscBound){ window.__gvLinkEscBound = 1; document.addEventListener('keydown', function(e){ if(e.key==='Escape' && window.gvLinkMode) gvLinkCancel(); }); }
+// 连线模式的 Esc 退出已并入下方 __gvP1EscBound 统一监听：
+// 旧实现写 `window.gvLinkMode`，而 gvLinkMode 是顶层 let（不挂 window）⇒ 判定恒 false，Esc 从来没生效过。
 function graphSvgDown(ev) {
   if(ev.target.id==='gv-svg') {
     graphState.sel = null; graphState.drag = null;
+    /* P1-1 框选：Shift + 空白拖动 = 矩形多选。
+       用修饰键强制区分两种手势（行业惯例 Reagraph / Gephi），不平移就不抢同一手势。 */
+    if(ev.shiftKey){
+      graphState.pan = null;
+      const p = gvToUser(ev);
+      graphState.box = p ? {x0:p.x, y0:p.y, x1:p.x, y1:p.y} : null;
+      const svg0 = document.getElementById('gv-svg');
+      if(svg0) svg0.style.cursor = 'crosshair';
+      renderGraph();      // 先清掉旧选中视觉
+      gvBoxPaint();       // rect 必须在 renderGraph 之后插入（innerHTML 重建会清空画布）
+      showGraphDetail(null);
+      return;
+    }
     graphState.pan = {sx: ev.clientX, sy: ev.clientY, px: graphState.vp.panX, py: graphState.vp.panY};
+    graphState.multiSel = new Set();   // 点空白 = 取消一切临时选择（与提示条「点空白取消」语义一致）
     const svg = document.getElementById('gv-svg');
     if(svg) svg.style.cursor = 'grabbing';
     renderGraph();
@@ -824,10 +877,15 @@ function graphSvgDown(ev) {
   }
 }
 function graphSvgMove(ev) {
+  if(graphState.box) {
+    const p = gvToUser(ev);
+    if(p){ graphState.box.x1 = p.x; graphState.box.y1 = p.y; gvBoxPaint(); }
+    return;
+  }
   if(graphState.drag) {
     const n = graphState.nodes.find(x=>x.id===graphState.drag.id);
     if(n) {
-      const p = gvToUser(ev);
+      const p = gvScreenToWorld(ev);   // P1-1 前置：必须反算 vp，否则缩放后位移被放大 scale 倍
       if(p) { n.x = p.x - graphState.drag.ox; n.y = p.y - graphState.drag.oy; }
     }
     // P0-3：拖拽期间只做增量 patch（节点 transform + 相邻边路径），rAF 合帧；
@@ -840,6 +898,7 @@ function graphSvgMove(ev) {
   }
 }
 async function graphSvgUp(ev) {
+  if(graphState.box) { gvBoxCommit(); return; }
   if(graphState.drag) {
     const n = graphState.nodes.find(x=>x.id===graphState.drag.id);
     if(n) saveNodePos(n);
@@ -852,6 +911,269 @@ async function graphSvgUp(ev) {
     if(svg) svg.style.cursor = '';   // 2026-09-13 恢复十字定位光标
   }
 }
+/* ══════════ P1（2026-11-28）主画布交互三件：框选多选 / 路径高亮 / 双击折叠 ══════════
+   三者共用同一套「高亮集合 + 其余淡出」机制（neighbor / actEdgeIds / dim，见 renderGraph），
+   不新造第二套视觉语言；状态各自独立，互斥关系在入口处显式处理。 */
+
+// ── P1-1 框选：矩形 rect 画在 SVG 视口层（不是 #gv-inner），坐标与命中测试统一用视口坐标 ──
+function gvBoxPaint(){
+  const svg = document.getElementById('gv-svg'), b = graphState.box;
+  if(!svg || !b) return;
+  let r = document.getElementById('gv-box');
+  if(!r){
+    const k = graphTok();
+    r = document.createElementNS('http://www.w3.org/2000/svg','rect');
+    r.id = 'gv-box';
+    r.setAttribute('fill', hexToRgba(k.primary, .10));
+    r.setAttribute('stroke', k.primary);
+    r.setAttribute('stroke-width', '1.2');
+    r.setAttribute('stroke-dasharray', '4 3');
+    r.setAttribute('pointer-events', 'none');
+    svg.appendChild(r);
+  }
+  const x = Math.min(b.x0, b.x1), y = Math.min(b.y0, b.y1);
+  r.setAttribute('x', x); r.setAttribute('y', y);
+  r.setAttribute('width', Math.abs(b.x1 - b.x0));
+  r.setAttribute('height', Math.abs(b.y1 - b.y0));
+}
+function gvBoxClear(){
+  const r = document.getElementById('gv-box');
+  if(r && r.parentNode) r.parentNode.removeChild(r);
+}
+function gvBoxCommit(){
+  const b = graphState.box;
+  graphState.box = null; gvBoxClear();
+  const svg = document.getElementById('gv-svg');
+  if(svg) svg.style.cursor = '';
+  if(!b){ renderGraph(); return; }
+  const x0 = Math.min(b.x0,b.x1), x1 = Math.max(b.x0,b.x1);
+  const y0 = Math.min(b.y0,b.y1), y1 = Math.max(b.y0,b.y1);
+  // 误触（Shift+单击）不给多选，按清空处理
+  if((x1-x0) < 4 && (y1-y0) < 4){ graphState.multiSel = new Set(); renderGraph(); return; }
+  const hidden = (graphState.fold && graphState.fold.hidden) || null;
+  const hit = new Set();
+  (graphState.nodes||[]).forEach(n=>{
+    if(hidden && hidden.has(String(n.id))) return;             // 折叠域内的节点不可选
+    if(n.x==null || n.y==null) return;
+    const p = gvWorldToScreen(n.x, n.y);
+    if(p.x>=x0 && p.x<=x1 && p.y>=y0 && p.y<=y1) hit.add(String(n.id));
+  });
+  graphState.multiSel = hit;
+  renderGraph();
+  gvMultiSelDetail();
+  toast(hit.size ? ('已框选 ' + hit.size + ' 个节点') : '框选范围内没有节点');
+}
+function gvMultiSelClear(){
+  graphState.multiSel = new Set();
+  renderGraph();
+  showGraphDetail(null);
+}
+function gvMultiSelDetail(){
+  const body = document.getElementById('gv-detail-body');
+  const ids = [...(graphState.multiSel||new Set())];
+  if(!body || !ids.length) return;
+  const byId = new Map((graphState.nodes||[]).map(n=>[String(n.id), n]));
+  const rows = ids.map(id=>byId.get(id)).filter(Boolean).slice(0,50).map(n=>
+    `<div style="display:flex;gap:6px;align-items:center;padding:2px 0;">
+       <span style="width:8px;height:8px;border-radius:50%;background:${graphColor(n.entity_type)};flex:none;"></span>
+       <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(n.name)}</span>
+       <span style="color:var(--mut);font-size:11.5px;">${esc(n.entity_type)}</span></div>`).join('');
+  body.innerHTML = `<div style="font-size:13px;">
+    <div style="font-weight:700;color:var(--blue-d);margin-bottom:6px;">框选 ${ids.length} 个节点</div>
+    <div style="max-height:340px;overflow:auto;">${rows}</div>
+    ${ids.length>50?'<div style="color:var(--mut);font-size:12px;margin-top:6px;">仅列出前 50 个</div>':''}
+    <div style="color:var(--mut);font-size:12px;margin-top:8px;line-height:1.6;">
+      提示：Shift+拖动可重新框选，点 ✕ 或点任意节点退出多选。<br>
+      当前仅支持「框选 + 批量查看」；批量改类型 / 批量连关系属后续阶段，未在本版提供。
+    </div></div>`;
+}
+
+// ── P1-4 路径高亮：无向 BFS 最短路（最少跳数；同层按关系类型字典序，口径可复现） ──
+let gvPathMode = false, gvPathSrc = null;
+function gvTogglePathMode(){
+  if(!gvPathMode && typeof gvLinkMode !== 'undefined' && gvLinkMode) gvToggleLinkMode();   // 与连线模式互斥
+  gvPathMode = !gvPathMode; gvPathSrc = null;
+  const btn = document.getElementById('gv-path-btn');
+  if(btn){
+    btn.style.background = gvPathMode ? graphTok('primaryL') : '';
+    btn.style.color = gvPathMode ? graphTok('primaryD') : '';
+    btn.style.fontWeight = gvPathMode ? '600' : '';
+  }
+  const tip = document.getElementById('gv-path-tip');
+  if(tip) tip.style.display = gvPathMode ? '' : 'none';
+  const svg = document.getElementById('gv-svg');
+  if(svg) svg.style.cursor = gvPathMode ? 'crosshair' : '';
+  if(!gvPathMode){ graphState.path = null; graphState.sel = null; }
+  renderGraph();
+}
+function gvPathClear(){
+  gvPathMode = false; gvPathSrc = null; graphState.path = null;
+  const btn = document.getElementById('gv-path-btn');
+  if(btn){ btn.style.background = ''; btn.style.color = ''; btn.style.fontWeight = ''; }
+  const tip = document.getElementById('gv-path-tip'); if(tip) tip.style.display = 'none';
+  const svg = document.getElementById('gv-svg'); if(svg) svg.style.cursor = '';
+  renderGraph();
+}
+function gvPathPick(id){
+  id = String(id);
+  if(id.startsWith('sk:')){ toast('骨架聚合节点不支持路径查找，请下钻到实例'); return; }
+  if(!gvPathSrc){
+    gvPathSrc = id; graphState.sel = {type:'node', id}; renderGraph();
+    toast('已设起点，请点终点（Esc 退出路径模式）');
+    return;
+  }
+  if(gvPathSrc === id){ gvPathSrc = null; graphState.path = null; renderGraph(); return; }
+  const r = gvPathBFS(gvPathSrc, id);
+  gvPathSrc = null;
+  if(!r){
+    graphState.path = null; graphState.sel = null; renderGraph();
+    toast('⚠ 这两点之间在当前画布内没有可达路径');
+    return;
+  }
+  graphState.path = r;
+  graphState.sel = null;
+  renderGraph();
+  gvPathDetail(r);
+}
+function gvPathBFS(from, to){
+  from = String(from); to = String(to);
+  const adj = new Map();
+  const push = (a, b, eid, rel) => {
+    if(!adj.has(a)) adj.set(a, []);
+    adj.get(a).push({to:b, eid:eid, rel:rel});
+  };
+  (graphState.edges||[]).forEach(e=>{
+    const s = String(e.source_id), t = String(e.target_id), eid = String(e.id), rel = String(e.relation_type||'');
+    push(s, t, eid, rel); push(t, s, eid, rel);     // 无向：追踪链常常要逆着关系方向找
+  });
+  // 同层按关系类型字典序，再按目标 id —— 保证同一份数据每次得到的路径完全一致
+  adj.forEach(list=>list.sort((a,b)=> a.rel.localeCompare(b.rel) || a.to.localeCompare(b.to)));
+  const prev = new Map([[from, null]]);
+  const q = [from];
+  while(q.length){
+    const cur = q.shift();
+    if(cur === to) break;
+    for(const st of (adj.get(cur)||[])){
+      if(prev.has(st.to)) continue;
+      prev.set(st.to, {from:cur, eid:st.eid, rel:st.rel});
+      q.push(st.to);
+    }
+  }
+  if(!prev.has(to)) return null;
+  const nodeIds = new Set([to]), edgeIds = new Set(), steps = [];
+  let cur = to;
+  while(cur !== from){
+    const p = prev.get(cur);
+    if(!p) break;
+    edgeIds.add(p.eid); nodeIds.add(p.from);
+    steps.unshift({from:p.from, to:cur, rel:p.rel, eid:p.eid});
+    cur = p.from;
+  }
+  return {from:from, to:to, nodeIds:nodeIds, edgeIds:edgeIds, steps:steps, hops:steps.length};
+}
+function gvPathDetail(r){
+  const body = document.getElementById('gv-detail-body');
+  if(!body) return;
+  const byId = new Map((graphState.nodes||[]).map(n=>[String(n.id), n]));
+  const nm = id => ((byId.get(String(id))||{}).name) || String(id);
+  const chain = r.steps.map(st=>
+    `<div style="display:flex;gap:6px;align-items:baseline;padding:2px 0;">
+       <span style="color:var(--mut);font-size:11.5px;min-width:14px;">${''}</span>
+       <span style="flex:1;min-width:0;"><b>${esc(nm(st.from))}</b>
+         <span style="color:${graphTok('primary')};font-size:12px;">—${esc(st.rel)}→</span>
+         <b>${esc(nm(st.to))}</b></span></div>`).join('');
+  body.innerHTML = `<div style="font-size:13px;">
+    <div style="font-weight:700;color:var(--blue-d);margin-bottom:4px;">🧭 路径 · ${r.hops} 跳</div>
+    <div style="color:var(--mut);font-size:12px;margin-bottom:8px;">${esc(nm(r.from))} → ${esc(nm(r.to))}（BFS 最少跳数；同层按关系类型字典序）</div>
+    <div style="max-height:340px;overflow:auto;">${chain}</div>
+    <div style="color:var(--mut);font-size:12px;margin-top:8px;">路径上的节点与关系已高亮，其余淡出；再点「🧭 路径」或按 Esc 退出。</div></div>`;
+}
+
+// ── P1-2 双击节点：只看它的 1-hop（其余折叠），再次双击或点 +N 徽标恢复 ──
+function gvUnfold(){
+  if(!graphState.fold) return;
+  graphState.fold = null;
+  renderGraph();
+  gvFitView();   // 展开后回到全图视角（与折叠时的聚焦视图对称）
+}
+function graphNodeDblClick(ev, id){
+  if(ev){ ev.stopPropagation(); if(ev.preventDefault) ev.preventDefault(); }
+  if(typeof gvLinkMode !== 'undefined' && gvLinkMode) return;   // 连线/路径模式下双击不抢语义
+  if(typeof gvPathMode !== 'undefined' && gvPathMode) return;
+  if(graphState.sk && graphState.sk.on) return;                  // 骨架模式有自己的下钻
+  id = String(id);
+  const cur = graphState.fold;
+  if(cur && String(cur.nid) === id){ gvUnfold(); toast('已展开全部节点'); return; }
+  const nb = new Set([id]);
+  (graphState.edges||[]).forEach(e=>{
+    if(String(e.source_id)===id) nb.add(String(e.target_id));
+    if(String(e.target_id)===id) nb.add(String(e.source_id));
+  });
+  const hidden = new Set();
+  (graphState.nodes||[]).forEach(n=>{ if(!nb.has(String(n.id))) hidden.add(String(n.id)); });
+  if(!hidden.size){ toast('该节点已连到全部可见节点，无需折叠'); return; }
+  graphState.fold = {nid:id, hidden:hidden, keep:nb.size};
+  graphState.sel = {type:'node', id:id};
+  graphState.multiSel = new Set();
+  graphState.path = null;
+  renderGraph();
+  gvFitView();   // 折叠后把视图收到剩下的这一片，否则画面空旷、焦点飘在角落
+  showGraphDetail(id);
+  toast('已折叠 ' + hidden.size + ' 个非直接关联节点（双击该节点或点 +N 徽标恢复）');
+}
+// ── P1-3 布局参数（滑杆，防抖 220ms 后重排）与局部重排（只动选中节点的 1-hop） ──
+let _gvLoTimer = 0;
+function gvLayoutOptInput(key, val){
+  const o = graphState.view.layoutOpts = graphState.view.layoutOpts || {sep:80, rep:26000, iters:500};
+  o[key] = Number(val);
+  const lbl = document.getElementById('gv-lo-' + key + '-v');
+  if(lbl) lbl.textContent = String(val);
+  if(_gvLoTimer) clearTimeout(_gvLoTimer);
+  _gvLoTimer = setTimeout(()=>{ _gvLoTimer = 0; graphLayout(); renderGraph(); }, 220);
+}
+function gvRelayoutAround(){
+  const sel = graphState.sel;
+  if(!sel || sel.type !== 'node'){ toast('请先点选一个节点，再局部重排它的 1-hop'); return; }
+  const id = String(sel.id);
+  const nb = new Set([id]);
+  (graphState.edges||[]).forEach(e=>{
+    if(String(e.source_id)===id) nb.add(String(e.target_id));
+    if(String(e.target_id)===id) nb.add(String(e.source_id));
+  });
+  const sub = (graphState.nodes||[]).filter(n=>nb.has(String(n.id)) && n.x!=null && n.y!=null);
+  if(sub.length < 3){ toast('该节点邻域只有 ' + sub.length + ' 个节点，局部重排意义不大'); return; }
+  const subEdges = (graphState.edges||[]).filter(e=>nb.has(String(e.source_id)) && nb.has(String(e.target_id)));
+  // 原包围盒：重排后整体归一回原位，避免这一片被搬到画布别处、跟周围节点脱节
+  const bx0 = Math.min(...sub.map(n=>n.x)), bx1 = Math.max(...sub.map(n=>n.x));
+  const by0 = Math.min(...sub.map(n=>n.y)), by1 = Math.max(...sub.map(n=>n.y));
+  if(!gvLayoutWith('cose', sub, subEdges, {sep:70, rep:22000, iters:300})){
+    toast('局部重排失败：布局引擎不可用（已回退，坐标未改动）');
+    return;
+  }
+  const ax0 = Math.min(...sub.map(n=>n.x)), ax1 = Math.max(...sub.map(n=>n.x));
+  const ay0 = Math.min(...sub.map(n=>n.y)), ay1 = Math.max(...sub.map(n=>n.y));
+  const sw = (ax1-ax0) || 1, sh = (ay1-ay0) || 1;
+  const tw = Math.max(bx1-bx0, 60), th = Math.max(by1-by0, 60);
+  sub.forEach(n=>{ n.x = bx0 + (n.x-ax0)/sw*tw; n.y = by0 + (n.y-ay0)/sh*th; });
+  renderGraph();
+  gvEnsureMinimap(graphState.nodes, graphState.edges);
+  // 局部重排是「整理视图」动作，不回写 graph_x/graph_y（回写会发 N 个请求，且与拖拽落位的语义不同）；
+  // 需要固化时逐个拖动即可（拖拽会 saveNodePos）。
+  toast('已局部重排 ' + sub.length + ' 个节点（其余节点坐标不变；未回写坐标）');
+}
+
+// Esc 统一退出：路径 → 连线 → 多选 → 折叠（从最"临时"的状态开始收）
+if(!window.__gvP1EscBound){
+  window.__gvP1EscBound = 1;
+  document.addEventListener('keydown', function(e){
+    if(e.key !== 'Escape') return;
+    if(typeof gvPathMode !== 'undefined' && gvPathMode){ gvPathClear(); return; }
+    if(typeof gvLinkMode !== 'undefined' && gvLinkMode){ gvLinkCancel(); return; }
+    if((graphState.multiSel||new Set()).size){ gvMultiSelClear(); return; }
+    if(graphState.fold){ gvUnfold(); return; }
+  });
+}
+
 function graphEdgeClick(id) {
   graphState.sel = {type:'edge', id:String(id)};
   graphState.drag = null; graphState.pan = null;

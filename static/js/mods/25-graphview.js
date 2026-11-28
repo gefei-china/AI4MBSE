@@ -479,6 +479,9 @@ function svmRenderCytoscape(container, vm) {
       {selector:'.dimmed', style:{'opacity':k.dimOpacity}},
       {selector:'.focus-hi', style:{'border-width':3.5,'border-color':k.primary,
         'overlay-color':k.primary,'overlay-opacity':0.14,'overlay-padding':6}},
+      // P1-5 标签密度：缩小后隐标签（阈值与主画布 SVG 同源于 graphTok）
+      {selector:'edge.svm-lbl-off', style:{'text-opacity':0}},
+      {selector:'node.svm-lbl-off', style:{'text-opacity':0}},
     ],
     layout: {name:'preset', animate:false},  // 《视图规范》布局引擎已在 svmToElements 预计算位置，preset 保留
     wheelSensitivity: 0.2,
@@ -499,6 +502,15 @@ function svmRenderCytoscape(container, vm) {
     toastHtml(`<b>${esc(d.kind||'relation')}</b>${d.label?'：'+esc(d.label):''}`);
   });
   cy.on('tap', evt=>{ if(evt.target === cy) applyGraphFocus(cy, null); });   // 点画布空白 ⇒ 统一取消高亮
+  /* P1-5：缩放驱动的标签密度（Cytoscape 的 text-opacity 可被 class 覆盖）。
+     阈值取 graphTok('labelEdgeZoom'/'labelNodeZoom')，与主画布 SVG 同源。 */
+  const svmLblDensity = () => {
+    const z = cy.zoom();
+    if(z < graphTok('labelEdgeZoom')) cy.edges().addClass('svm-lbl-off'); else cy.edges().removeClass('svm-lbl-off');
+    if(z < graphTok('labelNodeZoom')) cy.nodes().addClass('svm-lbl-off'); else cy.nodes().removeClass('svm-lbl-off');
+  };
+  cy.on('zoom', svmLblDensity);
+  svmLblDensity();
   _cyInstances[key] = cy;
   if (container.id) window['cy_' + container.id] = cy;  // 调试/自动化引用
   svmElkRelayout(cy, vm);  // ELK 精排（异步、不阻断；不适用类型内部直接返回）
@@ -643,6 +655,14 @@ function gvEnsureHoverStyle(){
       ';filter:drop-shadow(0 0 4px ' + hexToRgba(k.primary, .75) + ');}' +
     '.gv-hov-ring > circle:nth-of-type(2){opacity:.45;}' +
     '.gv-sel-node > circle:first-of-type{filter:drop-shadow(0 0 8px rgba(250,199,117,.95)) drop-shadow(0 1px 2px rgba(0,0,0,.18));}' +
+    // P1-1 框选多选：统一淡蓝填充 + 主色描边（批量选择用同一种视觉，不与类型色抢信息）
+    '.gv-ms-node > circle:first-of-type{fill:' + k.primaryL + ';stroke:' + k.primary + ';stroke-width:3.2;}' +
+    // P1-4 路径节点：深主色描边 + 光晕，与「普通邻居」区分开
+    '.gv-path-node > circle:first-of-type{stroke:' + k.primaryD + ';stroke-width:3.4;filter:drop-shadow(0 0 6px ' + hexToRgba(k.primary, .8) + ');}' +
+    // P1-5 标签密度：按缩放级别切 class。大图里字号随 transform 一起缩，硬缩小字号只会更糊，
+    //        直接隐标签（信息暂时隐藏，图例提示条已声明）比堆叠遮挡更可读。
+    '#gv-svg.gv-far .gv-elabel{opacity:0;}' +
+    '#gv-svg.gv-farther .gv-nlabel{opacity:0;}' +
     // 选中节点关系方向流动（蚂蚁线沿 source→target 流动；入边反向流动以示关系方向）
     '@keyframes gvDashFlow{to{stroke-dashoffset:-28}}' +
     '.gv-flow-out,.gv-flow-in{stroke-dasharray:8 8;stroke-width:2.6;}' +
@@ -763,6 +783,22 @@ function renderGraph() {
       <span style="width:9px;height:9px;border-radius:50%;background:${graphColor(t)};display:inline-block;border:1px solid rgba(0,0,0,.1);"></span>${esc(t)} ${c}
     </span>`;
   }).join('');
+  // P1-3 布局参数的当前值（滑杆初值与标签用；未设过则用默认）
+  const lo = graphState.view.layoutOpts || {sep:80, rep:26000, iters:500};
+  // P1-2 折叠状态 chip：折叠后画布节点数骤减，必须给出「为什么少」和「怎么恢复」
+  const _foldNow = graphState.fold;
+  const foldChip = (_foldNow && _foldNow.hidden && _foldNow.hidden.size)
+    ? `<span id="gv-fold-chip" style="display:inline-flex;align-items:center;gap:6px;background:${graphTok('amberL')};border:1px solid ${graphTok('amber')};border-radius:14px;padding:2px 10px;font-size:12px;color:${graphTok('amber')};"
+        title="双击节点后只保留它的直接关联，其余节点被折叠（坐标未变）">已折叠 <b>${_foldNow.hidden.size}</b> 个
+        <span style="cursor:pointer;font-weight:700;text-decoration:underline;" onclick="gvUnfold()" title="展开被折叠的节点">展开</span></span>`
+    : '';
+  // P1-1 框选结果 chip（工具栏常显，避免「选了但看不见选了谁」）
+  const _msNow = graphState.multiSel || new Set();
+  const msChip = _msNow.size
+    ? `<span id="gv-ms-chip" style="display:inline-flex;align-items:center;gap:6px;background:${graphTok('primaryL')};border:1px solid ${graphTok('primary')};border-radius:14px;padding:2px 10px;font-size:12px;color:${graphTok('primaryD')};"
+        title="Shift+拖动框选的节点数">框选 <b>${_msNow.size}</b> 个
+        <span style="cursor:pointer;font-weight:700;" onclick="gvMultiSelClear()" title="清空框选">✕</span></span>`
+    : '';
   // 2026-09-10 米爸裁剪：命名子图组件（gv-view/💾/删除）与「🔍 搜索」按钮移除——子图是低频功能且与筛选语义重叠，
   // 搜索以顶部搜索框唯一入口（+ / 快捷键），避免双入口冗余
   let s = `<div style="padding:6px 10px;font-size:12.5px;color:var(--mut);border-bottom:1px solid var(--line);background:#fafaf7;">
@@ -776,6 +812,20 @@ function renderGraph() {
           <div style="font-weight:700;font-size:13.5px;color:var(--blue-d);margin-bottom:6px;">筛选 · 仅作用于画布</div>
           <div style="font-size:12.5px;margin-bottom:4px;color:var(--mut);">说明：左栏实体树不受此筛选影响，便于跨视图查找</div>
           <label style="display:flex;align-items:center;gap:5px;cursor:pointer;font-size:12.5px;margin-bottom:10px;"><input type="checkbox" ${v.hideIsolated?'checked':''} onchange="graphToggleIsolated(this)" style="vertical-align:middle;"> 隐藏孤立节点</label>
+          <!-- P1-3 布局参数（受硬上限夹紧：间距 40–200 / 斥力 10000–60000 / 迭代 100–800） -->
+          <div style="border-top:1px solid var(--line);margin:2px 0 8px;"></div>
+          <div style="font-weight:700;font-size:13px;color:var(--blue-d);margin-bottom:2px;">布局参数</div>
+          <div style="font-size:11.5px;color:var(--mut);margin-bottom:8px;">对「分层 / 力导向」生效，改动后自动重排</div>
+          <label style="display:block;font-size:12px;margin-bottom:7px;">节点间距 <b id="gv-lo-sep-v">${lo.sep}</b>
+            <input type="range" min="40" max="200" step="10" value="${lo.sep}" style="width:100%;vertical-align:middle;" oninput="gvLayoutOptInput('sep',this.value)">
+          </label>
+          <label style="display:block;font-size:12px;margin-bottom:7px;">斥力 <b id="gv-lo-rep-v">${lo.rep}</b>
+            <input type="range" min="10000" max="60000" step="2000" value="${lo.rep}" style="width:100%;vertical-align:middle;" oninput="gvLayoutOptInput('rep',this.value)">
+          </label>
+          <label style="display:block;font-size:12px;margin-bottom:7px;">迭代次数 <b id="gv-lo-iters-v">${lo.iters}</b>
+            <input type="range" min="100" max="800" step="50" value="${lo.iters}" style="width:100%;vertical-align:middle;" oninput="gvLayoutOptInput('iters',this.value)">
+          </label>
+          <button class="btn sm ghost" style="width:100%;margin-bottom:8px;" onclick="gvRelayoutAround()" title="只重排「当前选中节点 + 它的直接邻居」，其余节点坐标不变">⚡ 局部重排（选中节点 1-hop）</button>
           <div style="display:flex;gap:6px;">
             <button class="btn sm" style="flex:1;" onclick="gvClearFilters()">↺ 清除筛选</button>
             <button class="btn sm ghost" onclick="gvCloseMenu('gv-filter-dd')">完成</button>
@@ -791,6 +841,7 @@ function renderGraph() {
         </select>
         <button class="btn sm ghost" ${graphState.sk.on?'style="background:var(--blue-l);color:var(--blue-d);font-weight:600;"':''} onclick="gvToggleSkeleton()" title="骨架模式（万级图谱三级下钻）：L1 类型聚合 → 点击类型下钻 L2 实例束 → 点击实例下钻 L3 邻域">🦴 骨架</button>
         <button class="btn sm ghost" id="gv-link-btn" onclick="gvToggleLinkMode()" title="连线模式：点源节点 → 点目标节点 → 选择关系类型建立边">🔗 连关系</button>
+        <button class="btn sm ghost" id="gv-path-btn" onclick="gvTogglePathMode()" title="路径查找：点起点 → 点终点，高亮最短关系路径（BFS 最少跳数；同层按关系类型字典序）">🧭 路径</button>
         <button class="btn sm ghost" id="gv-link-cancel" onclick="gvLinkCancel()" style="display:none;color:${graphTok('red')};" title="退出连线模式">✕ 取消</button>
       </span>
       <!-- 2026-09-10：搜索按钮已删（顶部搜索框唯一入口，快捷键 /） -->
@@ -806,6 +857,9 @@ function renderGraph() {
       <span style="flex:1;"></span>
       <!-- ⇵ 同步基线 2026-09-14 迁移至顶部分支切换入口右侧（index.html #hdr-sync-baseline，仅个人分支显示） -->
       <span id="gv-link-tip" style="display:none;color:var(--blue-d);font-weight:600;font-size:12px;">🔗 连线模式：点源节点 → 点目标节点 → 右栏选关系类型（Esc 退出）</span>
+      <span id="gv-path-tip" style="display:none;color:var(--blue-d);font-weight:600;font-size:12px;">🧭 路径模式：点起点 → 点终点（Esc 退出）</span>
+      ${msChip}
+      ${foldChip}
       ${gvHintBar('kg')}
     </div>
     <!-- 2026-09-04 优化：筛选 + 缩放 + 类型图例 全部迁移至画布内 absolute 浮层，避免误关联左栏实体树 -->
@@ -840,7 +894,17 @@ function renderGraph() {
     const e = graphState.edges.find(x=>String(x.id)===actEdge);
     if(e){ neighbor.add(e.source_id); neighbor.add(e.target_id); actEdgeIds.add(actEdge); }
   }
-  const dim = !!(actNode || actEdge);  // 存在选中元素时其余元素淡出
+  /* P1-4 路径高亮：路径上的节点/边并入同一套「高亮 + 其余淡出」集合，
+     不新造第二套视觉机制 —— 单选、路径、连线三种高亮共用 neighbor/actEdgeIds。 */
+  const _P = graphState.path;
+  const pathOn = !!(_P && _P.nodeIds && _P.nodeIds.size);
+  if(pathOn){ _P.nodeIds.forEach(x=>neighbor.add(x)); _P.edgeIds.forEach(x=>actEdgeIds.add(x)); }
+  /* P1-2 折叠：双击节点后只渲染其 1-hop，其余不输出（不重算坐标 ⇒ 展开即恢复原布局）。
+     用渲染层过滤而非删节点，所以 graph_x/graph_y 与布局结果都不受影响。 */
+  const _fold = graphState.fold;
+  const _hidden = (_fold && _fold.hidden && _fold.hidden.size) ? _fold.hidden : null;
+  const _ms = graphState.multiSel || new Set();   // P1-1 框选多选
+  const dim = !!(actNode || actEdge || pathOn);  // 存在选中元素/路径时其余元素淡出
   // edges —— 2026-09-12 展示优化：贝塞尔曲线边（gvEdgePath）＋ 同对多重边曲率偏移防重叠 ＋ 边标签取曲线中垂线
   // P0-3（2026-11-28）：把每条边几何（两端 + 曲率偏移）记入 graphState._edgeGeom，
   //   拖拽时只按此表重算**相邻边**的 d 与标签坐标，不再整图 innerHTML 重建（见 gvPatchNode）。
@@ -850,48 +914,61 @@ function renderGraph() {
     const sN = graphState.nodes.find(n=>n.id===e.source_id);
     const tN = graphState.nodes.find(n=>n.id===e.target_id);
     if(!sN||!tN) return;
+    if(_hidden && (_hidden.has(String(e.source_id)) || _hidden.has(String(e.target_id)))) return;   // P1-2：折叠域内的边不渲染
     const x1=sN.x, y1=sN.y, x2=tN.x, y2=tN.y;
     const kk=[e.source_id,e.target_id].sort().join('|');
     const total=_eb[kk]||1, idx=(_ed[kk]=(_ed[kk]||0))+1;
     const off = total<=1 ? 0.22 : ((idx - (total+1)/2) * 0.5);
     const d = gvEdgePath(x1,y1,x2,y2,off);
     const md = gvEdgeMid(x1,y1,x2,y2,off);
-    const isAct = actNode ? actEdgeIds.has(String(e.id)) : (actEdge ? String(e.id)===actEdge : false);
+    // 高亮集合统一：单选邻边 / 单条选中边 / P1-4 路径边 —— 三者语义相同（"当前关注的边"）
+    const isAct = actEdgeIds.has(String(e.id));
     _geom[String(e.id)] = {a:String(e.source_id), b:String(e.target_id), off:off};
     // 选中关联边方向动效：出边(success→target)正向流动、入边(target→选中)反向流动
     // 方向必须准确：流动恒沿边的真实方向 source->target（正向），不随选中端点改变
     const flowCls = isAct ? 'gv-flow-out' : '';
-    const eo = isAct ? 1 : (dim ? 0.12 : 1);
+    const eo = isAct ? 1 : (dim ? k.dimOpacity : 1);   // P0-2 收口：淡出强度只认 graphTok('dimOpacity')（原硬编码 0.12）
     const inf = !!e._inferred;   // 推断边（推理叠加）：橙色虚线 + 橙色箭头，与原始边明确区分
     const eStroke = isAct ? k.edgeActive : (inf ? k.edgeInfer : k.edge);
     const eDash = inf ? ' stroke-dasharray="6 4"' : '';
     const eMarker = inf ? 'url(#gv-arrow-inf)' : 'url(#gv-arrow)';
     s += `<path id="gv-edge-${e.id}" d="${d}" fill="none" stroke="${eStroke}" stroke-width="${isAct?2.2:1.3}"${eDash} opacity="${eo}" marker-end="${eMarker}"${flowCls ? ' class="'+flowCls+'"' : ''} style="cursor:pointer;filter:drop-shadow(0 .5px 1px rgba(0,0,0,.08));" onclick="event.stopPropagation();graphEdgeClick('${e.id}')"/>`;
-    s += `<text id="gv-elabel-${e.id}" x="${md.x}" y="${md.y+3}" font-size="10" fill="${inf?k.edgeInfer:k.edgeLabel}" text-anchor="middle" opacity="${eo}" pointer-events="none">${e.relation_type}${inf?' ⇢':''}</text>`;
+    // 边标签加画布色 halo（paint-order:stroke）：大图里标签与连线/其它标签交叠时仍可读
+    s += `<text class="gv-elabel" id="gv-elabel-${e.id}" x="${md.x}" y="${md.y+3}" font-size="10" fill="${inf?k.edgeInfer:k.edgeLabel}" text-anchor="middle" opacity="${eo}" pointer-events="none" stroke="${k.canvas}" stroke-width="2.6" stroke-linejoin="round" paint-order="stroke">${e.relation_type}${inf?' ⇢':''}</text>`;
   });
   // nodes（节点半径按关系度：连通度越大越显著；选中/邻居高亮）—— 2026-09-12 展示优化：径向高光＋阴影光晕＋类型标签移入圆内＋hover 提示
   const deg = graphDegreeMap(graphState.nodes, graphState.edges);
   const ro = isReleaseBranch(getCurrentBranch());   // release 只读：禁删除/拖拽（不影响展示）
   graphState.nodes.forEach(n=>{
+    if(_hidden && _hidden.has(String(n.id))) return;   // P1-2：折叠域外的节点不渲染
     const c = graphColor(n.entity_type);
     const sel = graphState.sel&&graphState.sel.type==='node'&&graphState.sel.id===n.id;
     const nb = dim && neighbor.has(n.id);
+    const onPath = pathOn && _P.nodeIds.has(String(n.id));               // P1-4 路径节点
+    const isMs = _ms.has(String(n.id));                                  // P1-1 框选多选
     const linkHi = (typeof gvLinkMode!=='undefined') && gvLinkMode && gvLinkSrc===n.id;   // 连线模式源点高亮
     const tint = gvTypeTint(c);
     const fill = n._skel ? k.skelFill : (linkHi ? k.linkFill : (sel ? k.selFill : (nb ? k.nbrFill : tint)));
     const sw = linkHi ? 4 : (sel ? 3 : (nb ? 2.5 : 1.5));
-    const no = (dim && !sel && !nb) ? 0.22 : 1;
+    const no = (dim && !sel && !nb && !isMs) ? k.dimOpacity : 1;   // 同上（原硬编码 0.22）
     const r = n._skel ? 20 + Math.min((n._count||1)*0.9, 13) : 13 + Math.min((deg[n.id]||0)*1.7, 13);   // 2026-09-13 节点加大更醒目
     const hiR = Math.max(5, r*0.42);
-    s += `<g class="gv-node${sel?' gv-sel-node':''}" data-nid="${esc(n.id)}" transform="translate(${n.x},${n.y})" style="cursor:pointer;opacity:${no};"
+    const foldHere = !!(_hidden && _fold && String(_fold.nid)===String(n.id));
+    s += `<g class="gv-node${sel?' gv-sel-node':''}${isMs?' gv-ms-node':''}${onPath?' gv-path-node':''}" data-nid="${esc(n.id)}" transform="translate(${n.x},${n.y})" style="cursor:pointer;opacity:${no};"
       onmousedown="event.stopPropagation();graphNodeDown(event,'${esc(n.id)}')"
+      ondblclick="graphNodeDblClick(event,'${esc(n.id)}')"
       onmouseenter="gvNodeHover('${esc(n.id)}')" onmouseleave="gvNodeHoverEnd()">
       <circle r="${r}" fill="${fill}" stroke="${nb?k.nbrStroke:c}" stroke-width="${sw}" ${n._skel?'stroke-dasharray="4 2"':''} style="filter:drop-shadow(0 1px 2px rgba(0,0,0,.16));"/>
       ${n._skel
         ? `<text y="4" font-size="10.5" fill="${c}" text-anchor="middle" font-weight="700">×${n._count}</text>`
         : `<circle r="${hiR}" fill="${k.canvas}" opacity="0.36" pointer-events="none"/>
            ${r >= 16 ? `<text y="${Math.min(2, r*0.3)}" font-size="9.5" fill="${k.canvas}" text-anchor="middle" font-weight="700" pointer-events="none">${esc(n.entity_type)}</text>` : ''}
-           <text y="${r+14}" font-size="11.5" fill="${k.text}" text-anchor="middle" font-weight="600" pointer-events="none">${esc(n.name.length>10?n.name.slice(0,10)+'…':n.name)}</text>`}
+           <text class="gv-nlabel" y="${r+14}" font-size="11.5" fill="${k.text}" text-anchor="middle" font-weight="600" pointer-events="none"
+             stroke="${k.canvas}" stroke-width="3" stroke-linejoin="round" paint-order="stroke">${esc(n.name.length>10?n.name.slice(0,10)+'…':n.name)}</text>`}
+      ${foldHere ? `<g class="gv-fold-badge" style="cursor:pointer;" onmousedown="event.stopPropagation();" onclick="event.stopPropagation();gvUnfold();"
+        ><circle cx="${r+8}" cy="${-r-14}" r="11.5" fill="${k.canvas}" stroke="${k.primary}" stroke-width="1.4" stroke-dasharray="3 2"/>
+        <text x="${r+8}" y="${-r-11}" font-size="9.5" fill="${k.primary}" text-anchor="middle" font-weight="700" pointer-events="none"
+          stroke="${k.canvas}" stroke-width="3" paint-order="stroke">+${_hidden.size}</text></g>` : ''}
     </g>`;
   });
   s += `<defs><marker id="gv-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 0L10 5L0 10z" fill="${k.edge}"/></marker>
@@ -901,6 +978,7 @@ function renderGraph() {
     el.innerHTML = s;
     const _mmEl = document.getElementById('gv-minimap'); if(_mmEl) el.appendChild(_mmEl);   // 2026-09-12 minimap 挂回（renderGraph 内 innerHTML 会清空画布容器）
   gvUpdateStatusPill(); gvRenderFilterBadge();
+  gvSyncLabelDensity();   // P1-5：上面重建了 #gv-svg，缩放档位的 class 必须重新施加
   if(typeof gvStatusUpdate==='function') gvStatusUpdate();
 }
 /* ══ P0-3（2026-11-28）拖拽增量重绘 ══
@@ -1006,7 +1084,11 @@ function gvCenterOnNode(id){
 }
 // 首次加载自适应缩放：限高后画布世界坐标可能超出可视区，按节点包围盒 fit（不改变布局）
 function gvFitView(){
-  const ns = graphState.nodes; if(!ns.length) return;
+  // P1-2：折叠后只剩一小撮节点，视图必须按「可见节点」算包围盒，
+  //       否则会按整图包围盒取景，折叠后画面空旷且偏心。
+  const _hid = (graphState.fold && graphState.fold.hidden) || null;
+  const ns = _hid ? graphState.nodes.filter(n=>!_hid.has(String(n.id))) : graphState.nodes;
+  if(!ns.length) return;
   const svg = document.getElementById('gv-svg'); if(!svg) return;
   let minX=1e9,minY=1e9,maxX=-1e9,maxY=-1e9;
   ns.forEach(n=>{ if(n.x==null) return; minX=Math.min(minX,n.x-70); maxX=Math.max(maxX,n.x+70); minY=Math.min(minY,n.y-45); maxY=Math.max(maxY,n.y+45); });

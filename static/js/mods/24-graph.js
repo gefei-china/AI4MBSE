@@ -80,7 +80,11 @@ function graphTok(name){
       // 取值 0.30 有真机对照：本系统节点是「白底 + 类型色描边」的浅填充，
       // 0.18 时非邻域节点整块结构基本消失（截图 focus_ab_018 vs focus_ab_030），
       // 0.30 既保住全局脉络又能明确读出焦点；深色填充的图库用 0.15~0.2 才够，此图不适用。
-      dimOpacity: 0.30
+      dimOpacity: 0.30,
+      // P1-5 标签密度阈值（唯一真源：主画布 SVG 与 SysML Cytoscape 共用，避免两侧各写一份）：
+      // 缩小到 labelEdgeZoom 以下隐关系标签，labelNodeZoom 以下再隐节点名。
+      labelEdgeZoom: 0.6,
+      labelNodeZoom: 0.4
     };
   }
   return name ? _gvTokens[name] : _gvTokens;
@@ -166,7 +170,7 @@ function applyGraphFocus(target, id){
    mode：'kg' 主知识图谱 | 'sysml' SysML 视图 | 'impact' 影响拓扑图 */
 function gvHintBar(mode){
   const T = {
-    kg:     '滚轮缩放 · 空白拖动平移 · 节点拖拽调整布局 · 点节点高亮上下游（点空白取消）',
+    kg:     '滚轮缩放 · 空白拖动平移 · 节点拖拽调整布局 · 点节点高亮上下游（点空白取消） · Shift+拖动框选 · 双击节点只看直接关联 · 缩小到 60% 以下隐藏关系标签',
     sysml:  '滚轮缩放 · 空白拖动平移 · 节点可拖动 · 点节点高亮 1-hop 邻域（点空白取消）',
     impact: '滚轮缩放 · 画布拖拽平移 · 节点可拖动 · 点节点高亮上下游（点空白取消）'
   };
@@ -446,8 +450,16 @@ function gvNormalize(nodes, W, H){
 // 离屏 Cytoscape 布局：headless 实例跑成熟布局（dagre 分层 / cose 力导向）→ 坐标回填 SVG 节点。
 // headless + animate:false 在 layout().run() 内同步完成，保持调用方同步路径（graphSetLayout 等）不破；
 // 任一环节失败则回退手写算法，不影响上游。输出仍是 n.x/n.y，下游 renderGraph/骨架/连线零改动。
-function gvLayoutWith(algo, nodes, edges){
+function gvLayoutWith(algo, nodes, edges, opts){
   if(!window.cytoscape || !nodes.length) return false;
+  // P1-3 布局参数：调用方可传 opts 覆盖；未传则读 graphState.view.layoutOpts；最后落回默认值。
+  // 全部经过硬上限夹紧（斥力 10000–60000 / 迭代 100–800 / 间距 40–200），
+  // 防止极端参数把节点弹出画布或让布局跑不完（方案 §P1-3 风险项）。
+  const clamp = (v, lo, hi, fb) => { const n = Number(v); return Math.max(lo, Math.min(hi, isFinite(n) ? n : fb)); };
+  const src = opts || (graphState.view && graphState.view.layoutOpts) || {};
+  const sep = clamp(src.sep, 40, 200, 80);
+  const rep = clamp(src.rep, 10000, 60000, 26000);
+  const iters = clamp(src.iters, 100, 800, 500);
   const elNodes = nodes.map(n=>({data:{id:String(n.id)}}));
   const elEdges = edges.map((e,i)=>({data:{id:'gve'+i, source:String(e.source_id), target:String(e.target_id)}}));
   let cy = null;
@@ -455,9 +467,9 @@ function gvLayoutWith(algo, nodes, edges){
     cy = cytoscape({headless:true, style:[{selector:'node', style:{'width':70,'height':56}}],
       elements:{nodes:elNodes, edges:elEdges}});
     const opt = (algo==='dagre')
-      ? {name:'dagre', animate:false, nodeSep:80, rankSep:100, rankDir:'TB', edgeSep:60, margin:40}
-      : {name:'cose', animate:false, nodeRepulsion:()=>26000, idealEdgeLength:90, gravity:0.85,
-         numIter:500, initialTemp:200, coolingFactor:0.9, randomize:true, padding:40};
+      ? {name:'dagre', animate:false, nodeSep:sep, rankSep:sep+20, rankDir:'TB', edgeSep:Math.max(40, Math.round(sep*0.75)), margin:40}
+      : {name:'cose', animate:false, nodeRepulsion:()=>rep, idealEdgeLength:sep+10, gravity:0.85,
+         numIter:iters, initialTemp:200, coolingFactor:0.9, randomize:true, padding:40};
     cy.layout(opt).run();
     const pmap = {};
     cy.nodes().forEach(n=>{ pmap[n.id()] = {x:n.position('x'), y:n.position('y')}; });
@@ -587,6 +599,9 @@ async function loadGraph() {
   graphState.total = (g && g.total_entities) != null ? g.total_entities : 0;
   graphState.all.nodes = (g.entities||[]).map((n,i)=>({...n, x:n.graph_x||0, y:n.graph_y||0}));
   graphState.all.edges = (g.relations||[]).map(r=>({...r, id:r.id}));
+  // P1（2026-11-28）：折叠/路径/框选都按节点 id 绑定具体数据集，换数据（切分支/刷新）后必须失效，
+  // 否则旧 hidden 集合会把新数据里同名 id 以外的节点全部隐藏。layoutOpts 属用户偏好，保留。
+  graphState.fold = null; graphState.path = null; graphState.multiSel = new Set(); graphState.sel = null;
   graphApplyView(); graphLayout(); renderGraph(); gvFitView(); gvEnsureMinimap(graphState.nodes, graphState.edges);   // 限高画布 + 缩略图总览同步
   gvLoadViews();  // 子图下拉（模板来源文档/已存子图）随图谱加载刷新
   loadBranchMaturity(br);  // P1-②：按分支展示成熟度统计联动

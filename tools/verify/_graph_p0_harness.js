@@ -38,6 +38,8 @@ function loadCtx(cssVars) {
 }
 
 const SRC24 = fs.readFileSync(path.join(DIR, "24-graph.js"), "utf8");
+// 26-grapheditor.js 只做静态取证（能力是否真实现），不在本上下文 exec（它依赖 DOM/async）
+const SRC26 = fs.readFileSync(path.join(DIR, "26-grapheditor.js"), "utf8");
 const SRC25 = fs.readFileSync(path.join(DIR, "25-graphview.js"), "utf8");
 
 // ── A. P0-1 样式单一真源：真读 CSS 变量，且类型色由 token 派生 ──
@@ -209,9 +211,20 @@ if (ctx) {
       [kg.length, svm.length, imp.length].join("/"));
     rec("D2_hint_tells_blank_click_cancels",
       kg.includes("点空白取消") && svm.includes("点空白取消") && imp.includes("点空白取消"));
-    // 不得预告未落地能力（P1 的框选/双击展开）
-    rec("D3_hint_no_unimplemented_features",
-      ![kg, svm, imp].some((h) => h.includes("框选") || h.includes("双击")));
+    /* 不得预告未落地能力 —— 判据形式：**提示里出现某个能力词，就必须有对应实现**。
+       原判据是"禁止出现框选/双击"（把 P1 未做的事实写死），P1 落地后会自己变假红；
+       现在改成「出现即要求实现存在」，判据随能力落地自动保持有效。 */
+    const CAP_EVIDENCE = [
+      ["框选", /function gvBoxCommit\(/],
+      ["双击", /function graphNodeDblClick\(/],
+      ["隐藏关系标签", /function gvSyncLabelDensity\(/],
+      ["路径", /function gvPathBFS\(/],
+    ];
+    const unimplemented = CAP_EVIDENCE
+      .filter(([word, re]) => [kg, svm, imp].some((h) => h.includes(word)) && !re.test(SRC26))
+      .map(([word]) => word);
+    rec("D3_hint_no_unimplemented_features", unimplemented.length === 0,
+      unimplemented.join(",") || "all_hinted_caps_implemented");
     rec("D4_hint_fallback", ctx.gvHintBar("unknown").includes('data-mode="kg"'));
   } catch (e) {
     rec("D5_hint_runtime", false, e.message);
